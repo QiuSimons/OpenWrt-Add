@@ -6,22 +6,28 @@ USE_PROCD=1
 
 #####  ONLY CHANGE THIS BLOCK  ######
 PROG=/usr/bin/dnsproxy # where is dnsproxy
-CONF_OVERSEA=-l 127.0.0.1 -p 5335 -u tls://dns.google -u tls://1.1.1.1 -u 202.141.162.123:5353 --cache --cache-min-ttl=3600 --fastest-addr --ipv6-disabled # oversea config
-CONF_MAINLAND=-l 127.0.0.1 -p 6050 -u 119.29.29.29 -u 223.5.5.5 --cache --cache-min-ttl=3600 --fastest-addr # mainland config
+CONF_OVERSEA="-l 127.0.0.1 -p 5336 -u tls://dns.google -u tls://1.1.1.1 -u 202.141.162.123:5353 --cache --cache-min-ttl=3600 --fastest-addr --ipv6-disabled" # oversea config
+CONF_MAINLAND="-l 127.0.0.1 -p 6055 -u 119.29.29.29 -u 223.5.5.5 --cache --cache-min-ttl=3600 --fastest-addr" # mainland config
 #####  ONLY CHANGE THIS BLOCK  ######
 
 start_service() {
   procd_open_instance OVERSEA
   procd_set_param command $PROG $CONF_OVERSEA
-  procd_open_instance MAINLAND
-  procd_set_param command $PROG $CONF_MAINLAND
-
   procd_set_param user root
   procd_set_param stdout 1
   procd_set_param stderr 1
   procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
-  procd_close_instance
-  echo "dnsproxy is started!"
+  procd_close_instance OVERSEA
+  echo "dnsproxy OVERSEA is started!"
+  
+  procd_open_instance MAINLAND
+  procd_set_param command $PROG $CONF_MAINLAND
+  procd_set_param user root
+  procd_set_param stdout 1
+  procd_set_param stderr 1
+  procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
+  procd_close_instance MAINLAND
+  echo "dnsproxy MAINLAND is started!"
 }
 
 reload_service() {
