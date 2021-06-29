@@ -1,7 +1,6 @@
 #!/bin/sh
 # From QiuSimons
-
-uci del dhcp.@dnsmasq[0].server
+sed -i "/list server/d" /etc/config/network
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#6050'
 uci set dhcp.@dnsmasq[0].rebind_protection='0'
 lanip="$(uci get network.lan.ipaddr)"
@@ -14,7 +13,9 @@ uci set shadowsocksr.@global[0].pdnsd_enable='0'
 uci del shadowsocksr.@global[0].tunnel_forward
 uci commit shadowsocksr
 
+sed -i "/list dns/d" /etc/config/network
 uci set network.wan.peerdns='0'
 uci add_list network.wan.dns='127.0.0.1'
 uci add_list network.lan.dns='127.0.0.1'
 uci commit network
+echo "Job's done! Ready to work."
