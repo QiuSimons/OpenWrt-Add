@@ -97,4 +97,6 @@ opkg flag hold dnsmasq-full
 rm -rf /tmp/luci-modulecache
 rm -f /tmp/luci-indexcache
 
+setdns
+
 exit 0
