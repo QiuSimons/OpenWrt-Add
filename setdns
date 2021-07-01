@@ -18,4 +18,8 @@ uci set network.wan.peerdns='0'
 uci add_list network.wan.dns='127.0.0.1'
 uci add_list network.lan.dns='127.0.0.1'
 uci commit network
+
+service dnsproxy enable
+service dnsproxy restart
+
 echo "Job's done! Ready to work."
