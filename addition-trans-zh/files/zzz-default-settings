@@ -87,7 +87,7 @@ opkg flag hold dnsmasq-full
 #rm -rf /etc/rc.d/S90shortcut-fe
 
 #默认关闭 dnsproxy
-service dnsproxy stop
+/etc/init.d/dnsproxy stop
 rm -rf /etc/rc.d/S99dnsproxy
 
 #自用
