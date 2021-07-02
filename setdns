@@ -19,7 +19,7 @@ uci add_list network.wan.dns='127.0.0.1'
 uci add_list network.lan.dns='127.0.0.1'
 uci commit network
 
-service dnsproxy enable
-service dnsproxy restart
+ln -sf /etc/init.d/dnsproxy /etc/rc.d/S99dnsproxy
+/etc/rc.d/S99dnsproxy restart
 
 echo "Job's done! Ready to work."
