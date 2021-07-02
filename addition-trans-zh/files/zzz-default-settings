@@ -83,7 +83,7 @@ opkg flag hold dnsmasq-full
 #sync; echo 3 > /proc/sys/vm/drop_caches
 
 #默认关闭 Shortcut-FE
-#service shortcut-fe stop
+#/etc/init.d/shortcut-fe stop
 #rm -rf /etc/rc.d/S90shortcut-fe
 
 #默认关闭 dnsproxy
