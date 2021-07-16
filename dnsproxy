@@ -6,7 +6,7 @@ USE_PROCD=1
 
 #####  ONLY CHANGE THIS BLOCK  ######
 PROG=/usr/bin/dnsproxy # where is dnsproxy
-CONF_OVERSEA="-l 127.0.0.1 -p 5335 -u tls://dns.google -u tls://1.1.1.1 -u 202.141.162.123:5353 -b 1.1.1.1:53 --cache --cache-min-ttl=3600 --fastest-addr --ipv6-disabled" # oversea config
+CONF_OVERSEA="-l 127.0.0.1 -p 5335 -u tls://8.8.4.4:853 -u tls://1.1.1.1:853 --cache --cache-min-ttl=3600 --fastest-addr --ipv6-disabled" # oversea config
 CONF_MAINLAND="-l 127.0.0.1 -p 6050 -u 119.29.29.29 -u 223.5.5.5 -u 180.76.76.76 --cache --cache-min-ttl=3600 --fastest-addr" # mainland config
 #####  ONLY CHANGE THIS BLOCK  ######
 
@@ -28,6 +28,11 @@ start_service() {
   procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
   procd_close_instance MAINLAND
   echo "dnsproxy MAINLAND is started!"
+
+  uci set dhcp.@dnsmasq[0].cachesize='0'
+  uci commit dhcp
+  /etc/init.d/dnsmasq restart
+
 }
 
 reload_service() {
