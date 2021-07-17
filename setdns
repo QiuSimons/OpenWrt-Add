@@ -3,6 +3,7 @@
 sed -i "/list server/d" /etc/config/network
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#6050'
 uci set dhcp.@dnsmasq[0].rebind_protection='0'
+uci set dhcp.@dnsmasq[0].cachesize='0'
 lanip="$(uci get network.lan.ipaddr)"
 sed -i "/dhcp_option/d" /etc/config/dhcp
 sed -i "/dhcpv6/a\\\tlist dhcp_option '6,$lanip'" /etc/config/dhcp
