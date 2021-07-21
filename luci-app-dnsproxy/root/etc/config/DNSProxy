@@ -1,0 +1,3 @@
+
+config DNSProxy 'DNSProxy'
+	option enabled '1'
