@@ -35,13 +35,26 @@ start_service()
   config_get_bool enabled DNSProxy enabled 0
 
   if [ "$enabled" -eq 0 ]; then
+  sed -i "/list server/d" /etc/config/network
+  sed -i "/dhcp_option/d" /etc/config/dhcp
+  uci commit dhcp
+  uci set shadowsocksr.@global[0].pdnsd_enable='1'
+  uci set shadowsocksr.@global[0].tunnel_forward='8.8.4.4:53'
+  uci commit shadowsocksr
+  uci del network.lan.dns
+  uci del network.wan.peerdns
+  uci del network.wan.dns
+  uci commit network
+
+  /etc/init.d/network reload
+  /etc/init.d/dnsmasq restart
+  /etc/init.d/shadowsocksr restart
 	echo "dnsproxy has turned off"
 	return 1
   fi
 	sed -i "/list server/d" /etc/config/network
 	uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#6050'
 	uci set dhcp.@dnsmasq[0].rebind_protection='0'
-	uci set dhcp.@dnsmasq[0].cachesize='0'
 	lanip="$(uci get network.lan.ipaddr)"
 	sed -i "/dhcp_option/d" /etc/config/dhcp
 	sed -i "/dhcpv6/a\\\tlist dhcp_option '6,$lanip'" /etc/config/dhcp
@@ -65,7 +78,7 @@ start_service()
 	procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
 	procd_close_instance OVERSEA
 	echo "dnsproxy OVERSEA is started!"
-  
+
 	procd_open_instance MAINLAND
 	procd_set_param command $PROG $CONF_MAINLAND
 	procd_set_param user root
@@ -73,8 +86,12 @@ start_service()
 	procd_set_param stderr 1
 	procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
 	procd_close_instance MAINLAND
+
+  /etc/init.d/network reload
+  /etc/init.d/dnsmasq restart
+  /etc/init.d/shadowsocksr restart
+
 	echo "dnsproxy MAINLAND is started!"
-	/etc/init.d/dnsmasq restart
 	echo "dnsproxy turn on"
 	echo "enabled="$enabled""
 }
@@ -83,10 +100,9 @@ stop_service()
 {
 	config_load "${CONFIGURATION}"
 	local enabled
- 
+
 	config_get_bool enabled DNSProxy enabled 0
 	killall -q dnsproxy
 	echo "dnsproxy turn off"
 	echo "enabled="$enabled""
 }
-
