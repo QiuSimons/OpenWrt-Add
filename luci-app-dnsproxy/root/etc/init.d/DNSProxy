@@ -2,21 +2,28 @@
 # Copyright (C) 2020 IrineSistiana
 
 START=99
+STOP=10
 USE_PROCD=1
 PROG=/usr/bin/dnsproxy
 CONFIGURATION=DNSProxy
 PORT1="-l 127.0.0.1 -p 5335"
 PORT2="-l 127.0.0.1 -p 6050"
+ipv6flag="--ipv6-disabled"
 
-uci_get_by_type() 
+uci_get_by_type()
 {
-	local "ret"
-	ret="$(uci get "$NAME".@"$1"[0]."$2" 2>/dev/null)"
-	echo "${ret:=$3}"
+    local "ret"
+    ret="$(uci get "$NAME".@"$1"[0]."$2" 2>/dev/null)"
+    echo "${ret:=$3}"
 }
 
-CONF_OVERSEA="$(uci_get_by_type "$NAME" "node5335" "-u tls://8.8.4.4:853 -u tls://1.1.1.1:853 --cache --cache-min-ttl=3600 --fastest-addr --ipv6-disabled")"
-CONF_MAINLAND="$(uci_get_by_type "$NAME" "node6050" "-u 119.29.29.29 -u 223.5.5.5 -u 180.76.76.76 --cache --cache-min-ttl=3600 --fastest-addr")"
+CONF_OVERSEA="$(uci_get_by_type "$NAME" "node5335" "tls://8.8.4.4:853 tls://1.1.1.1:853")"
+CONF_MAINLAND="$(uci_get_by_type "$NAME" "node6050" "119.29.29.29 223.5.5.5 180.76.76.76")"
+
+CONF_NOIPV6="$(uci_get_by_type "$NAME" "noipv6" "1")"
+if [ "${CONF_NOIPV6}" = "0" ];  then
+    ipv6flag=""
+fi
 
 service_triggers()
 {
@@ -25,100 +32,105 @@ service_triggers()
 
 reload_service()
 {
-	stop
-	sleep 2s
-	echo "dnsproxy is restarted!"
-	start
+    stop
+    sleep 2s
+    echo "dnsproxy is restarted!"
+    start
 }
 
 restart_others()
 {
-  /etc/init.d/network reload
-  /etc/init.d/dnsmasq restart
-  /etc/init.d/shadowsocksr restart
+    /etc/init.d/network reload
+    /etc/init.d/dnsmasq restart
+    /etc/init.d/shadowsocksr restart
 }
 
 restore_setting()
 {
-  sed -i "/list server/d" /etc/config/network
-  sed -i "/dhcp_option/d" /etc/config/dhcp
-  uci commit dhcp
-  uci set shadowsocksr.@global[0].pdnsd_enable='1'
-  uci set shadowsocksr.@global[0].tunnel_forward='8.8.4.4:53'
-  uci commit shadowsocksr
-  uci del network.lan.dns
-  uci del network.wan.peerdns
-  uci del network.wan.dns
-  uci commit network
+    sed -i "/list server/d" /etc/config/network
+    sed -i "/dhcp_option/d" /etc/config/dhcp
+    uci commit dhcp
+    uci set shadowsocksr.@global[0].pdnsd_enable='1'
+    uci set shadowsocksr.@global[0].tunnel_forward='8.8.4.4:53'
+    uci commit shadowsocksr
+    uci del network.lan.dns
+    uci del network.wan.peerdns
+    uci del network.wan.dns
+    uci commit network
 }
 
 prepare_setting()
 {
-  sed -i "/list server/d" /etc/config/network
-  uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#6050'
-  uci set dhcp.@dnsmasq[0].rebind_protection='0'
-  lanip="$(uci get network.lan.ipaddr)"
-  sed -i "/dhcp_option/d" /etc/config/dhcp
-  sed -i "/dhcpv6/a\\\tlist dhcp_option '6,$lanip'" /etc/config/dhcp
-  uci commit dhcp
-  uci set shadowsocksr.@global[0].dports='1'
-  uci set shadowsocksr.@global[0].pdnsd_enable='0'
-  uci del shadowsocksr.@global[0].tunnel_forward
-  uci commit shadowsocksr
-  sed -i "/list dns/d" /etc/config/network
-  uci set network.wan.peerdns='0'
-  uci add_list network.wan.dns='127.0.0.1'
-  uci add_list network.lan.dns='127.0.0.1'
-  uci commit network
+    sed -i "/list server/d" /etc/config/network
+    uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#6050'
+    uci set dhcp.@dnsmasq[0].rebind_protection='0'
+    lanip="$(uci get network.lan.ipaddr)"
+    sed -i "/dhcp_option/d" /etc/config/dhcp
+    sed -i "/dhcpv6/a\\\tlist dhcp_option '6,$lanip'" /etc/config/dhcp
+    uci commit dhcp
+    uci set shadowsocksr.@global[0].dports='1'
+    uci set shadowsocksr.@global[0].pdnsd_enable='0'
+    uci del shadowsocksr.@global[0].tunnel_forward
+    uci commit shadowsocksr
+    sed -i "/list dns/d" /etc/config/network
+    uci set network.wan.peerdns='0'
+    uci add_list network.wan.dns='127.0.0.1'
+    uci add_list network.lan.dns='127.0.0.1'
+    uci commit network
 }
 
 start_service()
 {
-   # Reading config
-   config_load "${CONFIGURATION}"
-   local enabled
+    # Reading config
+    config_load "${CONFIGURATION}"
+    local enabled
 
-  config_get_bool enabled DNSProxy enabled 0
+    config_get_bool enabled DNSProxy enabled 0
 
-  if [ "$enabled" -eq 0 ]; then
-  restore_setting
-  restart_others
-	echo "dnsproxy has turned off"
-	return 1
-  fi
-  	prepare_setting
-	
-	procd_open_instance OVERSEA
-	procd_set_param command $PROG $PORT1 $CONF_OVERSEA
-	procd_set_param user root
-	procd_set_param stdout 1
-	procd_set_param stderr 1
-	procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
-	procd_close_instance OVERSEA
-	echo "dnsproxy OVERSEA is started!"
+    if [ "$enabled" -eq 0 ]; then
+        restore_setting
+        restart_others
+        echo "dnsproxy has turned off"
+        return 1
+    fi
+    prepare_setting
 
-	procd_open_instance MAINLAND
-	procd_set_param command $PROG $PORT2 $CONF_MAINLAND
-	procd_set_param user root
-	procd_set_param stdout 1
-	procd_set_param stderr 1
-	procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
-	procd_close_instance MAINLAND
+    [ -d "/var/run/dnsproxy" ] || mkdir -p "/var/run/dnsproxy"
+    echo -e "${CONF_OVERSEA// /\\n}" > "/var/run/dnsproxy/dnsproxy_oversea.conf"
+    echo -e "${CONF_MAINLAND// /\\n}" > "/var/run/dnsproxy/dnsproxy_mainland.conf"
 
-	restart_others
+    procd_open_instance OVERSEA
+    procd_set_param command $PROG $PORT1 "-u '/var/run/dnsproxy/dnsproxy_oversea.conf' --all-servers --cache --cache-min-ttl=3600 --fastest-addr" $ipv6flag
+    procd_set_param user root
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
+    procd_close_instance OVERSEA
+    echo "dnsproxy OVERSEA is started!"
 
-	echo "dnsproxy MAINLAND is started!"
-	echo "dnsproxy turn on"
-	echo "enabled="$enabled""
+    procd_open_instance MAINLAND
+    procd_set_param command $PROG $PORT2 "-u '/var/run/dnsproxy/dnsproxy_mainland.conf' --all-servers --cache --cache-min-ttl=3600 --fastest-addr"
+    procd_set_param user root
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
+    procd_close_instance MAINLAND
+
+    restart_others
+
+    echo "dnsproxy MAINLAND is started!"
+    echo "dnsproxy turn on"
+    echo "enabled="$enabled""
 }
 
 stop_service()
 {
-	config_load "${CONFIGURATION}"
-	local enabled
+    config_load "${CONFIGURATION}"
+    local enabled
 
-	config_get_bool enabled DNSProxy enabled 0
-	killall -q dnsproxy
-	echo "dnsproxy turn off"
-	echo "enabled="$enabled""
+    config_get_bool enabled DNSProxy enabled 0
+    killall -q dnsproxy
+    rm -f /var/run/dnsproxy/*
+    echo "dnsproxy turn off"
+    echo "enabled="$enabled""
 }
