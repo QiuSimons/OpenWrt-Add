@@ -3,7 +3,7 @@ msgid "Manual Configuration"
 msgstr "手动配置"
 
 msgid "DNSProxy is a Simple DNS proxy with DoH, DoT, DoQ and DNSCrypt support."
-msgstr "DNSProxy 是一个简单的DNS代理工具，支持DoH、DoT、DoQ和DNSCrypt。"
+msgstr "DNSProxy 是一个简单的DNS代理工具，支持 DoH、DoT、DoQ 和 DNSCrypt。"
 
 msgid "RUNNING"
 msgstr "运行中"
@@ -16,3 +16,9 @@ msgstr "获取数据中..."
 
 msgid "Enable"
 msgstr "启用"
+
+msgid "Node 5335"
+msgstr "监听端口 5335"
+
+msgid "Node 6050"
+msgstr "监听端口 6050"
