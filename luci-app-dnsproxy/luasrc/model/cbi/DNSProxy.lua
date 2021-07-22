@@ -1,3 +1,10 @@
+require("luci.sys")
+require("luci.util")
+require("luci.http")
+require("luci.dispatcher")
+require("nixio.fs")
+local fs=require"nixio.fs"
+
 mp = Map("DNSProxy", translate("DNSProxy"))
 mp.description = translate("DNSProxy is a Simple DNS proxy with DoH, DoT, DoQ and DNSCrypt support.")
 mp:section(SimpleSection).template  = "DNSProxy/DNSProxy_status"
@@ -10,17 +17,19 @@ enabled = s:option(Flag, "enabled", translate("Enable"))
 enabled.default = 0
 enabled.rmempty = false
 
-node5335 = s:option(DynamicList, "node5335", translate("Node 5335"))
-node5335.description = translate("Upsteam DNS Server For 5335 (Support DoT/DoH)")
-node5335.rmempty = true
+node5335 = s:option(Value, "node5335", translate("Node 5335"))
+node5335.default = "-u tls://8.8.4.4:853 -u tls://1.1.1.1:853 --cache --cache-min-ttl=3600 --fastest-addr --ipv6-disabled"
+node5335.placeholder = "-u tls://8.8.4.4:853 -u tls://1.1.1.1:853 --cache --cache-min-ttl=3600 --fastest-addr --ipv6-disabled"
+node5335.datatype = "string"
 
-noipv6 = s:option(Flag, "noipv6", translate("Filter AAAA"))
-noipv6.default = 1
-noipv6.rmempty = false
-noipv6.description = translate("DNSProxy Port 5335 Filter AAAA Result")
+node6050 = s:option(Value, "node6050", translate("Node 6050"))
+node6050.default = "-u 119.29.29.29 -u 223.5.5.5 -u 180.76.76.76 --cache --cache-min-ttl=3600 --fastest-addr"
+node6050.placeholder = "-u 119.29.29.29 -u 223.5.5.5 -u 180.76.76.76 --cache --cache-min-ttl=3600 --fastest-addr"
+node6050.datatype = "string"
 
-node6050 = s:option(DynamicList, "node6050", translate("Node 6050"))
-node6050.description = translate("Upsteam DNS Server For 6050 (Support DoT/DoH)")
-node6050.rmempty = true
+local apply = luci.http.formvalue("cbi.apply")
+if apply then
+    io.popen("/etc/init.d/DNSProxy reload &")
+end
 
 return mp
