@@ -22,15 +22,3 @@ msgstr "监听端口 5335"
 
 msgid "Node 6050"
 msgstr "监听端口 6050"
-
-msgid "Upsteam DNS Server For 5335 (Support DoT/DoH)"
-msgstr "配置 5335 端口使用的上游 DNS 服务器, 支持 DoT/DoH"
-
-msgid "Upsteam DNS Server For 6050 (Support DoT/DoH)"
-msgstr "配置 6050 端口使用的上游 DNS 服务器, 支持 DoT/DoH"
-
-msgid "Filter AAAA"
-msgstr "禁用 IPv6 解析"
-
-msgid "Port 5335 Filter AAAA Result"
-msgstr "禁止 5335 端口解析 IPv6 地址"
