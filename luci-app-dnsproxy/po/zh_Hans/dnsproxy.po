@@ -1,0 +1,39 @@
+#/cgi-bin/luci/admin/services/dnsproxy
+msgid "Manual Configuration"
+msgstr "手动配置"
+
+msgid "DNSProxy is a Simple DNS proxy with DoH, DoT, DoQ and DNSCrypt support."
+msgstr "DNSProxy 是一个简单的DNS代理工具，支持 DoH、DoT、DoQ 和 DNSCrypt。"
+
+msgid "RUNNING"
+msgstr "运行中"
+
+msgid "NOT RUNNING"
+msgstr "未运行"
+
+msgid "Collecting data..."
+msgstr "获取数据中..."
+
+msgid "Enable"
+msgstr "启用"
+
+msgid "DNSProxy Port1"
+msgstr "监听端口一(默认5335)"
+
+msgid "NSProxy Port2"
+msgstr "监听端口二(默认6050)"
+
+msgid "Upsteam DNS"
+msgstr "上游 DNS 服务器"
+
+msgid "Upsteam DNS Server For DNSProxy Port1 (Support DoT/DoH)"
+msgstr "配置第一端口使用的上游 DNS 服务器, 支持 DoT/DoH"
+
+msgid "Upsteam DNS Server For DNSProxy Port2 (Support DoT/DoH)"
+msgstr "配置第二端口使用的上游 DNS 服务器, 支持 DoT/DoH"
+
+msgid "Filter AAAA"
+msgstr "禁用 IPv6 解析"
+
+msgid "DNSProxy Port1 Filter AAAA Result"
+msgstr "禁止第一端口解析 IPv6 地址"
