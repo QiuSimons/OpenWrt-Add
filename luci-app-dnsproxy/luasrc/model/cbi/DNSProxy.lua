@@ -28,10 +28,8 @@ node6050.placeholder = "-u 119.29.29.29 -u 223.5.5.5 -u 180.76.76.76 --cache --c
 node6050.datatype = "string"
 
 local apply = luci.http.formvalue("cbi.apply")
- if apply then
-     io.popen("/etc/init.d/DNSProxy reload")
+if apply then
+    io.popen("/etc/init.d/DNSProxy reload &")
 end
-
-io.popen("/etc/init.d/DNSProxy reload")
 
 return mp
