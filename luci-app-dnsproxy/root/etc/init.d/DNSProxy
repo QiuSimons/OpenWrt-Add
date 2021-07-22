@@ -8,15 +8,8 @@ CONFIGURATION=DNSProxy
 PORT1="-l 127.0.0.1 -p 5335"
 PORT2="-l 127.0.0.1 -p 6050"
 
-uci_get_by_type() 
-{
-	local "ret"
-	ret="$(uci get "$NAME".@"$1"[0]."$2" 2>/dev/null)"
-	echo "${ret:=$3}"
-}
-
-CONF_OVERSEA="$(uci_get_by_type "$NAME" "node5335" "-u tls://8.8.4.4:853 -u tls://1.1.1.1:853 --cache --cache-min-ttl=3600 --fastest-addr --ipv6-disabled")"
-CONF_MAINLAND="$(uci_get_by_type "$NAME" "node6050" "-u 119.29.29.29 -u 223.5.5.5 -u 180.76.76.76 --cache --cache-min-ttl=3600 --fastest-addr")"
+CONF_OVERSEA="$(uci get DNSProxy.DNSProxy.node5335)"
+CONF_MAINLAND="$(uci get DNSProxy.DNSProxy.node6050)"
 
 service_triggers()
 {
@@ -72,6 +65,30 @@ prepare_setting()
   uci commit network
 }
 
+
+
+run_node1()
+{
+    procd_open_instance OVERSEA
+		procd_set_param command $PROG $PORT1 $CONF_OVERSEA
+		procd_set_param file /etc/config/DNSProxy
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance OVERSEA
+    echo "dnsproxy OVERSEA is started!"
+}
+
+run_node2()
+{
+    procd_open_instance MAINLAND
+		procd_set_param command $PROG $PORT2 $CONF_MAINLAND
+		procd_set_param file /etc/config/DNSProxy
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance MAINLAND
+    echo "dnsproxy MAINLAND is started!"
+}
+
 start_service()
 {
    # Reading config
@@ -87,38 +104,23 @@ start_service()
 	return 1
   fi
   	prepare_setting
-	
-	procd_open_instance OVERSEA
-	procd_set_param command $PROG $PORT1 $CONF_OVERSEA
-	procd_set_param user root
-	procd_set_param stdout 1
-	procd_set_param stderr 1
-	procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
-	procd_close_instance OVERSEA
-	echo "dnsproxy OVERSEA is started!"
 
-	procd_open_instance MAINLAND
-	procd_set_param command $PROG $PORT2 $CONF_MAINLAND
-	procd_set_param user root
-	procd_set_param stdout 1
-	procd_set_param stderr 1
-	procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
-	procd_close_instance MAINLAND
+		run_node1
+		run_node2
 
-	restart_others
+		restart_others
 
-	echo "dnsproxy MAINLAND is started!"
-	echo "dnsproxy turn on"
-	echo "enabled="$enabled""
+		echo "dnsproxy turn on"
+		echo "enabled="$enabled""
 }
 
 stop_service()
 {
-	config_load "${CONFIGURATION}"
-	local enabled
+		config_load "${CONFIGURATION}"
+		local enabled
 
-	config_get_bool enabled DNSProxy enabled 0
-	killall -q dnsproxy
-	echo "dnsproxy turn off"
-	echo "enabled="$enabled""
+		config_get_bool enabled DNSProxy enabled 0
+		killall -q dnsproxy
+		echo "dnsproxy turn off"
+		echo "enabled="$enabled""
 }
