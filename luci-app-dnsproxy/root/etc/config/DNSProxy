@@ -1,3 +1,5 @@
 
 config DNSProxy 'DNSProxy'
 	option enabled '0'
+	option node5335 '-u tls://8.8.4.4:853 -u tls://1.1.1.1:853 --cache --cache-min-ttl=3600 --fastest-addr --ipv6-disabled'
+	option node6050 '-u 119.29.29.29 -u 223.5.5.5 -u 180.76.76.76 --cache --cache-min-ttl=3600 --fastest-addr'
