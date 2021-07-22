@@ -20,7 +20,7 @@ msgstr "启用"
 msgid "DNSProxy Port1"
 msgstr "监听端口一(默认5335)"
 
-msgid "NSProxy Port2"
+msgid "DNSProxy Port2"
 msgstr "监听端口二(默认6050)"
 
 msgid "Upsteam DNS"

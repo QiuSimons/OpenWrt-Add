@@ -7,7 +7,8 @@ USE_PROCD=1
 PROG=/usr/bin/dnsproxy
 ipv6flag="--ipv6-disabled"
 
-inital_conf(){
+inital_conf()
+{
 	config_load "DNSProxy"
 	config_get "enabled" "DNSProxy" "enabled" "0"
 	config_get "oversea_port" "DNSProxy" "oversea_port" "5335"
@@ -39,7 +40,7 @@ restart_others()
 
 restore_setting()
 {
-    sed -i "/list server/d" /etc/config/network
+    sed -i "/list server/d" /etc/config/dhcp
     sed -i "/dhcp_option/d" /etc/config/dhcp
     uci commit dhcp
     uci set shadowsocksr.@global[0].pdnsd_enable='1'
@@ -53,7 +54,7 @@ restore_setting()
 
 prepare_setting()
 {
-    sed -i "/list server/d" /etc/config/network
+    sed -i "/list server/d" /etc/config/dhcp
     uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#'$mainland_port''
     uci set dhcp.@dnsmasq[0].rebind_protection='0'
     lanip="$(uci get network.lan.ipaddr)"
@@ -70,6 +71,31 @@ prepare_setting()
     uci add_list network.lan.dns='127.0.0.1'
     uci commit network
 }
+
+start_node1()
+{
+    procd_open_instance OVERSEA
+    procd_set_param command $PROG -l "127.0.0.1" -p $oversea_port -u "/var/run/dnsproxy/dnsproxy_oversea.conf" --all-servers --cache --cache-min-ttl=3600 --fastest-addr $ipv6flag
+    procd_set_param user root
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
+    procd_close_instance OVERSEA
+    echo "dnsproxy OVERSEA is started!"
+}
+
+start_node2()
+{
+    procd_open_instance MAINLAND
+    procd_set_param command $PROG -l "127.0.0.1" -p $mainland_port -u "/var/run/dnsproxy/dnsproxy_mainland.conf" --all-servers --cache --cache-min-ttl=3600 --fastest-addr
+    procd_set_param user root
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
+    procd_close_instance MAINLAND
+    echo "dnsproxy MAINLAND is started!"
+}
+
 
 start_service()
 {
@@ -90,26 +116,12 @@ start_service()
     if [ "${oversea_noipv6}" = "0" ];  then
         ipv6flag = ""
     fi
-    procd_open_instance OVERSEA
-    procd_set_param command $PROG -l "127.0.0.1" -p $oversea_port -u "/var/run/dnsproxy/dnsproxy_oversea.conf" --all-servers --cache --cache-min-ttl=3600 --fastest-addr $ipv6flag
-    procd_set_param user root
-    procd_set_param stdout 1
-    procd_set_param stderr 1
-    procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
-    procd_close_instance OVERSEA
-    echo "dnsproxy OVERSEA is started!"
 
-    procd_open_instance MAINLAND
-    procd_set_param command $PROG -l "127.0.0.1" -p $mainland_port -u "/var/run/dnsproxy/dnsproxy_mainland.conf" --all-servers --cache --cache-min-ttl=3600 --fastest-addr
-    procd_set_param user root
-    procd_set_param stdout 1
-    procd_set_param stderr 1
-    procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
-    procd_close_instance MAINLAND
+    start_node1
+    start_node2
 
     restart_others
 
-    echo "dnsproxy MAINLAND is started!"
     echo "dnsproxy turn on"
     echo "enabled="$enabled""
 }
@@ -122,6 +134,10 @@ stop_service()
     config_get_bool enabled DNSProxy enabled 0
     killall -q dnsproxy
     rm -f /var/run/dnsproxy/*
+    if [ "$enabled" -eq 0 ]; then
+        restore_setting
+        restart_others
+    fi
     echo "dnsproxy turn off"
     echo "enabled="$enabled""
 }
