@@ -10,6 +10,14 @@ enabled = s:option(Flag, "enabled", translate("Enable"))
 enabled.default = 0
 enabled.rmempty = false
 
+fastestflag = s:option(Flag, "fastestflag", translate("Respond Fastest IP"))
+fastestflag.default = 1
+fastestflag.rmempty = false
+
+cacheflag = s:option(Flag, "cacheflag", translate("Enabled DNS cache"))
+cacheflag.default = 1
+cacheflag6.rmempty = false
+
 oversea_port = s:option(Value, "oversea_port", translate("DNSProxy Port1"))
 oversea_port.default = "5335"
 oversea_port.datatype = "port"
