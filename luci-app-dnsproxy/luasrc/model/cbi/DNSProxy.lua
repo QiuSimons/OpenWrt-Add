@@ -16,7 +16,7 @@ fastestflag.rmempty = false
 
 cacheflag = s:option(Flag, "cacheflag", translate("Enabled DNS cache"))
 cacheflag.default = 1
-cacheflag6.rmempty = false
+cacheflag.rmempty = false
 
 oversea_port = s:option(Value, "oversea_port", translate("DNSProxy Port1"))
 oversea_port.default = "5335"
