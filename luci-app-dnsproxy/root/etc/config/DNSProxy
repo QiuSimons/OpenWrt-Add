@@ -1,6 +1,8 @@
 
 config DNSProxy 'DNSProxy'
 	option enabled '0'
+	option fastest '1'
+	option cache '1'
 	option oversea_port '5335'
 	option oversea_noipv6 '1'
 	option mainland_port '6050'

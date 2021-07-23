@@ -6,6 +6,8 @@ USE_PROCD=1
 
 PROG=/usr/bin/dnsproxy
 ipv6flag="--ipv6-disabled"
+cacheflag="--cache --cache-min-ttl=3600"
+fastestflag="--fastest-addr"
 
 inital_conf()
 {
@@ -75,7 +77,7 @@ prepare_setting()
 start_node1()
 {
     procd_open_instance OVERSEA
-    procd_set_param command $PROG -l "127.0.0.1" -p $oversea_port -u "/var/run/dnsproxy/dnsproxy_oversea.conf" --all-servers --cache --cache-min-ttl=3600 --fastest-addr $ipv6flag
+    procd_set_param command $PROG -l "127.0.0.1" -p $oversea_port -u "/var/run/dnsproxy/dnsproxy_oversea.conf" --all-servers $fastestflag $cacheflag $ipv6flag
     procd_set_param user root
     procd_set_param stdout 1
     procd_set_param stderr 1
@@ -87,7 +89,7 @@ start_node1()
 start_node2()
 {
     procd_open_instance MAINLAND
-    procd_set_param command $PROG -l "127.0.0.1" -p $mainland_port -u "/var/run/dnsproxy/dnsproxy_mainland.conf" --all-servers --cache --cache-min-ttl=3600 --fastest-addr
+    procd_set_param command $PROG -l "127.0.0.1" -p $mainland_port -u "/var/run/dnsproxy/dnsproxy_mainland.conf" --all-servers $fastestflag $cacheflag
     procd_set_param user root
     procd_set_param stdout 1
     procd_set_param stderr 1
@@ -115,6 +117,12 @@ start_service()
     echo -e "${mainland_dns// /\\n}" > "/var/run/dnsproxy/dnsproxy_mainland.conf"
     if [ "${oversea_noipv6}" = "0" ];  then
         ipv6flag = ""
+    fi
+    if [ "${cache}" = "0" ];  then
+        cacheflag = ""
+    fi
+    if [ "${fastest}" = "0" ];  then
+        fastestflag = ""
     fi
 
     start_node1

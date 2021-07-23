@@ -37,3 +37,12 @@ msgstr "禁用 IPv6 解析"
 
 msgid "DNSProxy Port1 Filter AAAA Result"
 msgstr "禁止第一端口解析 IPv6 地址"
+
+msgid "Respond Fastest IP"
+msgstr "IP 优选"
+
+msgid "Respond Fastest IP"
+msgstr "IP 优选"
+
+msgid "Enabled DNS Cache"
+msgstr "启用缓存"

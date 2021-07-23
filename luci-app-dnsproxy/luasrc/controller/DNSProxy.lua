@@ -3,10 +3,7 @@ function index()
     if not nixio.fs.access("/etc/config/DNSProxy")then
         return
     end
-    local page = entry({"admin","services","DNSProxy"},cbi("DNSProxy"),_("DNSProxy"))
-    page.order = 30
-    page.dependent = true
-    page.acl_depends = { "luci-app-dnsproxy" }
+    	entry({"admin","services","DNSProxy"},cbi("DNSProxy"),_("DNSProxy"),30).dependent=true
     entry({"admin","services","DNSProxy","status"},call("act_status")).leaf=true
 end
 
