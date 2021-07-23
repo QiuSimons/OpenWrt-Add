@@ -118,6 +118,12 @@ start_service()
     if [ "${oversea_noipv6}" = "0" ];  then
         ipv6flag = ""
     fi
+    if [ "${cacheflag}" = "0" ];  then
+        cacheflag = ""
+    fi
+    if [ "${fastestflag}" = "0" ];  then
+        fastestflag = ""
+    fi
 
     start_node1
     start_node2
