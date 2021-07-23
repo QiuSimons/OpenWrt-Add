@@ -14,7 +14,7 @@ fastestflag = s:option(Flag, "fastestflag", translate("Respond Fastest IP"))
 fastestflag.default = 1
 fastestflag.rmempty = false
 
-cacheflag = s:option(Flag, "cacheflag", translate("Enabled DNS cache"))
+cacheflag = s:option(Flag, "cacheflag", translate("Enabled DNS Cache"))
 cacheflag.default = 1
 cacheflag.rmempty = false
 
