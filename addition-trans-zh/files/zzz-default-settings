@@ -26,7 +26,7 @@ uci commit uhttpd
 
 #在防火墙默认开启全锥形 NAT 以及 Flow Offloading
 uci set firewall.@defaults[0].fullcone='1'
-#uci set firewall.@defaults[0].flow_offloading='1'
+uci set firewall.@defaults[0].flow_offloading='1'
 uci commit firewall
 
 #默认开启 Packet Steering
