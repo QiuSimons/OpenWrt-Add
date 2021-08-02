@@ -126,13 +126,13 @@ start_service()
     echo -e "${oversea_dns// /\\n}" > "/var/run/dnsproxy/dnsproxy_oversea.conf"
     echo -e "${mainland_dns// /\\n}" > "/var/run/dnsproxy/dnsproxy_mainland.conf"
     if [ "${oversea_noipv6}" = "0" ];  then
-        ipv6flag = ""
+        ipv6flag=""
     fi
     if [ "${cache}" = "0" ];  then
-        cacheflag = ""
+        cacheflag=""
     fi
     if [ "${fastest}" = "0" ];  then
-        fastestflag = ""
+        fastestflag=""
     fi
 
     start_node1
