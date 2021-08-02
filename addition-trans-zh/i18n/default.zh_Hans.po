@@ -229,6 +229,3 @@ msgstr "秒。"
 
 msgid "upflow:"
 msgstr "上传："
-
-msgid "There is no password set on this router. Please configure a root password to protect the web interface and enable SSH."
-msgstr "尚未设置密码。请为 root 用户设置密码以保护主机并启用 SSH 。"
