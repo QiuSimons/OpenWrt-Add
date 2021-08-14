@@ -1089,3 +1089,24 @@ msgstr "通常为 lan"
 
 msgid "Source Code"
 msgstr "源代码"
+
+msgid "Routing"
+msgstr "路由表"
+
+msgid "IPv4 Routing"
+msgstr "IPv4 路由表"
+
+msgid "IPv6 Routing"
+msgstr "IPv6 路由表"
+
+msgid "Active <abbr title=\"Internet Protocol Version 4\">IPv4</abbr>-Rules"
+msgstr "活动的 <abbr title=\"互联网协议第 4 版\">IPv4</abbr> 规则"
+
+msgid "Active <abbr title=\"Internet Protocol Version 6\">IPv6</abbr>-Rules"
+msgstr "活动的 <abbr title=\"互联网协议第 6 版\">IPv6</abbr> 规则"
+
+msgid "Skip from backup files that are equal to those in /rom"
+msgstr "跳过与 /rom 中的文件相同的备份文件"
+
+msgid "Include in backup a list of current installed packages at /etc/backup/installed_packages.txt"
+msgstr "在 /etc/backup/installed_packages.txt 中保存一份当前安装的软件包列表"
