@@ -1,9 +1,9 @@
 
 config DNSProxy 'DNSProxy'
-	option enabled '0'
+	option enabled '1'
 	option fastest '1'
 	option cache '1'
-	option oversea_port '5335'
+	option oversea_port '6051'
 	option oversea_noipv6 '1'
 	option mainland_port '6050'
 	list oversea_dns 'tls://8.8.4.4:853'
