@@ -12,10 +12,10 @@ fastestflag="--fastest-addr"
 inital_conf()
 {
 	config_load "DNSProxy"
-	config_get "enabled" "DNSProxy" "enabled" "0"
+	config_get "enabled" "DNSProxy" "enabled" "1"
 	config_get "fastest" "DNSProxy" "fastest" "1"
 	config_get "cache" "DNSProxy" "cache" "1"
-	config_get "oversea_port" "DNSProxy" "oversea_port" "5335"
+	config_get "oversea_port" "DNSProxy" "oversea_port" "6051"
 	config_get "oversea_dns" "DNSProxy" "oversea_dns" "tls://8.8.4.4:853 tls://1.1.1.1:853"
 	config_get "oversea_noipv6" "DNSProxy" "oversea_noipv6" "1"
 	config_get "mainland_port" "DNSProxy" "mainland_port" "6050"
