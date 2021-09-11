@@ -12,7 +12,7 @@ fastestflag="--fastest-addr"
 inital_conf()
 {
 	config_load "DNSProxy"
-	config_get "enabled" "DNSProxy" "enabled" "1"
+	config_get "enabled" "DNSProxy" "enabled" "0"
 	config_get "fastest" "DNSProxy" "fastest" "1"
 	config_get "cache" "DNSProxy" "cache" "1"
 	config_get "oversea_port" "DNSProxy" "oversea_port" "6051"
@@ -64,6 +64,10 @@ start_service()
 {
     # Reading config
     inital_conf
+
+    if [ "${enabled}" = "0" ];  then
+        return 0
+    fi
 
     [ -d "/var/run/dnsproxy" ] || mkdir -p "/var/run/dnsproxy"
     echo -e "${oversea_dns// /\\n}" > "/var/run/dnsproxy/dnsproxy_oversea.conf"
