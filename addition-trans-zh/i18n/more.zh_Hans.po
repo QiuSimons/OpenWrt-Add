@@ -1110,3 +1110,6 @@ msgstr "跳过与 /rom 中的文件相同的备份文件"
 
 msgid "Include in backup a list of current installed packages at /etc/backup/installed_packages.txt"
 msgstr "在 /etc/backup/installed_packages.txt 中保存一份当前安装的软件包列表"
+
+msgid "Enable FullCone NAT"
+msgstr "启用 FullCone-NAT"
