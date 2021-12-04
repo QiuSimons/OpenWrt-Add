@@ -1,34 +1,5 @@
 #!/bin/sh
 
-# nanopi docker 兼容性调整
-local board_name="$(cat /tmp/sysinfo/board_name)"
-case "$(board_name)" in
-friendlyarm,nanopi-r2c|\
-friendlyarm,nanopi-r2s|\
-xunlong,orangepi-r1-plus)
-uci set network.lan.device='eth0'
-uci commit network
-echo '
-# disable bridge firewalling by default
-net.bridge.bridge-nf-call-arptables=0
-net.bridge.bridge-nf-call-ip6tables=0
-net.bridge.bridge-nf-call-iptables=0
-' >>/etc/sysctl.conf
-sysctl -p
-;;
-friendlyarm,nanopi-r4s)
-uci set network.lan.device='eth1'
-uci commit network
-echo '
-# disable bridge firewalling by default
-net.bridge.bridge-nf-call-arptables=0
-net.bridge.bridge-nf-call-ip6tables=0
-net.bridge.bridge-nf-call-iptables=0
-' >>/etc/sysctl.conf
-sysctl -p
-;;
-esac
-
 #Argon 主题
 uci set luci.main.mediaurlbase='/luci-static/argon'
 uci commit luci
@@ -81,6 +52,9 @@ echo "10 2 * * * cd /usr/share/unblockneteasemusic/core/ && openssl req -new -x5
 
 #OpenClash 设置
 echo "/etc/openclash/" >> /etc/sysupgrade.conf && cat /etc/sysupgrade.conf | sort | uniq > /tmp/tmp_sysupgrade_conf && cat /tmp/tmp_sysupgrade_conf > /etc/sysupgrade.conf
+
+#Dockerman 设置
+#sed -i 's,/opt,/overlay,g' /etc/config/dockerman
 
 #qBittorrent 设置
 #echo "nobody:x:65534:" >> /etc/group
