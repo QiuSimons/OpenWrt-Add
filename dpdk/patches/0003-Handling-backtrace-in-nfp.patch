@@ -1,0 +1,14 @@
+--- a/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c
++++ b/drivers/net/nfp/nfpcore/nfp_cpp_pcie_ops.c
+@@ -16,9 +16,11 @@
+ 
+ #include <assert.h>
+ #include <stdio.h>
++#ifdef __GLIBC__
+ #if defined(RTE_BACKTRACE)
+ #include <execinfo.h>
+ #endif
++#endif
+ #include <stdlib.h>
+ #include <unistd.h>
+ #include <stdint.h>

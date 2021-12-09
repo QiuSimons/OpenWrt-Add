@@ -1,0 +1,11 @@
+--- a/config/arm/meson.build
++++ b/config/arm/meson.build
+@@ -476,7 +476,7 @@ else
+         # cross build
+         soc = meson.get_cross_property('platform', '')
+         if soc == ''
+-            error('Arm SoC must be specified in the cross file.')
++        soc = 'generic'
+         endif
+         soc_config = socs.get(soc, {'not_supported': true})
+     endif
