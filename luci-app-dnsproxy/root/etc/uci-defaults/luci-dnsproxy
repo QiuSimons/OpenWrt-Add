@@ -1,0 +1,11 @@
+#!/bin/sh
+
+uci -q batch <<-EOF >/dev/null
+	delete ucitrack.@dnsproxy[-1]
+	add ucitrack dnsproxy
+	set ucitrack.@dnsproxy[-1].init=dnsproxy
+	commit ucitrack
+EOF
+
+rm -f /tmp/luci-*
+exit 0

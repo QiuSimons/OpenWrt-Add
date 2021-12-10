@@ -1,8 +1,10 @@
-mp = Map("DNSProxy", translate("DNSProxy"))
+mp = Map("dnsproxy")
+mp.title = translate("DNSProxy")
 mp.description = translate("DNSProxy is a Simple DNS proxy with DoH, DoT, DoQ and DNSCrypt support.")
-mp:section(SimpleSection).template  = "DNSProxy/DNSProxy_status"
 
-s = mp:section(TypedSection, "DNSProxy")
+mp:section(SimpleSection).template = "dnsproxy/dnsproxy_status"
+
+s = mp:section(TypedSection, "dnsproxy")
 s.anonymous=true
 s.addremove=false
 
@@ -24,9 +26,9 @@ oversea_port.datatype = "port"
 oversea_port.rmempty = false
 
 oversea_noipv6 = s:option(Flag, "oversea_noipv6", translate("Filter AAAA"))
+oversea_noipv6.description = translate("DNSProxy Port1 Filter AAAA Result")
 oversea_noipv6.default = 1
 oversea_noipv6.rmempty = false
-oversea_noipv6.description = translate("DNSProxy Port1 Filter AAAA Result")
 
 oversea_dns = s:option(DynamicList, "oversea_dns", translate("Upsteam DNS"))
 oversea_dns.description = translate("Upsteam DNS Server For DNSProxy Port1 (Support DoT/DoH)")

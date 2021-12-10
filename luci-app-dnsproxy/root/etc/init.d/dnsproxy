@@ -11,20 +11,20 @@ fastestflag="--fastest-addr"
 
 inital_conf()
 {
-	config_load "DNSProxy"
-	config_get "enabled" "DNSProxy" "enabled" "0"
-	config_get "fastest" "DNSProxy" "fastest" "1"
-	config_get "cache" "DNSProxy" "cache" "1"
-	config_get "oversea_port" "DNSProxy" "oversea_port" "6051"
-	config_get "oversea_dns" "DNSProxy" "oversea_dns" "tls://8.8.4.4:853 tls://1.1.1.1:853"
-	config_get "oversea_noipv6" "DNSProxy" "oversea_noipv6" "1"
-	config_get "mainland_port" "DNSProxy" "mainland_port" "6050"
-	config_get "mainland_dns" "DNSProxy" "mainland_dns" "119.29.29.29 223.5.5.5 180.76.76.76"
+	config_load "dnsproxy"
+	config_get "enabled" "dnsproxy" "enabled" "0"
+	config_get "fastest" "dnsproxy" "fastest" "1"
+	config_get "cache" "dnsproxy" "cache" "1"
+	config_get "oversea_port" "dnsproxy" "oversea_port" "6051"
+	config_get "oversea_dns" "dnsproxy" "oversea_dns" "tls://8.8.4.4:853 tls://1.1.1.1:853"
+	config_get "oversea_noipv6" "dnsproxy" "oversea_noipv6" "1"
+	config_get "mainland_port" "dnsproxy" "mainland_port" "6050"
+	config_get "mainland_dns" "dnsproxy" "mainland_dns" "119.29.29.29 223.5.5.5 180.76.76.76"
 }
 
 service_triggers()
 {
-    procd_add_reload_trigger "DNSProxy"
+    procd_add_reload_trigger "dnsproxy"
 }
 
 reload_service()
@@ -91,10 +91,10 @@ start_service()
 
 stop_service()
 {
-    config_load "DNSProxy"
+    config_load "dnsproxy"
     local enabled
 
-    config_get_bool enabled DNSProxy enabled 0
+    config_get_bool enabled dnsproxy enabled 0
     killall -q dnsproxy
     rm -f /var/run/dnsproxy/*
     echo "dnsproxy turn off"
