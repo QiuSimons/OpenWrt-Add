@@ -1,15 +1,18 @@
+m = Map("cpulimit")
+m.title = translate("cpulimit")
+m.description = translate("cpulimit")
 
-m = Map("cpulimit", translate("cpulimit"),translate("cpulimit  "))
 s = m:section(TypedSection, "list", translate("Settings"))
 s.template = "cbi/tblsection"
 s.anonymous = true
 s.addremove = true
 
-enable = s:option(Flag, "enabled", translate("enable", "enable"))
+enable = s:option(Flag, "enabled", translate("enable"))
 enable.optional = false
 enable.rmempty = false
 
-exename = s:option(Value, "exename", translate("exename"), translate("name of the executable program file or path name"))
+exename = s:option(Value, "exename", translate("exename"))
+exename.description = translate("name of the executable program file or path name")
 exename.optional = false
 exename.rmempty = false
 exename.default = "/usr/bin/transmission-daemon"
@@ -33,6 +36,5 @@ limit:value("40","40%")
 limit:value("30","30%")
 limit:value("20","20%")
 limit:value("10","10%")
-
 
 return m
