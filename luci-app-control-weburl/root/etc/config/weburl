@@ -23,5 +23,3 @@ config macbind
 	option daysofweek 'Monday Tuesday Wednesday Thursday Friday Saturday Sunday'
 	option enable '0'
 	option keyword 'cmd.exe'
-
-
