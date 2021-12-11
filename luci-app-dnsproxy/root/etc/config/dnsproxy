@@ -1,5 +1,5 @@
 
-config DNSProxy 'DNSProxy'
+config dnsproxy 'dnsproxy'
 	option enabled '1'
 	option fastest '1'
 	option cache '1'
