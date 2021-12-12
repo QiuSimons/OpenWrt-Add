@@ -62,4 +62,3 @@ stop(){
 	iptables - X WEBURL 2>/dev/null
 	ip6tables -X WEBURL 2>/dev/null
 }
-
