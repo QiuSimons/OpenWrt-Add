@@ -55,6 +55,8 @@ uci set upnpd.config.enabled='1'
 uci del upnpd.config.enable_upnp
 uci del upnpd.config.enable_natpmp
 uci set upnpd.config.external_iface='wan'
+uci set upnpd.config.use_stun='1'
+uci set upnpd.config.stun_host='stun.miwifi.com'
 uci commit upnpd
 
 #网易云音乐
