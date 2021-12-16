@@ -1,5 +1,15 @@
 #!/bin/sh
 
+#!/bin/sh
+
+#自动语言
+uci set luci.main.lang=auto
+uci commit luci
+
+#自动挂载
+uci set fstab.@global[0].anon_mount=1
+uci commit fstab
+
 #Argon 主题
 uci set luci.main.mediaurlbase='/luci-static/argon'
 uci commit luci
@@ -98,11 +108,11 @@ opkg flag hold dnsmasq-full
 #rm -rf /etc/rc.d/S99dnsproxy
 
 #自用
-[ -f '/rom/etc/rpcd_10_system.js' ] && rm -f /etc/rpcd_10_system.js
-[ -f '/rom/etc/rpcd_10_system.js' ] && rm -f /www/luci-static/resources/view/status/include/10_system.js
-[ -f '/rom/etc/rpcd_10_system.js' ] && cp -f /rom/etc/rpcd_10_system.js /www/luci-static/resources/view/status/include/10_system.js
-[ -f '/etc/fucked' ] && sed -i '/Source Code/d' /www/luci-static/resources/view/status/include/10_system.js
-[ -f '/rom/etc/rpcd_10_system.js' ] && touch /etc/fucked
+#[ -f '/rom/etc/rpcd_10_system.js' ] && rm -f /etc/rpcd_10_system.js
+#[ -f '/rom/etc/rpcd_10_system.js' ] && rm -f /www/luci-static/resources/view/status/include/10_system.js
+#[ -f '/rom/etc/rpcd_10_system.js' ] && cp -f /rom/etc/rpcd_10_system.js /www/luci-static/resources/view/status/include/10_system.js
+#[ -f '/etc/fucked' ] && sed -i '/Source Code/d' /www/luci-static/resources/view/status/include/10_system.js
+#[ -f '/rom/etc/rpcd_10_system.js' ] && touch /etc/fucked
 
 #清除 LuCI 残留缓存
 rm -rf /tmp/luci-modulecache
