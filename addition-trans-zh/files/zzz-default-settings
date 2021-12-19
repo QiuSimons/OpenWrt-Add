@@ -29,6 +29,10 @@ uci set shadowsocksr.@global[0].gfwlist_url='https://cdn.jsdelivr.net/gh/Loyalso
 uci set shadowsocksr.@global[0].chnroute_url='https://cdn.jsdelivr.net/gh/QiuSimons/Chnroute@master/dist/chnroute/chnroute.txt'
 uci commit shadowsocksr
 
+#PASSWALL
+[ -f '/etc/mosdns/geoip.dat' ] && uci set passwall.@global_rules[0].v2ray_location_asset='/etc/mosdns/'
+uci commit passwall
+
 #Feeds 更换镜像源
 #sed -i 's,21.02,21.02-SNAPSHOT,g' /etc/opkg/distfeeds.conf
 sed -i 's,downloads.openwrt.org,mirror.sjtu.edu.cn/openwrt,g' /etc/opkg/distfeeds.conf
