@@ -18,8 +18,8 @@ logger -t disable-offloading "rk3328 board detected"
 ETHTOOL=/usr/sbin/ethtool
 [ -f $ETHTOOL ] || exit 3
 
-[ -d /sys/devices/platform/ff540000.ethernet/net/eth0 ] || exit 4
 $ETHTOOL -K eth0 rx off tx off
+$ETHTOOL -K eth1 tx off
 
 logger -t disable-offloading "disabed rk3328 ethernet tcp/udp offloading tx/rx"
 exit 0
