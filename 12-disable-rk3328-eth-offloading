@@ -19,7 +19,6 @@ ETHTOOL=/usr/sbin/ethtool
 [ -f $ETHTOOL ] || exit 3
 
 $ETHTOOL -K eth0 rx off tx off
-$ETHTOOL -K eth1 tx off
 
 logger -t disable-offloading "disabed rk3328 ethernet tcp/udp offloading tx/rx"
 exit 0
