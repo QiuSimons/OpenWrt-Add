@@ -99,6 +99,8 @@ uci commit system
 #软链接
 ln -sf /sbin/ip /usr/bin/ip
 ln -sf /usr/bin/wget /usr/bin/wget-ssl
+ln -sf /usr/bin/ssserver /usr/bin/ss-server
+ln -sf /usr/bin/sslocal /usr/bin/ss-local
 
 #Flag packages
 opkg flag hold luci-app-firewall
