@@ -97,9 +97,9 @@ uci commit system
 /etc/init.d/cron restart
 
 #软链接
-ln -sf /sbin/ip /usr/bin/ip
-ln -sf /usr/bin/wget /usr/bin/wget-ssl
-ln -sf /usr/bin/sslocal /usr/bin/ss-local
+[ ! -f '/usr/bin/ip' ] && ln -sf /sbin/ip /usr/bin/ip
+[ ! -f '/usr/bin/wget-ssl' ] && ln -sf /usr/bin/wget /usr/bin/wget-ssl
+[ -f '/usr/bin/sslocal' ] && ln -sf /usr/bin/sslocal /usr/bin/ss-local
 
 #Flag packages
 opkg flag hold luci-app-firewall
