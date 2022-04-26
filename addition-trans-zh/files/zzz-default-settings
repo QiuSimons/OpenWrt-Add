@@ -50,10 +50,10 @@ uci commit firewall
 
 #默认开启 Packet Steering
 uci set network.globals.packet_steering='1'
+uci set network.lan.ip6assign='64'
 uci commit network
 
 #通用即插即用
-uci set upnpd.config.igdv1='1'
 uci set upnpd.config.enabled='1'
 uci del upnpd.config.enable_upnp
 uci del upnpd.config.enable_natpmp
@@ -76,10 +76,9 @@ echo "/etc/openclash/" >> /etc/sysupgrade.conf && cat /etc/sysupgrade.conf | sor
 #echo "nobody:x:65534:" >> /etc/group
 
 #dnsmasq 设置以及开启 IPv6
-uci set dhcp.lan.ra='hybrid'
-uci set dhcp.lan.ndp='hybrid'
-uci set dhcp.lan.dhcpv6='hybrid'
-uci set dhcp.lan.ra_management='1'
+uci del dhcp.lan.ra
+uci del dhcp.lan.dhcpv6
+uci del dhcp.lan.ndp
 uci del dhcp.@dnsmasq[0].rebind_protection
 uci del dhcp.@dnsmasq[0].filteraaaa
 uci set dhcp.@dnsmasq[0].rebind_protection='0'
@@ -122,6 +121,19 @@ opkg flag hold dnsmasq-full
 #[ -f '/rom/etc/rpcd_10_system.js' ] && cp -f /rom/etc/rpcd_10_system.js /www/luci-static/resources/view/status/include/10_system.js
 #[ -f '/etc/fucked' ] && sed -i '/Source Code/d' /www/luci-static/resources/view/status/include/10_system.js
 #[ -f '/rom/etc/rpcd_10_system.js' ] && touch /etc/fucked
+
+#禁用某些可能会自启动且用不上的依赖包服务
+/etc/init.d/php7-fastcgi disable 2>/dev/null
+/etc/init.d/php7-fpm disable 2>/dev/null
+/etc/init.d/php8-fastcgi disable 2>/dev/null
+/etc/init.d/php8-fpm disable 2>/dev/null
+/etc/init.d/softethervpnbridge disable 2>/dev/null
+/etc/init.d/softethervpnserver disable 2>/dev/null
+/etc/init.d/softethervpnclient disable 2>/dev/null
+/etc/init.d/haproxy disable 2>/dev/null
+/etc/init.d/kcptun disable 2>/dev/null
+
+chmod 0755 /etc/init.d/*
 
 #清除 LuCI 残留缓存
 rm -rf /tmp/luci-modulecache
