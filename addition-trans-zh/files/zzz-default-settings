@@ -125,14 +125,25 @@ opkg flag hold dnsmasq-full
 
 #禁用某些可能会自启动且用不上的依赖包服务
 /etc/init.d/php7-fastcgi disable 2>/dev/null
+/etc/init.d/php7-fastcgi stop
 /etc/init.d/php7-fpm disable 2>/dev/null
+/etc/init.d/php7-fpm stop
 /etc/init.d/php8-fastcgi disable 2>/dev/null
+/etc/init.d/php8-fastcgi stop
 /etc/init.d/php8-fpm disable 2>/dev/null
+/etc/init.d/php8-fpm stop
 /etc/init.d/softethervpnbridge disable 2>/dev/null
+/etc/init.d/softethervpnbridge stop
 /etc/init.d/softethervpnserver disable 2>/dev/null
+/etc/init.d/softethervpnserver stop
 /etc/init.d/softethervpnclient disable 2>/dev/null
+/etc/init.d/softethervpnclient stop
 /etc/init.d/haproxy disable 2>/dev/null
+/etc/init.d/haproxy stop
 /etc/init.d/kcptun disable 2>/dev/null
+/etc/init.d/kcptun stop
+/etc/init.d/dockerd disable 2>/dev/null
+/etc/init.d/dockerd stop
 
 chmod 0755 /etc/init.d/*
 
