@@ -26,7 +26,6 @@ uci commit system
 
 #PASSWALL
 [ -f '/etc/mosdns/geoip.dat' ] && uci set passwall.@global_rules[0].v2ray_location_asset='/etc/mosdns/'
-uci set passwall.@global_forwarding[0].tcp_proxy_way='tproxy'
 uci commit passwall
 
 #Feeds 更换镜像源
@@ -55,11 +54,8 @@ uci commit network
 
 #通用即插即用
 uci set upnpd.config.enabled='1'
-uci del upnpd.config.enable_upnp
-uci del upnpd.config.enable_natpmp
-uci set upnpd.config.external_iface='wan'
-uci set upnpd.config.use_stun='1'
-uci set upnpd.config.stun_host='stun.miwifi.com'
+uci del upnpd.config.use_stun
+uci del upnpd.config.stun_host
 uci commit upnpd
 
 #网易云音乐
