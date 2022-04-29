@@ -138,8 +138,10 @@ opkg flag hold dnsmasq-full
 /etc/init.d/haproxy stop
 /etc/init.d/kcptun disable 2>/dev/null
 /etc/init.d/kcptun stop
-/etc/init.d/dockerd disable 2>/dev/null
-/etc/init.d/dockerd stop
+/etc/init.d/socat disable 2>/dev/null
+/etc/init.d/socat stop
+#/etc/init.d/dockerd disable 2>/dev/null
+#/etc/init.d/dockerd stop
 
 chmod 0755 /etc/init.d/*
 
