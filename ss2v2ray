@@ -1,0 +1,9 @@
+sed -i "/option v2ray_protocol 'shadowsocks'/d" /etc/config/shadowsocksr
+sed -i "/option encrypt_method_v2ray_ss 'aes-128-gcm'/d" /etc/config/shadowsocksr
+
+sed -i "/option type 'ss'/a\\\toption v2ray_protocol 'shadowsocks'" /etc/config/shadowsocksr
+sed -i "/option encrypt_method_ss 'aes-128-gcm'/a\\\toption encrypt_method_v2ray_ss 'aes-128-gcm'" /etc/config/shadowsocksr
+sed -i "s,option type 'ss',option type 'v2ray',g" /etc/config/shadowsocksr
+
+uci set shadowsocksr.@server_config[0].type='ss'
+uci commit shadowsocksr
