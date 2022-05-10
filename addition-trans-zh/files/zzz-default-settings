@@ -13,6 +13,8 @@ uci commit fstab
 #Argon 主题
 uci set luci.main.mediaurlbase='/luci-static/argon'
 uci commit luci
+uci set argon.@global[0].bing_background='1'
+uci commit argon
 
 #时区设置
 uci set system.@system[0].timezone=CST-8
