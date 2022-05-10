@@ -95,7 +95,8 @@ uci commit system
 [ ! -f '/usr/bin/ip' ] && [ -f '/sbin/ip' ] && ln -sf /sbin/ip /usr/bin/ip
 [ ! -f '/usr/bin/wget-ssl' ] && [ -f '/usr/bin/wget' ] && ln -sf /usr/bin/wget /usr/bin/wget-ssl
 [ ! -f '/usr/bin/ss-local' ] && [ -f '/usr/bin/sslocal' ] && ln -sf /usr/bin/sslocal /usr/bin/ss-local
-[ ! -f '/usr/bin/v2ray' ] && [ -f '/usr/bin/xray' ] && ln -sf /usr/bin/xray /usr/bin/v2ray
+[ ! -f '/usr/sbin/trojan' ] && [ -f '/usr/bin/trojan-go' ] && ln -sf /usr/bin/xray /usr/bin/v2ray
+#[ ! -f '/usr/bin/v2ray' ] && [ -f '/usr/bin/xray' ] && ln -sf /usr/bin/xray /usr/bin/v2ray
 #[ ! -f '/usr/bin/trojan-go' ] && [ -f '/usr/sbin/trojan-plus' ] && ln -sf /usr/sbin/trojan-plus /usr/bin/trojan-go
 rm -rf "/etc/rc.d/S99haproxy"
 
