@@ -1,7 +1,5 @@
 #!/bin/sh
 
-#!/bin/sh
-
 #自动语言
 uci set luci.main.lang=auto
 uci commit luci
@@ -100,7 +98,6 @@ uci commit system
 [ ! -f '/usr/sbin/trojan' ] && [ -f '/usr/bin/trojan-go' ] && ln -sf /usr/bin/xray /usr/bin/v2ray
 #[ ! -f '/usr/bin/v2ray' ] && [ -f '/usr/bin/xray' ] && ln -sf /usr/bin/xray /usr/bin/v2ray
 #[ ! -f '/usr/bin/trojan-go' ] && [ -f '/usr/sbin/trojan-plus' ] && ln -sf /usr/sbin/trojan-plus /usr/bin/trojan-go
-rm -rf "/etc/rc.d/S99haproxy"
 
 #Flag packages
 opkg flag hold luci-app-firewall
