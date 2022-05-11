@@ -126,6 +126,10 @@ opkg flag hold dnsmasq-full
 uci set dockerd.globals.auto_start='0'
 uci commit dockerd
 
+#禁用wrtbwmon自动启动
+uci del wrtbwmon.general.enabled
+uci commit wrtbwmon
+
 #禁用某些可能会自启动且用不上的依赖包服务
 /etc/init.d/php7-fastcgi disable 2>/dev/null
 /etc/init.d/php7-fastcgi stop
