@@ -122,6 +122,10 @@ opkg flag hold dnsmasq-full
 #[ -f '/etc/fucked' ] && sed -i '/Source Code/d' /www/luci-static/resources/view/status/include/10_system.js
 #[ -f '/rom/etc/rpcd_10_system.js' ] && touch /etc/fucked
 
+#禁用Docker自动启动
+uci set dockerd.globals.auto_start='0'
+uci commit dockerd
+
 #禁用某些可能会自启动且用不上的依赖包服务
 /etc/init.d/php7-fastcgi disable 2>/dev/null
 /etc/init.d/php7-fastcgi stop
