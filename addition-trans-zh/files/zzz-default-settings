@@ -145,6 +145,8 @@ opkg flag hold dnsmasq-full
 /etc/init.d/socat stop
 /etc/init.d/fa-rk3399-pwmfan disable 2>/dev/null
 /etc/init.d/fa-rk3399-pwmfan stop
+/etc/init.d/ttyd disable 2>/dev/null
+/etc/init.d/ttyd stop
 #/etc/init.d/dockerd disable 2>/dev/null
 #/etc/init.d/dockerd stop
 
