@@ -1097,8 +1097,5 @@ msgstr "允许ZeroTier修改系统的默认路由"
 msgid "Let ZeroTier manage IP addresses and route"
 msgstr "允许ZeroTier管理IP地址和路由"
 
-msgid "assignments that aren't in private ranges (rfc1918)"
-msgstr "不在私有网段内分配（rfc1918）"
-
-msgid "Let ZeroTier manage IP addresses and Route assignments"
-msgstr "让ZeroTier管理IP地址和路由分配"
+msgid "Let ZeroTier manage IP addresses and route assignments that aren't in private ranges (rfc1918)"
+msgstr "让ZeroTier管理不在私有范围内的IP地址和路由分配（rfc1918）"
