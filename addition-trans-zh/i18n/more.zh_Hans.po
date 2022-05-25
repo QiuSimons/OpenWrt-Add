@@ -1098,4 +1098,4 @@ msgid "Let ZeroTier manage IP addresses and route assignments that aren't in pri
 msgstr "允许ZeroTier管理不在私有范围内的IP地址和路由分配（rfc1918）"
 
 msgid "Let ZeroTier manage IP addresses and Route assignments"
-msgstr "让ZeroTier管理IP地址和路由分配"
+msgstr "允许ZeroTier管理IP地址和路由分配"
