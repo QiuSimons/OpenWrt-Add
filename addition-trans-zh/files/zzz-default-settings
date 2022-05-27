@@ -45,9 +45,9 @@ uci set uhttpd.main.http_keepalive=0
 uci commit uhttpd
 /etc/init.d/uhttpd restart
 
-#在防火墙默认开启全锥形 NAT 以及 Flow Offloading
+#在防火墙默认开启全锥形 NAT 以及关闭 Flow Offloading
 uci set firewall.@defaults[0].fullcone='1'
-uci set firewall.@defaults[0].flow_offloading='1'
+uci set firewall.@defaults[0].flow_offloading='0'
 uci commit firewall
 
 #默认开启 Packet Steering
@@ -107,14 +107,6 @@ opkg flag hold dnsmasq-full
 #清理内存缓存
 #sync; echo 3 > /proc/sys/vm/drop_caches
 
-#默认关闭 Shortcut-FE
-#/etc/init.d/shortcut-fe stop
-#rm -rf /etc/rc.d/S90shortcut-fe
-
-#默认关闭 dnsproxy
-#/etc/init.d/dnsproxy stop
-#rm -rf /etc/rc.d/S99dnsproxy
-
 #自用
 #[ -f '/rom/etc/rpcd_10_system.js' ] && rm -f /etc/rpcd_10_system.js
 #[ -f '/rom/etc/rpcd_10_system.js' ] && rm -f /www/luci-static/resources/view/status/include/10_system.js
@@ -157,6 +149,10 @@ uci commit wrtbwmon
 /etc/init.d/fa-rk3328-pwmfan stop
 /etc/init.d/ttyd disable 2>/dev/null
 /etc/init.d/ttyd stop
+#/etc/init.d/shortcut-fe disable 2>/dev/null
+#/etc/init.d/shortcut-fe stop
+#/etc/init.d/dnsproxy disable 2>/dev/null
+#/etc/init.d/dnsproxy stop
 #/etc/init.d/dockerd disable 2>/dev/null
 #/etc/init.d/dockerd stop
 
