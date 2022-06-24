@@ -75,10 +75,13 @@ echo "/etc/openclash/" >> /etc/sysupgrade.conf && cat /etc/sysupgrade.conf | sor
 #echo "nobody:x:65534:" >> /etc/group
 
 #dnsmasq 设置以及开启 IPv6
-uci set dhcp.lan.ra='hybrid'
-uci set dhcp.lan.ndp='hybrid'
-uci set dhcp.lan.dhcpv6='hybrid'
-uci set dhcp.lan.ra_management='1'
+#uci set dhcp.lan.ra='hybrid'
+#uci set dhcp.lan.ndp='hybrid'
+#uci set dhcp.lan.dhcpv6='hybrid'
+#uci set dhcp.lan.ra_management='1'
+uci del dhcp.lan.ra
+uci del dhcp.lan.dhcpv6
+uci del dhcp.lan.ndp
 uci del dhcp.@dnsmasq[0].rebind_protection
 uci del dhcp.@dnsmasq[0].filteraaaa
 uci set dhcp.@dnsmasq[0].rebind_protection='0'
