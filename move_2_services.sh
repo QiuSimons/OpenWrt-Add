@@ -19,3 +19,12 @@ do
 	[ -n "$(grep 'admin/vpn' "$b")" ] && sed -i 's,admin/vpn,admin/services,g' "$b"
 done
 
+json_file="$({ find |grep "\.json"; } 2>"/dev/null")"
+for c in ${json_file}
+do
+	[ -n "$(grep '"vpn"' "$c")" ] && sed -i 's,"vpn","services",g' "$c"
+	[ -n "$(grep '"VPN"' "$c")" ] && sed -i 's,"VPN","services",g' "$c"
+	[ -n "$(grep '\[\[vpn\]\]' "$c")" ] && sed -i 's,\[\[vpn\]\],\[\[services\]\],g' "$c"
+	[ -n "$(grep 'admin/vpn' "$c")" ] && sed -i 's,admin/vpn,admin/services,g' "$c"
+done
+
