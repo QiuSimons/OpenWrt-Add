@@ -47,7 +47,7 @@ uci commit uhttpd
 
 #在防火墙默认开启全锥形 NAT 以及关闭 Flow Offloading
 uci set firewall.@defaults[0].fullcone='1'
-uci set firewall.@defaults[0].flow_offloading='0'
+uci set firewall.@defaults[0].flow_offloading='1'
 uci commit firewall
 
 #默认开启 Packet Steering
@@ -152,8 +152,8 @@ uci commit wrtbwmon
 /etc/init.d/fa-rk3328-pwmfan stop
 /etc/init.d/ttyd disable 2>/dev/null
 /etc/init.d/ttyd stop
-#/etc/init.d/shortcut-fe disable 2>/dev/null
-#/etc/init.d/shortcut-fe stop
+/etc/init.d/shortcut-fe disable 2>/dev/null
+/etc/init.d/shortcut-fe stop
 #/etc/init.d/dnsproxy disable 2>/dev/null
 #/etc/init.d/dnsproxy stop
 #/etc/init.d/dockerd disable 2>/dev/null
