@@ -10,9 +10,7 @@ LUCI_PKGARCH:=all
 PKG_VERSION:=V22.6.4
 PKG_RELEASE:=1907
 
-define Package/luci-app-p910nd-plus/preinst
-#!/bin/sh
-#rm -rf $${IPKG_INSTROOT}/etc/config/p910nd >/dev/null 2>&1
+define Package/luci-app-irqbalance/preinst
 exit 0
 endef
 
