@@ -1099,3 +1099,9 @@ msgstr "允许ZeroTier管理不在私有范围内的IP地址和路由分配（rf
 
 msgid "Let ZeroTier manage IP addresses and Route assignments"
 msgstr "允许ZeroTier管理IP地址和路由分配"
+
+msgid "Force Forwarding"
+msgstr "强制转发"
+
+msgid "Force forwarding even there is no public IP (please try STUN first)"
+msgstr "就算没有公网IP也进行转发（请先尝试STUN）"
