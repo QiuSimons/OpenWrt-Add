@@ -48,6 +48,13 @@ uci set uhttpd.main.http_keepalive=0
 uci commit uhttpd
 /etc/init.d/uhttpd restart
 
+#nginx 设置
+uci delete nginx._redirect2ssl.return
+uci add_list nginx._redirect2ssl.include='restrict_locally'
+uci add_list nginx._redirect2ssl.include='conf.d/*.locations'
+uci commit nginx
+/etc/init.d/nginx restart
+
 #在防火墙默认开启全锥形 NAT 以及关闭 Flow Offloading
 uci set firewall.@defaults[0].fullcone='1'
 uci set firewall.@defaults[0].flow_offloading='1'
