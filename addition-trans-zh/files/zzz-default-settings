@@ -53,6 +53,7 @@ uci delete nginx._redirect2ssl.return
 uci delete nginx._redirect2ssl.include
 uci add_list nginx._redirect2ssl.include='restrict_locally'
 uci add_list nginx._redirect2ssl.include='conf.d/*.locations'
+cp -rf /www/luci-static/argon/favicon.ico /www/
 uci commit nginx
 /etc/init.d/nginx restart
 
