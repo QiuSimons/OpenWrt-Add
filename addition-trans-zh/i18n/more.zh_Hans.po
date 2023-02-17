@@ -1241,3 +1241,108 @@ msgstr "上行速率"
 
 msgid "Value in KByte/s, informational only"
 msgstr "值为 KByte/s，仅供参考"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:354
+msgid "Relay DHCP requests elsewhere. OK: v4↔v4, v6↔v6. Not OK: v4↔v6, v6↔v4."
+msgstr "在别处中继 DHCP 请求。OK: v4↔v4, v6↔v6. Not OK: v4↔v6, v6↔v4。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:387
+msgid "Relay To address"
+msgstr "Relay To 地址"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:375
+msgid "Listen address"
+msgstr "监听地址"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:457
+msgid "Filter SRV/SOA service discovery"
+msgstr "过滤 SRV/SOA 服务发现"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:458
+msgid ""
+"Filters SRV/SOA service discovery, to avoid triggering dial-on-demand links."
+msgstr "过滤 SRV/SOA 服务发现避免触发按需拨号(dial-on-demand)链接。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:468
+msgid "Filter IPv4 A records"
+msgstr "过滤 IPv4 A 记录"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:462
+msgid "Filter IPv6 AAAA records"
+msgstr "过滤 IPv6 AAAA 记录"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:469
+msgid "Remove IPv4 addresses from the results and only return IPv6 addresses."
+msgstr "从结果中删除 IPv4 地址，只返回 IPv6 地址。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:463
+msgid "Remove IPv6 addresses from the results and only return IPv4 addresses."
+msgstr "从结果中删除 IPv6 地址，只返回 IPv4 地址。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:671
+msgid ""
+"Bind service records to a domain name: specify the location of services."
+msgstr "绑定服务记录到域名：指定服务的位置。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:632
+msgid ""
+"Bind service records to a domain name: specify the location of services. See "
+"<a href=\"%s\">RFC2782</a>."
+msgstr "绑定服务记录到域名：指定服务的位置。见 <a href=\"%s\">RFC2782</a>。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:634
+msgid "_proto: _tcp, _udp, _sctp, _quic, … ."
+msgstr "_proto: _tcp, _udp, _sctp, _quic, … ."
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:633
+msgid ""
+"_service: _sip, _ldap, _imap, _stun, _xmpp-client, … . (Note: while _http is "
+"possible, no browsers support SRV records.)"
+msgstr ""
+"_service: _sip, _ldap, _imap, _stun, _xmpp-client, … . （注：虽然 _http 有可"
+"能，但没有浏览器支持 SRV 记录。）"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:635
+msgid "You may add multiple records for the same Target."
+msgstr "你可以为同一目标添加多条记录。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:636
+msgid ""
+"Larger weights (of the same prio) are given a proportionately higher "
+"probability of being selected."
+msgstr "较大的权重（相同的优先级下）被赋予相应较高的被选中概率。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:645
+msgid "Syntax: <code>_service._proto.example.com</code>."
+msgstr "语法：<code>_service._proto.example.com</code>."
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:650
+msgid "CNAME or fqdn"
+msgstr "CNAME 或 fqdn"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:660
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:692
+msgid "Ordinal: lower comes first."
+msgstr "序数：较低的优先。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:671
+msgid ""
+"Bind service records to a domain name: specify the location of services."
+msgstr "绑定服务记录到域名：指定服务的位置。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:632
+msgid ""
+"Bind service records to a domain name: specify the location of services. See "
+"<a href=\"%s\">RFC2782</a>."
+msgstr "绑定服务记录到域名：指定服务的位置。见 <a href=\"%s\">RFC2782</a>。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:672
+msgid "You may add multiple records for the same domain."
+msgstr "你可以为同一个域添加多条记录。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:306
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:728
+msgid ""
+"List of IP sets to populate with the IPs of DNS lookup results of the FQDNs "
+"also specified here."
+msgstr "要用指定域 IP 填充的 IP 集列表。"
