@@ -1346,3 +1346,18 @@ msgid ""
 "List of IP sets to populate with the IPs of DNS lookup results of the FQDNs "
 "also specified here."
 msgstr "要用指定域 IP 填充的 IP 集列表。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:299
+msgid ""
+"<code>/#/</code> matches any domain. <code>/example.com/</code> returns "
+"NXDOMAIN."
+msgstr ""
+"<code>/#/</code> 匹配任何域名。<code>/example.com/</code> 返回 NXDOMAIN。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:300
+msgid ""
+"<code>/example.com/#</code> returns NULL addresses (<code>0.0.0.0</code> and "
+"<code>::</code>) for example.com and its subdomains."
+msgstr ""
+"<code>/example.com/#</code> 对 example.com 及其子域名返回无效地址 "
+"(<code>0.0.0.0</code> 和 <code>::</code>) 。"
