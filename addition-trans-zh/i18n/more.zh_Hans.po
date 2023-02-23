@@ -1361,3 +1361,32 @@ msgid ""
 msgstr ""
 "<code>/example.com/#</code> 对 example.com 及其子域名返回无效地址 "
 "(<code>0.0.0.0</code> 和 <code>::</code>) 。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:459
+msgid "May prevent VoIP or other services from working."
+msgstr "可能造成 VoIP 或其他服务无法运作。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:464
+msgid ""
+"Can be useful if ISP has IPv6 nameservers but does not provide IPv6 routing."
+msgstr "如果你的 ISP 有 IPv6 名称服务器但不提供 IPv6 路由，本选项可能会有用。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:355
+msgid ""
+"Note: you may also need a DHCP Proxy (currently unavailable) when specifying "
+"a non-standard Relay To port(<code>addr#port</code>)."
+msgstr ""
+"注意：在指定非标准 Relay To 端口时，你可能还需要 DHCP 代理（当前不可用）"
+"(<code>addr#port</code>)。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:297
+msgid "Resolve specified FQDNs to an IP."
+msgstr "此列表将域名强制指向某个 IP 地址。"
+
+#: modules/luci-mod-network/htdocs/luci-static/resources/view/network/dhcp.js:355
+msgid ""
+"Note: you may also need a DHCP Proxy (currently unavailable) when specifying "
+"a non-standard Relay To port(<code>addr#port</code>)."
+msgstr ""
+"注意：在指定非标准 Relay To 端口时，你可能还需要 DHCP 代理（当前不可用）"
+"(<code>addr#port</code>)。"
