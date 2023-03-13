@@ -29,18 +29,18 @@ start_service() {
         printf "%s" "${device:-$AIRUPNP_IFACE}"
     )
     [ -z "$interface" ] && interface=br-lan
-    local common_args="-Z -b $interface"
+    local common_args="-l 1000:2000 -Z -b $interface"
 
     if [ "$ENABLE_AIRUPNP" = 1 ]; then
         procd_open_instance
         procd_set_param command /usr/bin/airupnp $common_args
-        procd_set_param respawn
+        procd_set_param respawn 3600 5 0
         procd_close_instance
     fi
     if [ "$ENABLE_AIRCAST" = 1 ]; then
         procd_open_instance
         procd_set_param command /usr/bin/aircast $common_args
-        procd_set_param respawn
+        procd_set_param respawn 3600 5 0
         procd_close_instance
     fi
 }
