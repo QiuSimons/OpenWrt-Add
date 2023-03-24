@@ -1067,6 +1067,12 @@ msgstr "基于 SFE 的 Routing/NAT 分载（开/关后建议重启设备）"
 msgid "Enable FullCone NAT"
 msgstr "启用 FullCone-NAT"
 
+msgid "Compatible Mode"
+msgstr "兼容模式"
+
+msgid "High Performing Mode"
+msgstr "高性能模式"
+
 msgid "Base Setting"
 msgstr "基本设置"
 
