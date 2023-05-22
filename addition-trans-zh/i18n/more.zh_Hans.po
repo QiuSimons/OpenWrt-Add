@@ -1396,3 +1396,6 @@ msgid ""
 msgstr ""
 "注意：在指定非标准 Relay To 端口时，你可能还需要 DHCP 代理（当前不可用）"
 "(<code>addr#port</code>)。"
+
+msgid "Online Users"
+msgstr "在线用户数"
