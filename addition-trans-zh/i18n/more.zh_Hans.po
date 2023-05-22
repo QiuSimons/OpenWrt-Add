@@ -1399,3 +1399,6 @@ msgstr ""
 
 msgid "Online Users"
 msgstr "在线用户数"
+
+msgid "services"
+msgstr "服务"
