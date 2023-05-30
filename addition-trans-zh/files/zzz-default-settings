@@ -103,6 +103,7 @@ uci del dhcp.lan.ra
 uci del dhcp.lan.dhcpv6
 uci del dhcp.lan.ndp
 uci set dhcp.lan.ra_useleasetime='1'
+uci set dhcp.lan.fakeroute='1'
 uci set dhcp.lan.preferred_lifetime='8h'
 uci del dhcp.@dnsmasq[0].rebind_protection
 uci del dhcp.@dnsmasq[0].filteraaaa
