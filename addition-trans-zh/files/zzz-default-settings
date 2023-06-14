@@ -65,7 +65,6 @@ uci commit firewall
 
 #默认开启 Packet Steering
 uci set network.globals.packet_steering='1'
-uci set network.lan.ip6assign='64'
 uci commit network
 
 #通用即插即用
