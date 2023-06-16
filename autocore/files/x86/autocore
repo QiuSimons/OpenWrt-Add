@@ -4,6 +4,13 @@
 START=99
 
 start() {
+	rfc=4096
+
+	for fileRfc in /sys/class/net/eth*/queues/rx-*/rps_flow_cnt
+	do
+		echo "$rfc" > "$fileRfc"
+	done
+
 	echo 1 > /proc/sys/net/core/backlog_threaded
 	echo 1 > /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal
 	echo 1 > /proc/sys/net/netfilter/nf_conntrack_tcp_no_window_check
