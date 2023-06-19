@@ -4,9 +4,6 @@ msgstr "处理器"
 msgid "Architecture"
 msgstr "架构"
 
-msgid "Target Platform"
-msgstr "目标平台"
-
 msgid "CPU Temperature"
 msgstr "CPU 温度"
 
@@ -66,36 +63,32 @@ msgstr "强制启用 40MHz 频宽并忽略辅助信道重叠。此选项可能�
 msgid "Disassociate On Low Acknowledgement"
 msgstr "弱信号剔除"
 
-msgid "Ethernet Information"
-msgstr "网口信息"
-
-msgid "Ethernet Name"
-msgstr "网口名"
-
-msgid "Link Status"
-msgstr "连接状态"
-
-msgid "Speed"
-msgstr "速率"
-
-msgid "Duplex"
-msgstr "双工模式"
-
-msgid "Link Up"
-msgstr "已连接"
-
-msgid "Link Down"
-msgstr "已断开"
-
-msgid "Full Duplex"
-msgstr "全双工"
-
-msgid "Half Duplex"
-msgstr "半双工"
-
 msgid "Allow AP mode to disconnect STAs based on low ACK condition"
 msgstr "允许 AP 模式基于低 ACK 条件判断剔除弱信号的客户端"
 
 msgid "Temperature"
 msgstr "温度"
 
+msgid "Online Users"
+msgstr "在线用户数"
+
+msgid "Target Platform"
+msgstr "目标平台"
+
+msgid "services"
+msgstr "服务"
+
+msgid "SFE flow offloading"
+msgstr "SFE 流量分载"
+
+msgid "SFE based offloading for Routing/NAT. Restart recommended."
+msgstr "基于 SFE 的 Routing/NAT 分载（开/关后建议重启设备）"
+
+msgid "Enable FullCone NAT"
+msgstr "启用 FullCone-NAT"
+
+msgid "Compatible Mode"
+msgstr "兼容模式"
+
+msgid "High Performing Mode"
+msgstr "高性能模式"
