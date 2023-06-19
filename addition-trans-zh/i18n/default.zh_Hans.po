@@ -81,6 +81,12 @@ msgstr "服务"
 msgid "SFE flow offloading"
 msgstr "SFE 流量分载"
 
+msgid "Ethernet Information"
+msgstr "网口信息"
+
+msgid "Ethernet Name"
+msgstr "网口名"
+
 msgid "SFE based offloading for Routing/NAT. Restart recommended."
 msgstr "基于 SFE 的 Routing/NAT 分载（开/关后建议重启设备）"
 
