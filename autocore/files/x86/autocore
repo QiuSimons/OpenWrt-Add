@@ -9,7 +9,7 @@ start() {
 	rps_cpus=`printf "%x" $((2**$cpu_count-1))`
 	rps_sock_flow_entries=0
 
-	for preset in /sys/class/net/eth*/queues/rx-*/
+	for preset in /sys/class/net/*/queues/rx-*/
 	do
 		echo "$rps_cpus" > "$preset"/rps_cpus
 		echo "$rps_flow_cnt" > "$preset"/rps_flow_cnt
