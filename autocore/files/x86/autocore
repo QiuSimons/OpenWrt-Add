@@ -4,12 +4,19 @@
 START=99
 
 start() {
-	rfc=4096
+	rps_flow_cnt=4096
+	cpu_count=$(grep -c '^processor' /proc/cpuinfo)
+	rps_cpus=`printf "%x" $((2**$cpu_count-1))`
+	rps_sock_flow_entries=0
 
-	for fileRfc in /sys/class/net/eth*/queues/rx-*/rps_flow_cnt
+	for preset in /sys/class/net/eth*/queues/rx-*/
 	do
-		echo "$rfc" > "$fileRfc"
+		echo "$rps_cpus" > "$preset"/rps_cpus
+		echo "$rps_flow_cnt" > "$preset"/rps_flow_cnt
+		rps_sock_flow_entries=$(($rps_sock_flow_entries+$rps_flow_cnt))
 	done
+	
+	echo $rps_sock_flow_entries > /proc/sys/net/core/rps_sock_flow_entries
 
 	echo 1 > /proc/sys/net/core/backlog_threaded
 	echo 1 > /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal
