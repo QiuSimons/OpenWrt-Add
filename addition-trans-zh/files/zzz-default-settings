@@ -35,6 +35,11 @@ uci set passwall.@global_delay[0].start_delay='5'
 uci set passwall.@global_forwarding[0].tcp_redir_ports='1:65535'
 uci commit passwall
 
+#SSRP IPV6 HACK
+sed -i '/127.255.255.255/d' /etc/config/shadowsocksr
+uci add_list shadowsocksr.@access_control[0].wan_bp_ips='127.255.255.255'
+uci commit shadowsocksr
+
 #Feeds 更换镜像源
 #sed -i 's,21.02,21.02-SNAPSHOT,g' /etc/opkg/distfeeds.conf
 sed -i 's,downloads.openwrt.org,mirror.sjtu.edu.cn/openwrt,g' /etc/opkg/distfeeds.conf
