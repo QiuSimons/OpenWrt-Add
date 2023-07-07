@@ -27,6 +27,7 @@ define Package/$(PKG_NAME)
   SECTION:=multimedia
   CATEGORY:=Multimedia
   TITLE:=AirConnect
+  DEPENDS:=+libpthread
   URL:=https://github.com/philippe44/AirConnect
 endef
 
