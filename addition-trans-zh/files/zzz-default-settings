@@ -65,7 +65,7 @@ uci commit nginx
 
 #在防火墙默认开启全锥形 NAT 以及关闭 Flow Offloading
 uci set firewall.@defaults[0].fullcone='2'
-uci set firewall.@defaults[0].flow_offloading='1'
+uci set firewall.@defaults[0].flow_offloading='0'
 uci set firewall.@defaults[0].input='ACCEPT'
 uci commit firewall
 
@@ -179,8 +179,8 @@ uci commit wrtbwmon
 /etc/init.d/fa-rk3328-pwmfan stop
 /etc/init.d/ttyd disable 2>/dev/null
 /etc/init.d/ttyd stop
-/etc/init.d/shortcut-fe disable 2>/dev/null
-/etc/init.d/shortcut-fe stop
+/etc/init.d/shortcut-fe enable 2>/dev/null
+/etc/init.d/shortcut-fe start
 /etc/init.d/qemu-ga disable 2>/dev/null
 /etc/init.d/qemu-ga stop
 #/etc/init.d/dnsproxy disable 2>/dev/null
