@@ -153,3 +153,6 @@ msgstr "传输数据包"
 
 msgid "no link"
 msgstr "未连接"
+
+msgid "Port status"
+msgstr "端口状态"
