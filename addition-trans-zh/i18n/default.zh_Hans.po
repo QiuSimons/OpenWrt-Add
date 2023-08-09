@@ -78,17 +78,11 @@ msgstr "目标平台"
 msgid "services"
 msgstr "服务"
 
-msgid "SFE flow offloading"
-msgstr "SFE 流量分载"
-
 msgid "Ethernet Information"
 msgstr "网口信息"
 
 msgid "Ethernet Name"
 msgstr "网口名"
-
-msgid "SFE based offloading for Routing/NAT. Restart recommended."
-msgstr "基于 SFE 的 Routing/NAT 分载（开/关后建议重启设备）"
 
 msgid "Enable FullCone NAT"
 msgstr "启用 FullCone-NAT"
@@ -156,3 +150,9 @@ msgstr "未连接"
 
 msgid "Port status"
 msgstr "端口状态"
+
+msgid "Shortcut-FE flow offloading"
+msgstr "Shortcut-FE 流量分载"
+
+msgid "Shortcut-FE based offloading for routing/NAT"
+msgstr "基于 Shortcut-FE 的 路由/NAT 分载"
