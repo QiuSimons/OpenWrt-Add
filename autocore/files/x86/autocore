@@ -22,14 +22,6 @@ start() {
 	echo 1 > /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal
 	echo 1 > /proc/sys/net/netfilter/nf_conntrack_tcp_no_window_check
 
-	ulimit -t unlimited
-	ulimit -f unlimited
-	ulimit -m unlimited
-	ulimit -u unlimited
-	ulimit -n 1048576
-	ulimit -s unlimited
-	ulimit -v unlimited
-
 	for i in $(ip address | awk -F ': ' '/eth[0-9]+/ {print $2}' | xargs)
 	do
 		{
