@@ -157,6 +157,9 @@ msgstr "Shortcut-FE 流量分载"
 msgid "Shortcut-FE based offloading for routing/NAT"
 msgstr "基于 Shortcut-FE 的 路由/NAT 分载"
 
+msgid "Enable FullCone NAT6"
+msgstr "启用 FullCone-NAT6"
+
 msgid "Force Forwarding"
 msgstr "强制转发"
 
