@@ -1,0 +1,9 @@
+rm -rf ./target/linux/rockchip
+cp -rf ../lede/target/linux/rockchip ./target/linux/rockchip
+cp -rf ../PATCH/rockchip-5.15/* ./target/linux/rockchip/patches-5.15/
+rm -rf ./package/boot/uboot-rockchip
+cp -rf ../lede/package/boot/uboot-rockchip ./package/boot/uboot-rockchip
+rm -rf ./package/boot/arm-trusted-firmware-rockchip
+cp -rf ../lede/package/boot/arm-trusted-firmware-rockchip ./package/boot/arm-trusted-firmware-rockchip
+cp -rf ../lede/package/boot/arm-trusted-firmware-rockchip-vendor ./package/boot/arm-trusted-firmware-rockchip-vendor
+cp -rf ../lede/package/lean/pcat-manager ./package/new/pcat-manager
