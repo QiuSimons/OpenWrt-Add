@@ -7,3 +7,5 @@ rm -rf ./package/boot/arm-trusted-firmware-rockchip
 cp -rf ../lede/package/boot/arm-trusted-firmware-rockchip ./package/boot/arm-trusted-firmware-rockchip
 cp -rf ../lede/package/boot/arm-trusted-firmware-rockchip-vendor ./package/boot/arm-trusted-firmware-rockchip-vendor
 cp -rf ../lede/package/lean/pcat-manager ./package/new/pcat-manager
+cp -rf ../lede/package/wwan ./package/wwan
+cp -rf ../lede/package/firmware/linux-firmware/qca_ath10k.mk ./package/firmware/linux-firmware/qca_ath10k.mk
