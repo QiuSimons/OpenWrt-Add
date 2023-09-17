@@ -113,6 +113,7 @@ uci set dhcp.lan.ra_useleasetime='1'
 uci set dhcp.lan.preferred_lifetime='8h'
 uci set dhcp.lan.leasetime='12h
 uci set dhcp.lan.ra='server'
+sed -i "/list ra_flags/d" /etc/config/dhcp
 uci add_list dhcp.lan.ra_flags='none'
 uci set dhcp.lan.dns_service='0'
 uci del dhcp.@dnsmasq[0].filteraaaa
