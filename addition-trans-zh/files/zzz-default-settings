@@ -116,11 +116,9 @@ uci set dhcp.lan.ra='server'
 uci del dhcp.lan.ra_flags
 uci add_list dhcp.lan.ra_flags='none'
 uci del dhcp.lan.min_preferred_lifetime
-uci set dhcp.lan.max_preferred_lifetime='2700'
+uci set dhcp.lan.max_preferred_lifetime='2700s'
 uci del dhcp.lan.min_valid_lifetime
-uci set dhcp.lan.max_valid_lifetime='5400'
-uci set dhcp.lan.ra_maxinterval='900'
-uci set dhcp.lan.ra_mininterval='300'
+uci set dhcp.lan.max_valid_lifetime='5400s'
 uci set dhcp.lan.dns_service='0'
 uci set dhcp.@dnsmasq[0].rebind_protection='0'
 uci commit dhcp
