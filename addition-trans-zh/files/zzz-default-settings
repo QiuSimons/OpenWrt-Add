@@ -122,7 +122,7 @@ uci set dhcp.lan.max_valid_lifetime='5400s'
 uci set dhcp.lan.dns_service='0'
 uci set dhcp.@dnsmasq[0].rebind_protection='0'
 uci commit dhcp
-uci set network.lan.ip6assign='60'
+uci set network.lan.ip6assign='64'
 uci set network.lan.ip6ifaceid='eui64'
 uci delete network.globals.ula_prefix
 uci commit network
