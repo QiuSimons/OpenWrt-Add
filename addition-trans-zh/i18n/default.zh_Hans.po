@@ -165,3 +165,6 @@ msgstr "强制转发"
 
 msgid "Force forwarding even there is no public IP (please try STUN first)"
 msgstr "就算没有公网IP也进行转发（请先尝试STUN）"
+
+msgid "Applicable to internet environments where the router is not assigned an IPv6 prefix, such as when using an upstream optical modem for dial-up"
+msgstr "适用于路由器未分配IPv6前缀的互联网环境，例如在使用上游光纤调制解调器进行拨号时"
