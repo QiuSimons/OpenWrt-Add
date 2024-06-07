@@ -140,6 +140,12 @@ uci set system.@system[0].cronloglevel="9"
 uci commit system
 /etc/init.d/cron restart
 
+# docker mirror
+if [ -f /etc/config/dockerd ] && [ $(grep -c mirror.aliyuncs.com /etc/config/dockerd) -eq '0' ] && [ "$VERSION_TYPE" != "minimal" ]; then
+    uci add_list dockerd.globals.registry_mirrors="https://$(openssl rand -hex 4).mirror.aliyuncs.com"
+    uci commit dockerd
+fi
+
 #软链接
 [ ! -f '/usr/bin/ip' ] && [ -f '/sbin/ip' ] && ln -sf /sbin/ip /usr/bin/ip
 [ ! -f '/usr/bin/wget-ssl' ] && [ -f '/usr/bin/wget' ] && ln -sf /usr/bin/wget /usr/bin/wget-ssl
