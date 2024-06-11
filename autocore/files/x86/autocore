@@ -31,10 +31,15 @@ start() {
 				ethtool -K "$i" tx-checksum-ipv6 on
 			}
 			ethtool -K "$i" tx-scatter-gather on
+			ethtool -K "$i" rx on
+			ethtool -K "$i" tx on
+			ethtool -K "$i" sg on
 			ethtool -K "$i" gso on
 			ethtool -K "$i" gro on
 			ethtool -K "$i" tso on
 			ethtool -K "$i" ufo on
+			ethtool -K "$i" rxvlan on
+			ethtool -K "$i" txvlan on
 		}
 	done
 } >"/dev/null" 2>&1
