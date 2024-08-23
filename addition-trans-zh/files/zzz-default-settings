@@ -12,6 +12,8 @@ uci commit fstab
 ln -sf /www/luci-static/argon/favicon.ico /www/favicon.ico
 ln -sf "/www/luci-static/bootstrap/favicon.png" "/www/apple-touch-icon-precomposed.png"
 ln -sf "/www/luci-static/bootstrap/favicon.png" "/www/apple-touch-icon.png"
+ln -sf "/www/luci-static/bootstrap/favicon.png" "/www/apple-touch-icon-120x120-precomposed.png"
+ln -sf "/www/luci-static/bootstrap/favicon.png" "/www/apple-touch-icon-120x120.png"
 uci set luci.main.mediaurlbase='/luci-static/argon'
 uci commit luci
 uci set argon.@global[0].bing_background='1'
