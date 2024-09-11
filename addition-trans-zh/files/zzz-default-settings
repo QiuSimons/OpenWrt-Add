@@ -92,6 +92,7 @@ uci set firewall.@defaults[0].shortcut_fe='0'
 uci set firewall.@defaults[0].flow_offloading='1'
 uci set firewall.@defaults[0].input='ACCEPT'
 uci commit firewall
+/etc/init.d/autocore restart
 
 #SFE
 sed -i '/shortcutfe/d' /usr/share/rpcd/ucode/luci
