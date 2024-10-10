@@ -66,14 +66,14 @@ jobs:
       - name: Push changes
         uses: ad-m/github-push-action@master
         with:
-          github_token: ${{secrets.ACTIONS_DEPLOY_KEY}}
+          github_token: ${{secrets.GITHUB_TOKEN}}
           branch: master
         continue-on-error: true
 
       - name: Cleanup Workflow Logs
         uses: Mattraks/delete-workflow-runs@main
         with:
-          token: ${{secrets.ACTIONS_DEPLOY_KEY}}
+          token: ${{secrets.GITHUB_TOKEN}}
           repository: ${{ github.repository }}
           retain_days: 3
         continue-on-error: true
