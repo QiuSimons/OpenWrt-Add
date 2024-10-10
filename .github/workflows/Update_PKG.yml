@@ -14,16 +14,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Build System Setup
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y squashfs-tools jq
-          sudo apt-get install -y dos2unix
-          sudo npm install -g pnpm
-          sudo npm i taze -g
-
       - name: Update Makefile
         run: |
           git clone --depth 1 https://git.cooluc.com/sbwml/nft-fullcone
