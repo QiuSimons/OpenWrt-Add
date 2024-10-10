@@ -1,0 +1,149 @@
+name: Bug Report
+description: "Create a report to help us improve"
+title: "[BUG]"
+labels: ["bug"]
+body:
+  - type: checkboxes
+    id: self_check
+    attributes:
+      label: 自查
+      description: 请按以下步骤自查，如自查后问题仍然存在，再继续提交Issue。
+      options:
+        - label: OpenWrt 22.03 及以上版本的系统
+          required: true
+        - label: 使用firewall4（nftables）而非firewall3（iptables）
+          required: true
+        - label: 已经安装了 procd-ujail 依赖
+          required: true
+        - label: 针对ImmortalWrt，已经关闭了DNSMASQ的`DNS 重定向`选项
+          required: true
+        - label: 已停止运行其他代理插件，并确认环境正常
+          required: true
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 确认
+      description: 请你确认。
+      options:
+        - label: 我已经搜索过Issue，没有找到我的问题
+          required: true
+        - label: 我已经查看过Wiki，没有找到解决办法
+          required: true
+        - label: 我使用的是由本仓库代码构建的插件，而不是其他Fork
+          required: true
+        - label: 我使用的是最新版的插件
+          required: true
+        - label: 这确实是插件的问题，而不是核心/面板/订阅转换服务的问题
+          required: true
+        - label: 我提供了正确的、有效的、可以帮助DEBUG的信息，而不是随意填写
+          required: true
+        - label: 我提供的信息里不包含公网IP、MAC、代理节点等敏感信息
+          required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: 系统
+      options:
+        - OpenWrt
+        - ImmortalWrt
+        - iStoreOS
+    validations:
+      required: true
+  - type: input
+    id: os_version
+    attributes:
+      label: 系统版本
+      description: 填写你的系统版本
+    validations:
+      required: true
+  - type: input
+    id: app_version
+    attributes:
+      label: 插件版本
+      description: 填写你的插件版本
+    validations:
+      required: true
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: 硬件架构
+      description: 选择你的硬件架构
+      multiple: true
+      options:
+          - arm_cortex-a5_vfpv4
+          - arm_cortex-a7_neon-vfpv4
+          - arm_cortex-a8_vfpv3
+          - arm_cortex-a9
+          - arm_cortex-a9_vfpv3-d16
+          - arm_cortex-a9_neon
+          - arm_cortex-a15_neon-vfpv4
+          - aarch64_cortex-a53
+          - aarch64_cortex-a72
+          - aarch64_generic
+          - mips_24kc
+          - mips_4kec
+          - mips_mips32
+          - mipsel_24kc
+          - mipsel_24kc_24kf
+          - mipsel_74kc
+          - mips64_octeonplus
+          - i386_pentium4
+          - x86_64
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: BUG 描述
+      description: 在此描述你的BUG
+    validations:
+      required: true
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: 预期行为
+      description: 你认为的预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 如何复现
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: 插件配置
+      description: 附上你的插件配置，请贴上截图或`uci show mihomo`的输出
+    validations:
+      required: true
+  - type: textarea
+    id: profile
+    attributes:
+      label: 配置文件
+      description: 附上你的配置文件
+    validations:
+      required: true
+  - type: textarea
+    id: app_log
+    attributes:
+      label: 插件日志
+      description: 附上你的插件日志
+    validations:
+      required: true
+  - type: textarea
+    id: core_log
+    attributes:
+      label: 核心日志
+      description: 附上你的核心日志，级别至少为info，建议使用debug
+    validations:
+      required: true
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: 附加信息
+      description: 你觉得对解决此BUG有帮助的其它信息
+    validations:
+      required: false
