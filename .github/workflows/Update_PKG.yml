@@ -52,7 +52,7 @@ jobs:
           git clone --depth 1 https://github.com/morytyann/OpenWrt-mihomo
           git clone --depth 1 https://github.com/brvphoenix/wrtbwmon
           git clone --depth 1 https://github.com/brvphoenix/luci-app-wrtbwmon
-          git rm -r --cached .
+          find . -name ".git" -type d -exec rm -rf {} +
 
       - name: Commit file
         run: |
