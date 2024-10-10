@@ -1,0 +1,87 @@
+name: Update PKG
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: 0 16 * * *
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build System Setup
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools jq
+          sudo apt-get install -y dos2unix
+          sudo npm install -g pnpm
+          sudo npm i taze -g
+
+      - name: Update Makefile
+        run: |
+          git clone --depth 1 https://git.cooluc.com/sbwml/nft-fullcone
+          git clone --depth 1 https://git.cooluc.com/sbwml/shortcut-fe
+          git clone --depth 1 https://github.com/sbwml/luci-app-airconnect
+          git clone --depth 1 https://github.com/sbwml/feeds_packages_lang_node-prebuilt
+          git clone --depth 1 https://github.com/sbwml/package_kernel_r8125
+          git clone --depth 1 https://github.com/sbwml/OpenAppFilter
+          git clone --depth 1 https://github.com/sbwml/luci-app-mosdns
+          git clone --depth 1 https://github.com/sbwml/packages_new_nat6
+          git clone --depth 1 https://github.com/QiuSimons/luci-app-daed
+          git clone --depth 1 https://github.com/BROBIRD/openwrt-r8168
+          git clone --depth 1 https://github.com/rufengsuixing/luci-app-adguardhome
+          git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon
+          git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config
+          git clone --depth 1 https://github.com/kiddin9/luci-app-dnsfilter
+          git clone --depth 1 https://github.com/kiddin9/luci-theme-edge
+          git clone --depth 1 https://github.com/kiddin9/luci-app-xlnetacc
+          git clone --depth 1 https://github.com/BoringCat/luci-app-mentohust
+          git clone --depth 1 https://github.com/KyleRicardo/MentoHUST-OpenWrt-ipk
+          git clone --depth 1 https://github.com/NateLol/luci-app-oled
+          git clone --depth 1 https://github.com/immortalwrt/homeproxy
+          git clone --depth 1 https://github.com/vernesong/OpenClash
+          rm -rf ./OpenClash/luci-app-openclash/root/etc/openclash/GeoSite.dat
+          git clone --depth 1 https://github.com/tty228/luci-app-wechatpush
+          git clone --depth 1 https://github.com/zxlhhyccc/luci-app-v2raya
+          git clone --depth 1 https://github.com/muink/luci-app-natmapt
+          git clone --depth 1 https://github.com/muink/openwrt-natmapt
+          git clone --depth 1 https://github.com/muink/openwrt-stuntman
+          git clone --depth 1 https://github.com/UnblockNeteaseMusic/luci-app-unblockneteasemusic
+          sed -i 's, +node,,g' ./luci-app-unblockneteasemusic/Makefile
+          pushd luci-app-unblockneteasemusic
+          wget -qO - https://github.com/UnblockNeteaseMusic/luci-app-unblockneteasemusic/commit/a880428.patch | patch -p1
+          popd
+          git clone --depth 1 https://github.com/morytyann/OpenWrt-mihomo
+          git clone --depth 1 https://github.com/brvphoenix/wrtbwmon
+          git clone --depth 1 https://github.com/brvphoenix/luci-app-wrtbwmon
+          find ./ -name ".gitmodules" -type f -exec rm -f {} +
+
+      - name: Commit file
+        run: |
+          git config --global user.email simonsqiu@foxmail.com
+          git config --global user.name SimonsQiu
+          git add .
+          git commit -m "Update `date +%Y/%m/%d\ %H:%M:%S\ %Z`" -a
+        continue-on-error: true
+
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{secrets.ACTIONS_DEPLOY_KEY}}
+          branch: master
+        continue-on-error: true
+
+      - name: Cleanup Workflow Logs
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{secrets.ACTIONS_DEPLOY_KEY}}
+          repository: ${{ github.repository }}
+          retain_days: 3
+        continue-on-error: true
