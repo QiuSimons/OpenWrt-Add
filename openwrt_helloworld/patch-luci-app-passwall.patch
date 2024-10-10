@@ -1,0 +1,259 @@
+diff --git a/luci-app-passwall/Makefile b/luci-app-passwall/Makefile
+index e4be5cc..56f563b 100644
+--- a/luci-app-passwall/Makefile
++++ b/luci-app-passwall/Makefile
+@@ -171,7 +171,6 @@ define Package/$(PKG_NAME)/conffiles
+ /usr/share/passwall/rules/lanlist_ipv4
+ /usr/share/passwall/rules/lanlist_ipv6
+ /usr/share/passwall/rules/domains_excluded
+-/www/luci-static/resources/qrcode.min.js
+ endef
+ 
+ include $(TOPDIR)/feeds/luci/luci.mk
+diff --git a/luci-app-passwall/luasrc/controller/passwall.lua b/luci-app-passwall/luasrc/controller/passwall.lua
+index 03006a6..f384bbc 100644
+--- a/luci-app-passwall/luasrc/controller/passwall.lua
++++ b/luci-app-passwall/luasrc/controller/passwall.lua
+@@ -268,7 +268,7 @@ function connect_status()
+ 			url = "-x socks5h://127.0.0.1:" .. socks_port .. " " .. url
+ 		end
+ 	end
+-	local result = luci.sys.exec('curl --connect-timeout 3 -o /dev/null -I -sk -w "%{http_code}:%{time_appconnect}" ' .. url)
++	local result = luci.sys.exec('curl --connect-timeout 3 -o /dev/null -I -sk -w "%{http_code}:%{time_starttransfer}" ' .. url)
+ 	local code = tonumber(luci.sys.exec("echo -n '" .. result .. "' | awk -F ':' '{print $1}'") or "0")
+ 	if code ~= 0 then
+ 		local use_time = luci.sys.exec("echo -n '" .. result .. "' | awk -F ':' '{print $2}'")
+diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
+index cd9d8d4..0e5299b 100644
+--- a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
++++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
+@@ -413,6 +413,12 @@ o:value("9.9.9.9", "9.9.9.9 (Quad9)")
+ o:value("149.112.112.112", "149.112.112.112 (Quad9)")
+ o:value("208.67.220.220", "208.67.220.220 (OpenDNS)")
+ o:value("208.67.222.222", "208.67.222.222 (OpenDNS)")
++if nixio.fs.access("/usr/share/mosdns/mosdns.sh") then
++	local mosdns_port = string.gsub(luci.sys.exec("uci -q get mosdns.config.listen_port"), "\n", "")
++	if mosdns_port ~= nil and result ~= "" then
++		o:value("127.0.0.1:" .. mosdns_port, "127.0.0.1:" .. mosdns_port .. " (MosDNS)")
++	end
++end
+ o:depends({dns_mode = "dns2socks"})
+ o:depends({dns_mode = "tcp"})
+ o:depends({dns_mode = "udp"})
+diff --git a/luci-app-passwall/luasrc/view/passwall/app_update/app_version.htm b/luci-app-passwall/luasrc/view/passwall/app_update/app_version.htm
+index 739c593..3769e7d 100644
+--- a/luci-app-passwall/luasrc/view/passwall/app_update/app_version.htm
++++ b/luci-app-passwall/luasrc/view/passwall/app_update/app_version.htm
+@@ -180,12 +180,12 @@ local version = {}
+ <div class="cbi-value">
+ 	<label class="cbi-value-title">Passwall <%:Version%></label>
+ 	<div class="cbi-value-field">
+-		<div class="cbi-value-description">
++		<!--div class="cbi-value-description"-->
+ 			<span>【 <%=api.get_version()%> 】</span>
+ 			<input class="btn cbi-button cbi-button-apply" type="button" id="passwall-check_btn"
+ 				onclick="onBtnClick(this,'passwall');" value="<%:Check update%>" />
+ 			<span id="passwall-check_btn-detail"></span>
+-		</div>
++		<!--/div-->
+ 	</div>
+ </div>
+ 
+@@ -196,14 +196,14 @@ local version = {}
+ 		<%:Version%>
+ 	</label>
+ 	<div class="cbi-value-field">
+-		<div class="cbi-value-description">
++		<!--div class="cbi-value-description"-->
+ 			<span>【 <%=version[k] ~="" and version[k] or translate("Null") %> 】</span>
+ 			<input class="btn cbi-button cbi-button-apply" type="button" id="_<%=k%>-check_btn"
+ 				onclick="onBtnClick(this,'<%=k%>');" value="<%:Check update%>" />
+ 			<input class="btn cbi-button cbi-button-apply" type="button" id="_<%=k%>-force_btn"
+ 				onclick="doUpdate(this,'<%=k%>');" value="<%:Force update%>" style="display:none"/>
+ 			<span id="_<%=k%>-check_btn-detail"></span>
+-		</div>
++		<!--/div-->
+ 	</div>
+ </div>
+ <%end%>
+diff --git a/luci-app-passwall/luasrc/view/passwall/global/status.htm b/luci-app-passwall/luasrc/view/passwall/global/status.htm
+index 00f79ff..452d369 100644
+--- a/luci-app-passwall/luasrc/view/passwall/global/status.htm
++++ b/luci-app-passwall/luasrc/view/passwall/global/status.htm
+@@ -1,5 +1,11 @@
+ <%
+ local api = require "luci.passwall.api"
++local fs = require "nixio.fs"
++local uci = require 'luci.model.uci'.cursor()
++local mode = 'normal'
++if fs.access('/etc/config/argon') then
++	mode = uci:get_first('argon', 'global', 'mode')
++end
+ -%>
+ 
+ <style>
+@@ -52,7 +58,29 @@ https://github.com/pure-css/pure/blob/master/LICENSE.md
+ 		color:#8898aa!important;
+ 		line-height: 1.8em;
+ 		min-height: 48px;
++		background-image: linear-gradient(270deg, #dde2ff 0%, #fffeff 100%);
++		border-radius: 12.375px;
+ 	}
++	@media (prefers-color-scheme: dark) {
++		.block h4 {
++			background-image: none;
++			background-color: #2c323c;
++		}
++		.block.pure-g {
++			background: #444950;
++			box-shadow: unset;
++		}
++	}
++	<% if mode == 'dark' then %>
++		.block h4 {
++			background-image: none;
++			background-color: #2c323c;
++		}
++		.block.pure-g {
++			background: #444950;
++			box-shadow: unset;
++		}
++	<% end -%>
+ 
+ 	.check {
+ 		cursor: pointer;
+@@ -137,7 +165,7 @@ https://github.com/pure-css/pure/blob/master/LICENSE.md
+ 				</div>
+ 			</div>
+ 		</div>
+-		<div class="pure-u-1-4 check" onclick="check_connect('baidu', 'https://www.baidu.com')">
++		<div class="pure-u-1-4 check" onclick="check_connect('baidu', 'http://www.baidu.com')">
+ 			<div class="block pure-g">
+ 				<div class="pure-u-1-3">
+ 					<div class="img-con">
+@@ -149,7 +177,7 @@ https://github.com/pure-css/pure/blob/master/LICENSE.md
+ 				</div>
+ 			</div>
+ 		</div>
+-		<div class="pure-u-1-4 check" onclick="check_connect('google', 'https://www.google.com/generate_204')">
++		<div class="pure-u-1-4 check" onclick="check_connect('google', 'http://www.google.com/generate_204')">
+ 			<div class="block pure-g">
+ 				<div class="pure-u-1-3">
+ 					<div class="img-con">
+@@ -161,7 +189,7 @@ https://github.com/pure-css/pure/blob/master/LICENSE.md
+ 				</div>
+ 			</div>
+ 		</div>
+-		<div class="pure-u-1-4 check" onclick="check_connect('github', 'https://github.com')">
++		<div class="pure-u-1-4 check" onclick="check_connect('github', 'http://github.com')">
+ 			<div class="block pure-g">
+ 				<div class="pure-u-1-3">
+ 					<div class="img-con">
+@@ -173,7 +201,7 @@ https://github.com/pure-css/pure/blob/master/LICENSE.md
+ 				</div>
+ 			</div>
+ 		</div>
+-		<div class="pure-u-1-4 check" onclick="check_connect('instagram', 'https://www.instagram.com')">
++		<div class="pure-u-1-4 check" onclick="check_connect('instagram', 'http://www.instagram.com')">
+ 			<div class="block pure-g">
+ 				<div class="pure-u-1-3">
+ 					<div class="img-con">
+diff --git a/luci-app-passwall/luasrc/view/passwall/node_list/node_list.htm b/luci-app-passwall/luasrc/view/passwall/node_list/node_list.htm
+index 90bf6da..874b923 100644
+--- a/luci-app-passwall/luasrc/view/passwall/node_list/node_list.htm
++++ b/luci-app-passwall/luasrc/view/passwall/node_list/node_list.htm
+@@ -26,7 +26,7 @@ table td, .table .td {
+ }
+ 
+ ._now_use {
+-	background: #94e1ff !important;
++	background: #5e72e445 !important;
+ }
+ 
+ .ping a:hover{
+diff --git a/luci-app-passwall/luasrc/view/passwall/rule/rule_version.htm b/luci-app-passwall/luasrc/view/passwall/rule/rule_version.htm
+index 24662de..77b6a0b 100644
+--- a/luci-app-passwall/luasrc/view/passwall/rule/rule_version.htm
++++ b/luci-app-passwall/luasrc/view/passwall/rule/rule_version.htm
+@@ -70,7 +70,7 @@ local geosite_update = api.uci_get_type("global_rules", "geosite_update", "1") =
+ 				<input class="cbi-input-checkbox" type="checkbox" name="geosite" value="1" <%=geosite_update%> />
+ 				geosite
+ 			</label>
+-			<input class="btn cbi-button cbi-button-apply" type="button" id="update_rules_btn" onclick="update_rules(this)" value="<%:Manually update%>" />
++			<br><br><input class="btn cbi-button cbi-button-apply" type="button" id="update_rules_btn" onclick="update_rules(this)" value="<%:Manually update%>" />
+ 		</div>
+ 	</div>
+ </div>
+diff --git a/luci-app-passwall/root/usr/share/passwall/0_default_config b/luci-app-passwall/root/usr/share/passwall/0_default_config
+index 1bdbb35..cab712b 100644
+--- a/luci-app-passwall/root/usr/share/passwall/0_default_config
++++ b/luci-app-passwall/root/usr/share/passwall/0_default_config
+@@ -32,7 +32,7 @@ config global_haproxy
+ config global_delay
+ 	option auto_on '0'
+ 	option start_daemon '1'
+-	option start_delay '60'
++	option start_delay '15'
+ 
+ config global_forwarding
+ 	option tcp_no_redir_ports 'disable'
+diff --git a/luci-app-passwall/root/usr/share/passwall/rules/direct_host b/luci-app-passwall/root/usr/share/passwall/rules/direct_host
+index a3b1464..2aed721 100644
+--- a/luci-app-passwall/root/usr/share/passwall/rules/direct_host
++++ b/luci-app-passwall/root/usr/share/passwall/rules/direct_host
+@@ -4,8 +4,13 @@ microsoft.com
+ dyndns.com
+ douyucdn.cn
+ douyucdn2.cn
++ghp.ci
++gitmirror.com
+ location.services.mozilla.com
+ 
++# google
++dl.google.com
++
+ #steam
+ steamcontent.com
+ dl.steam.clngaa.com
+@@ -19,6 +24,15 @@ cdn-qc.content.steamchina.com
+ cdn-ali.content.steamchina.com
+ epicgames-download1-1251447533.file.myqcloud.com
+ 
++# Synology ddns
++account.synology.com
++checkip.dyndns.org
++checkip.synology.com
++checkipv6.dyndns.org
++checkipv6.synology.com
++checkport.synology.com
++ddns.synology.com
++
+ #DoT/DoH
+ dns.alidns.com
+ doh.pub
+diff --git a/luci-app-passwall/root/usr/share/passwall/rules/direct_ip b/luci-app-passwall/root/usr/share/passwall/rules/direct_ip
+index b73edaa..d48bc4a 100644
+--- a/luci-app-passwall/root/usr/share/passwall/rules/direct_ip
++++ b/luci-app-passwall/root/usr/share/passwall/rules/direct_ip
+@@ -4,7 +4,11 @@
+ 223.6.6.6
+ 119.29.29.29
+ 180.76.76.76
++34.149.0.0/16
++72.18.83.0/24
+ 1.12.12.12
+ 120.53.53.53
++203.208.39.192/28
++203.208.40.0/23
+ 180.184.1.1
+ 180.184.2.2
+diff --git a/luci-app-passwall/root/usr/share/passwall/rules/proxy_host b/luci-app-passwall/root/usr/share/passwall/rules/proxy_host
+index a70321f..95167f2 100644
+--- a/luci-app-passwall/root/usr/share/passwall/rules/proxy_host
++++ b/luci-app-passwall/root/usr/share/passwall/rules/proxy_host
+@@ -8,5 +8,4 @@ googleapis.cn
+ googleapis.com
+ google.com.tw
+ google.com.hk
+-gstatic.com
+ xn--ngstr-lra8j.com
