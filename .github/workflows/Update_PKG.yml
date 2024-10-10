@@ -52,8 +52,7 @@ jobs:
           git clone --depth 1 https://github.com/morytyann/OpenWrt-mihomo
           git clone --depth 1 https://github.com/brvphoenix/wrtbwmon
           git clone --depth 1 https://github.com/brvphoenix/luci-app-wrtbwmon
-          git submodule init
-          git submodule update
+          git rm -r --cached .
 
       - name: Commit file
         run: |
