@@ -49,8 +49,8 @@ define Package/autocore/install/Default
 
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
 	$(CP) ./files/generic/luci-mod-status-autocore.json $(1)/usr/share/rpcd/acl.d/
-\t$(INSTALL_DIR) $(1)/etc/init.d
-\t$(INSTALL_BIN) ./files/x86/autocore $(1)/etc/init.d/
+    $(INSTALL_DIR) $(1)/etc/init.d
+    $(INSTALL_BIN) ./files/x86/autocore $(1)/etc/init.d/
 endef
 
 define Package/autocore-arm/install
