@@ -46,7 +46,7 @@ endef
 define Build/Prepare
 	$(CP) $(CURDIR)/root $(PKG_BUILD_DIR)
 	$(CP) $(CURDIR)/luasrc $(PKG_BUILD_DIR)
-	$(foreach po,$(wildcard ${CURDIR}/po/zh_Hans/*.po), \
+	$(foreach po,$(wildcard ${CURDIR}/po/zh-cn/*.po), \
 		po2lmo $(po) $(PKG_BUILD_DIR)/$(patsubst %.po,%.lmo,$(notdir $(po)));)
 	sed -i "s/v0.00.00-beta/v$(PKG_VERSION)-beta/g" $(PKG_BUILD_DIR)/root/www/luci-static/resources/openclash/img/version.svg >/dev/null 2>&1
 	chmod 0755 $(PKG_BUILD_DIR)/root/etc/init.d/openclash
