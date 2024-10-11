@@ -31,8 +31,8 @@ jobs:
           git clone --depth 1 https://github.com/sbwml/openwrt_pkgs
           git clone --depth 1 https://github.com/sbwml/autocore-arm
           sed -i '/init/d' ./autocore-arm/Makefile
-          sed -i '/autocore.json/a\\$(INSTALL_BIN) ./files/x86/autocore $(1)/etc/init.d/' ./autocore-arm/Makefile
-          sed -i '/autocore.json/a\\$(INSTALL_DIR) $(1)/etc/init.d' ./autocore-arm/Makefile
+          sed -i '/autocore.json/a\\\t$(INSTALL_BIN) ./files/x86/autocore $(1)/etc/init.d/' ./autocore-arm/Makefile
+          sed -i '/autocore.json/a\\\t$(INSTALL_DIR) $(1)/etc/init.d' ./autocore-arm/Makefile
           cp -rf ./autocore ./autocore-arm/files/x86/
           git clone --depth 1 https://github.com/QiuSimons/luci-app-daed
           git clone --depth 1 https://github.com/QiuSimons/openwrt-natflow
