@@ -30,3 +30,5 @@ find "$BASE_DIR" -path "$BASE_DIR/staging_dir" -prune -o -type f -exec grep -l '
 chmod 755 "$BASE_DIR/scripts/feeds"
 
 echo "Permissions have been fixed."
+
+exit 0

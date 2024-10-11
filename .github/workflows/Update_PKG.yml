@@ -59,6 +59,7 @@ jobs:
           bash remove_upx.sh
           bash convert_translation.sh
           bash create_acl_for_luci.sh -a
+          bash move_2_services.sh
           bash fix_permissions.sh
 
       - name: Commit file

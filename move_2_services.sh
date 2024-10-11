@@ -28,3 +28,4 @@ do
 	[ -n "$(grep 'admin/vpn' "$c")" ] && sed -i 's,admin/vpn,admin/services,g' "$c"
 done
 
+exit 0
