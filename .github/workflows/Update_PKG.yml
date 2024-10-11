@@ -68,6 +68,7 @@ jobs:
           bash create_acl_for_luci.sh -a
           bash move_2_services.sh
           bash fix_permissions.sh
+          bash list.sh
 
       - name: Commit file
         run: |
