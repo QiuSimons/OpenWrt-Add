@@ -1,0 +1,57 @@
+name: Update Makefile
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: 0 16 * * *
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build System Setup
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools jq
+          sudo apt-get install -y dos2unix
+          sudo npm install -g pnpm
+          sudo npm i taze -g
+
+      - name: Update Makefile
+        run: |
+          chmod 755 ./natflow/files/natflow-boot.init ./natflow/files/natflow-boot.preinit ./natflow/files/60-luci-firewall-natflow ./natflow/files/21-natflow-boot.hotplug
+          find . -type f -exec dos2unix {} \; -print
+          latest_commit="$(curl -s https://api.github.com/repos/ptpt52/natflow/commits/master | jq -r '.sha' | cut -b 1-7)"
+          sed -i '/PKG_VERSION:/d' ./natflow/Makefile
+          sed -i "11 a PKG_VERSION:=$latest_commit" ./natflow/Makefile
+
+      - name: Commit file
+        run: |
+          rm -rf build
+          git config --global user.email simonsqiu@foxmail.com
+          git config --global user.name SimonsQiu
+          git add .
+          git commit -m "Update `date +%Y/%m/%d\ %H:%M:%S\ %Z`" -a
+        continue-on-error: true
+
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{secrets.ACTIONS_DEPLOY_KEY}}
+          branch: master
+        continue-on-error: true
+
+      - name: Cleanup Workflow Logs
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{secrets.ACTIONS_DEPLOY_KEY}}
+          repository: ${{ github.repository }}
+          retain_days: 3
+        continue-on-error: true

@@ -1,0 +1,53 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2006-2011 OpenWrt.org
+
+START=95
+
+disable_gro_gso() {
+	which ethtool &>/dev/null || return 0
+	for i in $(ip address | awk -F ': ' '/eth[0-9]+/ {print $2}' | xargs)
+	do
+		{
+			ethtool -K "$i" gso off
+			ethtool -K "$i" gro off
+			ethtool -K "$i" rx-gro-list off
+		}
+	done
+}
+
+enable_gso() {
+	which ethtool &>/dev/null || return 0
+	for i in $(ip address | awk -F ': ' '/eth[0-9]+/ {print $2}' | xargs)
+	do
+		{
+			ethtool -K "$i" gso on
+			ethtool -K "$i" gro on
+			ethtool -K "$i" rx-gro-list off
+		}
+	done
+}
+
+start() {
+	test -c /dev/natflow_ctl || return 0
+	[ "$(uci -q get firewall.@defaults[0].natflow)" != 1 ] && return 0
+	disable_gro_gso
+	enabled=$(uci get firewall.@defaults[0].natflow 2>/dev/null || echo 0)
+	debug=$(uci get firewall.@defaults[0].natflow_debug 2>/dev/null || echo 3)
+	delay_pkts=$(uci get firewall.@defaults[0].natflow_delay_pkts 2>/dev/null || echo 0)
+
+	echo "debug=$debug" >/dev/natflow_ctl
+	echo "disabled=$((!enabled))" >/dev/natflow_ctl
+	echo "delay_pkts=$delay_pkts" >/dev/natflow_ctl
+}
+
+stop() {
+	test -c /dev/natflow_ctl || return 0
+	enable_gso
+	echo disabled=1 >/dev/natflow_ctl
+}
+
+restart() {
+	stop
+	sleep 1
+	start
+}
