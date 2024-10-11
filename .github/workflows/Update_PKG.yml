@@ -64,7 +64,6 @@ jobs:
           pwd | awk -F/ '{print NF-1}'
           find . -mindepth 2 -name ".git" -type d -exec rm -rf {} +
           bash remove_upx.sh
-          bash convert_translation.sh
           bash create_acl_for_luci.sh -a
           bash move_2_services.sh
           bash fix_permissions.sh
