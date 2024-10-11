@@ -16,7 +16,7 @@ jobs:
 
       - name: Update Makefile
         run: |
-          rm -rf nft-fullcone shortcut-fe luci-app-airconnect feeds_packages_lang_node-prebuilt package_kernel_r8125 OpenAppFilter luci-app-mosdns packages_new_nat6 luci-app-daed openwrt-r8168 luci-app-adguardhome luci-theme-argon luci-app-argon-config luci-app-dnsfilter luci-theme-edge luci-app-xlnetacc luci-app-mentohust MentoHUST-OpenWrt-ipk luci-app-oled homeproxy OpenClash luci-app-wechatpush luci-app-v2raya luci-app-natmapt openwrt-natmapt openwrt-stuntman luci-app-unblockneteasemusic OpenWrt-mihomo wrtbwmon luci-app-wrtbwmon openwrt_helloworld
+          rm -rf nft-fullcone shortcut-fe luci-app-airconnect feeds_packages_lang_node-prebuilt package_kernel_r8125 OpenAppFilter luci-app-mosdns packages_new_nat6 luci-app-daed openwrt-r8168 luci-theme-argon luci-app-argon-config luci-app-dnsfilter luci-theme-edge luci-app-xlnetacc luci-app-mentohust MentoHUST-OpenWrt-ipk luci-app-oled homeproxy OpenClash luci-app-wechatpush luci-app-v2raya luci-app-natmapt openwrt-natmapt openwrt-stuntman luci-app-unblockneteasemusic OpenWrt-mihomo wrtbwmon luci-app-wrtbwmon openwrt_helloworld openwrt_pkgs
           git clone --depth 1 https://git.cooluc.com/sbwml/nft-fullcone
           git clone --depth 1 https://git.cooluc.com/sbwml/shortcut-fe
           git clone --depth 1 https://github.com/sbwml/luci-app-airconnect
@@ -26,9 +26,9 @@ jobs:
           git clone --depth 1 https://github.com/sbwml/luci-app-mosdns
           git clone --depth 1 https://github.com/sbwml/packages_new_nat6
           git clone --depth 1 https://github.com/sbwml/openwrt_helloworld
+          git clone --depth 1 https://github.com/sbwml/openwrt_pkgs
           git clone --depth 1 https://github.com/QiuSimons/luci-app-daed
           git clone --depth 1 https://github.com/BROBIRD/openwrt-r8168
-          git clone --depth 1 https://github.com/rufengsuixing/luci-app-adguardhome
           git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon
           git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config
           git clone --depth 1 https://github.com/kiddin9/luci-app-dnsfilter
