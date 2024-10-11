@@ -1,0 +1,39 @@
+#!/bin/sh /etc/rc.common
+
+START=90
+
+run_reboot()
+{
+	local enable
+	config_get_bool enable $1 enable
+
+	if [ $enable = 1 ]; then
+		local minute
+		local hour
+		config_get week $1 week
+		config_get minute $1 minute
+		config_get hour $1 hour
+		[ $week = 7 ] && week="*"
+		sed -i '/reboot/d' /etc/crontabs/root >/dev/null 2>&1
+		echo "$minute $hour * * $week /bin/sync && /sbin/reboot" >> /etc/crontabs/root
+		/etc/init.d/cron restart
+	fi
+}
+
+start()
+{
+	config_load autoreboot
+	config_foreach run_reboot login
+}
+
+stop()
+{
+	sed -i '/reboot/d' /etc/crontabs/root >/dev/null 2>&1
+	/etc/init.d/cron restart
+}
+
+restart()
+{
+	stop
+	start
+}
