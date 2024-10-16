@@ -154,8 +154,12 @@ sed -i '/log-facility/d' /etc/dnsmasq.conf
 echo "log-facility=/dev/null" >> /etc/dnsmasq.conf
 /etc/init.d/odhcpd restart
 
+#nanopi fix
 sed -i 's/eth1/eth1.*/g' /etc/hotplug.d/net/40-net-smp-affinity
 sed -i 's/eth0/eth0.*/g' /etc/hotplug.d/net/40-net-smp-affinity
+
+#SIP fix
+sed -i '/sip/d' /etc/modules.d/nf-nathelper-extra
 
 #计划任务
 uci set system.@system[0].cronloglevel="9"
