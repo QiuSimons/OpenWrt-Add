@@ -49,7 +49,6 @@ jobs:
           git clone --depth 1 https://github.com/vernesong/OpenClash
           rm -rf ./OpenClash/luci-app-openclash/root/etc/openclash/GeoSite.dat
           git clone --depth 1 https://github.com/tty228/luci-app-wechatpush
-          git clone --depth 1 https://github.com/zxlhhyccc/luci-app-v2raya
           git clone --depth 1 https://github.com/muink/luci-app-natmapt
           git clone --depth 1 https://github.com/muink/openwrt-natmapt
           git clone --depth 1 https://github.com/muink/openwrt-stuntman
