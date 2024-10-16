@@ -16,7 +16,7 @@ jobs:
 
       - name: Update Makefile
         run: |
-          rm -rf nft-fullcone shortcut-fe luci-app-airconnect feeds_packages_lang_node-prebuilt package_kernel_r8125 OpenAppFilter luci-app-mosdns packages_new_nat6 luci-app-daed openwrt-r8168 luci-theme-argon luci-app-argon-config luci-app-dnsfilter luci-theme-edge luci-app-xlnetacc luci-app-mentohust MentoHUST-OpenWrt-ipk luci-app-oled homeproxy OpenClash luci-app-wechatpush luci-app-v2raya luci-app-natmapt openwrt-natmapt openwrt-stuntman luci-app-unblockneteasemusic OpenWrt-mihomo wrtbwmon luci-app-wrtbwmon openwrt_helloworld openwrt_pkgs openwrt-natflow autocore-arm luci-app-autotimeset luci-app-partexp luci-app-frps luci-app-frpc luci-app-uugamebooster uugamebooster luci-app-ap-modem
+          rm -rf nft-fullcone shortcut-fe luci-app-airconnect feeds_packages_lang_node-prebuilt package_kernel_r8125 OpenAppFilter luci-app-mosdns packages_new_nat6 luci-app-daed openwrt-r8168 luci-theme-argon luci-app-argon-config luci-app-dnsfilter luci-theme-edge luci-app-xlnetacc luci-app-mentohust MentoHUST-OpenWrt-ipk luci-app-oled homeproxy OpenClash luci-app-wechatpush luci-app-v2raya luci-app-natmapt openwrt-natmapt openwrt-stuntman luci-app-unblockneteasemusic OpenWrt-mihomo wrtbwmon luci-app-wrtbwmon openwrt_helloworld openwrt_pkgs openwrt-natflow autocore-arm luci-app-autotimeset luci-app-partexp luci-app-frps luci-app-frpc luci-app-uugamebooster uugamebooster luci-app-ap-modem luci-app-arpbind
           git clone --depth 1 https://git.cooluc.com/sbwml/nft-fullcone
           git clone --depth 1 https://git.cooluc.com/sbwml/shortcut-fe
           git clone --depth 1 https://github.com/sbwml/luci-app-airconnect
@@ -85,6 +85,10 @@ jobs:
           git clone --depth 1 https://github.com/linkease/openwrt-app-actions
           cp -rf ./openwrt-app-actions/applications/luci-app-ap-modem ./luci-app-ap-modem
           rm -rf ./openwrt-app-actions
+          git clone --depth 1 https://github.com/immortalwrt/luci
+          cp -rf ./luci/applications/luci-app-arpbind ./luci-app-arpbind
+          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-arpbind/Makefile
+          rm -rf ./luci
           find . -mindepth 2 -name ".git" -type d -exec rm -rf {} +
           bash remove_upx.sh
           bash create_acl_for_luci.sh -a
