@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # defaults.sh -- default configuration values for cake-autorate.sh
 #
@@ -17,10 +17,10 @@ INTERFACE=""
 
 # *** OUTPUT AND LOGGING OPTIONS ***
 
-output_processing_stats=1 	# enable (1) or disable (0) output monitoring lines showing processing stats
-output_load_stats=1       	# enable (1) or disable (0) output monitoring lines showing achieved loads
-output_reflector_stats=1  	# enable (1) or disable (0) output monitoring lines showing reflector stats
-output_summary_stats=1          # enable (1) or disable (0) output monitoring lines showing summary stats
+output_processing_stats=0 	# enable (1) or disable (0) output monitoring lines showing processing stats
+output_load_stats=0       	# enable (1) or disable (0) output monitoring lines showing achieved loads
+output_reflector_stats=0  	# enable (1) or disable (0) output monitoring lines showing reflector stats
+output_summary_stats=0          # enable (1) or disable (0) output monitoring lines showing summary stats
 output_cake_changes=0     	# enable (1) or disable (0) output monitoring lines showing cake bandwidth changes
 debug=1 		  	# enable (1) or disable (0) out of debug lines
 
@@ -105,7 +105,7 @@ max_ul_shaper_rate_kbps=35000  # maximum bandwidth for upload (Kbit/s)
 # sleep functionality saves unecessary pings and CPU cycles by
 # pausing all active pingers when connection is not in active use
 enable_sleep_function=1 # enable (1) or disable (0) sleep functonality
-connection_active_thr_kbps=1000  # threshold in Kbit/s below which dl/ul is considered idle
+connection_active_thr_kbps=2000  # threshold in Kbit/s below which dl/ul is considered idle
 sustained_idle_sleep_thr_s=60.0  # time threshold to put pingers to sleep on sustained dl/ul achieved rate < idle_thr (seconds)
 
 min_shaper_rates_enforcement=0 # enable (1) or disable (0) dropping down to minimum shaper rates on connection idle or stall
@@ -113,6 +113,9 @@ min_shaper_rates_enforcement=0 # enable (1) or disable (0) dropping down to mini
 startup_wait_s=0.0 # number of seconds to wait on startup (e.g. to wait for things to settle on router reboot)
 
 # *** ADVANCED CONFIGURATION OPTIONS ***
+
+log_file_buffer_size_B=512     # log file buffer size in bytes
+log_file_buffer_timeout_ms=500 # log file buffer timeout in milliseconds
 
 log_file_export_compress=1 # compress log file exports using gzip and append .gz to export filename
 
@@ -171,7 +174,7 @@ alpha_delta_ewma=0.095
 # otherwise shaper rate is adjusted up on load high, and down on load idle or low
 shaper_rate_min_adjust_down_bufferbloat=0.99    # how rapidly to reduce shaper rate upon detection of bufferbloat (min reduction)
 shaper_rate_max_adjust_down_bufferbloat=0.75	# how rapidly to reduce shaper rate upon detection of bufferbloat (max reduction)
-shaper_rate_adjust_up_load_high=1.01		# how rapidly to increase shaper rate upon high load detected
+shaper_rate_adjust_up_load_high=1.04		# how rapidly to increase shaper rate upon high load detected
 shaper_rate_adjust_down_load_low=0.99		# how rapidly to return down to base shaper rate upon idle or low load detected
 shaper_rate_adjust_up_load_low=1.01		# how rapidly to return up to base shaper rate upon idle or low load detected
 
@@ -212,10 +215,3 @@ connection_stall_thr_kbps=10
 global_ping_response_timeout_s=10.0 # timeout to set shaper rates to min on no ping response whatsoever (seconds)
 
 if_up_check_interval_s=10.0 # time to wait before re-checking if rx/tx bytes files exist (e.g. from boot state or sleep recovery)
-
-# Starlink satellite switch (sss) compensation options
-sss_compensation=0 # enable (1) or disable (0) Starlink handling
-# satellite switch compensation start times in seconds of each minute
-sss_times_s=("12.0" "27.0" "42.0" "57.0")
-sss_compensation_pre_duration_ms=300
-sss_compensation_post_duration_ms=200
