@@ -41,7 +41,11 @@ reflector_ping_interval_s=$(uci -q get sqm.${INTERFACE}.reflector_ping_interval_
 # and the remaining 2 reflectors in the list will be used in the event any of the first 4 go bad
 # a bad reflector will go to the back of the queue on reflector rotation
 #reflectors=("1.1.1.1" "1.0.0.1" "8.8.8.8" "8.8.4.4" "9.9.9.9" "9.9.9.10")
-reflectors=($(uci get omr-tracker.defaults.hosts))
+reflectors=(
+"119.29.29.29" "119.28.28.28"  # Dnspod
+"223.5.5.5" "223.6.6.6"  # Alidns
+"114.114.114.114" "114.114.115.115" # 114DNS
+)
 no_pingers=$(uci -q get sqm.${INTERFACE}.no_pingers || echo "4")
 
 # delay threshold in ms is the extent of RTT increase to classify as a delay

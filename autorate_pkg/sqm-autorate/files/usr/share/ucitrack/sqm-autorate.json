@@ -1,0 +1,7 @@
+{
+  "config": "sqm-autorate",
+  "init": "sqm-autorate",
+  "affects": [
+    "firewall"
+  ]
+}
