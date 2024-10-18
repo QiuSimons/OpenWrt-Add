@@ -1,5 +1,6 @@
 #!/bin/sh
 
+[ -f "/etc/config/ucitrack" ] && {
 uci -q batch <<-EOF >/dev/null
 	delete ucitrack.@sqm[-1]
 	add ucitrack sqm
@@ -13,5 +14,6 @@ uci -q batch <<-EOF >/dev/null
 	add_list ucitrack.@firewall[0].affects=sqm-autorate
 	commit ucitrack
 EOF
+}
 
 exit 0
