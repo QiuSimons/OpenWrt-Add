@@ -11,7 +11,7 @@ include $(INCLUDE_DIR)/package.mk
 define Package/appfilter
   SECTION:=Derry Apps
   CATEGORY:=Derry Apps
-  DEPENDS:=+libubox +libubus  +libuci +libpthread +libjson-c +libblobmsg-json
+  DEPENDS:=+kmod-oaf +libubox +libubus  +libuci +libpthread +libjson-c +libblobmsg-json
   TITLE:=App filter userspace module
 endef
 

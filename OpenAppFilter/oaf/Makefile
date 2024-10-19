@@ -3,10 +3,9 @@ include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=oaf
-include $(INCLUDE_DIR)/package.mk
+PKG_VERSION:=5.0.2
 
-PKG_AUTOLOAD:=oaf
-RSTRIP:=:
+include $(INCLUDE_DIR)/package.mk
 
 define KernelPackage/oaf
   SECTION:=Derry Apps
@@ -15,7 +14,6 @@ define KernelPackage/oaf
   FILES:=$(PKG_BUILD_DIR)/oaf.ko 
   DEPENDS:=+kmod-ipt-conntrack
   KCONFIG:=
-  AUTOLOAD:=$(call AutoLoad,0,$(PKG_AUTOLOAD))
 endef
 
 define KernelPackage/oaf/description
