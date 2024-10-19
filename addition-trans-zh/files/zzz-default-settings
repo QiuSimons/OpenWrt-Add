@@ -32,7 +32,7 @@ uci set argon.@global[0].bing_background='1'
 uci commit argon
 
 #时区设置
-uci set system.@system[0].zram_comp_algo='zstd'
+uci set system.@system[0].zram_comp_algo='lz4'
 uci set system.@system[0].timezone=CST-8
 uci set system.@system[0].zonename=Asia/Shanghai
 uci del system.ntp.server
