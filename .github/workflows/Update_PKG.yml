@@ -75,8 +75,11 @@ jobs:
           rm -rf ./sirpdboy-package
           git clone --depth 1 https://github.com/coolsnowwolf/luci
           cp -rf ./luci/applications/luci-app-frps ./luci-app-frps
+          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-frps/Makefile
           cp -rf ./luci/applications/luci-app-frpc ./luci-app-frpc
+          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-frpc/Makefile
           cp -rf ./luci/applications/luci-app-uugamebooster ./luci-app-uugamebooster
+          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-uugamebooster/Makefile
           rm -rf ./luci
           git clone --depth 1 https://github.com/coolsnowwolf/packages
           cp -rf ./packages/net/uugamebooster ./uugamebooster
