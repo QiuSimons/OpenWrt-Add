@@ -100,6 +100,7 @@ sed -i '/offloading/ a\                shortcutfe: access('\''/etc/init.d/shortc
 
 #默认开启 Packet Steering
 uci set network.globals.packet_steering='1'
+uci set network.globals.steering_flows='128'
 uci commit network
 
 #通用即插即用
