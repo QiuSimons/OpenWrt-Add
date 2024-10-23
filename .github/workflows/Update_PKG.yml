@@ -29,6 +29,7 @@ jobs:
           git clone --depth 1 https://github.com/sbwml/openwrt_helloworld
           rm -rf ./openwrt_helloworld/{luci-app-mihomo,mihomo,luci-app-homeproxy,luci-app-openclash,luci-app-daed,daed}
           git clone --depth 1 https://github.com/sbwml/openwrt_pkgs
+          rm -rf ./openwrt_pkgs/luci-app-zerotier
           git clone --depth 1 https://github.com/sbwml/autocore-arm
           sed -i '/init/d' ./autocore-arm/Makefile
           sed -i '/autocore.json/a\\	$(INSTALL_BIN) ./files/x86/autocore $(1)/etc/init.d/' ./autocore-arm/Makefile
@@ -90,6 +91,8 @@ jobs:
           git clone --depth 1 https://github.com/immortalwrt/luci
           cp -rf ./luci/applications/luci-app-arpbind ./luci-app-arpbind
           sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-arpbind/Makefile
+          cp -rf ./luci/applications/luci-app-zerotier ./luci-app-zerotier
+          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-zerotier/Makefile
           rm -rf ./luci
           git clone --depth 1 https://github.com/immortalwrt/packages
           mkdir -p imm_pkg
@@ -99,6 +102,7 @@ jobs:
           sed -i '/defaults/{N;d;}' imm_pkg/frp/Makefile
           sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/packages|g' imm_pkg/frp/Makefile
           cp -rf ./packages/net/subconverter ./imm_pkg/subconverter
+          cp -rf ./packages/net/zerotier ./imm_pkg/zerotier
           cp -rf ./packages/libs/jpcre2 ./imm_pkg/jpcre2
           cp -rf ./packages/libs/rapidjson ./imm_pkg/rapidjson
           cp -rf ./packages/libs/libcron ./imm_pkg/libcron
