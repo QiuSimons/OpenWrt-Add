@@ -36,11 +36,10 @@ jobs:
           sed -i '/autocore.json/a\\	$(INSTALL_DIR) $(1)/etc/init.d' ./autocore-arm/Makefile
           cp -rf ./autocore ./autocore-arm/files/x86/
           git clone --depth 1 https://github.com/sbwml/openwrt-qBittorrent
+          git clone -b openwrt-23.05 --depth 1 https://github.com/sbwml/luci-theme-argon
           git clone --depth 1 https://github.com/QiuSimons/luci-app-daed
           git clone --depth 1 https://github.com/QiuSimons/openwrt-natflow
           git clone --depth 1 https://github.com/BROBIRD/openwrt-r8168
-          git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon
-          git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config
           git clone --depth 1 https://github.com/kiddin9/luci-app-dnsfilter
           git clone --depth 1 https://github.com/kiddin9/luci-theme-edge
           git clone --depth 1 https://github.com/kiddin9/luci-app-xlnetacc
