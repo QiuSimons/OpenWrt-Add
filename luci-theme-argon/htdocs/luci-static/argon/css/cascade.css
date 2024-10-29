@@ -1730,7 +1730,7 @@ h5 {
     align-items: flex-start;
     min-height: 100%;
     z-index: 2;
-    width: 420px;
+    width: 440px;
     box-shadow: rgba(0, 0, 0, 0.75) 0 0 35px -5px;
     margin-left: 5%;
     background: transparent
@@ -1745,7 +1745,7 @@ h5 {
     top: 0px;
     width: 100%;
     min-height: 100%;
-    max-width: 420px;
+    max-width: 440px;
     background-color: #fff;
     background-color: var(--white);
     -webkit-backdrop-filter: blur(var(--blur-radius));
