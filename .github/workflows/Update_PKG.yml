@@ -28,6 +28,7 @@ jobs:
           git clone --depth 1 https://github.com/sbwml/packages_new_nat6
           git clone --depth 1 https://github.com/sbwml/openwrt_helloworld
           rm -rf ./openwrt_helloworld/{luci-app-mihomo,mihomo,luci-app-homeproxy,luci-app-openclash,luci-app-daed,daed}
+          sed -i 's/result.insecure = "0"/result.insecure = "1"/g' ./openwrt_helloworld/luci-app-ssr-plus/usr/share/shadowsocksr/subscribe.lua
           git clone --depth 1 https://github.com/sbwml/openwrt_pkgs
           rm -rf ./openwrt_pkgs/luci-app-zerotier
           git clone --depth 1 https://github.com/sbwml/autocore-arm
