@@ -19,16 +19,14 @@ opkg update
 echo "download tarball"
 arch="$DISTRIB_ARCH"
 branch=
-if [[ "$DISTRIB_RELEASE" == *"22.03"* ]]; then
-	branch="openwrt-22.03"
-elif [[ "$DISTRIB_RELEASE" == *"23.05"* ]]; then
+if [[ "$DISTRIB_RELEASE" == *"23.05"* ]]; then
 	branch="openwrt-23.05"
 elif [[ "$DISTRIB_RELEASE" == *"24.10"* ]]; then
 	branch="openwrt-24.10"
 elif [[ "$DISTRIB_RELEASE" == "SNAPSHOT" ]]; then
 	branch="SNAPSHOT"
 else
-	echo "unknown release: $DISTRIB_RELEASE"
+	echo "unsupported release: $DISTRIB_RELEASE"
 	exit 1
 fi
 tarball="mihomo_$arch-$branch.tar.gz"
@@ -44,6 +42,6 @@ echo "install ipks"
 opkg install mihomo_*.ipk
 opkg install luci-app-mihomo_*.ipk
 opkg install luci-i18n-mihomo-zh-cn_*.ipk
-rm -f *mihomo*.ipk
+rm -f -- *mihomo*.ipk
 
 echo "success"

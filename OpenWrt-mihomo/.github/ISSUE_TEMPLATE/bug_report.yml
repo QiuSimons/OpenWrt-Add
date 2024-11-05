@@ -9,7 +9,7 @@ body:
       label: 自查
       description: 请按以下步骤自查，如自查后问题仍然存在，再继续提交Issue。
       options:
-        - label: OpenWrt 版本在 22.03 及以上
+        - label: OpenWrt 版本在 23.05 及以上
           required: true
         - label: Linux Kernel 版本在 5.10 及以上
           required: true

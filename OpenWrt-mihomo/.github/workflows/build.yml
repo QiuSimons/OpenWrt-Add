@@ -32,7 +32,6 @@ jobs:
           - i386_pentium4
           - x86_64
         branch:
-          - openwrt-22.03
           - openwrt-23.05
           - openwrt-24.10
           - SNAPSHOT
