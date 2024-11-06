@@ -7,8 +7,8 @@ include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=r8125
-PKG_VERSION:=9.013.02
-PKG_RELEASE:=3
+PKG_VERSION:=9.014.01
+PKG_RELEASE:=1
 
 PKG_BUILD_PARALLEL:=1
 PKG_LICENSE:=GPLv2
@@ -30,7 +30,10 @@ define Package/r8125/description
   This package contains a driver for Realtek r8125 chipsets.
 endef
 
-PKG_MAKE_FLAGS += ENABLE_RSS_SUPPORT=y
+PKG_MAKE_FLAGS += \
+	CONFIG_ASPM=n \
+	ENABLE_RSS_SUPPORT=y \
+	ENABLE_MULTIPLE_TX_QUEUE=y
 
 define Build/Compile
 	+$(KERNEL_MAKE) $(PKG_JOBS) \
