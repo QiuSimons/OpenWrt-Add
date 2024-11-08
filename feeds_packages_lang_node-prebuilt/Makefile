@@ -38,8 +38,9 @@ define Package/node/description
   Node.js® is a JavaScript runtime built on Chrome's V8 JavaScript engine. Node.js uses
   an event-driven, non-blocking I/O model that makes it lightweight and efficient. Node.js'
    package ecosystem, npm, is the largest ecosystem of open source libraries in the world.
+
   *** The following preparations must be made on the host side. ***
-      1. gcc 8.3 or higher is required.
+      1. gcc 10.1 or higher is required.
       2. To build a 32-bit target, gcc-multilib, g++-multilib are required.
       3. Requires libatomic package. (If necessary, install the 32-bit library at the same time.)
      ex) sudo apt-get install gcc-multilib g++-multilib
@@ -80,12 +81,12 @@ define Build/Compile
 	( \
 		echo $(ARCH_PACKAGES) ; \
 		pushd $(PKG_BUILD_DIR) ; \
-		wget https://downloads.openwrt.org/releases/$(PKG_BASE)/$(ARCH_PACKAGES)/packages/node_v$(PKG_BUILD_VERSION)_$(ARCH_PACKAGES).ipk ; \
-		$(TAR) -zxf node_v$(PKG_BUILD_VERSION)_$(ARCH_PACKAGES).ipk ; \
+		wget https://downloads.openwrt.org/releases/$(PKG_BASE)/$(ARCH_PACKAGES)/packages/node_$(PKG_BUILD_VERSION)_$(ARCH_PACKAGES).ipk ; \
+		$(TAR) -zxf node_$(PKG_BUILD_VERSION)_$(ARCH_PACKAGES).ipk ; \
 		$(TAR) -zxf data.tar.gz ; \
 		rm -f data.tar.gz control.tar.gz debian-binary ; \
-		wget https://downloads.openwrt.org/releases/$(PKG_BASE)/$(ARCH_PACKAGES)/packages/node-npm_v$(PKG_BUILD_VERSION)_$(ARCH_PACKAGES).ipk ; \
-		$(TAR) -zxf node-npm_v$(PKG_BUILD_VERSION)_$(ARCH_PACKAGES).ipk ; \
+		wget https://downloads.openwrt.org/releases/$(PKG_BASE)/$(ARCH_PACKAGES)/packages/node-npm_$(PKG_BUILD_VERSION)_$(ARCH_PACKAGES).ipk ; \
+		$(TAR) -zxf node-npm_$(PKG_BUILD_VERSION)_$(ARCH_PACKAGES).ipk ; \
 		$(TAR) -zxf data.tar.gz ; \
 		rm -f data.tar.gz control.tar.gz debian-binary ; \
 		popd ; \
