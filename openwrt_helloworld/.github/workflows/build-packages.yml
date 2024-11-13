@@ -8,13 +8,14 @@ on:
 jobs:
   build:
     name: Build ${{ matrix.arch }}-${{ matrix.tag }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         arch:
           - aarch64_cortex-a53
           - aarch64_cortex-a72
+          - aarch64_cortex-a76
           - aarch64_generic
           - arm_arm1176jzf-s_vfp
           - arm_arm926ej-s
@@ -28,11 +29,14 @@ jobs:
           - arm_cortex-a9_neon
           - arm_cortex-a9_vfpv3-d16
           - arm_fa526
-          - arm_mpcore
           - arm_xscale
+          - armeb_xscale
           - i386_pentium-mmx
           - i386_pentium4
+          - loongarch64_generic
+          - mips64_mips64r2
           - mips64_octeonplus
+          - mips64el_mips64r2
           - mips_24kc
           - mips_4kec
           - mips_mips32
@@ -50,12 +54,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Free disk space
+        run: |
+          rm -rf /usr/lib/{jvm,llvm} /usr/local /usr/src/* /var/lib/gems /var/lib/mysql /var/lib/snapd /etc/skel /opt/{microsoft,az,hostedtoolcache,cni,mssql-tools,pipx} /usr/share/{az*,dotnet,swift,miniconda,gradle*,java,kotlinc,ri,sbt} /root/{.sbt,.local,.npm} /usr/libexec/gcc/x86_64-linux-gnu/14 /usr/lib/x86_64-linux-gnu/{*clang*,*LLVM*} /home/linuxbrew
+
+      - name: Hack daed packages
+        run: |
+          sed -i 's/$(BPF_DEPENDS)//g' daed/Makefile
+
       - name: Build Packages
         uses: sbwml/openwrt-gh-action-sdk@helloworld
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.tag }}
           FEEDNAME: packages_ci
-          PACKAGES: chinadns-ng dns2socks dns2tcp hysteria ipt2socks lua-neturl luci-app-homeproxy luci-app-mihomo luci-app-openclash luci-app-passwall luci-app-passwall2 luci-app-ssr-plus microsocks naiveproxy pdnsd redsocks2 shadow-tls shadowsocks-rust shadowsocksr-libev simple-obfs sing-box tcping trojan trojan-plus tuic-client v2ray-core v2ray-geodata xray-core xray-plugin
+          PACKAGES: chinadns-ng daed dns2socks dns2tcp hysteria ipt2socks lua-neturl luci-app-daed luci-app-homeproxy luci-app-mihomo luci-app-openclash luci-app-passwall luci-app-passwall2 luci-app-ssr-plus microsocks naiveproxy pdnsd redsocks2 shadow-tls shadowsocks-libev shadowsocks-rust shadowsocksr-libev simple-obfs sing-box tcping trojan trojan-plus tuic-client v2ray-core v2ray-geodata xray-core xray-plugin
           KEY_BUILD: ${{ secrets.sign_key }}
           NO_REFRESH_CHECK: true
           IGNORE_ERRORS: true
