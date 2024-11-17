@@ -14,7 +14,7 @@ jobs:
           - i386_pentium4
           - x86_64
         sdk:
-          - openwrt-22.03
+          - openwrt-24.10
 
     steps:
       - uses: actions/checkout@main
@@ -32,14 +32,16 @@ jobs:
           sudo swapoff -a
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo -E apt-get -qq update
-          sudo -E apt-get -qq install clang-15 llvm-15
+          sudo -E apt-get -qq install clang-15 llvm-15 npm
+          sudo npm install -g pnpm
+          sudo npm i taze -g
           latest_commit="$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.sha' | cut -b 1-7)"
           timestamp=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main | jq -r '.commit.author.date')
           formatted_timestamp=$(date --date="$timestamp" "+%Y-%m-%d")
           echo "version=$formatted_timestamp-$latest_commit" >> "$GITHUB_ENV"
 
       - name: Building packages
-        uses: sbwml/openwrt-gh-action-sdk@go1.22
+        uses: sbwml/openwrt-gh-action-sdk@go1.23
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
           FEEDNAME: packages_ci

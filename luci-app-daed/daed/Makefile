@@ -7,6 +7,7 @@ include $(TOPDIR)/rules.mk
 PKG_NAME:=daed
 PKG_VERSION:=b44c472
 DAED_VERSION:=daed-b44c472
+WING_VERSION:=wing-c4c7159
 CORE_VERSION:=core-d3ab0b2
 PKG_RELEASE:=1
 
@@ -21,7 +22,7 @@ PKG_LICENSE_FILES:=LICENSE wing/LICENSE
 PKG_MAINTAINER:=Tianling Shen <cnsztl@immortalwrt.org>
 
 PKG_BUILD_DIR=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/wing
-PKG_BUILD_DEPENDS:=golang/host bpf-headers
+PKG_BUILD_DEPENDS:=golang/host bpf-headers node/host
 PKG_BUILD_PARALLEL:=1
 PKG_BUILD_FLAGS:=no-mips16
 
@@ -30,7 +31,7 @@ GO_PKG_LDFLAGS:= \
 	-s -w -X '$(GO_PKG)/db.AppDescription=$(PKG_NAME) is a integration solution of dae, API and UI.'
 GO_PKG_LDFLAGS_X= \
 	$(GO_PKG)/db.AppName=$(PKG_NAME) \
-	$(GO_PKG)/db.AppVersion=$(DAED_VERSION)_$(CORE_VERSION)
+	$(GO_PKG)/db.AppVersion=$(DAED_VERSION)_$(WING_VERSION)_$(CORE_VERSION)
 GO_PKG_TAGS:=embedallowed
 GO_PKG_TARGET_VARS:=$(filter-out CGO_ENABLED=%,$(GO_PKG_TARGET_VARS)) CGO_ENABLED=1
 
@@ -66,18 +67,10 @@ define Package/daed/conffiles
 /etc/config/daed
 endef
 
-WEB_FILE:=$(PKG_NAME)-web-$(PKG_VERSION).zip
-define Download/daed-web
-        URL:=https://github.com/daeuniverse/daed/releases/download/v0.8.0
-	URL_FILE:=web.zip
-	FILE:=$(WEB_FILE)
-	HASH:=skip
-endef
-
 define Build/Prepare
 	( \
 		$(TAR) --strip-components=1 -C $(PKG_BUILD_DIR)/../ -xzf $(DL_DIR)/$(PKG_NAME)-$(PKG_VERSION).tar.gz ; \
-		rm -rf $(PKG_BUILD_DIR) && git clone https://github.com/daeuniverse/dae-wing $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/wing ; \
+		rm -rf $(PKG_BUILD_DIR) && git clone https://github.com/daeuniverse/dae-wing $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/wing && git -C $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/wing checkout ${WING_VERSION: -7} ; \
 		rm -rf $(PKG_BUILD_DIR)/dae-core && git clone https://github.com/daeuniverse/dae $(PKG_BUILD_DIR)/dae-core && git -C $(PKG_BUILD_DIR)/dae-core checkout ${CORE_VERSION: -7} ; \
 		pushd $(PKG_BUILD_DIR)/dae-core ; \
 		git submodule update --init ; \
@@ -87,8 +80,13 @@ define Build/Prepare
 		wget -qO - https://github.com/daeuniverse/dae-wing/commit/ca02961.patch | patch -p1 ; \
 		go mod tidy ; \
 		popd ; \
-		mkdir -p $(PKG_BUILD_DIR)/webrender ; \
-		unzip -q -d $(PKG_BUILD_DIR)/webrender/ $(DL_DIR)/$(WEB_FILE) ; \
+		pushd $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION) ; \
+		npm install -g pnpm ; \
+		pnpm install ; \
+		pnpm build ; \
+		popd ; \
+		mkdir -p $(PKG_BUILD_DIR)/webrender/web ; \
+		cp -rf $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/dist/* $(PKG_BUILD_DIR)/webrender/web ; \
 		find $(PKG_BUILD_DIR)/webrender/web -type f -size +4k ! -name "*.gz" ! -name "*.woff"  ! -name "*.woff2" -exec sh -c '\
 			gzip -9 -k "{}"; \
 			if [ "$$$$(stat -c %s {})" -lt "$$$$(stat -c %s {}.gz)" ]; then \
@@ -141,6 +139,5 @@ define Package/daed/install
 	$(INSTALL_BIN) $(CURDIR)/files/daed.init $(1)/etc/init.d/daed
 endef
 
-$(eval $(call Download,daed-web))
 $(eval $(call GoBinPackage,daed))
 $(eval $(call BuildPackage,daed))
