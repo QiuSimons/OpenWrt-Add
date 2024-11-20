@@ -5,7 +5,7 @@ START=99
 
 start() {
 	echo 1 > /proc/sys/net/core/backlog_threaded
-	#echo 1 > /proc/sys/net/ipv4/conf/br-lan/proxy_arp
+	echo 1 > /proc/sys/net/ipv4/conf/br-lan/proxy_arp
 	#echo 1 > /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal
 	#echo 1 > /proc/sys/net/netfilter/nf_conntrack_tcp_no_window_check
 
