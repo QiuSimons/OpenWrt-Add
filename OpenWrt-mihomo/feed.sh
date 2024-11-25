@@ -46,8 +46,8 @@ elif [ -x "/usr/bin/apk" ]; then
 	# todo: implement add key for apk
 	# add feed
 	echo "add feed"
-	if (grep -q mihomo /etc/apk/repositories); then
-		sed -i '/mihomo/d' /etc/apk/repositories
+	if (grep -q mihomo /etc/apk/repositories.d/customfeeds.list); then
+		sed -i '/mihomo/d' /etc/apk/repositories.d/customfeeds.list
 	fi
 	echo "https://morytyann.github.io/OpenWrt-mihomo/$branch/$arch/mihomo/packages.adb" >> /etc/apk/repositories.d/customfeeds.list
 	# update feeds
