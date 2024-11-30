@@ -13,7 +13,7 @@ PKG_VERSION:=2024.11.25~3db7c6a
 PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
-PKG_SOURCE_URL:=https://codeload.github.com/ptpt52/natflow/tar.gz/$(PKG_VERSION)?
+PKG_SOURCE_URL:=https://codeload.github.com/ptpt52/natflow/tar.gz/$(shell echo $(PKG_VERSION) | sed 's/.*~//')?
 PKG_HASH:=skip
 
 PKG_MAINTAINER:=Chen Minqiang <ptpt52@gmail.com>
