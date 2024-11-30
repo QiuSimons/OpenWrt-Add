@@ -29,8 +29,9 @@ jobs:
           chmod 755 ./natflow/files/natflow-boot.init ./natflow/files/natflow-boot.preinit ./natflow/files/60-luci-firewall-natflow ./natflow/files/21-natflow-boot.hotplug
           find . -type f -exec dos2unix {} \; -print
           latest_commit="$(curl -s https://api.github.com/repos/ptpt52/natflow/commits/master | jq -r '.sha' | cut -b 1-7)"
+          latest_date="$(curl -s https://api.github.com/repos/ptpt52/natflow/commits/master | jq -r '.commit.committer.date | split("T")[0] | split("-") | "\(.[0]).\(.[1]).\(.[2])"')"
           sed -i '/PKG_VERSION:/d' ./natflow/Makefile
-          sed -i "11 a PKG_VERSION:=$latest_commit" ./natflow/Makefile
+          sed -i "11 a PKG_VERSION:=$latest_date~$latest_commit" ./natflow/Makefile
 
       - name: Commit file
         run: |
