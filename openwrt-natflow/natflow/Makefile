@@ -10,10 +10,11 @@ include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=natflow
 PKG_VERSION:=2024.11.25~3db7c6a
+PKG_REAL_VERSION:=3db7c6a
 PKG_RELEASE:=$(AUTORELEASE)
 
-PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
-PKG_SOURCE_URL:=https://codeload.github.com/ptpt52/natflow/tar.gz/$(shell echo $(PKG_VERSION) | sed 's/.*~//')?
+PKG_SOURCE:=$(PKG_NAME)-$(PKG_REAL_VERSION).tar.gz
+PKG_SOURCE_URL:=https://codeload.github.com/ptpt52/natflow/tar.gz/$(PKG_REAL_VERSION)?
 PKG_HASH:=skip
 
 PKG_MAINTAINER:=Chen Minqiang <ptpt52@gmail.com>
@@ -41,7 +42,7 @@ include $(INCLUDE_DIR)/kernel-defaults.mk
 
 EXTRA_CFLAGS += -Wno-stringop-overread
 
-EXTRA_CFLAGS += -DCONFIG_NATFLOW_PATH -DCONFIG_NATFLOW_URLLOGGER -DNATFLOW_VERSION=\\\"$(PKG_VERSION)-$(shell echo $(PKG_HASH) | head -c7)\\\"
+EXTRA_CFLAGS += -DCONFIG_NATFLOW_PATH -DCONFIG_NATFLOW_URLLOGGER -DNATFLOW_VERSION=\\\"$(PKG_REAL_VERSION)\\\"
 ifneq ($(CONFIG_TARGET_mediatek_mt7622),)
 EXTRA_CFLAGS += -DCONFIG_HWNAT_EXTDEV_USE_VLAN_HASH
 endif

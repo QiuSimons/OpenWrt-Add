@@ -32,6 +32,8 @@ jobs:
           latest_date="$(curl -s https://api.github.com/repos/ptpt52/natflow/commits/master | jq -r '.commit.committer.date | split("T")[0] | split("-") | "\(.[0]).\(.[1]).\(.[2])"')"
           sed -i '/PKG_VERSION:/d' ./natflow/Makefile
           sed -i "11 a PKG_VERSION:=$latest_date~$latest_commit" ./natflow/Makefile
+          sed -i '/PKG_REAL_VERSION:/d' ./natflow/Makefile
+          sed -i "12 a PKG_REAL_VERSION:=$latest_commit" ./natflow/Makefile
 
       - name: Commit file
         run: |
