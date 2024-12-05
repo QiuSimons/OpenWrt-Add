@@ -6,7 +6,7 @@ LUCI_TITLE:=LuCI File Manager module
 LUCI_DEPENDS:=+luci-base
 
 PKG_LICENSE:=Apache-2.0
-PKG_VERSION:=1.0.0
+PKG_VERSION:=1.0.1
 PKG_RELEASE:=1
 PKG_MAINTAINER:=Dmitry R <rdmitry0911@gmail.com>
 
