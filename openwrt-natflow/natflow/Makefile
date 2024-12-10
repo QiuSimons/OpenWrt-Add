@@ -17,6 +17,7 @@ PKG_SOURCE:=$(PKG_NAME)-$(PKG_REAL_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/ptpt52/natflow/tar.gz/$(PKG_REAL_VERSION)?
 PKG_HASH:=skip
 
+PKG_BUILD_DIR=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_REAL_VERSION)
 PKG_MAINTAINER:=Chen Minqiang <ptpt52@gmail.com>
 PKG_LICENSE:=GPL-2.0
 
