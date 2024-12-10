@@ -664,6 +664,26 @@ const methods = {
 				return { onlineusers: error() };
 			}
 		}
+	},
+
+	getETHInfo: {
+		call: function() {
+			if (!access('/sbin/ethinfo'))
+				return {};
+
+			const fd = popen('/sbin/ethinfo');
+			if (fd) {
+				let ethinfo = fd.read('all');
+				if (!ethinfo)
+					ethinfo = '{}';
+				ethinfo = json(ethinfo);
+				fd.close();
+
+				return { result: ethinfo };
+			} else {
+				return { result: error() };
+			}
+		}
 	}
 };
 

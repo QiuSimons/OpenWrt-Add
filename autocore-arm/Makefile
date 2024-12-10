@@ -38,6 +38,7 @@ endef
 define Package/autocore/install/Default
 	$(INSTALL_DIR) $(1)/etc
 	$(CP) ./files/generic/10_system.js $(1)/etc/rpcd_10_system.js
+	$(CP) ./files/generic/29_ports.js $(1)/etc/rpcd_29_ports.js
 	$(CP) ./files/generic/luci $(1)/etc/rpcd_luci
 	$(CP) ./files/generic/sys.uc $(1)/etc/ucode_sys
 
@@ -46,6 +47,7 @@ define Package/autocore/install/Default
 
 	$(INSTALL_DIR) $(1)/sbin
 	$(INSTALL_BIN) ./files/generic/cpuinfo $(1)/sbin/
+	$(INSTALL_BIN) ./files/generic/ethinfo $(1)/sbin/
 
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
 	$(CP) ./files/generic/luci-mod-status-autocore.json $(1)/usr/share/rpcd/acl.d/
