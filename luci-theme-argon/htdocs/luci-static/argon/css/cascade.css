@@ -3327,6 +3327,10 @@ td>table>tbody>tr>td,
     min-width: 18rem
 }
 
+.cbi-input-textarea {
+    min-width: 18rem;
+}
+
 .cbi-value input[type="password"] {
     border-bottom-right-radius: 0;
     border-top-right-radius: 0;
@@ -5164,6 +5168,10 @@ pre.command-output {
         min-width: 18rem
     }
 
+    .cbi-input-textarea {
+        min-width: 18rem;
+    }
+
     #cbi-firewall-zone .cbi-input-select {
         min-width: 9rem
     }
@@ -5210,6 +5218,10 @@ pre.command-output {
     .cbi-value input[type="text"],
     .cbi-value input[type="password"] {
         min-width: 16rem
+    }
+
+    .cbi-input-textarea {
+        min-width: 16rem;
     }
 
     #cbi-firewall-zone .cbi-input-select {
@@ -5291,6 +5303,10 @@ pre.command-output {
     .cbi-value input[type="text"] {
         width: 16rem;
         min-width: 16rem
+    }
+
+    .cbi-input-textarea {
+        min-width: 16rem;
     }
 
     .cbi-value input[name^="pw"],
@@ -5576,6 +5592,8 @@ pre.command-output {
     }
 
     .cbi-dropdown[open]>ul.dropdown {
+        left: 0 !important;
+        right: 0 !important;
         margin-bottom: 1rem
     }
 
