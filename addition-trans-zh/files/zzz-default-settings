@@ -93,7 +93,7 @@ uci set firewall.@defaults[0].flow_offloading='1'
 uci set firewall.@defaults[0].input='ACCEPT'
 uci set firewall.@defaults[0].synflood_protect='0'
 for key in $(uci show firewall | grep fullcone6 | cut -d '=' -f 1); do
-    uci set ${key}=0
+    uci set "${key}"=0
 done
 uci commit firewall
 /etc/init.d/autocore restart
@@ -122,7 +122,7 @@ echo "10 2 * * * cd /usr/share/unblockneteasemusic/core/ && openssl req -new -x5
 (crontab -l | sed '/find \/tmp/d'; echo "0 0 1 * * find /tmp -type f \( -name \"*.log\" -o -name \"*.txt\" \) -exec sh -c 'rm {} && touch {}' \;") | sed '/^$/d' | crontab -
 
 #rpcd
-[ $(uci -q get rpcd.@rpcd[0].timeout) -lt 60 ] && uci set rpcd.@rpcd[0].timeout=60 && uci commit rpcd
+[ "$(uci -q get rpcd.@rpcd[0].timeout)" -lt 60 ] && uci set rpcd.@rpcd[0].timeout=60 && uci commit rpcd
 
 #OpenClash 设置
 echo "/etc/openclash/" >> /etc/sysupgrade.conf && cat /etc/sysupgrade.conf | sort | uniq > /tmp/tmp_sysupgrade_conf && cat /tmp/tmp_sysupgrade_conf > /etc/sysupgrade.conf
@@ -173,22 +173,22 @@ uci commit system
 /etc/init.d/cron restart
 
 # docker mirror
-if [ -f /etc/config/dockerd ] && [ $(grep -c mirror.aliyuncs.com /etc/config/dockerd) -eq '1' ] && [ "$VERSION_TYPE" != "minimal" ]; then
+if [ -f /etc/config/dockerd ] && [ "$(grep -c mirror.aliyuncs.com /etc/config/dockerd)" -eq '1' ] && [ "$VERSION_TYPE" != "minimal" ]; then
     uci del dockerd.globals.registry_mirrors
     uci commit dockerd
 fi
 
-if [ -f /etc/config/dockerd ] && [ $(grep -c dockerpull.com /etc/config/dockerd) -eq '0' ] && [ "$VERSION_TYPE" != "minimal" ]; then
+if [ -f /etc/config/dockerd ] && [ "$(grep -c dockerpull.com /etc/config/dockerd)" -eq '0' ] && [ "$VERSION_TYPE" != "minimal" ]; then
     uci add_list dockerd.globals.registry_mirrors="https://dockerpull.com"
     uci commit dockerd
 fi
 
-if [ -f /etc/config/dockerd ] && [ $(grep -c dockerproxy.net /etc/config/dockerd) -eq '0' ] && [ "$VERSION_TYPE" != "minimal" ]; then
+if [ -f /etc/config/dockerd ] && [ "$(grep -c dockerproxy.net /etc/config/dockerd)" -eq '0' ] && [ "$VERSION_TYPE" != "minimal" ]; then
     uci add_list dockerd.globals.registry_mirrors="https://dockerproxy.net"
     uci commit dockerd
 fi
 
-if [ -f /etc/config/dockerd ] && [ $(grep -c docker.m.daocloud.io /etc/config/dockerd) -eq '0' ] && [ "$VERSION_TYPE" != "minimal" ]; then
+if [ -f /etc/config/dockerd ] && [ "$(grep -c docker.m.daocloud.io /etc/config/dockerd)" -eq '0' ] && [ "$VERSION_TYPE" != "minimal" ]; then
     uci add_list dockerd.globals.registry_mirrors='https://docker.m.daocloud.io'
     uci commit dockerd
 fi
