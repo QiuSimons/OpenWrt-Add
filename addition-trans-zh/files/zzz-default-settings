@@ -91,6 +91,10 @@ uci set firewall.@defaults[0].natflow='0'
 uci set firewall.@defaults[0].shortcut_fe='0'
 uci set firewall.@defaults[0].flow_offloading='1'
 uci set firewall.@defaults[0].input='ACCEPT'
+uci set firewall.@defaults[0].synflood_protect='0'
+for key in $(uci show firewall | grep fullcone6 | cut -d '=' -f 1); do
+    uci set ${key}=0
+done
 uci commit firewall
 /etc/init.d/autocore restart
 
