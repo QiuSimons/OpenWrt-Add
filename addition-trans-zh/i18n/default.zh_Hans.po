@@ -7,6 +7,9 @@ msgstr "全锥形 NAT"
 msgid "Nftables Fullcone nat"
 msgstr "Nftables 全锥形 NAT"
 
+msgid "Full Cone NAT6"
+msgstr "全锥形 NAT6"
+
 msgid "Nftables based fullcone nat scheme."
 msgstr "基于 Nftables 的全锥形 NAT 方案。"
 
