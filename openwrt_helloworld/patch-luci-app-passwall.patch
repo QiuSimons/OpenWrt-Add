@@ -33,10 +33,10 @@ index 6851861..669a612 100644
  	if code ~= 0 then
  		local use_time = luci.sys.exec("echo -n '" .. result .. "' | awk -F ':' '{print $2}'")
 diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
-index 958ff0a..89543b9 100644
+index 9b0cdb3..bf2c383 100644
 --- a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
 +++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
-@@ -474,6 +474,12 @@ o:value("9.9.9.9", "9.9.9.9 (Quad9)")
+@@ -478,6 +478,12 @@ o:value("9.9.9.9", "9.9.9.9 (Quad9)")
  o:value("149.112.112.112", "149.112.112.112 (Quad9)")
  o:value("208.67.220.220", "208.67.220.220 (OpenDNS)")
  o:value("208.67.222.222", "208.67.222.222 (OpenDNS)")
@@ -49,7 +49,7 @@ index 958ff0a..89543b9 100644
  o:depends({dns_mode = "dns2socks"})
  o:depends({dns_mode = "tcp"})
  o:depends({dns_mode = "udp"})
-@@ -565,7 +571,7 @@ if api.is_finded("smartdns") then
+@@ -569,7 +575,7 @@ if api.is_finded("smartdns") then
  end
  
  o = s:taboption("DNS", Flag, "dns_redirect", translate("DNS Redirect"), translate("Force special DNS server to need proxy devices."))
@@ -175,7 +175,7 @@ index 551c824..2a6a814 100644
  config global_forwarding
  	option tcp_no_redir_ports 'disable'
 diff --git a/luci-app-passwall/root/usr/share/passwall/app.sh b/luci-app-passwall/root/usr/share/passwall/app.sh
-index 57f52f0..14aa4e4 100755
+index f5d7466..fb3f64d 100755
 --- a/luci-app-passwall/root/usr/share/passwall/app.sh
 +++ b/luci-app-passwall/root/usr/share/passwall/app.sh
 @@ -1589,9 +1589,7 @@ start_dns() {
@@ -237,7 +237,7 @@ index 57f52f0..14aa4e4 100755
  			/etc/init.d/dnsmasq restart >/dev/null 2>&1
  		}
  	fi
-@@ -2047,23 +2045,11 @@ stop() {
+@@ -2046,23 +2044,11 @@ stop() {
  	source $APP_PATH/helper_smartdns.sh del
  	rm -rf $GLOBAL_DNSMASQ_CONF
  	rm -rf $GLOBAL_DNSMASQ_CONF_PATH
@@ -266,7 +266,7 @@ index 57f52f0..14aa4e4 100755
  	rm -rf $TMP_PATH
  	rm -rf /tmp/lock/${CONFIG}_socks_auto_switch*
  	echolog "清空并关闭相关程序和缓存完成。"
-@@ -2122,7 +2108,6 @@ DNS_CACHE=0
+@@ -2121,7 +2107,6 @@ DNS_CACHE=0
  REMOTE_DNS=$(config_t_get global remote_dns 1.1.1.1:53 | sed 's/#/:/g' | sed -E 's/\:([^:]+)$/#\1/g')
  USE_DEFAULT_DNS=$(config_t_get global use_default_dns direct)
  FILTER_PROXY_IPV6=$(config_t_get global filter_proxy_ipv6 0)
@@ -275,7 +275,7 @@ index 57f52f0..14aa4e4 100755
  
  REDIRECT_LIST="socks ss ss-rust ssr sing-box xray trojan-plus naiveproxy hysteria2"
 diff --git a/luci-app-passwall/root/usr/share/passwall/iptables.sh b/luci-app-passwall/root/usr/share/passwall/iptables.sh
-index a1e44f2..c5d23ba 100755
+index b510f2f..bbdb912 100755
 --- a/luci-app-passwall/root/usr/share/passwall/iptables.sh
 +++ b/luci-app-passwall/root/usr/share/passwall/iptables.sh
 @@ -329,7 +329,6 @@ load_acl() {
@@ -287,7 +287,7 @@ index a1e44f2..c5d23ba 100755
  
  				[ -n "$tcp_port" -o -n "$udp_port" ] && {
 diff --git a/luci-app-passwall/root/usr/share/passwall/nftables.sh b/luci-app-passwall/root/usr/share/passwall/nftables.sh
-index 3bd9dd0..4cf6f6e 100755
+index 1f8126d..94242ea 100755
 --- a/luci-app-passwall/root/usr/share/passwall/nftables.sh
 +++ b/luci-app-passwall/root/usr/share/passwall/nftables.sh
 @@ -379,7 +379,6 @@ load_acl() {
