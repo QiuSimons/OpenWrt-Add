@@ -23,7 +23,7 @@ start() {
 			ethtool -K "$i" sg on
 			ethtool -K "$i" gso on
 			ethtool -K "$i" gro on
-			ethtool -K "$i" rx-gro-list off
+			ethtool -K "$i" rx-gro-list on
 			ethtool -K "$i" tso on
 			ethtool -K "$i" ufo on
 			ethtool -K "$i" rxvlan on
