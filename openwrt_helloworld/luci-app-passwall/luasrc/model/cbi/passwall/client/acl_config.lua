@@ -1,6 +1,6 @@
 local api = require "luci.passwall.api"
 local appname = "passwall"
-local uci = api.uci
+local uci = api.libuci
 local sys = api.sys
 local has_singbox = api.finded_com("singbox")
 local has_xray = api.finded_com("xray")
@@ -387,11 +387,10 @@ if has_singbox or has_xray then
 	o:depends({xray_dns_mode = "tcp+doh"})
 	o:depends({singbox_dns_mode = "doh"})
 
-	if has_xray then
-		o = s:option(Value, "dns_client_ip", translate("EDNS Client Subnet"))
-		o.datatype = "ipaddr"
-		o:depends({dns_mode = "xray"})
-	end
+	o = s:option(Value, "remote_dns_client_ip", translate("EDNS Client Subnet"))
+	o.datatype = "ipaddr"
+	o:depends({dns_mode = "sing-box"})
+	o:depends({dns_mode = "xray"})
 end
 
 o = s:option(ListValue, "chinadns_ng_default_tag", translate("Default DNS"))
