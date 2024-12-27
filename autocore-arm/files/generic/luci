@@ -196,6 +196,8 @@ const methods = {
 				firewall:   access('/sbin/fw3') == true,
 				firewall4:  access('/sbin/fw4') == true,
 				opkg:       access('/bin/opkg') == true,
+				bonding:    access('/sys/module/bonding'),
+				mii_tool:   access('/usr/sbin/mii-tool'),
 				offloading: access('/sys/module/xt_FLOWOFFLOAD/refcnt') == true || access('/sys/module/nft_flow_offload/refcnt') == true,
 				fullcone:   access('/sys/module/xt_FULLCONENAT/refcnt') == true || access('/sys/module/nft_fullcone/refcnt') == true,
 				shortcutfe: access('/sys/module/shortcut_fe/refcnt') == true,
@@ -209,10 +211,12 @@ const methods = {
 				dropbear:   access('/usr/sbin/dropbear') == true,
 				cabundle:   access('/etc/ssl/certs/ca-certificates.crt') == true,
 				relayd:     access('/usr/sbin/relayd') == true,
+				apk:        access('/usr/bin/apk') == true,
+				wifi:       access('/sbin/wifi') == true,
 				offload_hw: system((`[[ $(. /etc/openwrt_release ; echo $DISTRIB_TARGET) == "mediatek"* || $(. /etc/openwrt_release ; echo $DISTRIB_TARGET) == *"bcm"* ]]`)) == 0,
 			};
 
-			const wifi_features = [ 'eap', '11ac', '11ax', '11r', 'acs', 'sae', 'owe', 'suiteb192', 'wep', 'wps', 'ocv' ];
+			const wifi_features = [ 'eap', '11ac', '11ax', '11be', '11r', 'acs', 'sae', 'owe', 'suiteb192', 'wep', 'wps', 'ocv' ];
 
 			if (access('/usr/sbin/hostapd')) {
 				result.hostapd = { cli: access('/usr/sbin/hostapd_cli') == true };
@@ -614,7 +618,7 @@ const methods = {
 
 	getCPUUsage: {
 		call: function() {
-			const fd = popen('busybox top -n1 | awk \'/^CPU/ {printf("%d%", 100 - $8)}\'');
+			const fd = popen('/bin/busybox top -n1 | awk \'/^CPU/ {printf("%d%", 100 - $8)}\'');
 			if (fd) {
 				let cpuusage = fd.read('all');
 				if (!cpuusage)
