@@ -9,9 +9,9 @@ start() {
 	#echo 1 > /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal
 	#echo 1 > /proc/sys/net/netfilter/nf_conntrack_tcp_no_window_check
 
-	sysctl -w net.core.somaxconn=65535
-	sysctl -w net.ipv4.tcp_max_syn_backlog=8192
-	sysctl -w net.core.rmem_max=2500000
+	echo 65535 > /proc/sys/net/core/somaxconn
+	echo 8192 > /proc/sys/net/ipv4/tcp_max_syn_backlog
+	echo 2500000 > /proc/sys/net/core/rmem_max
 
 	for i in $(ip address | awk -F ': ' '/eth[0-9]+/ {print $2}' | xargs)
 	do
