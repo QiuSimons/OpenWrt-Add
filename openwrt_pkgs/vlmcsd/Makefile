@@ -1,37 +1,27 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=vlmcsd
-PKG_VERSION:=svn1113
-PKG_RELEASE:=4
-
-PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
-PKG_SOURCE_URL:=https://codeload.github.com/Wind4/vlmcsd/tar.gz/$(PKG_VERSION)?
-PKG_HASH:=62f55c48f5de1249c2348ab6b96dabbe7e38899230954b0c8774efb01d9c42cc
-
-PKG_LICENSE:=MIT
-PKG_LICENSE_FILES:=LICENSE
-PKG_MAINTAINER:=fuyumi <280604399@qq.com>
+PKG_VERSION:=2023.7.28
+PKG_RELEASE:=1
 
 PKG_BUILD_PARALLEL:=1
+PKG_MAINTAINER:=sbwml <admin@cooluc.com>
 
 include $(INCLUDE_DIR)/package.mk
 
 define Package/vlmcsd
   SECTION:=net
   CATEGORY:=Network
-  TITLE:=vlmcsd for OpenWRT
-  URL:=http://forums.mydigitallife.info/threads/50234
+  TITLE:=KMS Emulator in C
+  URL:=https://github.com/Wind4/vlmcsd
   DEPENDS:=+libpthread
 endef
 
 define Package/vlmcsd/description
-  vlmcsd is a KMS Emulator in C.
+  vlmcsd is an open-source KMS (Key Management Service) server emulator that allows
+  for the activation of Microsoft products such as Windows and Office within a local network,
+  without needing to connect to Microsoft's official KMS servers.
 endef
-
-TARGET_CC:= $(filter-out ccache,$(TARGET_CC))
-
-MAKE_FLAGS += \
-	-C $(PKG_BUILD_DIR)
 
 define Package/vlmcsd/install
 	$(INSTALL_DIR) $(1)/usr/bin
