@@ -1,5 +1,5 @@
 diff --git a/luci-app-passwall/Makefile b/luci-app-passwall/Makefile
-index 18cdd8d..44f5958 100644
+index f0c9835..3555afe 100644
 --- a/luci-app-passwall/Makefile
 +++ b/luci-app-passwall/Makefile
 @@ -67,7 +67,7 @@ config PACKAGE_$(PKG_NAME)_Nftables_Transparent_Proxy
@@ -20,7 +20,7 @@ index 18cdd8d..44f5958 100644
  
  define Package/$(PKG_NAME)/postrm
 diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
-index 3f6dd8c..952e4c8 100644
+index de67f1c..463bdff 100644
 --- a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
 +++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
 @@ -492,6 +492,12 @@ o:value("9.9.9.9", "9.9.9.9 (Quad9)")
