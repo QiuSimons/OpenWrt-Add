@@ -1,6 +1,6 @@
-![GitHub License](https://img.shields.io/github/license/morytyann/OpenWrt-mihomo?style=for-the-badge&logo=github) ![GitHub Tag](https://img.shields.io/github/v/release/morytyann/OpenWrt-mihomo?style=for-the-badge&logo=github) ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/morytyann/OpenWrt-mihomo/total?style=for-the-badge&logo=github) ![GitHub Repo stars](https://img.shields.io/github/stars/morytyann/OpenWrt-mihomo?style=for-the-badge&logo=github) [![Telegram](https://img.shields.io/badge/Contact-Telegram-26A5E4?style=for-the-badge&logo=telegram)](https://t.me/mihomotproxy)
+![GitHub License](https://img.shields.io/github/license/nikkinikki-org/OpenWrt-nikki?style=for-the-badge&logo=github) ![GitHub Tag](https://img.shields.io/github/v/release/nikkinikki-org/OpenWrt-nikki?style=for-the-badge&logo=github) ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/nikkinikki-org/OpenWrt-nikki/total?style=for-the-badge&logo=github) ![GitHub Repo stars](https://img.shields.io/github/stars/nikkinikki-org/OpenWrt-nikki?style=for-the-badge&logo=github) [![Telegram](https://img.shields.io/badge/Contact-Telegram-26A5E4?style=for-the-badge&logo=telegram)](https://t.me/mugen_nikki)
 
-# MihomoTProxy
+# Nikki (formerly MihomoTProxy)
 
 Transparent Proxy with Mihomo on OpenWrt.
 
@@ -26,7 +26,7 @@ Transparent Proxy with Mihomo on OpenWrt.
 
 ```shell
 # only needs to be run once
-curl -s -L https://github.com/morytyann/OpenWrt-mihomo/raw/refs/heads/main/feed.sh | ash
+curl -s -L https://github.com/nikkinikki-org/OpenWrt-nikki/raw/refs/heads/main/feed.sh | ash
 ```
 
 2. Install
@@ -34,30 +34,30 @@ curl -s -L https://github.com/morytyann/OpenWrt-mihomo/raw/refs/heads/main/feed.
 ```shell
 # you can install from shell or `Software` menu in LuCI
 # for opkg
-opkg install mihomo
-opkg install luci-app-mihomo
-opkg install luci-i18n-mihomo-zh-cn
+opkg install nikki
+opkg install luci-app-nikki
+opkg install luci-i18n-nikki-zh-cn
 # for apk
-apk add --allow-untrusted mihomo
-apk add --allow-untrusted luci-app-mihomo
-apk add --allow-untrusted luci-i18n-mihomo-zh-cn
+apk add --allow-untrusted nikki
+apk add --allow-untrusted luci-app-nikki
+apk add --allow-untrusted luci-i18n-nikki-zh-cn
 ```
 
 ### B. Install From Release
 
 ```shell
-curl -s -L https://github.com/morytyann/OpenWrt-mihomo/raw/refs/heads/main/install.sh | ash
+curl -s -L https://github.com/nikkinikki-org/OpenWrt-nikki/raw/refs/heads/main/install.sh | ash
 ```
 
 ## Uninstall & Reset
 
 ```shell
-curl -s -L https://github.com/morytyann/OpenWrt-mihomo/raw/refs/heads/main/uninstall.sh | ash
+curl -s -L https://github.com/nikkinikki-org/OpenWrt-nikki/raw/refs/heads/main/uninstall.sh | ash
 ```
 
 ## How To Use
 
-See [Wiki](https://github.com/morytyann/OpenWrt-mihomo/wiki)
+See [Wiki](https://github.com/nikkinikki-org/OpenWrt-nikki/wiki)
 
 ## How does it work
 
@@ -74,15 +74,15 @@ Note that the steps above may change base on config.
 
 ```shell
 # add feed
-echo "src-git mihomo https://github.com/morytyann/OpenWrt-mihomo.git;main" >> "feeds.conf.default"
+echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> "feeds.conf.default"
 # update & install feeds
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 # make package
-make package/luci-app-mihomo/compile
+make package/luci-app-nikki/compile
 ```
 
-The ipk/apk file will be found under `bin/packages/your_architecture/mihomo`.
+The ipk/apk file will be found under `bin/packages/your_architecture/nikki`.
 
 ## Dependencies
 
@@ -97,9 +97,9 @@ The ipk/apk file will be found under `bin/packages/your_architecture/mihomo`.
 
 ## Contributors
 
-[![Contributors](https://contrib.rocks/image?repo=morytyann/OpenWrt-mihomo)](https://github.com/morytyann/OpenWrt-mihomo/graphs/contributors)
+[![Contributors](https://contrib.rocks/image?repo=nikkinikki-org/OpenWrt-nikki)](https://github.com/nikkinikki-org/OpenWrt-nikki/graphs/contributors)
 
 ## Special Thanks
 
-- [@ApoisL](https://github.com/vernlau)
+- [@ApoisL](https://github.com/apoiston)
 - [@xishang0128](https://github.com/xishang0128)
