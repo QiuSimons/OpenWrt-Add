@@ -43,7 +43,7 @@ jobs:
           git clone --depth 1 https://github.com/QiuSimons/openwrt-natflow
           git clone --depth 1 https://github.com/BROBIRD/openwrt-r8168
           git clone -b master --depth 1 https://github.com/jerrykuku/luci-theme-argon
-          sed -i 's/420px/440px/g' ./htdocs/luci-static/argon/css/cascade.css
+          sed -i 's/420px/440px/g' ./luci-theme-argon/htdocs/luci-static/argon/css/cascade.css
           git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config
           git clone --depth 1 https://github.com/kiddin9/luci-app-dnsfilter
           git clone --depth 1 https://github.com/kiddin9/luci-theme-edge
