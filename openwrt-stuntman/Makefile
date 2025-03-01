@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Copyright (C) 2023-2024 muink <https://github.com/muink>
+# Copyright (C) 2023-2025 muink <https://github.com/muink>
 
 include $(TOPDIR)/rules.mk
 
@@ -13,10 +13,11 @@ PKG_RELEASE:=20240806
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/muink/stunserver.git
 PKG_SOURCE_VERSION:=$(PKG_UPSTREAM_GITHASH)
-PKG_MIRROR_HASH:=0c934c41301cf11c1874165bcf52142afecc4b3f85259dee8cba48ec6e43c0d8
+PKG_MIRROR_HASH:=8d607d97e3bc94950cdc5dfe1bcd37ac8589da161b3794127e7e62802234359e
 
-PKG_SOURCE:=$(PKG_NAME)-$(PKG_UPSTREAM_VERSION)-$(PKG_SOURCE_VERSION).tar.gz
 PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_UPSTREAM_VERSION)
+PKG_SOURCE:=$(PKG_SOURCE_SUBDIR)-$(PKG_SOURCE_VERSION).tar.zst
+
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_SOURCE_SUBDIR)
 
 PKG_MAINTAINER:=Anya Lin <hukk1996@gmail.com>
