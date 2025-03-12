@@ -74,7 +74,7 @@ define Build/Prepare
 		rm -rf $(PKG_BUILD_DIR)/dae-core && git clone https://github.com/daeuniverse/dae $(PKG_BUILD_DIR)/dae-core && git -C $(PKG_BUILD_DIR)/dae-core checkout ${CORE_VERSION: -7} ; \
 		pushd $(PKG_BUILD_DIR)/dae-core ; \
 		git submodule update --init ; \
-		wget -qO - https://github.com/Basstorm/dae/commit/c14d06a.patch | patch -p1 ; \
+		wget -qO - https://github.com/daeuniverse/dae/commit/c14d06a.patch | patch -p1 ; \
 		go mod tidy ; \
 		popd ; \
 		pushd $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/wing ; \
@@ -82,6 +82,7 @@ define Build/Prepare
 		go mod tidy ; \
 		popd ; \
 		pushd $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION) ; \
+		wget -qO - https://github.com/daeuniverse/daed/commit/7b5f245.patch | patch -p1 ; \
 		npm install -g pnpm ; \
 		pnpm install ; \
 		pnpm build ; \
