@@ -74,7 +74,7 @@ jobs:
           sed -i '/start()/a \    echo "Service autotimesetrun started!" >/dev/null' luci-app-autotimeset/root/etc/init.d/autotimesetrun
           rm -rf ./luci-app-autotimeset/po/zh_Hans
           git clone --depth 1 https://github.com/sirpdboy/luci-app-partexp
-          cp -rf ./sirpdboy-package/luci-app-partexp ./luci-app-partexp
+          #cp -rf ./sirpdboy-package/luci-app-partexp ./luci-app-partexp
           rm -rf ./luci-app-partexp/po/zh_Hans
           sed -i 's, - !, -o !,g' luci-app-partexp/root/etc/init.d/partexp
           sed -i 's,expquit 1 ,#expquit 1 ,g' luci-app-partexp/root/etc/init.d/partexp
