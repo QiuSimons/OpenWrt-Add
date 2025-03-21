@@ -107,19 +107,11 @@ jobs:
           sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/packages|g' imm_pkg/frp/Makefile
           cp -rf ./packages/net/subconverter ./imm_pkg/subconverter
           cp -rf ./packages/net/zerotier ./imm_pkg/zerotier
-          sed -i '/PKG_VERSION:=/d' imm_pkg/zerotier/Makefile
-          sed -i '/PKG_HASH:=/d' imm_pkg/zerotier/Makefile
-          sed -i '/PKG_NAME:=/a PKG_VERSION:=1.12.2' imm_pkg/zerotier/Makefile
-          sed -i '/PKG_SOURCE_URL:=/a PKG_HASH:=7c6512cfc208374ea9dc9931110e35f71800c34890e0f35991ea485aae66e31c' imm_pkg/zerotier/Makefile
           cp -rf ./packages/libs/jpcre2 ./imm_pkg/jpcre2
           cp -rf ./packages/libs/rapidjson ./imm_pkg/rapidjson
           cp -rf ./packages/libs/libcron ./imm_pkg/libcron
           cp -rf ./packages/libs/quickjspp ./imm_pkg/quickjspp
           cp -rf ./packages/libs/toml11 ./imm_pkg/toml11
-          rm -rf ./packages
-          git clone -b openwrt-22.03 --depth 1 https://github.com/openwrt/packages
-          rm -rf ./packages/net/zerotier/patches
-          cp -rf ./packages/net/zerotier/patches ./imm_pkg/zerotier/patches
           rm -rf ./packages
           find . -mindepth 2 -name ".git" -type d -exec rm -rf {} +
           bash remove_upx.sh
