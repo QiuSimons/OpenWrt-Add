@@ -5,15 +5,14 @@ function index()
 	if not nixio.fs.access("/etc/config/taskplan") then
 		return
 	end
-        entry({"admin", "control"}, firstchild(), "Control", 44).dependent = false
-        local e = entry({"admin", "control", "taskplan"}, alias("admin", "control", "taskplan", "scheduledtask"), _("Task Plan"), 20)
+        local e = entry({"admin", "system", "taskplan"}, alias("admin", "system", "taskplan", "scheduledtask"), _("Task Plan"), 20)
 	e.dependent = false
 	e.acl_depends = { "luci-app-taskplan" }
-        entry({"admin", "control", "taskplan", "scheduledtask"}, cbi("taskplan/scheduledtask"),  _("Scheduled task"), 10).leaf = true
-        entry({"admin", "control", "taskplan", "startuptask"}, cbi("taskplan/startuptask"),  _("Startup task"), 20).leaf = true
-        entry({"admin", "control", "taskplan", "log"}, form("taskplan/log"), _("Log"), 30).leaf = true
-        entry({"admin","control","taskplan","dellog"},call("dellog"))
-        entry({"admin","control","taskplan","getlog"},call("getlog"))
+        entry({"admin", "system", "taskplan", "scheduledtask"}, cbi("taskplan/scheduledtask"),  _("Scheduled task"), 10).leaf = true
+        entry({"admin", "system", "taskplan", "startuptask"}, cbi("taskplan/startuptask"),  _("Startup task"), 20).leaf = true
+        entry({"admin", "system", "taskplan", "log"}, form("taskplan/log"), _("Log"), 30).leaf = true
+        entry({"admin","system","taskplan","dellog"},call("dellog"))
+        entry({"admin","system","taskplan","getlog"},call("getlog"))
 end
 
 function getlog()

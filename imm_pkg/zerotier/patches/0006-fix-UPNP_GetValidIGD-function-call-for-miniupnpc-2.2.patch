@@ -1,0 +1,51 @@
+From 4a693f905db0d12a55eabbf87b18e47e90d2b655 Mon Sep 17 00:00:00 2001
+From: sbwml <admin@cooluc.com>
+Date: Sat, 22 Mar 2025 02:12:28 +0800
+Subject: [PATCH] fix UPNP_GetValidIGD function call for miniupnpc 2.2.8
+
+according to https://github.com/miniupnp/miniupnp/commit/c0a50ce
+
+Signed-off-by: sbwml <admin@cooluc.com>
+---
+ ext/miniupnpc/miniupnpc.h | 3 ++-
+ osdep/PortMapper.cpp      | 4 +++-
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+--- a/ext/miniupnpc/miniupnpc.h
++++ b/ext/miniupnpc/miniupnpc.h
+@@ -119,7 +119,8 @@ MINIUPNP_LIBSPEC int
+ UPNP_GetValidIGD(struct UPNPDev * devlist,
+                  struct UPNPUrls * urls,
+ 				 struct IGDdatas * data,
+-				 char * lanaddr, int lanaddrlen);
++				 char * lanaddr, int lanaddrlen,
++				 char * wanaddr, int wanaddrlen);
+ 
+ /* UPNP_GetIGDFromUrl()
+  * Used when skipping the discovery process.
+--- a/osdep/PortMapper.cpp
++++ b/osdep/PortMapper.cpp
+@@ -203,6 +203,7 @@ public:
+ 			// ---------------------------------------------------------------------
+ 			if (mode == 1) {
+ 				char lanaddr[4096];
++				char wanaddr[4096];
+ 				char externalip[4096]; // no range checking? so make these buffers larger than any UDP packet a uPnP server could send us as a precaution :P
+ 				char inport[16];
+ 				char outport[16];
+@@ -224,13 +225,14 @@ public:
+ #endif
+ 
+ 					memset(lanaddr,0,sizeof(lanaddr));
++					memset(wanaddr,0,sizeof(wanaddr));
+ 					memset(externalip,0,sizeof(externalip));
+ 					memset(&urls,0,sizeof(urls));
+ 					memset(&data,0,sizeof(data));
+ 					OSUtils::ztsnprintf(inport,sizeof(inport),"%d",localPort);
+ 
+ 					int foundValidIGD = 0;
+-					if ((foundValidIGD = UPNP_GetValidIGD(devlist,&urls,&data,lanaddr,sizeof(lanaddr)))&&(lanaddr[0])) {
++					if ((foundValidIGD = UPNP_GetValidIGD(devlist,&urls,&data,lanaddr,sizeof(lanaddr),wanaddr,sizeof(wanaddr)))&&(lanaddr[0])) {
+ #ifdef ZT_PORTMAPPER_TRACE
+                         PM_TRACE("PortMapper: UPnP: my LAN IP address: %s" ZT_EOL_S,lanaddr);
+ #endif

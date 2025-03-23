@@ -16,7 +16,7 @@ function createAndDownloadFile(fileName,content){
 }
 
 function apply_del_log(){
-	XHR.get('<%=url([[admin]],[[control]],[[taskplan]],[[dellog]])%>',null,function(x,data){
+	XHR.get('<%=url([[admin]],[[system]],[[taskplan]],[[dellog]])%>',null,function(x,data){
 	var lv=document.getElementById('cbid.logview.1.conf');
 		lv.innerHTML="";
 	}
@@ -35,7 +35,7 @@ function reverselog(){
 	return
 }
 
-XHR.poll(3,'<%=url([[admin]],[[control]],[[taskplan]],[[getlog]])%>',null,
+XHR.poll(3,'<%=url([[admin]],[[system]],[[taskplan]],[[getlog]])%>',null,
 	function(x,data){
 		var lv=document.getElementById('cbid.logview.1.conf');
 		lv.innerHTML=""
