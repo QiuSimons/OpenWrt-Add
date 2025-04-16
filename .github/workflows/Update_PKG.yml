@@ -68,17 +68,17 @@ jobs:
           git clone --depth 1 https://github.com/brvphoenix/luci-app-wrtbwmon
           git clone --depth 1 https://github.com/sirpdboy/luci-app-taskplan
           #cp -rf ./sirpdboy-package/luci-app-taskplan ./luci-app-taskplan
-          sed -i 's,"control","system",g' luci-app-taskplan/luasrc/controller/taskplan.lua
-          sed -i '/firstchild/d' luci-app-taskplan/luasrc/controller/taskplan.lua
-          rm -rf ./luci-app-taskplan/luasrc/view/autotimeset
-          sed -i 's,control,system,g' luci-app-taskplan/luasrc/view/taskplan/log.htm
-          rm -rf ./luci-app-taskplan/po/zh_Hans
-          rm -rf ./luci-app-taskplan/root/etc/init.d/autotimeset
-          rm -rf ./luci-app-taskplan/root/etc/init.d/autotimesetrun
-          rm -rf ./luci-app-taskplan/root/etc/autotimeset
-          rm -rf ./luci-app-taskplan/root/etc/uci-defaults/luci-autotimeset
-          rm -rf ./luci-app-taskplan/root/usr/share/rpcd/acl.d/luci-app-taskplan.json
-          rm -rf ./luci-app-taskplan/root/usr/bin/timesethandler
+          sed -i 's,"control","system",g' luci-app-taskplan/luci-app-taskplan/luasrc/controller/taskplan.lua
+          sed -i '/firstchild/d' luci-app-taskplan/luci-app-taskplan/luasrc/controller/taskplan.lua
+          rm -rf ./luci-app-taskplan/luci-app-taskplan/luasrc/view/autotimeset
+          sed -i 's,control,system,g' luci-app-taskplan/luci-app-taskplan/luasrc/view/taskplan/log.htm
+          rm -rf ./luci-app-taskplan/luci-app-taskplan/po/zh_Hans
+          rm -rf ./luci-app-taskplan/luci-app-taskplan/root/etc/init.d/autotimeset
+          rm -rf ./luci-app-taskplan/luci-app-taskplan/root/etc/init.d/autotimesetrun
+          rm -rf ./luci-app-taskplan/luci-app-taskplan/root/etc/autotimeset
+          rm -rf ./luci-app-taskplan/luci-app-taskplan/root/etc/uci-defaults/luci-autotimeset
+          rm -rf ./luci-app-taskplan/luci-app-taskplan/root/usr/share/rpcd/acl.d/luci-app-taskplan.json
+          rm -rf ./luci-app-taskplan/luci-app-taskplan/root/usr/bin/timesethandler
           git clone --depth 1 https://github.com/sirpdboy/luci-app-partexp
           #cp -rf ./sirpdboy-package/luci-app-partexp ./luci-app-partexp
           rm -rf ./luci-app-partexp/luci-app-partexp/po/zh_Hans
