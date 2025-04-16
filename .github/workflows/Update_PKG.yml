@@ -16,7 +16,7 @@ jobs:
 
       - name: Update Makefile
         run: |
-          rm -rf nft-fullcone shortcut-fe luci-app-airconnect feeds_packages_lang_node-prebuilt package_kernel_r8125 OpenAppFilter luci-app-mosdns packages_new_nat6 luci-app-daed openwrt-r8168 luci-theme-argon luci-app-argon-config luci-app-dnsfilter luci-theme-edge luci-app-xlnetacc luci-app-mentohust MentoHUST-OpenWrt-ipk luci-app-oled homeproxy OpenClash luci-app-wechatpush luci-app-v2raya luci-app-natmapt openwrt-natmapt openwrt-stuntman luci-app-unblockneteasemusic OpenWrt-mihomo wrtbwmon luci-app-wrtbwmon openwrt_helloworld openwrt_pkgs openwrt-natflow autocore-arm luci-app-autotimeset luci-app-partexp luci-app-frps luci-app-frpc luci-app-uugamebooster uugamebooster luci-app-ap-modem luci-app-arpbind imm_pkg openwrt-qBittorrent luci-app-filemanager
+          rm -rf nft-fullcone shortcut-fe luci-app-airconnect feeds_packages_lang_node-prebuilt package_kernel_r8125 OpenAppFilter luci-app-mosdns packages_new_nat6 luci-app-daed openwrt-r8168 luci-theme-argon luci-app-argon-config luci-app-dnsfilter luci-theme-edge luci-app-xlnetacc luci-app-mentohust MentoHUST-OpenWrt-ipk luci-app-oled homeproxy OpenClash luci-app-wechatpush luci-app-v2raya luci-app-natmapt openwrt-natmapt openwrt-stuntman luci-app-unblockneteasemusic OpenWrt-mihomo wrtbwmon luci-app-wrtbwmon openwrt_helloworld openwrt_pkgs openwrt-natflow autocore-arm luci-app-taskplan luci-app-partexp luci-app-frps luci-app-frpc luci-app-uugamebooster uugamebooster luci-app-ap-modem luci-app-arpbind imm_pkg openwrt-qBittorrent luci-app-filemanager
           git clone --depth 1 https://git.cooluc.com/sbwml/nft-fullcone
           git clone --depth 1 https://git.cooluc.com/sbwml/shortcut-fe
           git clone --depth 1 https://github.com/sbwml/luci-app-airconnect
@@ -66,20 +66,19 @@ jobs:
           git clone --depth 1 https://github.com/morytyann/OpenWrt-mihomo
           git clone --depth 1 https://github.com/brvphoenix/wrtbwmon
           git clone --depth 1 https://github.com/brvphoenix/luci-app-wrtbwmon
-          git clone --depth 1 https://github.com/sirpdboy/luci-app-autotimeset
-          #cp -rf ./sirpdboy-package/luci-app-autotimeset ./luci-app-autotimeset
-          rm -rf ./luci-app-autotimeset/luasrc/controller/autotimeset.lua
-          sed -i 's,"control","system",g' luci-app-autotimeset/luasrc/controller/taskplan.lua
-          sed -i '/firstchild/d' luci-app-autotimeset/luasrc/controller/taskplan.lua
-          rm -rf ./luci-app-autotimeset/luasrc/view/autotimeset
-          sed -i 's,control,system,g' luci-app-autotimeset/luasrc/view/taskplan/log.htm
-          rm -rf ./luci-app-autotimeset/po/zh_Hans
-          rm -rf ./luci-app-autotimeset/root/etc/init.d/autotimeset
-          rm -rf ./luci-app-autotimeset/root/etc/init.d/autotimesetrun
-          rm -rf ./luci-app-autotimeset/root/etc/autotimeset
-          rm -rf ./luci-app-autotimeset/root/etc/uci-defaults/luci-autotimeset
-          rm -rf ./luci-app-autotimeset/root/usr/share/rpcd/acl.d/luci-app-autotimeset.json
-          rm -rf ./luci-app-autotimeset/root/usr/bin/timesethandler
+          git clone --depth 1 https://github.com/sirpdboy/luci-app-taskplan
+          #cp -rf ./sirpdboy-package/luci-app-taskplan ./luci-app-taskplan
+          sed -i 's,"control","system",g' luci-app-taskplan/luasrc/controller/taskplan.lua
+          sed -i '/firstchild/d' luci-app-taskplan/luasrc/controller/taskplan.lua
+          rm -rf ./luci-app-taskplan/luasrc/view/autotimeset
+          sed -i 's,control,system,g' luci-app-taskplan/luasrc/view/taskplan/log.htm
+          rm -rf ./luci-app-taskplan/po/zh_Hans
+          rm -rf ./luci-app-taskplan/root/etc/init.d/autotimeset
+          rm -rf ./luci-app-taskplan/root/etc/init.d/autotimesetrun
+          rm -rf ./luci-app-taskplan/root/etc/autotimeset
+          rm -rf ./luci-app-taskplan/root/etc/uci-defaults/luci-autotimeset
+          rm -rf ./luci-app-taskplan/root/usr/share/rpcd/acl.d/luci-app-taskplan.json
+          rm -rf ./luci-app-taskplan/root/usr/bin/timesethandler
           git clone --depth 1 https://github.com/sirpdboy/luci-app-partexp
           #cp -rf ./sirpdboy-package/luci-app-partexp ./luci-app-partexp
           rm -rf ./luci-app-partexp/luci-app-partexp/po/zh_Hans
