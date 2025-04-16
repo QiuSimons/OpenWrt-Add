@@ -2,7 +2,7 @@ local m, s = ...
 
 local api = require "luci.passwall2.api"
 
-local singbox_bin = api.finded_com("singbox")
+local singbox_bin = api.finded_com("sing-box")
 
 if not singbox_bin then
 	return
@@ -26,6 +26,9 @@ local ss_method_list = {
 -- [[ Sing-Box ]]
 
 s.fields["type"]:value(type_name, "Sing-Box")
+if not s.fields["type"].default then
+	s.fields["type"].default = type_name
+end
 
 o = s:option(ListValue, _n("protocol"), translate("Protocol"))
 o:value("mixed", "Mixed")

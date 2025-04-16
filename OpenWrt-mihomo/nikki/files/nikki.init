@@ -143,11 +143,11 @@ service_started() {
 	fi
 	# load config
 	config_load nikki
-	# check if transparent proxy enabled
-	local transparent_proxy
-	config_get_bool transparent_proxy "proxy" "transparent_proxy" 0
-	if [ "$transparent_proxy" == 0 ]; then
-		log "Transparent Proxy" "Disabled."
+	# check if proxy enabled
+	local enabled
+	config_get_bool enabled "proxy" "enabled" 0
+	if [ "$enabled" == 0 ]; then
+		log "Proxy" "Disabled."
 		return
 	fi
 	# get config
@@ -156,36 +156,28 @@ service_started() {
 	local tun_device
 	config_get tun_device "mixin" "tun_device" "nikki"
 	## proxy config
-	### transparent proxy
-	local tcp_transparent_proxy_mode udp_transparent_proxy_mode ipv4_proxy ipv6_proxy
-	config_get tcp_transparent_proxy_mode "proxy" "tcp_transparent_proxy_mode"
-	config_get udp_transparent_proxy_mode "proxy" "udp_transparent_proxy_mode"
+	### general
+	local tcp_mode udp_mode ipv4_proxy ipv6_proxy
+	config_get tcp_mode "proxy" "tcp_mode"
+	config_get udp_mode "proxy" "udp_mode"
 	config_get_bool ipv4_proxy "proxy" "ipv4_proxy" 0
 	config_get_bool ipv6_proxy "proxy" "ipv6_proxy" 0
 	# prepare config
 	local tproxy_enable; tproxy_enable=0
-	if [[ "$tcp_transparent_proxy_mode" == "tproxy" || "$udp_transparent_proxy_mode" == "tproxy" ]]; then
+	if [[ "$tcp_mode" == "tproxy" || "$udp_mode" == "tproxy" ]]; then
 		tproxy_enable=1
 	fi
 	local tun_enable; tun_enable=0
-	if [[ "$tcp_transparent_proxy_mode" == "tun" || "$udp_transparent_proxy_mode" == "tun" ]]; then
+	if [[ "$tcp_mode" == "tun" || "$udp_mode" == "tun" ]]; then
 		tun_enable=1
 	fi
 	# fix compatible with dockerd
 	## cgroupfs-mount
 	### when cgroupfs-mount is installed, cgroupv1 will mounted instead of cgroupv2, we need to create cgroup manually
 	if (mount | grep -q -w "^cgroup"); then
-		local cgroup_v1_path; cgroup_v1_path="/sys/fs/cgroup/net_cls/$CGROUP_NAME"
-		mkdir -p "$cgroup_v1_path"
-		echo "$CGROUP_ID" > "$cgroup_v1_path/net_cls.classid"
-		cat "$PID_FILE_PATH" > "$cgroup_v1_path/cgroup.procs"
-		# local bypass_cgroup; config_get bypass_cgroup "proxy" "bypass_cgroup"
-		# if [ -n "$bypass_cgroup" ]; then
-		# 	local cgroup
-		# 	for cgroup in $bypass_cgroup; do
-		# 		ubus call service list "{\"name\": \"$cgroup\"}" | jsonfilter -e "$.$cgroup.instances.*.pid" >> "$cgroup_v1_path/cgroup.procs"
-		# 	done
-		# fi
+		mkdir -p "/sys/fs/cgroup/net_cls/$CGROUP_NAME"
+		echo "$CGROUP_ID" > "/sys/fs/cgroup/net_cls/$CGROUP_NAME/net_cls.classid"
+		cat "$PID_FILE_PATH" > "/sys/fs/cgroup/net_cls/$CGROUP_NAME/cgroup.procs"
 	fi
 	## kmod-br-netfilter
 	### when kmod-br-netfilter is loaded, bridge-nf-call-iptables and bridge-nf-call-ip6tables are set to 1, we need to set them to 0 if tproxy is enabled
@@ -205,17 +197,17 @@ service_started() {
 			fi
 		fi
 	fi
-	# transparent proxy
-	log "Transparent Proxy" "Enabled."
+	# proxy
+	log "Proxy" "Enabled."
 	# wait for tun device online
 	if [ "$tun_enable" == 1 ]; then
-		log "Transparent Proxy" "Waiting for tun device online..."
+		log "Proxy" "Waiting for tun device online..."
 		local tun_timeout; tun_timeout=15
 		local tun_interval; tun_interval=1
 		while [ "$tun_timeout" -gt 0 ]; do
 			if (ip link show dev "$tun_device" > /dev/null 2>&1); then
 				if [ $(ip -json addr show dev "$tun_device" | tun_device="$tun_device" yq -M '.[] | select(.ifname = strenv(tun_device)) | .addr_info | length') -gt 0 ]; then
-					log "Transparent Proxy" "Tun device is online."
+					log "Proxy" "Tun device is online."
 					break
 				fi
 			fi
@@ -223,7 +215,7 @@ service_started() {
 			sleep "$tun_interval"
 		done
 		if [ "$tun_timeout" -le 0 ]; then
-			log "Transparent Proxy" "Waiting timeout, tun device is not online."
+			log "Proxy" "Waiting timeout, tun device is not online."
 			log "App" "Exit."
 			return
 		fi
@@ -254,9 +246,9 @@ service_started() {
 	utpl -D cgroup_name="$CGROUP_NAME" -D cgroup_id="$CGROUP_ID" -D tproxy_fw_mark="$TPROXY_FW_MARK" -D tun_fw_mark="$TUN_FW_MARK" -S "$HIJACK_UT" | nft -f -
 	# check hijack
 	if (nft list tables | grep -q nikki); then
-		log "Transparent Proxy" "Hijack successful."
+		log "Proxy" "Hijack successful."
 	else
-		log "Transparent Proxy" "Hijack failed."
+		log "Proxy" "Hijack failed."
 		log "App" "Exit."
 	fi
 }
@@ -299,14 +291,13 @@ cleanup() {
 		nft delete rule inet fw4 forward handle "$handle"
 	done
 	# delete started flag
-	rm -f "$STARTED_FLAG_PATH"
-	# revert fix compatible between tproxy and dockerd (kmod-br-netfilter)
-	if [ -f "$BRIDGE_NF_CALL_IPTABLES_FLAG_PATH" ]; then
-		rm -f "$BRIDGE_NF_CALL_IPTABLES_FLAG_PATH"
+	rm "$STARTED_FLAG_PATH" > /dev/null 2>&1
+	# revert fix compatible with dockerd
+	## kmod-br-netfilter
+	if (rm "$BRIDGE_NF_CALL_IPTABLES_FLAG_PATH" > /dev/null 2>&1); then
 		sysctl -q -w net.bridge.bridge-nf-call-iptables=1
 	fi
-	if [ -f "$BRIDGE_NF_CALL_IP6TABLES_FLAG_PATH" ]; then
-		rm -f "$BRIDGE_NF_CALL_IP6TABLES_FLAG_PATH"
+	if (rm "$BRIDGE_NF_CALL_IP6TABLES_FLAG_PATH" > /dev/null 2>&1); then
 		sysctl -q -w net.bridge.bridge-nf-call-ip6tables=1
 	fi
 	# delete cron

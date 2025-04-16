@@ -59,15 +59,15 @@ const methods = {
 	},
 	get_identifiers: {
 		call: function() {
-			const users = filter(get_users(), (x) => x != '' && x != 'root');
-			const groups = filter(get_groups(), (x) => x != '' && x != 'root');
+			const users = filter(get_users(), (x) => x != '');
+			const groups = filter(get_groups(), (x) => x != '');
 			const cgroups = filter(get_cgroups(), (x) => x != '' && x != 'nikki');
 			return { users: users, groups: groups, cgroups: cgroups };
 		}
 	},
 	debug: {
 		call: function() {
-			const success = system('/etc/nikki/scripts/debug.sh > /var/log/nikki/debug.log') == 0;
+			const success = system('/etc/nikki/scripts/debug.sh > /var/log/nikki/debug.log 2>&1') == 0;
 			return { success: success };
 		}
 	}

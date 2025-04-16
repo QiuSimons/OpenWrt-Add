@@ -1,7 +1,7 @@
 local api = require "luci.passwall2.api"
 local appname = api.appname
 local datatypes = api.datatypes
-local has_singbox = api.finded_com("singbox")
+local has_singbox = api.finded_com("sing-box")
 local has_xray = api.finded_com("xray")
 
 m = Map(appname)
@@ -351,9 +351,9 @@ o.default = "1"
 o.rmempty = false
 
 if (m:get("@global_forwarding[0]", "use_nft") or "0") == "1" then
-	o = s:taboption("DNS", Button, "clear_ipset", translate("Clear NFTSET"), translate("Try this feature if the rule modification does not take effect."))
+	o = s:taboption("DNS", Button, "clear_ipset", translate("Clear NFTSet"), translate("Try this feature if the rule modification does not take effect."))
 else
-	o = s:taboption("DNS", Button, "clear_ipset", translate("Clear IPSET"), translate("Try this feature if the rule modification does not take effect."))
+	o = s:taboption("DNS", Button, "clear_ipset", translate("Clear IPSet"), translate("Try this feature if the rule modification does not take effect."))
 end
 o.inputstyle = "remove"
 function o.write(e, e)

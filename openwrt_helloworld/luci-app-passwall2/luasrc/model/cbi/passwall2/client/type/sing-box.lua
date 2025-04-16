@@ -2,7 +2,7 @@ local m, s = ...
 
 local api = require "luci.passwall2.api"
 
-local singbox_bin = api.finded_com("singbox")
+local singbox_bin = api.finded_com("sing-box")
 
 if not singbox_bin then
 	return
@@ -33,6 +33,9 @@ local security_list = { "none", "auto", "aes-128-gcm", "chacha20-poly1305", "zer
 -- [[ sing-box ]]
 
 s.fields["type"]:value(type_name, translate("Sing-Box"))
+if not s.fields["type"].default then
+	s.fields["type"].default = type_name
+end
 
 o = s:option(ListValue, _n("protocol"), translate("Protocol"))
 o:value("socks", "Socks")
@@ -401,6 +404,10 @@ if singbox_tags:find("with_quic") then
 end
 
 if singbox_tags:find("with_quic") then
+	o = s:option(Value, _n("hysteria2_hop"), translate("Port hopping range"))
+	o.description = translate("Format as 1000:2000 or 1000-2000 Multiple groups are separated by commas (,).")
+	o:depends({ [_n("protocol")] = "hysteria2" })
+
 	o = s:option(Value, _n("hysteria2_up_mbps"), translate("Max upload Mbps"))
 	o:depends({ [_n("protocol")] = "hysteria2" })
 
