@@ -102,6 +102,7 @@ jobs:
           git clone --depth 1 https://github.com/immortalwrt/luci
           cp -rf ./luci/applications/luci-app-arpbind ./luci-app-arpbind
           sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-arpbind/Makefile
+          rm -rf ./luci-app-zerotier
           cp -rf ./luci/applications/luci-app-zerotier ./luci-app-zerotier
           sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-zerotier/Makefile
           rm -rf ./luci
