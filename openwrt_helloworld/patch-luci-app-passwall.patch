@@ -20,7 +20,7 @@ index b0a2282..bab556b 100644
  
  define Package/$(PKG_NAME)/postrm
 diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
-index 175a7e6..4ff4fe2 100644
+index 927a9fd..b5aebe5 100644
 --- a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
 +++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
 @@ -506,6 +506,12 @@ o:value("9.9.9.9", "9.9.9.9 (Quad9)")
@@ -117,13 +117,3 @@ index b73edaa..ada52ad 100644
 +203.208.40.0/23
 +34.149.0.0/16
 +72.18.83.0/24
-diff --git a/luci-app-passwall/root/usr/share/passwall/rules/proxy_host b/luci-app-passwall/root/usr/share/passwall/rules/proxy_host
-index 72c498c..4aa1a8c 100644
---- a/luci-app-passwall/root/usr/share/passwall/rules/proxy_host
-+++ b/luci-app-passwall/root/usr/share/passwall/rules/proxy_host
-@@ -9,5 +9,4 @@ googleapis.cn
- googleapis.com
- google.com.tw
- google.com.hk
--gstatic.com
- xn--ngstr-lra8j.com
