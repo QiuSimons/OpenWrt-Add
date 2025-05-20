@@ -69,3 +69,61 @@ msgstr "博通全锥型 NAT 方案"
 
 msgid "Use the Broadcom FullCone NAT scheme if enabled, and use the NFT FullCone scheme if the option is disabled."
 msgstr "启用该选项时使用 Broadcom FullCone NAT 方案，禁用该选项时则使用 nft-fullcone 方案"
+
+msgid "Enable SQM autorate"
+msgstr "启用 SQM 自适应速率"
+
+msgid "Base download speed (kbit/s) (ingress):"
+msgstr "下载速度（kbit/s）（入口）"
+
+msgid "Base upload speed (kbit/s) (egress):"
+msgstr "上传速度（kbit/s）（出口）"
+
+msgid "Minimum download speed (kbit/s):"
+msgstr "最低下载速率（kbit/s）"
+
+msgid "Maximum download speed (kbit/s):"
+msgstr "最高下载速率（kbit/s）"
+
+msgid "Minimum upload speed (kbit/s):"
+msgstr "最低上传速率（kbit/s）"
+
+msgid "Maximum upload speed (kbit/s):"
+msgstr "最高上传速率（kbit/s）"
+
+msgid "Autorate settings"
+msgstr "自适应速率设置"
+
+msgid "Output monitoring lines showing processing stats"
+msgstr "输出监控行（显示处理统计）"
+
+msgid "Output monitoring lines showing cake bandwidth changes"
+msgstr "输出监控行（显示 CAKE 带宽变化）"
+
+msgid "Starlink support"
+msgstr "Starlink 支持"
+
+msgid "Reflector ping interval in seconds:"
+msgstr "反射器ping间隔（秒）"
+
+msgid "Pingers numbers:"
+msgstr "Ping 发送器 数量"
+
+msgid "delay threshold in ms:"
+msgstr "延迟阈值（毫秒）"
+
+msgid "Sleep functionnality"
+msgstr "休眠功能"
+
+msgid "Threshold in Kbit/s below which dl/ul is considered idle"
+msgstr "当下行/上行速率低于此阈值 (Kbit/s) 时视为空闲"
+
+msgid ""
+"Time threshold to put pingers to sleep on substained dl/ul achieved rate < "
+"idle_threshold"
+msgstr ""
+"当持续的下行/上行速率低于空闲阈值时，使检测延迟的 pingers 进入休眠"
+"时间阈值（秒）"
+
+msgid "Number of seconds to wait on startup:"
+msgstr "启动等待时间（秒）"
