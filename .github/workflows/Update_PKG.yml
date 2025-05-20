@@ -16,7 +16,7 @@ jobs:
 
       - name: Update Makefile
         run: |
-          rm -rf nft-fullcone shortcut-fe luci-app-airconnect feeds_packages_lang_node-prebuilt package_kernel_r8125 OpenAppFilter luci-app-mosdns packages_new_nat6 luci-app-daed openwrt-r8168 luci-theme-argon luci-app-argon-config luci-app-dnsfilter luci-theme-edge luci-app-xlnetacc luci-app-mentohust MentoHUST-OpenWrt-ipk luci-app-oled homeproxy OpenClash luci-app-wechatpush luci-app-v2raya luci-app-natmapt openwrt-natmapt openwrt-stuntman luci-app-unblockneteasemusic OpenWrt-mihomo wrtbwmon luci-app-wrtbwmon openwrt_helloworld openwrt_pkgs openwrt-natflow autocore-arm luci-app-taskplan luci-app-partexp luci-app-frps luci-app-frpc luci-app-uugamebooster uugamebooster luci-app-ap-modem luci-app-arpbind imm_pkg openwrt-qBittorrent luci-app-filemanager
+          rm -rf nft-fullcone shortcut-fe luci-app-airconnect feeds_packages_lang_node-prebuilt package_kernel_r8125 OpenAppFilter luci-app-mosdns packages_new_nat6 luci-app-daed openwrt-r8168 luci-theme-argon luci-app-argon-config luci-app-dnsfilter luci-theme-edge luci-app-xlnetacc luci-app-mentohust MentoHUST-OpenWrt-ipk luci-app-oled homeproxy OpenClash luci-app-wechatpush luci-app-v2raya luci-app-natmapt openwrt-natmapt openwrt-stuntman luci-app-unblockneteasemusic OpenWrt-mihomo wrtbwmon luci-app-wrtbwmon openwrt_helloworld openwrt_pkgs openwrt-natflow autocore-arm luci-app-taskplan luci-app-partexp luci-app-frps luci-app-frpc luci-app-uugamebooster uugamebooster luci-app-ap-modem luci-app-arpbind imm_pkg openwrt-qBittorrent luci-app-filemanager autorate
           git clone --depth 1 https://git.cooluc.com/sbwml/nft-fullcone
           git clone --depth 1 https://git.cooluc.com/sbwml/shortcut-fe
           git clone --depth 1 https://github.com/sbwml/luci-app-airconnect
@@ -123,6 +123,12 @@ jobs:
           cp -rf ./packages/libs/quickjspp ./imm_pkg/quickjspp
           cp -rf ./packages/libs/toml11 ./imm_pkg/toml11
           rm -rf ./packages
+          git clone --depth 1 https://github.com/Ysurac/openmptcprouter-feeds
+          mkdir -p autorate
+          cp -rf ./openmptcprouter-feeds/tsping ./autorate/tsping
+          cp -rf ./openmptcprouter-feeds/sqm-autorate ./autorate/sqm-autorate
+          cp -rf ./openmptcprouter-feeds/luci-app-sqm-autorate ./autorate/luci-app-sqm-autorate
+          rm -rf ./openmptcprouter-feeds
           find . -mindepth 2 -name ".git" -type d -exec rm -rf {} +
           bash remove_upx.sh
           bash create_acl_for_luci.sh -a
