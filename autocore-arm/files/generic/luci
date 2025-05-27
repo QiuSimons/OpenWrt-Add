@@ -213,6 +213,7 @@ const methods = {
 				relayd:     access('/usr/sbin/relayd') == true,
 				apk:        access('/usr/bin/apk') == true,
 				wifi:       access('/sbin/wifi') == true,
+				iptables:   access('/usr/sbin/iptables') == true,
 				offload_hw: system((`[[ $(. /etc/openwrt_release ; echo $DISTRIB_TARGET) == "mediatek"* || $(. /etc/openwrt_release ; echo $DISTRIB_TARGET) == *"bcm"* ]]`)) == 0,
 			};
 
