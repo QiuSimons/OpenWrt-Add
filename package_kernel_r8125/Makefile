@@ -7,7 +7,7 @@ include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=r8125
-PKG_VERSION:=9.015.00
+PKG_VERSION:=9.016.00
 PKG_RELEASE:=1
 
 PKG_BUILD_PARALLEL:=1
