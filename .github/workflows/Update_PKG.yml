@@ -105,10 +105,14 @@ jobs:
           rm -rf ./luci-app-zerotier
           cp -rf ./luci/applications/luci-app-zerotier ./luci-app-zerotier
           sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-zerotier/Makefile
+          rm -rf ./luci-app-3cat
+          cp -rf ./luci/applications/luci-app-3cat ./luci-app-3cat
+          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-3cat/Makefile
           rm -rf ./luci
           git clone --depth 1 https://github.com/immortalwrt/packages
           mkdir -p imm_pkg
           cp -rf ./packages/utils/cpulimit ./imm_pkg/cpulimit
+          cp -rf ./packages/net/3proxy ./imm_pkg/3proxy
           cp -rf ./packages/net/frp ./imm_pkg/frp
           sed -i '/etc/d' imm_pkg/frp/Makefile
           sed -i '/defaults/{N;d;}' imm_pkg/frp/Makefile
