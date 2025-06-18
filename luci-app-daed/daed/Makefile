@@ -83,7 +83,7 @@ define Build/Prepare
 		wget -qO - https://github.com/LostAttractor/dae/commit/82058ae.patch | patch -p1 ; \
 		wget -qO - https://github.com/LostAttractor/dae/commit/585ccfb.patch | patch -p1 ; \
 		wget -qO - https://github.com/LostAttractor/dae/commit/77b54f2.patch | patch -p1 ; \
-		wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/master/patch_test/cache_lockless.patch | patch -p1 ; \
+		wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/master/patch_test/dns_optimization.patch | patch -p1 ; \
 		go mod tidy ; \
 		popd ; \
 		pushd $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/wing ; \
