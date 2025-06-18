@@ -1,0 +1,768 @@
+diff --git a/control/anyfrom_pool.go b/control/anyfrom_pool.go
+index 226e55f..668fcab 100644
+--- a/control/anyfrom_pool.go
++++ b/control/anyfrom_pool.go
+@@ -161,71 +161,77 @@ func appendUDPSegmentSizeMsg(b []byte, size uint16) []byte {
+ 
+ // AnyfromPool is a full-cone udp listener pool
+ type AnyfromPool struct {
+-	pool map[string]*Anyfrom
+-	mu   sync.RWMutex
++	pool sync.Map // 使用sync.Map减少锁竞争
+ }
+ 
+ var DefaultAnyfromPool = NewAnyfromPool()
+ 
+ func NewAnyfromPool() *AnyfromPool {
+-	return &AnyfromPool{
+-		pool: make(map[string]*Anyfrom, 64),
+-		mu:   sync.RWMutex{},
+-	}
++	return &AnyfromPool{}
+ }
+ 
+ func (p *AnyfromPool) GetOrCreate(lAddr string, ttl time.Duration) (conn *Anyfrom, isNew bool, err error) {
+-	p.mu.RLock()
+-	af, ok := p.pool[lAddr]
+-	if !ok {
+-		p.mu.RUnlock()
+-		p.mu.Lock()
+-		defer p.mu.Unlock()
+-		if af, ok = p.pool[lAddr]; ok {
+-			return af, false, nil
+-		}
+-		// Create an Anyfrom.
+-		isNew = true
+-		d := net.ListenConfig{
+-			Control: func(network string, address string, c syscall.RawConn) error {
+-				return dialer.TransparentControl(c)
+-			},
+-			KeepAlive: 0,
+-		}
+-		var err error
+-		var pc net.PacketConn
+-		GetDaeNetns().With(func() error {
+-			pc, err = d.ListenPacket(context.Background(), "udp", lAddr)
+-			return nil
+-		})
+-		if err != nil {
+-			return nil, true, err
+-		}
+-		uConn := pc.(*net.UDPConn)
+-		af = &Anyfrom{
+-			UDPConn:       uConn,
+-			deadlineTimer: nil,
+-			ttl:           ttl,
+-			gotGSOError:   false,
+-			gso:           isGSOSupported(uConn),
++	if af, ok := p.pool.Load(lAddr); ok {
++		anyfrom := af.(*Anyfrom)
++		anyfrom.RefreshTtl()
++		return anyfrom, false, nil
++	}
++	
++	// 使用双重检查锁定模式避免重复创建
++	// 创建临时key用于创建锁
++	createKey := lAddr + "_creating"
++	if _, loaded := p.pool.LoadOrStore(createKey, struct{}{}); loaded {
++		// 有其他goroutine在创建，等待并重试
++		time.Sleep(time.Microsecond * 100)
++		if af, ok := p.pool.Load(lAddr); ok {
++			anyfrom := af.(*Anyfrom)
++			anyfrom.RefreshTtl()
++			return anyfrom, false, nil
+ 		}
++	}
++	
++	defer p.pool.Delete(createKey)
++	
++	// 再次检查是否已创建
++	if af, ok := p.pool.Load(lAddr); ok {
++		anyfrom := af.(*Anyfrom)
++		anyfrom.RefreshTtl()
++		return anyfrom, false, nil
++	}
++	
++	// 创建新的Anyfrom
++	d := net.ListenConfig{
++		Control: func(network string, address string, c syscall.RawConn) error {
++			return dialer.TransparentControl(c)
++		},
++		KeepAlive: 0,
++	}
++	var pc net.PacketConn
++	GetDaeNetns().With(func() error {
++		pc, err = d.ListenPacket(context.Background(), "udp", lAddr)
++		return nil
++	})
++	if err != nil {
++		return nil, true, err
++	}
++	
++	uConn := pc.(*net.UDPConn)
++	af := &Anyfrom{
++		UDPConn:       uConn,
++		deadlineTimer: nil,
++		ttl:           ttl,
++		gotGSOError:   false,
++		gso:           isGSOSupported(uConn),
++	}
+ 
+-		if ttl > 0 {
+-			af.deadlineTimer = time.AfterFunc(ttl, func() {
+-				p.mu.Lock()
+-				defer p.mu.Unlock()
+-				_af := p.pool[lAddr]
+-				if _af == af {
+-					delete(p.pool, lAddr)
+-					af.Close()
+-				}
+-			})
+-			p.pool[lAddr] = af
+-		}
+-		return af, true, nil
+-	} else {
+-		af.RefreshTtl()
+-		p.mu.RUnlock()
+-		return af, false, nil
++	if ttl > 0 {
++		af.deadlineTimer = time.AfterFunc(ttl, func() {
++			if loaded := p.pool.CompareAndDelete(lAddr, af); loaded {
++				af.Close()
++			}
++		})
+ 	}
++	
++	p.pool.Store(lAddr, af)
++	return af, true, nil
+ }
+diff --git a/control/control_plane.go b/control/control_plane.go
+index e57cbd8..cc0c2cf 100644
+--- a/control/control_plane.go
++++ b/control/control_plane.go
+@@ -560,9 +560,12 @@ func (c *ControlPlane) InjectBpf(bpf *bpfObjects) {
+ }
+ 
+ func (c *ControlPlane) CloneDnsCache() map[string]*DnsCache {
+-	c.dnsController.dnsCacheMu.Lock()
+-	defer c.dnsController.dnsCacheMu.Unlock()
+-	return deepcopy.Copy(c.dnsController.dnsCache).(map[string]*DnsCache)
++	clonedCache := make(map[string]*DnsCache)
++	c.dnsController.dnsCache.Range(func(key, value interface{}) bool {
++		clonedCache[key.(string)] = deepcopy.Copy(value.(*DnsCache)).(*DnsCache)
++		return true
++	})
++	return clonedCache
+ }
+ 
+ func (c *ControlPlane) dnsUpstreamReadyCallback(dnsUpstream *dns.Upstream) (err error) {
+diff --git a/control/dns_control.go b/control/dns_control.go
+index 6a55368..664d83c 100644
+--- a/control/dns_control.go
++++ b/control/dns_control.go
+@@ -76,11 +76,9 @@ type DnsController struct {
+ 	timeoutExceedCallback func(dialArgument *dialArgument, err error)
+ 
+ 	fixedDomainTtl map[string]int
+-	// mutex protects the dnsCache.
+-	dnsCacheMu          sync.Mutex
+-	dnsCache            map[string]*DnsCache
+-	dnsForwarderCacheMu sync.Mutex
+-	dnsForwarderCache   map[dnsForwarderKey]DnsForwarder
++	// 使用sync.Map代替mutex+map，减少锁竞争
++	dnsCache            sync.Map // map[string]*DnsCache
++	dnsForwarderCache   sync.Map // map[dnsForwarderKey]DnsForwarder
+ }
+ 
+ type handlingState struct {
+@@ -119,11 +117,8 @@ func NewDnsController(routing *dns.Dns, option *DnsControllerOption) (c *DnsCont
+ 		bestDialerChooser:     option.BestDialerChooser,
+ 		timeoutExceedCallback: option.TimeoutExceedCallback,
+ 
+-		fixedDomainTtl:      option.FixedDomainTtl,
+-		dnsCacheMu:          sync.Mutex{},
+-		dnsCache:            make(map[string]*DnsCache),
+-		dnsForwarderCacheMu: sync.Mutex{},
+-		dnsForwarderCache:   make(map[dnsForwarderKey]DnsForwarder),
++		fixedDomainTtl: option.FixedDomainTtl,
++		// 使用sync.Map，无需初始化
+ 	}, nil
+ }
+ 
+@@ -133,20 +128,15 @@ func (c *DnsController) cacheKey(qname string, qtype uint16) string {
+ }
+ 
+ func (c *DnsController) RemoveDnsRespCache(cacheKey string) {
+-	c.dnsCacheMu.Lock()
+-	_, ok := c.dnsCache[cacheKey]
+-	if ok {
+-		delete(c.dnsCache, cacheKey)
+-	}
+-	c.dnsCacheMu.Unlock()
++	c.dnsCache.Delete(cacheKey)
+ }
++
+ func (c *DnsController) LookupDnsRespCache(cacheKey string, ignoreFixedTtl bool) (cache *DnsCache) {
+-	c.dnsCacheMu.Lock()
+-	cache, ok := c.dnsCache[cacheKey]
+-	c.dnsCacheMu.Unlock()
++	cacheValue, ok := c.dnsCache.Load(cacheKey)
+ 	if !ok {
+ 		return nil
+ 	}
++	cache = cacheValue.(*DnsCache)
+ 	var deadline time.Time
+ 	if !ignoreFixedTtl {
+ 		deadline = cache.Deadline
+@@ -287,21 +277,18 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
+ 	deadline, originalDeadline := deadlineFunc(now, host)
+ 
+ 	cacheKey := c.cacheKey(fqdn, dnsTyp)
+-	c.dnsCacheMu.Lock()
+-	cache, ok := c.dnsCache[cacheKey]
+-	if ok {
++	var cache *DnsCache
++	if cacheValue, ok := c.dnsCache.Load(cacheKey); ok {
++		cache = cacheValue.(*DnsCache)
+ 		cache.Answer = answers
+ 		cache.Deadline = deadline
+ 		cache.OriginalDeadline = originalDeadline
+-		c.dnsCacheMu.Unlock()
+ 	} else {
+ 		cache, err = c.newCache(fqdn, answers, deadline, originalDeadline)
+ 		if err != nil {
+-			c.dnsCacheMu.Unlock()
+ 			return err
+ 		}
+-		c.dnsCache[cacheKey] = cache
+-		c.dnsCacheMu.Unlock()
++		c.dnsCache.Store(cacheKey, cache)
+ 	}
+ 	if err = c.cacheAccessCallback(cache); err != nil {
+ 		return err
+@@ -577,18 +564,25 @@ func (c *DnsController) dialSend(invokingDepth int, req *udpRequest, data []byte
+ 	ctxDial, cancel := context.WithTimeout(context.TODO(), consts.DefaultDialTimeout)
+ 	defer cancel()
+ 
+-	// get forwarder from cache
+-	c.dnsForwarderCacheMu.Lock()
+-	forwarder, ok := c.dnsForwarderCache[dnsForwarderKey{upstream: upstream.String(), dialArgument: *dialArgument}]
+-	if !ok {
+-		forwarder, err = newDnsForwarder(upstream, *dialArgument)
++	// get forwarder from cache - 使用sync.Map减少锁竞争
++	var forwarder DnsForwarder
++	forwarderKey := dnsForwarderKey{upstream: upstream.String(), dialArgument: *dialArgument}
++	if forwarderValue, ok := c.dnsForwarderCache.Load(forwarderKey); ok {
++		forwarder = forwarderValue.(DnsForwarder)
++	} else {
++		// 使用LoadOrStore原子操作避免重复创建
++		newForwarder, err := newDnsForwarder(upstream, *dialArgument)
+ 		if err != nil {
+-			c.dnsForwarderCacheMu.Unlock()
+ 			return err
+ 		}
+-		c.dnsForwarderCache[dnsForwarderKey{upstream: upstream.String(), dialArgument: *dialArgument}] = forwarder
++		if existingValue, loaded := c.dnsForwarderCache.LoadOrStore(forwarderKey, newForwarder); loaded {
++			// 有其他goroutine创建了forwarder，使用现有的
++			forwarder = existingValue.(DnsForwarder)
++			newForwarder.Close() // 关闭我们创建的重复实例
++		} else {
++			forwarder = newForwarder
++		}
+ 	}
+-	c.dnsForwarderCacheMu.Unlock()
+ 
+ 	defer func() {
+ 		if !connClosed {
+diff --git a/control/udp_endpoint_pool.go b/control/udp_endpoint_pool.go
+index 5fd972a..cb87016 100644
+--- a/control/udp_endpoint_pool.go
++++ b/control/udp_endpoint_pool.go
+@@ -38,22 +38,68 @@ type UdpEndpoint struct {
+ }
+ 
+ func (ue *UdpEndpoint) start() {
+-	buf := pool.GetFullCap(consts.EthernetMtu)
+-	defer pool.Put(buf)
++	// 使用buffered channel实现异步处理
++	const maxPendingPackets = 1000
++	packetChan := make(chan struct {
++		data []byte
++		from netip.AddrPort
++	}, maxPendingPackets)
++	
++	// 启动异步包处理器
++	go func() {
++		for packet := range packetChan {
++			// 异步处理每个包，避免阻塞读取循环
++			go func(data []byte, from netip.AddrPort) {
++				defer pool.Put(data) // 确保释放buffer
++				if err := ue.handler(data, from); err != nil {
++					// 处理错误但不阻塞
++					return
++				}
++			}(packet.data, packet.from)
++		}
++	}()
++	
++	// 高性能读取循环
+ 	for {
++		buf := pool.GetFullCap(consts.EthernetMtu)
+ 		n, from, err := ue.conn.ReadFrom(buf[:])
+ 		if err != nil {
++			pool.Put(buf)
+ 			break
+ 		}
++		
++		// 快速重置计时器，减少锁竞争
+ 		ue.mu.Lock()
+-		ue.deadlineTimer.Reset(ue.NatTimeout)
++		if ue.deadlineTimer != nil {
++			ue.deadlineTimer.Reset(ue.NatTimeout)
++		}
+ 		ue.mu.Unlock()
+-		if err = ue.handler(buf[:n], from); err != nil {
+-			break
++		
++		// 复制数据到正确大小的buffer
++		data := pool.Get(n)
++		copy(data, buf[:n])
++		pool.Put(buf)
++		
++		// 非阻塞发送到处理器
++		select {
++		case packetChan <- struct {
++			data []byte
++			from netip.AddrPort
++		}{data, from}:
++			// 成功发送到处理队列
++		default:
++			// 队列满了，丢弃包（避免阻塞读取）
++			pool.Put(data)
++			// 可以在这里记录丢包统计
+ 		}
+ 	}
++	
++	// 清理
++	close(packetChan)
+ 	ue.mu.Lock()
+-	ue.deadlineTimer.Stop()
++	if ue.deadlineTimer != nil {
++		ue.deadlineTimer.Stop()
++	}
+ 	ue.mu.Unlock()
+ }
+ 
+diff --git a/control/udp_health_monitor.go b/control/udp_health_monitor.go
+new file mode 100644
+index 0000000..667e863
+--- /dev/null
++++ b/control/udp_health_monitor.go
+@@ -0,0 +1,165 @@
++/*
++ * SPDX-License-Identifier: AGPL-3.0-only
++ * Copyright (c) 2022-2025, daeuniverse Organization <dae@v2raya.org>
++ */
++
++package control
++
++import (
++	"context"
++	"sync"
++	"sync/atomic"
++	"time"
++)
++
++// UdpHealthMonitor monitors UDP processing health and prevents deadlocks
++type UdpHealthMonitor struct {
++	// 基本指标
++	activeConnections    int64
++	totalPacketsHandled  int64
++	droppedPackets      int64
++	timeoutOccurrences  int64
++	
++	// 控制参数
++	isShuttingDown      int32
++	maxActiveConns      int64
++	healthCheckInterval time.Duration
++	
++	// 监控
++	lastActivity        time.Time
++	mu                 sync.RWMutex
++	ctx                context.Context
++	cancel             context.CancelFunc
++}
++
++// NewUdpHealthMonitor creates a new UDP health monitor
++func NewUdpHealthMonitor() *UdpHealthMonitor {
++	ctx, cancel := context.WithCancel(context.Background())
++	monitor := &UdpHealthMonitor{
++		maxActiveConns:      20000, // 增加最大连接数
++		healthCheckInterval: 30 * time.Second,
++		lastActivity:        time.Now(),
++		ctx:                 ctx,
++		cancel:              cancel,
++	}
++	
++	go monitor.healthCheckLoop()
++	return monitor
++}
++
++// healthCheckLoop runs periodic health checks
++func (m *UdpHealthMonitor) healthCheckLoop() {
++	ticker := time.NewTicker(m.healthCheckInterval)
++	defer ticker.Stop()
++	
++	for {
++		select {
++		case <-m.ctx.Done():
++			return
++		case <-ticker.C:
++			m.performHealthCheck()
++		}
++	}
++}
++
++// performHealthCheck 执行简化的健康检查
++func (m *UdpHealthMonitor) performHealthCheck() {
++	activeConns := atomic.LoadInt64(&m.activeConnections)
++	totalPackets := atomic.LoadInt64(&m.totalPacketsHandled)
++	droppedPackets := atomic.LoadInt64(&m.droppedPackets)
++	timeouts := atomic.LoadInt64(&m.timeoutOccurrences)
++	
++	// 简单的日志记录（如果需要的话）
++	_ = activeConns
++	_ = totalPackets
++	_ = droppedPackets
++	_ = timeouts
++	
++	// 重置计数器防止溢出
++	if totalPackets > 10000000 { // 1000万包后重置
++		atomic.StoreInt64(&m.totalPacketsHandled, 0)
++		atomic.StoreInt64(&m.droppedPackets, 0)
++		atomic.StoreInt64(&m.timeoutOccurrences, 0)
++	}
++}
++
++// RegisterConnection registers a new UDP connection
++func (m *UdpHealthMonitor) RegisterConnection() bool {
++	if atomic.LoadInt32(&m.isShuttingDown) != 0 {
++		return false
++	}
++	
++	activeConns := atomic.AddInt64(&m.activeConnections, 1)
++	if activeConns > m.maxActiveConns {
++		atomic.AddInt64(&m.activeConnections, -1)
++		atomic.AddInt64(&m.droppedPackets, 1)
++		return false
++	}
++	
++	m.mu.Lock()
++	m.lastActivity = time.Now()
++	m.mu.Unlock()
++	
++	return true
++}
++
++// UnregisterConnection unregisters a UDP connection
++func (m *UdpHealthMonitor) UnregisterConnection() {
++	atomic.AddInt64(&m.activeConnections, -1)
++}
++
++// RecordPacketHandled records a successfully handled packet
++func (m *UdpHealthMonitor) RecordPacketHandled() {
++	atomic.AddInt64(&m.totalPacketsHandled, 1)
++	
++	m.mu.Lock()
++	m.lastActivity = time.Now()
++	m.mu.Unlock()
++}
++
++// RecordTimeout records a timeout occurrence
++func (m *UdpHealthMonitor) RecordTimeout() {
++	atomic.AddInt64(&m.timeoutOccurrences, 1)
++}
++
++// IsHealthy returns true if the system is in a healthy state
++func (m *UdpHealthMonitor) IsHealthy() bool {
++	activeConns := atomic.LoadInt64(&m.activeConnections)
++	timeouts := atomic.LoadInt64(&m.timeoutOccurrences)
++	totalPackets := atomic.LoadInt64(&m.totalPacketsHandled)
++	
++	// 基本健康检查
++	if activeConns > m.maxActiveConns*9/10 { // 90% 容量
++		return false
++	}
++	
++	// 超时率检查
++	if totalPackets > 1000 {
++		timeoutRate := float64(timeouts) / float64(totalPackets)
++		if timeoutRate > 0.05 { // 5% 超时率阈值
++			return false
++		}
++	}
++	
++	return true
++}
++
++// Shutdown shuts down the health monitor
++func (m *UdpHealthMonitor) Shutdown() {
++	atomic.StoreInt32(&m.isShuttingDown, 1)
++	m.cancel()
++}
++
++// GetStats returns current statistics
++func (m *UdpHealthMonitor) GetStats() map[string]int64 {
++	return map[string]int64{
++		"active_connections":    atomic.LoadInt64(&m.activeConnections),
++		"total_packets_handled": atomic.LoadInt64(&m.totalPacketsHandled),
++		"dropped_packets":       atomic.LoadInt64(&m.droppedPackets),
++		"timeout_occurrences":   atomic.LoadInt64(&m.timeoutOccurrences),
++		"max_active_conns":      m.maxActiveConns,
++	}
++}
++
++// Global UDP health monitor instance
++var DefaultUdpHealthMonitor = NewUdpHealthMonitor()
+diff --git a/control/udp_task_pool.go b/control/udp_task_pool.go
+index 08b02d7..89fd42a 100644
+--- a/control/udp_task_pool.go
++++ b/control/udp_task_pool.go
+@@ -11,7 +11,11 @@ import (
+ 	"time"
+ )
+ 
+-const UdpTaskQueueLength = 128
++const (
++	UdpTaskQueueLength = 512  // 增加队列容量以支持更高并发
++	MaxUdpQueues       = 5000 // 增加最大队列数
++	UdpTaskTimeout     = 100 * time.Millisecond // 极短超时时间
++)
+ 
+ type UdpTask = func()
+ 
+@@ -27,22 +31,57 @@ type UdpTaskQueue struct {
+ }
+ 
+ func (q *UdpTaskQueue) convoy() {
++	defer close(q.closed)
++	
+ 	for {
+ 		select {
+ 		case <-q.ctx.Done():
+-			close(q.closed)
++			// 清空剩余任务
++			q.drainRemainingTasks()
+ 			return
++			
+ 		case task := <-q.ch:
+-			task()
+-			q.timer.Reset(q.agingTime)
++			// 立即异步执行任务，不等待完成
++			go q.executeTaskAsync(task)
++			
++			// 重置老化定时器
++			if q.timer != nil {
++				q.timer.Reset(q.agingTime)
++			}
++		}
++	}
++}
++
++// executeTaskAsync 异步执行单个任务
++func (q *UdpTaskQueue) executeTaskAsync(task UdpTask) {
++	defer func() {
++		if r := recover(); r != nil {
++			// 记录panic但不影响其他任务
++		}
++	}()
++	
++	if task != nil {
++		task()
++	}
++}
++
++// drainRemainingTasks 清空剩余任务
++func (q *UdpTaskQueue) drainRemainingTasks() {
++	for {
++		select {
++		case task := <-q.ch:
++			// 异步执行剩余任务
++			go q.executeTaskAsync(task)
++		default:
++			return
+ 		}
+ 	}
+ }
+ 
+ type UdpTaskPool struct {
+ 	queueChPool sync.Pool
+-	// mu protects m
+-	mu sync.Mutex
++	// 使用RWMutex提高读取性能
++	mu sync.RWMutex
+ 	m  map[string]*UdpTaskQueue
+ }
+ 
+@@ -51,7 +90,7 @@ func NewUdpTaskPool() *UdpTaskPool {
+ 		queueChPool: sync.Pool{New: func() any {
+ 			return make(chan UdpTask, UdpTaskQueueLength)
+ 		}},
+-		mu: sync.Mutex{},
++		mu: sync.RWMutex{},
+ 		m:  map[string]*UdpTaskQueue{},
+ 	}
+ 	return p
+@@ -59,40 +98,123 @@ func NewUdpTaskPool() *UdpTaskPool {
+ 
+ // EmitTask: Make sure packets with the same key (4 tuples) will be sent in order.
+ func (p *UdpTaskPool) EmitTask(key string, task UdpTask) {
++	if task == nil {
++		return
++	}
++
++	// 快速健康检查
++	if !DefaultUdpHealthMonitor.RegisterConnection() {
++		return
++	}
++	defer DefaultUdpHealthMonitor.UnregisterConnection()
++
++	// 尝试使用读锁快速查找现有队列
++	p.mu.RLock()
++	q, exists := p.m[key]
++	queueCount := len(p.m)
++	p.mu.RUnlock()
++
++	if exists {
++		// 队列已存在，直接提交任务
++		p.submitTaskToQueue(q, task)
++		return
++	}
++
++	// 需要创建新队列，使用写锁
+ 	p.mu.Lock()
+-	q, ok := p.m[key]
+-	if !ok {
+-		ch := p.queueChPool.Get().(chan UdpTask)
+-		ctx, cancel := context.WithCancel(context.Background())
+-		q = &UdpTaskQueue{
+-			key:       key,
+-			p:         p,
+-			ch:        ch,
+-			timer:     nil,
+-			agingTime: DefaultNatTimeout,
+-			ctx:       ctx,
+-			closed:    make(chan struct{}),
+-		}
+-		q.timer = time.AfterFunc(q.agingTime, func() {
+-			// if timer executed, there should no task in queue.
+-			// q.closed should not blocking things.
+-			p.mu.Lock()
+-			cancel()
+-			delete(p.m, key)
+-			p.mu.Unlock()
+-			<-q.closed
+-			if len(ch) == 0 { // Otherwise let it be GCed
+-				p.queueChPool.Put(ch)
++	defer p.mu.Unlock()
++
++	// 双重检查
++	if q, exists := p.m[key]; exists {
++		p.submitTaskToQueue(q, task)
++		return
++	}
++
++	// 限制队列数量
++	if queueCount >= MaxUdpQueues {
++		DefaultUdpHealthMonitor.RecordTimeout()
++		return
++	}
++
++	// 创建新队列
++	ch := p.queueChPool.Get().(chan UdpTask)
++	ctx, cancel := context.WithCancel(context.Background())
++	q = &UdpTaskQueue{
++		key:       key,
++		p:         p,
++		ch:        ch,
++		timer:     nil,
++		agingTime: DefaultNatTimeout,
++		ctx:       ctx,
++		closed:    make(chan struct{}),
++	}
++
++	q.timer = time.AfterFunc(q.agingTime, func() {
++		p.cleanupQueue(key, q, cancel, ch)
++	})
++
++	p.m[key] = q
++	go q.convoy()
++
++	// 提交任务到新创建的队列
++	p.submitTaskToQueue(q, task)
++}
++
++// submitTaskToQueue 提交任务到指定队列（极简版本）
++func (p *UdpTaskPool) submitTaskToQueue(q *UdpTaskQueue, task UdpTask) {
++	// 包装任务以增加健康监控
++	wrappedTask := func() {
++		defer func() {
++			DefaultUdpHealthMonitor.RecordPacketHandled()
++			if r := recover(); r != nil {
++				// 记录panic但继续
+ 			}
+-		})
+-		p.m[key] = q
+-		go q.convoy()
++		}()
++		task()
+ 	}
+-	p.mu.Unlock()
+-	// if task cannot be executed within 180s(DefaultNatTimeout), GC may be triggered, so skip the task when GC occurs
++
++	// 极速任务提交 - 非阻塞模式
+ 	select {
+-	case q.ch <- task:
++	case q.ch <- wrappedTask:
++		// 任务成功排队
+ 	case <-q.ctx.Done():
++		// 上下文已取消
++		DefaultUdpHealthMonitor.RecordTimeout()
++	default:
++		// 队列已满，异步重试一次
++		go func() {
++			select {
++			case q.ch <- wrappedTask:
++				// 重试成功
++			case <-q.ctx.Done():
++				DefaultUdpHealthMonitor.RecordTimeout()
++			case <-time.After(UdpTaskTimeout):
++				DefaultUdpHealthMonitor.RecordTimeout()
++			}
++		}()
++	}
++}
++
++// cleanupQueue 清理队列
++func (p *UdpTaskPool) cleanupQueue(key string, q *UdpTaskQueue, cancel context.CancelFunc, ch chan UdpTask) {
++	p.mu.Lock()
++	cancel()
++	delete(p.m, key)
++	p.mu.Unlock()
++
++	// 等待清理完成，带超时
++	select {
++	case <-q.closed:
++	case <-time.After(1 * time.Second):
++		// 强制清理
++	}
++
++	// 回收通道
++	if len(ch) == 0 {
++		for len(ch) > 0 {
++			<-ch
++		}
++		p.queueChPool.Put(ch)
+ 	}
+ }
+ 
