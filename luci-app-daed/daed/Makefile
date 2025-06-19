@@ -5,10 +5,10 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=daed
-PKG_VERSION:=2025.06.15
+PKG_VERSION:=2025.06.18
 DAED_VERSION:=daed-c3588a9
 WING_VERSION:=wing-6df3da2
-CORE_VERSION:=core-d5d4c69
+CORE_VERSION:=core-27f9d9b
 WING_HASH_SHORT:=$(shell echo $(WING_VERSION) | cut -d- -f2)
 CORE_HASH_SHORT:=$(shell echo $(CORE_VERSION) | cut -d- -f2)
 PKG_RELEASE:=1
@@ -83,7 +83,8 @@ define Build/Prepare
 		wget -qO - https://github.com/LostAttractor/dae/commit/82058ae.patch | patch -p1 ; \
 		wget -qO - https://github.com/LostAttractor/dae/commit/585ccfb.patch | patch -p1 ; \
 		wget -qO - https://github.com/LostAttractor/dae/commit/77b54f2.patch | patch -p1 ; \
-		wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/master/patch_test/dns_optimization.patch | patch -p1 ; \
+		wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/master/patchset/kix-feat_lockless_concurrency_udp_dns.patch | patch -p1 ; \
+		wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/master/patchset/kix-feat_enhanced_routing_engine.patch | patch -p1 ; \
 		go mod tidy ; \
 		popd ; \
 		pushd $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/wing ; \
