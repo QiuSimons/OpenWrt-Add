@@ -126,3 +126,15 @@ msgstr ""
 
 msgid "Number of seconds to wait on startup:"
 msgstr "启动等待时间（秒）"
+
+msgid "Not"
+msgstr "排除"
+
+msgid "facility:"
+msgstr "类型:"
+
+msgid "severity:"
+msgstr "级别:"
+
+msgid "including:"
+msgstr "包含:"
