@@ -5,10 +5,10 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=daed
-PKG_VERSION:=2025.06.22
+PKG_VERSION:=2025.06.25
 DAED_VERSION:=daed-c3588a9
 WING_VERSION:=wing-6df3da2
-CORE_VERSION:=core-0eb8416
+CORE_VERSION:=core-17c7e3d
 WING_HASH_SHORT:=$(shell echo $(WING_VERSION) | cut -d- -f2)
 CORE_HASH_SHORT:=$(shell echo $(CORE_VERSION) | cut -d- -f2)
 PKG_RELEASE:=1
@@ -81,8 +81,8 @@ define Build/Prepare
 		git submodule update --init ; \
 		wget -qO - https://github.com/daeuniverse/dae/pull/763.patch | patch -p1 ; \
 		wget -qO - https://github.com/daeuniverse/dae/pull/839.patch | patch -p1 ; \
-		wget -qO - https://github.com/daeuniverse/dae/pull/845.patch | patch -p1 ; \
 		wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/master/patchset/kix-feat_lockless_concurrency_udp_dns.patch | patch -p1 ; \
+		wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/master/patchset/kix-bind_fix.patch | patch -p1 ; \
 		go mod tidy ; \
 		popd ; \
 		pushd $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/wing ; \
