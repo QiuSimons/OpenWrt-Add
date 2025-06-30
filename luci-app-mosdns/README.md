@@ -24,10 +24,10 @@
 
 - Openwrt official SnapShots
 
-  * requires golang 1.22.x or latest version
+  * requires golang 1.24.x or latest version
   ```shell
   rm -rf feeds/packages/lang/golang
-  git clone https://github.com/sbwml/packages_lang_golang -b 23.x feeds/packages/lang/golang
+  git clone https://github.com/sbwml/packages_lang_golang -b 24.x feeds/packages/lang/golang
   ```
 
   ```shell
@@ -61,8 +61,13 @@
 
 - Install `curl` package
   ```shell
+  # for opkg package manager (openwrt 21.02 ~ 24.10)
   opkg update
   opkg install curl
+  
+  # for apk package manager
+  apk update
+  apk add curl
   ```
 
 - Execute install script (Multi-architecture support)
@@ -70,14 +75,11 @@
   sh -c "$(curl -ksS https://raw.githubusercontent.com/sbwml/luci-app-mosdns/v5/install.sh)"
   ```
 
+  install via ghproxy:
+  ```shell
+  sh -c "$(curl -ksS https://raw.githubusercontent.com/sbwml/luci-app-mosdns/v5/install.sh)" _ gh_proxy="https://gh.cooluc.com"
+  ```
+
 --------------
 
-## Preview Images
-
-![1](https://github.com/sbwml/luci-app-mosdns/assets/16485166/3118d6eb-cc47-4411-8fd7-f84fe60b84ed)
-
-![2](https://github.com/sbwml/luci-app-mosdns/assets/16485166/a23da446-7751-4944-a2d0-56049142729c)
-
-![3](https://github.com/sbwml/luci-app-mosdns/assets/16485166/941d2bc9-5e12-42bf-980e-3faebe83e6e8)
-
-![4](https://github.com/sbwml/luci-app-mosdns/assets/16485166/aaefee1f-6396-4b99-badf-86fe1a49cf4b)
+![1](https://github.com/user-attachments/assets/f92847c9-4512-4969-afdc-2d83ddf3a758)
