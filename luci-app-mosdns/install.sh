@@ -140,7 +140,10 @@ fi
 # Extract and install packages
 msg_green "Installing Packages ..."
 tar -zxf "$TEMP_DIR/$PKG_FILE" -C "$TEMP_DIR/"
-for pkg in "$TEMP_DIR"/packages_ci/mosdns*.* \
+for pkg in "$TEMP_DIR"/packages_ci/v2dat*.* \
+           "$TEMP_DIR"/packages_ci/v2ray-geoip*.* \
+           "$TEMP_DIR"/packages_ci/v2ray-geosite*.* \
+           "$TEMP_DIR"/packages_ci/mosdns*.* \
            "$TEMP_DIR"/packages_ci/luci-app-mosdns*.* \
            "$TEMP_DIR"/packages_ci/luci-i18n-mosdns-zh-cn*.*; do
     [ -f "$pkg" ] && $PKG_MANAGER $PKG_OPT $pkg
