@@ -37,6 +37,7 @@ jobs:
           sed -i '/autocore.json/a\\	$(INSTALL_BIN) ./files/x86/autocore $(1)/etc/init.d/' ./autocore-arm/Makefile
           sed -i '/autocore.json/a\\	$(INSTALL_DIR) $(1)/etc/init.d' ./autocore-arm/Makefile
           cp -rf ./autocore ./autocore-arm/files/x86/
+          sed -i 's/png/svg/g' ./autocore-arm/files/generic/29_ports.js
           git clone --depth 1 https://github.com/sbwml/openwrt-qBittorrent
           git clone --depth 1 https://github.com/sbwml/luci-app-filemanager
           git clone -b master --depth 1 https://github.com/QiuSimons/luci-app-daed
