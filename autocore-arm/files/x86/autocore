@@ -13,8 +13,6 @@ start() {
 	echo 8192 > /proc/sys/net/ipv4/tcp_max_syn_backlog
 	echo 7500000 > /proc/sys/net/core/rmem_max
 	echo 7500000 > /proc/sys/net/core/wmem_max
-	sysctl -w net.ipv4.tcp_wmem="8192 131072 16777216"
-	sysctl -w net.ipv4.tcp_rmem="8192 131072 16777216"
 
 	for i in $(ip address | awk -F ': ' '/eth[0-9]+/ {print $2}' | xargs)
 	do
