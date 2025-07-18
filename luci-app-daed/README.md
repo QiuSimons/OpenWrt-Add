@@ -25,7 +25,6 @@ mkdir -p Package/libcron && wget -O Package/libcron/Makefile https://raw.githubu
 ```bash
 apt-get update
 apt-get install -y clang-15 llvm-15 npm
-npm install -g pnpm
 ```
 
 ### 3. Change OpenWrt Source (Requirements for DAE to work)

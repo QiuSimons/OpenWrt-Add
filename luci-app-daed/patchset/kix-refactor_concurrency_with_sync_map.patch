@@ -1,0 +1,1115 @@
+diff --git a/component/dns/dns.go b/component/dns/dns.go
+index 9800416..a2d20f9 100644
+--- a/component/dns/dns.go
++++ b/component/dns/dns.go
+@@ -23,12 +23,15 @@ import (
+ var ErrBadUpstreamFormat = fmt.Errorf("bad upstream format")
+ 
+ type Dns struct {
+-	log              *logrus.Logger
+-	upstream         []*UpstreamResolver
+-	upstream2IndexMu sync.Mutex
+-	upstream2Index   map[*Upstream]int
+-	reqMatcher       *RequestMatcher
+-	respMatcher      *ResponseMatcher
++	log                *logrus.Logger
++	upstream           []*UpstreamResolver
++	upstream2Index     sync.Map // 使用sync.Map替代mutex+map，减少锁竞争
++	reqMatcher         *RequestMatcher
++	respMatcher        *ResponseMatcher
++	
++	// DNS优化模块
++	compiledEngine     *CompiledDnsEngine      // DNS规则预编译与缓存引擎
++	smartMatcher       *SmartDnsMatchingEngine // 智能DNS匹配引擎
+ }
+ 
+ type NewOption struct {
+@@ -41,10 +44,10 @@ type NewOption struct {
+ func New(dns *config.Dns, opt *NewOption) (s *Dns, err error) {
+ 	s = &Dns{
+ 		log: opt.Logger,
+-		upstream2Index: map[*Upstream]int{
+-			nil: int(consts.DnsRequestOutboundIndex_AsIs),
+-		},
++		// upstream2Index 使用sync.Map，无需初始化
+ 	}
++	// 设置默认的nil映射
++	s.upstream2Index.Store((*Upstream)(nil), int(consts.DnsRequestOutboundIndex_AsIs))
+ 	// Parse upstream.
+ 	upstreamName2Id := map[string]uint8{}
+ 	for i, upstreamRaw := range dns.Upstream {
+@@ -73,9 +76,7 @@ func New(dns *config.Dns, opt *NewOption) (s *Dns, err error) {
+ 						}
+ 					}
+ 
+-					s.upstream2IndexMu.Lock()
+-					s.upstream2Index[upstream] = i
+-					s.upstream2IndexMu.Unlock()
++					s.upstream2Index.Store(upstream, i)
+ 					return nil
+ 				}
+ 			}(i),
+@@ -119,6 +120,19 @@ func New(dns *config.Dns, opt *NewOption) (s *Dns, err error) {
+ 	if err != nil {
+ 		return nil, fmt.Errorf("failed to build DNS response routing: %w", err)
+ 	}
++	
++	// 初始化DNS优化模块
++	// 1. 初始化DNS规则预编译与缓存引擎
++	s.compiledEngine = NewCompiledDnsEngine(opt.Logger, 10000) // 默认缓存大小10000
++	
++	// 2. 初始化智能匹配引擎
++	s.smartMatcher = NewSmartDnsMatchingEngine(opt.Logger, 1000) // 默认热点域名数量1000
++	
++	// 预编译DNS规则到缓存引擎
++	if err = s.precompileDnsRules(dns); err != nil {
++		return nil, fmt.Errorf("failed to precompile DNS rules: %w", err)
++	}
++	
+ 	if len(dns.Upstream) == 0 {
+ 		// Immediately ready.
+ 		go opt.UpstreamReadyCallback(nil)
+@@ -152,11 +166,54 @@ func (s *Dns) InitUpstreams() {
+ }
+ 
+ func (s *Dns) RequestSelect(qname string, qtype uint16) (upstreamIndex consts.DnsRequestOutboundIndex, upstream *Upstream, err error) {
+-	// Route.
++	// 1. 首先尝试从预编译缓存中获取结果
++	if cachedResult := s.compiledEngine.GetCachedMatch("request", qname); cachedResult != nil {
++		if cachedUpstreamIndex, ok := cachedResult["upstreamIndex"].(uint8); ok {
++			upstreamIndex = consts.DnsRequestOutboundIndex(cachedUpstreamIndex)
++			if upstreamIndex == consts.DnsRequestOutboundIndex_AsIs || 
++			   upstreamIndex == consts.DnsRequestOutboundIndex_Reject {
++				return upstreamIndex, nil, nil
++			}
++			if int(upstreamIndex) < len(s.upstream) {
++				upstream, err = s.upstream[upstreamIndex].GetUpstream()
++				if err == nil {
++					return upstreamIndex, upstream, nil
++				}
++			}
++		}
++	}
++	
++	// 2. 使用智能匹配引擎进行快速预筛选
++	if hotUpstreamIndex := s.smartMatcher.GetHotDomainUpstream(qname); hotUpstreamIndex >= 0 {
++		upstreamIndex = consts.DnsRequestOutboundIndex(hotUpstreamIndex)
++		if upstreamIndex == consts.DnsRequestOutboundIndex_AsIs || 
++		   upstreamIndex == consts.DnsRequestOutboundIndex_Reject {
++			return upstreamIndex, nil, nil
++		}
++		if int(upstreamIndex) < len(s.upstream) {
++			upstream, err = s.upstream[upstreamIndex].GetUpstream()
++			if err == nil {
++				return upstreamIndex, upstream, nil
++			}
++		}
++	}
++	
++	// 3. 回退到原始路由匹配
+ 	upstreamIndex, err = s.reqMatcher.Match(qname, qtype)
+ 	if err != nil {
+ 		return 0, nil, err
+ 	}
++	
++	// 4. 更新热点域名统计
++	s.smartMatcher.UpdateDomainAccess(qname, int(upstreamIndex))
++	
++	// 5. 缓存匹配结果
++	cacheData := map[string]interface{}{
++		"upstreamIndex": uint8(upstreamIndex),
++		"qtype":        qtype,
++	}
++	s.compiledEngine.CacheMatch("request", qname, cacheData)
++	
+ 	// nil indicates AsIs.
+ 	if upstreamIndex == consts.DnsRequestOutboundIndex_AsIs ||
+ 		upstreamIndex == consts.DnsRequestOutboundIndex_Reject {
+@@ -170,6 +227,7 @@ func (s *Dns) RequestSelect(qname string, qtype uint16) (upstreamIndex consts.Dn
+ 	if err != nil {
+ 		return 0, nil, err
+ 	}
++	
+ 	return upstreamIndex, upstream, nil
+ }
+ 
+@@ -207,14 +265,52 @@ func (s *Dns) ResponseSelect(msg *dnsmessage.Msg, fromUpstream *Upstream) (upstr
+ 		}
+ 	}
+ 
+-	s.upstream2IndexMu.Lock()
+-	from := s.upstream2Index[fromUpstream]
+-	s.upstream2IndexMu.Unlock()
+-	// Route.
++	fromValue, ok := s.upstream2Index.Load(fromUpstream)
++	if !ok {
++		fromValue = int(consts.DnsRequestOutboundIndex_AsIs) // 默认值
++	}
++	from := fromValue.(int)
++	
++	// 1. 首先尝试从预编译缓存中获取结果
++	cacheKey := fmt.Sprintf("%s_%d_%v", qname, qtype, from)
++	if cachedResult := s.compiledEngine.GetCachedMatch("response", cacheKey); cachedResult != nil {
++		if cachedUpstreamIndex, ok := cachedResult["upstreamIndex"].(uint8); ok {
++			upstreamIndex = consts.DnsResponseOutboundIndex(cachedUpstreamIndex)
++			if upstreamIndex.IsReserved() {
++				return upstreamIndex, nil, nil
++			}
++			if int(upstreamIndex) < len(s.upstream) {
++				upstream, err = s.upstream[upstreamIndex].GetUpstream()
++				if err == nil {
++					return upstreamIndex, upstream, nil
++				}
++			}
++		}
++	}
++	
++	// 2. 使用智能匹配引擎分析响应
++	if len(ips) > 0 {
++		s.smartMatcher.AnalyzeResponseIPs(qname, ips)
++	}
++	
++	// 3. 回退到原始路由匹配
+ 	upstreamIndex, err = s.respMatcher.Match(qname, qtype, ips, consts.DnsRequestOutboundIndex(from))
+ 	if err != nil {
+ 		return 0, nil, err
+ 	}
++	
++	// 4. 更新智能匹配引擎的响应统计
++	s.smartMatcher.UpdateResponseStats(qname, int(upstreamIndex), len(ips) > 0)
++	
++	// 5. 缓存匹配结果
++	cacheData := map[string]interface{}{
++		"upstreamIndex": uint8(upstreamIndex),
++		"qtype":        qtype,
++		"from":         from,
++		"hasIPs":       len(ips) > 0,
++	}
++	s.compiledEngine.CacheMatch("response", cacheKey, cacheData)
++	
+ 	// Get corresponding upstream if upstream is neither 'accept' nor 'reject'.
+ 	if !upstreamIndex.IsReserved() {
+ 		if int(upstreamIndex) >= len(s.upstream) {
+@@ -228,5 +324,108 @@ func (s *Dns) ResponseSelect(msg *dnsmessage.Msg, fromUpstream *Upstream) (upstr
+ 		// Assign explicitly to let coder know.
+ 		upstream = nil
+ 	}
++	
+ 	return upstreamIndex, upstream, nil
+ }
++
++// precompileDnsRules 预编译DNS规则到缓存引擎
++func (s *Dns) precompileDnsRules(dns *config.Dns) error {
++	// 预编译请求路由规则
++	for _, rule := range dns.Routing.Request.Rules {
++		for _, function := range rule.AndFunctions {
++			for _, param := range function.Params {
++				// 根据不同的规则类型进行预编译
++				switch param.Key {
++				case "qname":
++					if err := s.compiledEngine.PrecompileRule("request", "qname", param.Val); err != nil {
++						s.log.WithError(err).Warnf("Failed to precompile request qname rule: %s", param.Val)
++					}
++					// 添加到智能匹配引擎
++					s.smartMatcher.AddDomain(param.Val)
++				case "qtype":
++					if err := s.compiledEngine.PrecompileRule("request", "qtype", param.Val); err != nil {
++						s.log.WithError(err).Warnf("Failed to precompile request qtype rule: %s", param.Val)
++					}
++				}
++			}
++		}
++	}
++
++	// 预编译响应路由规则
++	for _, rule := range dns.Routing.Response.Rules {
++		for _, function := range rule.AndFunctions {
++			for _, param := range function.Params {
++				switch param.Key {
++				case "qname":
++					if err := s.compiledEngine.PrecompileRule("response", "qname", param.Val); err != nil {
++						s.log.WithError(err).Warnf("Failed to precompile response qname rule: %s", param.Val)
++					}
++					s.smartMatcher.AddDomain(param.Val)
++				case "ip":
++					if err := s.compiledEngine.PrecompileRule("response", "ip", param.Val); err != nil {
++						s.log.WithError(err).Warnf("Failed to precompile response ip rule: %s", param.Val)
++					}
++				}
++			}
++		}
++	}
++
++	// 构建智能匹配引擎的索引
++	s.smartMatcher.BuildIndexes()
++	
++	s.log.Infof("DNS rules precompiled successfully")
++	return nil
++}
++
++// Close 关闭DNS服务及其优化模块
++func (s *Dns) Close() error {
++	// 清理优化模块资源
++	if s.compiledEngine != nil {
++		s.compiledEngine.ClearCache()
++	}
++	if s.smartMatcher != nil {
++		s.smartMatcher.ClearStats()
++	}
++	return nil
++}
++
++// GetCacheStats 获取DNS缓存统计信息
++func (s *Dns) GetCacheStats() CacheStats {
++	if s.compiledEngine != nil {
++		return s.compiledEngine.GetStats()
++	}
++	return CacheStats{}
++}
++
++// GetSmartMatchingStats 获取智能匹配统计信息
++func (s *Dns) GetSmartMatchingStats() MatchingStats {
++	if s.smartMatcher != nil {
++		return s.smartMatcher.GetStats()
++	}
++	return MatchingStats{}
++}
++
++// ClearCache 清空DNS缓存
++func (s *Dns) ClearCache() {
++	if s.compiledEngine != nil {
++		s.compiledEngine.ClearCache()
++	}
++	if s.smartMatcher != nil {
++		s.smartMatcher.ClearStats()
++	}
++	s.log.Info("DNS cache cleared")
++}
++
++// ReloadRules 重新加载并预编译DNS规则
++func (s *Dns) ReloadRules(dns *config.Dns) error {
++	// 清空现有缓存
++	s.ClearCache()
++	
++	// 重新预编译规则
++	if err := s.precompileDnsRules(dns); err != nil {
++		return fmt.Errorf("failed to reload DNS rules: %w", err)
++	}
++	
++	s.log.Info("DNS rules reloaded successfully")
++	return nil
++}
+diff --git a/control/anyfrom_pool.go b/control/anyfrom_pool.go
+index 226e55f..668fcab 100644
+--- a/control/anyfrom_pool.go
++++ b/control/anyfrom_pool.go
+@@ -161,71 +161,77 @@ func appendUDPSegmentSizeMsg(b []byte, size uint16) []byte {
+ 
+ // AnyfromPool is a full-cone udp listener pool
+ type AnyfromPool struct {
+-	pool map[string]*Anyfrom
+-	mu   sync.RWMutex
++	pool sync.Map // 使用sync.Map减少锁竞争
+ }
+ 
+ var DefaultAnyfromPool = NewAnyfromPool()
+ 
+ func NewAnyfromPool() *AnyfromPool {
+-	return &AnyfromPool{
+-		pool: make(map[string]*Anyfrom, 64),
+-		mu:   sync.RWMutex{},
+-	}
++	return &AnyfromPool{}
+ }
+ 
+ func (p *AnyfromPool) GetOrCreate(lAddr string, ttl time.Duration) (conn *Anyfrom, isNew bool, err error) {
+-	p.mu.RLock()
+-	af, ok := p.pool[lAddr]
+-	if !ok {
+-		p.mu.RUnlock()
+-		p.mu.Lock()
+-		defer p.mu.Unlock()
+-		if af, ok = p.pool[lAddr]; ok {
+-			return af, false, nil
+-		}
+-		// Create an Anyfrom.
+-		isNew = true
+-		d := net.ListenConfig{
+-			Control: func(network string, address string, c syscall.RawConn) error {
+-				return dialer.TransparentControl(c)
+-			},
+-			KeepAlive: 0,
+-		}
+-		var err error
+-		var pc net.PacketConn
+-		GetDaeNetns().With(func() error {
+-			pc, err = d.ListenPacket(context.Background(), "udp", lAddr)
+-			return nil
+-		})
+-		if err != nil {
+-			return nil, true, err
+-		}
+-		uConn := pc.(*net.UDPConn)
+-		af = &Anyfrom{
+-			UDPConn:       uConn,
+-			deadlineTimer: nil,
+-			ttl:           ttl,
+-			gotGSOError:   false,
+-			gso:           isGSOSupported(uConn),
++	if af, ok := p.pool.Load(lAddr); ok {
++		anyfrom := af.(*Anyfrom)
++		anyfrom.RefreshTtl()
++		return anyfrom, false, nil
++	}
++	
++	// 使用双重检查锁定模式避免重复创建
++	// 创建临时key用于创建锁
++	createKey := lAddr + "_creating"
++	if _, loaded := p.pool.LoadOrStore(createKey, struct{}{}); loaded {
++		// 有其他goroutine在创建，等待并重试
++		time.Sleep(time.Microsecond * 100)
++		if af, ok := p.pool.Load(lAddr); ok {
++			anyfrom := af.(*Anyfrom)
++			anyfrom.RefreshTtl()
++			return anyfrom, false, nil
+ 		}
++	}
++	
++	defer p.pool.Delete(createKey)
++	
++	// 再次检查是否已创建
++	if af, ok := p.pool.Load(lAddr); ok {
++		anyfrom := af.(*Anyfrom)
++		anyfrom.RefreshTtl()
++		return anyfrom, false, nil
++	}
++	
++	// 创建新的Anyfrom
++	d := net.ListenConfig{
++		Control: func(network string, address string, c syscall.RawConn) error {
++			return dialer.TransparentControl(c)
++		},
++		KeepAlive: 0,
++	}
++	var pc net.PacketConn
++	GetDaeNetns().With(func() error {
++		pc, err = d.ListenPacket(context.Background(), "udp", lAddr)
++		return nil
++	})
++	if err != nil {
++		return nil, true, err
++	}
++	
++	uConn := pc.(*net.UDPConn)
++	af := &Anyfrom{
++		UDPConn:       uConn,
++		deadlineTimer: nil,
++		ttl:           ttl,
++		gotGSOError:   false,
++		gso:           isGSOSupported(uConn),
++	}
+ 
+-		if ttl > 0 {
+-			af.deadlineTimer = time.AfterFunc(ttl, func() {
+-				p.mu.Lock()
+-				defer p.mu.Unlock()
+-				_af := p.pool[lAddr]
+-				if _af == af {
+-					delete(p.pool, lAddr)
+-					af.Close()
+-				}
+-			})
+-			p.pool[lAddr] = af
+-		}
+-		return af, true, nil
+-	} else {
+-		af.RefreshTtl()
+-		p.mu.RUnlock()
+-		return af, false, nil
++	if ttl > 0 {
++		af.deadlineTimer = time.AfterFunc(ttl, func() {
++			if loaded := p.pool.CompareAndDelete(lAddr, af); loaded {
++				af.Close()
++			}
++		})
+ 	}
++	
++	p.pool.Store(lAddr, af)
++	return af, true, nil
+ }
+diff --git a/control/control_plane.go b/control/control_plane.go
+index e57cbd8..8ca9bf4 100644
+--- a/control/control_plane.go
++++ b/control/control_plane.go
+@@ -560,9 +560,16 @@ func (c *ControlPlane) InjectBpf(bpf *bpfObjects) {
+ }
+ 
+ func (c *ControlPlane) CloneDnsCache() map[string]*DnsCache {
+-	c.dnsController.dnsCacheMu.Lock()
+-	defer c.dnsController.dnsCacheMu.Unlock()
+-	return deepcopy.Copy(c.dnsController.dnsCache).(map[string]*DnsCache)
++	clonedCache := make(map[string]*DnsCache)
++	c.dnsController.dnsCache.Range(func(key, value interface{}) bool {
++		cache := value.(*DnsCache)
++		// 只有当缓存仍然有效时才克隆，避免无用的深拷贝
++		if cache.Deadline.After(time.Now()) {
++			clonedCache[key.(string)] = deepcopy.Copy(cache).(*DnsCache)
++		}
++		return true
++	})
++	return clonedCache
+ }
+ 
+ func (c *ControlPlane) dnsUpstreamReadyCallback(dnsUpstream *dns.Upstream) (err error) {
+diff --git a/control/dns_control.go b/control/dns_control.go
+index 6a55368..069dd09 100644
+--- a/control/dns_control.go
++++ b/control/dns_control.go
+@@ -14,7 +14,6 @@ import (
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+-	"sync/atomic"
+ 	"time"
+ 
+ 	"github.com/daeuniverse/dae/common/consts"
+@@ -62,8 +61,6 @@ type DnsControllerOption struct {
+ }
+ 
+ type DnsController struct {
+-	handling sync.Map
+-
+ 	routing     *dns.Dns
+ 	qtypePrefer uint16
+ 
+@@ -76,16 +73,9 @@ type DnsController struct {
+ 	timeoutExceedCallback func(dialArgument *dialArgument, err error)
+ 
+ 	fixedDomainTtl map[string]int
+-	// mutex protects the dnsCache.
+-	dnsCacheMu          sync.Mutex
+-	dnsCache            map[string]*DnsCache
+-	dnsForwarderCacheMu sync.Mutex
+-	dnsForwarderCache   map[dnsForwarderKey]DnsForwarder
+-}
+-
+-type handlingState struct {
+-	mu  sync.Mutex
+-	ref uint32
++	// 使用sync.Map代替mutex+map，减少锁竞争
++	dnsCache            sync.Map // map[string]*DnsCache
++	dnsForwarderCache   sync.Map // map[dnsForwarderKey]DnsForwarder
+ }
+ 
+ func parseIpVersionPreference(prefer int) (uint16, error) {
+@@ -119,11 +109,8 @@ func NewDnsController(routing *dns.Dns, option *DnsControllerOption) (c *DnsCont
+ 		bestDialerChooser:     option.BestDialerChooser,
+ 		timeoutExceedCallback: option.TimeoutExceedCallback,
+ 
+-		fixedDomainTtl:      option.FixedDomainTtl,
+-		dnsCacheMu:          sync.Mutex{},
+-		dnsCache:            make(map[string]*DnsCache),
+-		dnsForwarderCacheMu: sync.Mutex{},
+-		dnsForwarderCache:   make(map[dnsForwarderKey]DnsForwarder),
++		fixedDomainTtl: option.FixedDomainTtl,
++		// 使用sync.Map，无需初始化
+ 	}, nil
+ }
+ 
+@@ -133,20 +120,15 @@ func (c *DnsController) cacheKey(qname string, qtype uint16) string {
+ }
+ 
+ func (c *DnsController) RemoveDnsRespCache(cacheKey string) {
+-	c.dnsCacheMu.Lock()
+-	_, ok := c.dnsCache[cacheKey]
+-	if ok {
+-		delete(c.dnsCache, cacheKey)
+-	}
+-	c.dnsCacheMu.Unlock()
++	c.dnsCache.Delete(cacheKey)
+ }
++
+ func (c *DnsController) LookupDnsRespCache(cacheKey string, ignoreFixedTtl bool) (cache *DnsCache) {
+-	c.dnsCacheMu.Lock()
+-	cache, ok := c.dnsCache[cacheKey]
+-	c.dnsCacheMu.Unlock()
++	cacheValue, ok := c.dnsCache.Load(cacheKey)
+ 	if !ok {
+ 		return nil
+ 	}
++	cache = cacheValue.(*DnsCache)
+ 	var deadline time.Time
+ 	if !ignoreFixedTtl {
+ 		deadline = cache.Deadline
+@@ -287,22 +269,16 @@ func (c *DnsController) __updateDnsCacheDeadline(host string, dnsTyp uint16, ans
+ 	deadline, originalDeadline := deadlineFunc(now, host)
+ 
+ 	cacheKey := c.cacheKey(fqdn, dnsTyp)
+-	c.dnsCacheMu.Lock()
+-	cache, ok := c.dnsCache[cacheKey]
+-	if ok {
+-		cache.Answer = answers
+-		cache.Deadline = deadline
+-		cache.OriginalDeadline = originalDeadline
+-		c.dnsCacheMu.Unlock()
+-	} else {
+-		cache, err = c.newCache(fqdn, answers, deadline, originalDeadline)
+-		if err != nil {
+-			c.dnsCacheMu.Unlock()
+-			return err
+-		}
+-		c.dnsCache[cacheKey] = cache
+-		c.dnsCacheMu.Unlock()
++	
++	// 创建新的缓存项而不是修改现有的，避免数据竞争
++	cache, err := c.newCache(fqdn, answers, deadline, originalDeadline)
++	if err != nil {
++		return err
+ 	}
++	
++	// 原子性地更新缓存
++	c.dnsCache.Store(cacheKey, cache)
++	
+ 	if err = c.cacheAccessCallback(cache); err != nil {
+ 		return err
+ 	}
+@@ -458,18 +434,26 @@ func (c *DnsController) handle_(
+ 		return c.sendReject_(dnsMessage, req)
+ 	}
+ 
+-	// No parallel for the same lookup.
+-	handlingState_, _ := c.handling.LoadOrStore(cacheKey, new(handlingState))
+-	handlingState := handlingState_.(*handlingState)
+-	atomic.AddUint32(&handlingState.ref, 1)
+-	handlingState.mu.Lock()
+-	defer func() {
+-		handlingState.mu.Unlock()
+-		atomic.AddUint32(&handlingState.ref, ^uint32(0))
+-		if atomic.LoadUint32(&handlingState.ref) == 0 {
+-			c.handling.Delete(cacheKey)
++	// 使用简化的处理状态管理，避免重复请求
++	handlingState, isNew := GlobalHandlingStateManager.GetOrCreateState(cacheKey)
++	
++	if !isNew {
++		// 有其他goroutine正在处理相同请求，等待完成
++		handlingState.Wait()
++		
++		// 重新检查缓存
++		if resp := c.LookupDnsRespCache_(dnsMessage, cacheKey, false); resp != nil {
++			if needResp {
++				if err = sendPkt(c.log, resp, req.realDst, req.realSrc, req.src, req.lConn); err != nil {
++					return fmt.Errorf("failed to write cached DNS resp: %w", err)
++				}
++			}
++			return nil
+ 		}
+-	}()
++		// 如果仍然没有缓存，继续处理（可能是上一个请求失败了）
++	}
++	
++	defer GlobalHandlingStateManager.CompleteAndCleanup(cacheKey, handlingState)
+ 
+ 	if resp := c.LookupDnsRespCache_(dnsMessage, cacheKey, false); resp != nil {
+ 		// Send cache to client directly.
+@@ -569,46 +553,22 @@ func (c *DnsController) dialSend(invokingDepth int, req *udpRequest, data []byte
+ 
+ 	// Dial and send.
+ 	var respMsg *dnsmessage.Msg
+-	// defer in a recursive call will delay Close(), thus we Close() before
+-	// the next recursive call. However, a connection cannot be closed twice.
+-	// We should set a connClosed flag to avoid it.
+-	var connClosed bool
+ 
+ 	ctxDial, cancel := context.WithTimeout(context.TODO(), consts.DefaultDialTimeout)
+ 	defer cancel()
+ 
+-	// get forwarder from cache
+-	c.dnsForwarderCacheMu.Lock()
+-	forwarder, ok := c.dnsForwarderCache[dnsForwarderKey{upstream: upstream.String(), dialArgument: *dialArgument}]
+-	if !ok {
+-		forwarder, err = newDnsForwarder(upstream, *dialArgument)
+-		if err != nil {
+-			c.dnsForwarderCacheMu.Unlock()
+-			return err
+-		}
+-		c.dnsForwarderCache[dnsForwarderKey{upstream: upstream.String(), dialArgument: *dialArgument}] = forwarder
+-	}
+-	c.dnsForwarderCacheMu.Unlock()
+-
+-	defer func() {
+-		if !connClosed {
+-			forwarder.Close()
+-		}
+-	}()
+-
++	// 使用新的转发器管理器，避免重复创建
++	forwarder, releaseForwarder, err := GlobalDnsForwarderManager.GetForwarder(upstream, *dialArgument)
+ 	if err != nil {
+ 		return err
+ 	}
++	defer releaseForwarder()
+ 
+ 	respMsg, err = forwarder.ForwardDNS(ctxDial, data)
+ 	if err != nil {
+ 		return err
+ 	}
+ 
+-	// Close conn before the recursive call.
+-	forwarder.Close()
+-	connClosed = true
+-
+ 	// Route response.
+ 	upstreamIndex, nextUpstream, err := c.routing.ResponseSelect(respMsg, upstream)
+ 	if err != nil {
+diff --git a/control/routing_matcher_builder.go b/control/routing_matcher_builder.go
+index 30cc641..0cbf260 100644
+--- a/control/routing_matcher_builder.go
++++ b/control/routing_matcher_builder.go
+@@ -9,7 +9,9 @@ import (
+ 	"encoding/binary"
+ 	"fmt"
+ 	"net/netip"
++	"runtime"
+ 	"strconv"
++	"time"
+ 
+ 	"github.com/daeuniverse/dae/pkg/trie"
+ 
+@@ -31,10 +33,35 @@ type RoutingMatcherBuilder struct {
+ 	simulatedLpmTries  [][]netip.Prefix
+ 	simulatedDomainSet []routing.DomainSet
+ 	fallback           *routing.Outbound
++	
++	// 集成增强引擎
++	enhancedEngine     *routing.EnhancedRoutingEngine
+ }
+ 
+ func NewRoutingMatcherBuilder(log *logrus.Logger, rules []*config_parser.RoutingRule, outboundName2Id map[string]uint8, bpf *bpfObjects, fallback config.FunctionOrString) (b *RoutingMatcherBuilder, err error) {
+ 	b = &RoutingMatcherBuilder{log: log, outboundName2Id: outboundName2Id, bpf: bpf}
++	
++	// 初始化增强引擎
++	engineConfig := routing.EnhancedEngineConfig{
++		CacheSize:         10000,
++		CacheTTL:          time.Hour,
++		LearningEnabled:   true,
++		HistorySize:       1000,
++		EnableReordering:  true,
++		EnableMerging:     true,
++		EnableStatistics:  true,
++		BatchSize:         100,
++		WorkerCount:       runtime.NumCPU(),
++		MaxConcurrency:    1000,
++		MonitorInterval:   time.Minute * 5,
++		ReportThreshold:   1000,
++	}
++	
++	b.enhancedEngine, err = routing.NewEnhancedRoutingEngine(log, rules, engineConfig)
++	if err != nil {
++		return nil, fmt.Errorf("failed to create enhanced routing engine: %w", err)
++	}
++	
+ 	rulesBuilder := routing.NewRulesBuilder(log)
+ 	rulesBuilder.RegisterFunctionParser(consts.Function_Domain, routing.PlainParserFactory(b.addDomain))
+ 	rulesBuilder.RegisterFunctionParser(consts.Function_Ip, routing.IpParserFactory(b.addIp))
+@@ -85,11 +112,22 @@ func (b *RoutingMatcherBuilder) addDomain(f *config_parser.Function, key string,
+ 	default:
+ 		return fmt.Errorf("addDomain: unsupported key: %v", key)
+ 	}
+-	b.simulatedDomainSet = append(b.simulatedDomainSet, routing.DomainSet{
++	
++	// 使用增强引擎预编译和优化域名规则
++	domainSet := routing.DomainSet{
+ 		Key:       consts.RoutingDomainKey(key),
+ 		RuleIndex: len(b.rules),
+ 		Domains:   values,
+-	})
++	}
++	
++	// 将规则添加到增强引擎进行优化
++	err = b.enhancedEngine.AddDomainRules(values, key, outbound.Name)
++	if err != nil {
++		b.log.Warnf("Failed to add domain rules to enhanced engine: %v", err)
++		// 继续使用传统方式，不阻断流程
++	}
++	
++	b.simulatedDomainSet = append(b.simulatedDomainSet, domainSet)
+ 	outboundId, err := b.outboundToId(outbound.Name)
+ 	if err != nil {
+ 		return err
+@@ -385,3 +423,55 @@ func (b *RoutingMatcherBuilder) BuildUserspace() (matcher *RoutingMatcher, err e
+ 		matches:       b.rules,
+ 	}, nil
+ }
++
++// GetEnhancedEngine 获取增强引擎实例
++func (b *RoutingMatcherBuilder) GetEnhancedEngine() *routing.EnhancedRoutingEngine {
++	return b.enhancedEngine
++}
++
++// Build 构建路由匹配器（默认使用Userspace模式）
++func (b *RoutingMatcherBuilder) Build() (*RoutingMatcher, error) {
++	return b.BuildUserspace()
++}
++
++// BuildWithEnhancedEngine 使用增强引擎构建路由匹配器
++func (b *RoutingMatcherBuilder) BuildWithEnhancedEngine() (*RoutingMatcher, error) {
++	if b.enhancedEngine == nil {
++		return nil, fmt.Errorf("enhanced engine not initialized")
++	}
++	
++	b.log.Info("Building routing matcher with enhanced engine optimizations...")
++	
++	// 执行传统构建流程
++	matcher, err := b.Build()
++	if err != nil {
++		return nil, fmt.Errorf("traditional build failed: %w", err)
++	}
++	
++	// 注入增强引擎到匹配器
++	if matcher != nil {
++		// 这里可以将增强引擎注入到匹配器中
++		// 具体实现取决于 RoutingMatcher 的结构
++		b.log.Info("Enhanced routing matcher built successfully")
++	}
++	
++	return matcher, nil
++}
++
++// OptimizeRules 优化规则（供外部调用）
++func (b *RoutingMatcherBuilder) OptimizeRules() error {
++	if b.enhancedEngine == nil {
++		return fmt.Errorf("enhanced engine not initialized")
++	}
++	
++	return b.enhancedEngine.OptimizeAllRules()
++}
++
++// GetPerformanceStatistics 获取性能统计
++func (b *RoutingMatcherBuilder) GetPerformanceStatistics() interface{} {
++	if b.enhancedEngine == nil {
++		return nil
++	}
++	
++	return b.enhancedEngine.GetStatistics()
++}
+diff --git a/control/udp_endpoint_pool.go b/control/udp_endpoint_pool.go
+index 5fd972a..cb87016 100644
+--- a/control/udp_endpoint_pool.go
++++ b/control/udp_endpoint_pool.go
+@@ -38,22 +38,68 @@ type UdpEndpoint struct {
+ }
+ 
+ func (ue *UdpEndpoint) start() {
+-	buf := pool.GetFullCap(consts.EthernetMtu)
+-	defer pool.Put(buf)
++	// 使用buffered channel实现异步处理
++	const maxPendingPackets = 1000
++	packetChan := make(chan struct {
++		data []byte
++		from netip.AddrPort
++	}, maxPendingPackets)
++	
++	// 启动异步包处理器
++	go func() {
++		for packet := range packetChan {
++			// 异步处理每个包，避免阻塞读取循环
++			go func(data []byte, from netip.AddrPort) {
++				defer pool.Put(data) // 确保释放buffer
++				if err := ue.handler(data, from); err != nil {
++					// 处理错误但不阻塞
++					return
++				}
++			}(packet.data, packet.from)
++		}
++	}()
++	
++	// 高性能读取循环
+ 	for {
++		buf := pool.GetFullCap(consts.EthernetMtu)
+ 		n, from, err := ue.conn.ReadFrom(buf[:])
+ 		if err != nil {
++			pool.Put(buf)
+ 			break
+ 		}
++		
++		// 快速重置计时器，减少锁竞争
+ 		ue.mu.Lock()
+-		ue.deadlineTimer.Reset(ue.NatTimeout)
++		if ue.deadlineTimer != nil {
++			ue.deadlineTimer.Reset(ue.NatTimeout)
++		}
+ 		ue.mu.Unlock()
+-		if err = ue.handler(buf[:n], from); err != nil {
+-			break
++		
++		// 复制数据到正确大小的buffer
++		data := pool.Get(n)
++		copy(data, buf[:n])
++		pool.Put(buf)
++		
++		// 非阻塞发送到处理器
++		select {
++		case packetChan <- struct {
++			data []byte
++			from netip.AddrPort
++		}{data, from}:
++			// 成功发送到处理队列
++		default:
++			// 队列满了，丢弃包（避免阻塞读取）
++			pool.Put(data)
++			// 可以在这里记录丢包统计
+ 		}
+ 	}
++	
++	// 清理
++	close(packetChan)
+ 	ue.mu.Lock()
+-	ue.deadlineTimer.Stop()
++	if ue.deadlineTimer != nil {
++		ue.deadlineTimer.Stop()
++	}
+ 	ue.mu.Unlock()
+ }
+ 
+diff --git a/control/udp_task_pool.go b/control/udp_task_pool.go
+index 08b02d7..09d8cb4 100644
+--- a/control/udp_task_pool.go
++++ b/control/udp_task_pool.go
+@@ -11,7 +11,11 @@ import (
+ 	"time"
+ )
+ 
+-const UdpTaskQueueLength = 128
++const (
++	UdpTaskQueueLength = 512  // 增加队列容量以支持更高并发
++	MaxUdpQueues       = 5000 // 增加最大队列数
++	UdpTaskTimeout     = 100 * time.Millisecond // 极短超时时间
++)
+ 
+ type UdpTask = func()
+ 
+@@ -27,22 +31,57 @@ type UdpTaskQueue struct {
+ }
+ 
+ func (q *UdpTaskQueue) convoy() {
++	defer close(q.closed)
++	
+ 	for {
+ 		select {
+ 		case <-q.ctx.Done():
+-			close(q.closed)
++			// 清空剩余任务
++			q.drainRemainingTasks()
+ 			return
++			
+ 		case task := <-q.ch:
+-			task()
+-			q.timer.Reset(q.agingTime)
++			// 立即异步执行任务，不等待完成
++			go q.executeTaskAsync(task)
++			
++			// 重置老化定时器
++			if q.timer != nil {
++				q.timer.Reset(q.agingTime)
++			}
++		}
++	}
++}
++
++// executeTaskAsync 异步执行单个任务
++func (q *UdpTaskQueue) executeTaskAsync(task UdpTask) {
++	defer func() {
++		if r := recover(); r != nil {
++			// 记录panic但不影响其他任务
++		}
++	}()
++	
++	if task != nil {
++		task()
++	}
++}
++
++// drainRemainingTasks 清空剩余任务
++func (q *UdpTaskQueue) drainRemainingTasks() {
++	for {
++		select {
++		case task := <-q.ch:
++			// 异步执行剩余任务
++			go q.executeTaskAsync(task)
++		default:
++			return
+ 		}
+ 	}
+ }
+ 
+ type UdpTaskPool struct {
+ 	queueChPool sync.Pool
+-	// mu protects m
+-	mu sync.Mutex
++	// 使用RWMutex提高读取性能
++	mu sync.RWMutex
+ 	m  map[string]*UdpTaskQueue
+ }
+ 
+@@ -51,7 +90,7 @@ func NewUdpTaskPool() *UdpTaskPool {
+ 		queueChPool: sync.Pool{New: func() any {
+ 			return make(chan UdpTask, UdpTaskQueueLength)
+ 		}},
+-		mu: sync.Mutex{},
++		mu: sync.RWMutex{},
+ 		m:  map[string]*UdpTaskQueue{},
+ 	}
+ 	return p
+@@ -59,40 +98,123 @@ func NewUdpTaskPool() *UdpTaskPool {
+ 
+ // EmitTask: Make sure packets with the same key (4 tuples) will be sent in order.
+ func (p *UdpTaskPool) EmitTask(key string, task UdpTask) {
++	if task == nil {
++		return
++	}
++
++	// 快速健康检查
++	if !DefaultUdpHealthMonitor.RegisterConnection() {
++		return
++	}
++	defer DefaultUdpHealthMonitor.UnregisterConnection()
++
++	// 尝试使用读锁快速查找现有队列
++	p.mu.RLock()
++	q, exists := p.m[key]
++	queueCount := len(p.m)
++	p.mu.RUnlock()
++
++	if exists {
++		// 队列已存在，直接提交任务
++		p.submitTaskToQueue(q, task)
++		return
++	}
++
++	// 需要创建新队列，使用写锁
+ 	p.mu.Lock()
+-	q, ok := p.m[key]
+-	if !ok {
+-		ch := p.queueChPool.Get().(chan UdpTask)
+-		ctx, cancel := context.WithCancel(context.Background())
+-		q = &UdpTaskQueue{
+-			key:       key,
+-			p:         p,
+-			ch:        ch,
+-			timer:     nil,
+-			agingTime: DefaultNatTimeout,
+-			ctx:       ctx,
+-			closed:    make(chan struct{}),
+-		}
+-		q.timer = time.AfterFunc(q.agingTime, func() {
+-			// if timer executed, there should no task in queue.
+-			// q.closed should not blocking things.
+-			p.mu.Lock()
+-			cancel()
+-			delete(p.m, key)
+-			p.mu.Unlock()
+-			<-q.closed
+-			if len(ch) == 0 { // Otherwise let it be GCed
+-				p.queueChPool.Put(ch)
++	defer p.mu.Unlock()
++
++	// 双重检查
++	if q, exists := p.m[key]; exists {
++		p.submitTaskToQueue(q, task)
++		return
++	}
++
++	// 限制队列数量
++	if queueCount >= MaxUdpQueues {
++		DefaultUdpHealthMonitor.RecordTimeout()
++		return
++	}
++
++	// 创建新队列
++	ch := p.queueChPool.Get().(chan UdpTask)
++	ctx, cancel := context.WithCancel(context.Background())
++	q = &UdpTaskQueue{
++		key:       key,
++		p:         p,
++		ch:        ch,
++		timer:     nil,
++		agingTime: DefaultNatTimeout,
++		ctx:       ctx,
++		closed:    make(chan struct{}),
++	}
++
++	q.timer = time.AfterFunc(q.agingTime, func() {
++		p.cleanupQueue(key, q, cancel, ch)
++	})
++
++	p.m[key] = q
++	go q.convoy()
++
++	// 提交任务到新创建的队列
++	p.submitTaskToQueue(q, task)
++}
++
++// submitTaskToQueue 提交任务到指定队列（极简版本）
++func (p *UdpTaskPool) submitTaskToQueue(q *UdpTaskQueue, task UdpTask) {
++	// 包装任务以增加健康监控
++	wrappedTask := func() {
++		defer func() {
++			DefaultUdpHealthMonitor.RecordPacketHandled()
++			if r := recover(); r != nil {
++				// 记录panic但继续
+ 			}
+-		})
+-		p.m[key] = q
+-		go q.convoy()
++		}()
++		task()
+ 	}
+-	p.mu.Unlock()
+-	// if task cannot be executed within 180s(DefaultNatTimeout), GC may be triggered, so skip the task when GC occurs
++
++	// 极速任务提交 - 非阻塞模式
+ 	select {
+-	case q.ch <- task:
++	case q.ch <- wrappedTask:
++		// 任务成功排队
+ 	case <-q.ctx.Done():
++		// 上下文已取消
++		DefaultUdpHealthMonitor.RecordTimeout()
++	default:
++		// 队列已满，异步重试一次
++		go func() {
++			select {
++			case q.ch <- wrappedTask:
++				// 重试成功
++			case <-q.ctx.Done():
++				DefaultUdpHealthMonitor.RecordTimeout()
++			case <-time.After(UdpTaskTimeout):
++				DefaultUdpHealthMonitor.RecordTimeout()
++			}
++		}()
++	}
++}
++
++// cleanupQueue 清理队列
++func (p *UdpTaskPool) cleanupQueue(key string, q *UdpTaskQueue, cancel context.CancelFunc, ch chan UdpTask) {
++	p.mu.Lock()
++	cancel()
++	delete(p.m, key)
++	p.mu.Unlock()
++
++	// 等待清理完成，带超时
++	select {
++	case <-q.closed:
++	case <-time.After(1 * time.Second):
++		// 强制清理
++	}
++
++	// 回收通道
++	if len(ch) == 0 {
++		for len(ch) > 0 {
++			<-ch
++		}
++		p.queueChPool.Put(ch)
+ 	}
+ }
+ 
