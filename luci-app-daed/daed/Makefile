@@ -80,6 +80,7 @@ define Build/Prepare
 		sed -i '/UDPHopInterval/d' component/outbound/dialer/dialer.go ; \
 		sed -i 's/, conf.Global.Mptcp//g' cmd/run.go ; \
 		wget -qO - https://github.com/daeuniverse/dae/commit/02cbbab.patch | patch -p1 ; \
+		wget -qO - https://github.com/daeuniverse/dae/commit/0517e24.patch | patch -p1 ; \
 		popd ; \
 		pushd $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/wing ; \
 		wget -qO - https://github.com/daeuniverse/dae-wing/commit/ca02961.patch | patch -p1 ; \
