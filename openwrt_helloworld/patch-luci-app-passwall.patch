@@ -125,7 +125,7 @@ index 31c6d12..b6a3511 100644
  
  s = m:section(NamedSection, arg[1], "nodes", "")
 diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/node_list.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/node_list.lua
-index 0cd8ad9..5659632 100644
+index c1e6440..49aa9e6 100644
 --- a/luci-app-passwall/luasrc/model/cbi/passwall/client/node_list.lua
 +++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/node_list.lua
 @@ -4,7 +4,6 @@ local sys = api.sys
@@ -222,7 +222,7 @@ index fccedeb..67e8456 100644
  o.rmempty = false
  
 diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/other.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/other.lua
-index d4f45b7..85608a8 100644
+index 17485c9..90d7939 100644
 --- a/luci-app-passwall/luasrc/model/cbi/passwall/client/other.lua
 +++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/other.lua
 @@ -11,7 +11,6 @@ local port_validate = function(self, value, t)
@@ -440,10 +440,10 @@ index eb5527e..133c295 100644
  		cursor: pointer;
  	}
 diff --git a/luci-app-passwall/po/zh-cn/passwall.po b/luci-app-passwall/po/zh-cn/passwall.po
-index 154b3e6..b590cfe 100644
+index afb3c3d..5a2800e 100644
 --- a/luci-app-passwall/po/zh-cn/passwall.po
 +++ b/luci-app-passwall/po/zh-cn/passwall.po
-@@ -1843,9 +1843,6 @@ msgstr "是否要恢复客户端默认配置？"
+@@ -1849,9 +1849,6 @@ msgstr "是否要恢复客户端默认配置？"
  msgid "Are you sure you want to restore the client to default settings?"
  msgstr "是否真的要恢复客户端默认配置？"
  
