@@ -103,7 +103,8 @@ sed -i '/shortcutfe/d' /usr/share/rpcd/ucode/luci
 sed -i '/offloading/ a\                shortcutfe: access('\''/etc/init.d/shortcut-fe'\'') == true,' /usr/share/rpcd/ucode/luci
 
 #默认开启 Packet Steering
-uci set network.globals.packet_steering=$(( $(uname -r | grep -q "^5\.15"; echo $?) ? 2 : 1 ))
+#uci set network.globals.packet_steering=$(( $(uname -r | grep -q "^5\.15"; echo $?) ? 2 : 1 ))
+uci set network.globals.packet_steering='1'
 uci set network.globals.steering_flows='128'
 uci commit network
 
