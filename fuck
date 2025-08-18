@@ -16,7 +16,7 @@ rm -rf `ls | egrep -v '(share)'`
 cd $OVERLAY_DIR/upper/usr/share
 rm -rf `ls | egrep -v '(unblockneteasemusic|passwall)'`
 cd $OVERLAY_DIR/upper/etc
-rm -rf `ls | egrep -v '(config|zerotier|daed|daed-next|smartdns|ssrplus|bench.log|shadow|openclash|fucked|autotimeset)'`
+rm -rf `ls | egrep -v '(config|zerotier|dae|daed|daed-next|smartdns|ssrplus|bench.log|shadow|openclash|fucked|autotimeset)'`
 cd $OVERLAY_DIR/upper/etc/config
-rm -rf `ls | egrep -v '(ap_modem|homeproxy|daed|daed-next|arpbind|autoreboot|ddns|firewall|jd-dailybonus|network|oled|openclash|passwall|serverchan|shadowsocksr|sqm|unblockneteasemusic|weburl|zerotier|vssr|zero|dhcp|mosdns|appfilter|fstab|watchcat)'`
+rm -rf `ls | egrep -v '(ap_modem|homeproxy|dae|daed|daed-next|arpbind|autoreboot|ddns|firewall|jd-dailybonus|network|oled|openclash|passwall|serverchan|shadowsocksr|sqm|unblockneteasemusic|weburl|zerotier|vssr|zero|dhcp|mosdns|appfilter|fstab|watchcat)'`
 sleep 5 && touch /etc/banner && reboot
