@@ -44,6 +44,31 @@ o.write = function()
     sys.exec("/etc/init.d/dae hot_reload")
 end
 
+-- Auto update settings
+enable = s:option(Flag, "subscribe_auto_update", translate("Enable Auto Subscribe Update"))
+enable.rmempty = false
+
+-- Update cycle
+weekly = s:option(ListValue, "subscribe_update_week_time", translate("Update Cycle"))
+weekly:value("*", translate("Every Day"))
+weekly:value("1", translate("Every Monday"))
+weekly:value("2", translate("Every Tuesday"))
+weekly:value("3", translate("Every Wednesday"))
+weekly:value("4", translate("Every Thursday"))
+weekly:value("5", translate("Every Friday"))
+weekly:value("6", translate("Every Saturday"))
+weekly:value("7", translate("Every Sunday"))
+weekly.default = "*"
+weekly:depends('subscribe_auto_update', '1')
+
+-- Update time
+daily = s:option(ListValue, "subscribe_update_day_time", translate("Update Time (Every Day)"))
+for t = 0, 23 do
+  daily:value(t, t..":00")
+end
+daily.default = 0
+daily:depends('subscribe_auto_update', '1')
+
 -- Global configuration editor
 o = s:option(TextValue, "globalconf", translate("Global Configuration"), translate("Correctly configure the include field for separate-config to work, or enter complete configuration here (other sub-pages won't need configuration and won't take effect)."))
 o.rmempty = true

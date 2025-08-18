@@ -28,10 +28,11 @@ function index()
 end
 
 function act_status()
-	local e = {}
-	e.running = sys.call("pgrep -x /usr/bin/dae >/dev/null") == 0
-	http.prepare_content("application/json")
-	http.write_json(e)
+	local sys  = require "luci.sys"
+	local e = { }
+	e.running = sys.call("pidof dae >/dev/null") == 0
+	luci.http.prepare_content("application/json")
+	luci.http.write_json(e)
 end
 
 function get_log()

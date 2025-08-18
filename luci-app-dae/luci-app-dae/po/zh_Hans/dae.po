@@ -63,3 +63,12 @@ msgstr "日志"
 
 msgid "Clear logs"
 msgstr "清空日志"
+
+msgid "Enable Auto Subscribe Update"
+msgstr "启用订阅自动更新"
+
+msgid "Update Cycle"
+msgstr "更新周期"
+
+msgid "Update Time (Every Day)"
+msgstr "更新时间（每天）"

@@ -9,6 +9,21 @@ extra_command "hot_reload" "Hot-reload service"
 CONF="dae"
 PROG="/usr/bin/dae"
 LOG="/var/log/dae/dae.log"
+CRON_FILE="/etc/crontabs/root"
+RANDOM_SEED=$RANDOM
+RANDOM_NUM=$((RANDOM_SEED % 10 + 1))
+
+setcron() {
+  touch $CRON_FILE
+  sed -i '/dae hot_reload/d' $CRON_FILE 2>/dev/null
+  [ "$(uci -q get dae.config.subscribe_auto_update)" -eq 1 ] && echo "${RANDOM_NUM} $(uci -q get dae.config.subscribe_update_day_time) * * $(uci -q get dae.config.subscribe_update_week_time) /etc/init.d/dae hot_reload >/dev/null 2>&1" >>$CRON_FILE
+  crontab $CRON_FILE
+}
+
+delcron() {
+  sed -i '/dae hot_reload/d' $CRON_FILE 2>/dev/null
+  crontab $CRON_FILE
+}
 
 set_chmod_640() {
   chmod -R 640 /etc/dae/
@@ -39,11 +54,13 @@ dellocaluse() {
 start_service() {
 	set_chmod_640
 	setlocaluse
+	delcron
 	config_load "$CONF"
 
 	local enabled
 	config_get_bool enabled "config" "enabled" "0"
 	[ "$enabled" -eq "1" ] || return 1
+	setcron
 
 	local config_file
 	config_get config_file "config" "config_file" "/etc/dae/config.dae"
