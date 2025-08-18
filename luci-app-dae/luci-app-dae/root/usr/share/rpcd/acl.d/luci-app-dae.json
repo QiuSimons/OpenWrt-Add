@@ -1,0 +1,23 @@
+{
+	"luci-app-dae": {
+		"description": "Grant access for luci-app-dae",
+		"read": {
+			"uci": [ "dae" ],
+			"file": [
+				"/etc/dae/config.dae",
+				"/etc/dae/config.d/dns.dae",
+				"/etc/dae/config.d/node.dae",
+				"/etc/dae/config.d/route.dae"
+			]
+		},
+		"write": {
+			"uci": [ "dae" ],
+			"file": [
+				"/etc/dae/config.dae",
+				"/etc/dae/config.d/dns.dae",
+				"/etc/dae/config.d/node.dae",
+				"/etc/dae/config.d/route.dae"
+			]
+		}
+	}
+}

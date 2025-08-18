@@ -1,0 +1,65 @@
+msgid "DAE"
+msgstr ""
+
+msgid "RUNNING"
+msgstr "运行中"
+
+msgid "NOT RUNNING"
+msgstr "未运行"
+
+msgid "Collecting data..."
+msgstr "收集数据..."
+
+msgid "Enabled"
+msgstr "启用"
+
+msgid "Reload Service"
+msgstr "重载服务"
+
+msgid "Reload service to apply configuration."
+msgstr "重载服务以使配置文件生效。"
+
+msgid "Global Settings"
+msgstr "全局设置"
+
+msgid "DNS Settings"
+msgstr "DNS 设置"
+
+msgid "Node Settings"
+msgstr "节点设置"
+
+msgid "Routing Settings"
+msgstr "路由设置"
+
+msgid "Global Configuration"
+msgstr "全局配置"
+
+msgid "DNS Configuration"
+msgstr "DNS配置"
+
+msgid "Node Configuration"
+msgstr "节点配置"
+
+msgid "Route Configuration"
+msgstr "路由配置"
+
+msgid "Configure global settings for DAE."
+msgstr "调整DAE的全局设置"
+
+msgid "Configure DNS settings for DAE."
+msgstr "调整DAE的DNS设置"
+
+msgid "Configure nodes and groups for DAE."
+msgstr "调整DAE的节点设置"
+
+msgid "Configure routing rules for DAE."
+msgstr "调整DAE的路由设置"
+
+msgid "Correctly configure the include field for separate-config to work, or enter complete configuration here (other sub-pages won't need configuration and won't take effect)."
+msgstr "需要正确配置的include字段以使得separate-config生效，或者在此处填入完整配置，则其他子分页无需配置，也不会生效。"
+
+msgid "Logs"
+msgstr "日志"
+
+msgid "Clear logs"
+msgstr "清空日志"
