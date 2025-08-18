@@ -25,6 +25,7 @@ subscription {
 group {
     my_group {
         filter: subtag(my_sub) && !name(keyword: 'ExpireAt:')
+        filter: subtag(my_sub2)
         policy: min_moving_avg
     }
     local_group {

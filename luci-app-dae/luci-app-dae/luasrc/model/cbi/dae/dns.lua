@@ -15,22 +15,21 @@ end
 -- Check if dns config file exists, create if not
 local dns_file = "/etc/dae/config.d/dns.dae"
 if not fs.access(dns_file) then
-    fs.writefile(dns_file, [[dns {
+    fs.writefile(dns_file, [[# dns.dae
+dns {
     upstream {
-        alidns: 'udp://dns.alidns.com:53'
-        googledns: 'tcp+udp://dns.google:53'
+        localdns:'udp://127.0.0.1:53'
+        overseadns:'udp://dns.google:53'
     }
-
     routing {
         request {
-            qname(geosite:category-ads) -> reject
-            qname(geosite:category-ads-all) -> reject
-            fallback: alidns
+            qtype(https) -> reject
+            qname(geosite:gfw) -> overseadns
+            fallback:localdns
         }
         response {
-            upstream(googledns) -> accept
-            !qname(geosite:cn) && ip(geoip:private) -> googledns
-            fallback: accept
+            upstream(localdns) && !ip(geoip:cn) -> overseadns
+            fallback:accept
         }
     }
 }]]
