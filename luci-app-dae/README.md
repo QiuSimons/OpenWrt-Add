@@ -14,15 +14,14 @@
 ### 1. Get Source
 
 ```bash
-git clone https://github.com/sbwml/luci-app-dae package/dae
-git clone https://github.com/sbwml/v2ray-geodata package/v2ray-geodata
+git clone https://github.com/QiuSimons/luci-app-dae package/dae
 ```
 
-### 2. Install clang-13, refer to https://apt.llvm.org
+### 2. Install clang, refer to https://apt.llvm.org
 
 ```bash
 apt-get update
-apt-get install -y clang-13
+apt-get install -y clang
 ```
 
 ### 3. Change OpenWrt Source (Requirements for DAE to work)
@@ -40,17 +39,6 @@ apt-get install -y clang-13
   CONFIG_KERNEL_XDP_SOCKETS=y
   ```
 
-- Patch cgroupfs-mount: use cgroupfs2 (Required when docker is compiled.)
-  ```bash
-  # fix unmount hierarchical mount
-  pushd feeds/packages
-      curl -s https://raw.githubusercontent.com/sbwml/luci-app-dae/main/.cgroupfs/cgroupfs-mount.init.patch | patch -p1
-  popd
-  # cgroupfs v2
-  mkdir -p feeds/packages/utils/cgroupfs-mount/patches
-  curl -s https://raw.githubusercontent.com/sbwml/luci-app-dae/main/.cgroupfs/900-add-cgroupfs2.patch > feeds/packages/utils/cgroupfs-mount/patches/900-add-cgroupfs2.patch
-  ```
-
 ### 4. Build luci-app-dae
 
 ```bash
@@ -60,4 +48,4 @@ make package/dae/luci-app-dae/compile V=s # build luci-app-dae
 
 -----------
 
-![dae](https://github.com/sbwml/luci-app-dae/assets/16485166/df81cd85-2957-4bc7-bb57-c561766d7e67)
+![dae](https://raw.githubusercontent.com/QiuSimons/luci-app-dae/refs/heads/next/image.jpg)
