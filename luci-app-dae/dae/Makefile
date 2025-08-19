@@ -77,6 +77,10 @@ DAE_CFLAGS:= \
 
 define Build/Compile
 	( \
+		pushd $(PKG_BUILD_DIR) ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/bdea911.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/4248b61.patch | patch -p1 -N || true ; \
+		popd ; \
 		export \
 		$(GO_GENERAL_BUILD_CONFIG_VARS) \
 		$(GO_PKG_BUILD_CONFIG_VARS) \
