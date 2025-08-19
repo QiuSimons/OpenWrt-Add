@@ -65,7 +65,7 @@ define Package/dae/description
 endef
 
 define Package/dae/conffiles
-/etc/dae/config.dae
+/etc/dae/
 /etc/config/dae
 endef
 
