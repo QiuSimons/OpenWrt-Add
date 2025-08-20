@@ -1,0 +1,22 @@
+#!/bin/sh
+
+[ "${ACTION}" = "ifup" ] || exit 0
+
+DEVICE=$(logread | grep "link is up" | tail -n 1 | awk -F "'" '{print $2}')
+DEVICE_TYPE=$(ip link show dev "$DEVICE")
+
+case "$DEVICE_TYPE" in
+  *"link/ether"*)
+    (
+      LOCK_FILE="/tmp/lock/dae_hotplug_lock"
+      if [ -f "$LOCK_FILE" ]; then
+        exit 1
+      else
+        echo $$ > "$LOCK_FILE" 2>/dev/null
+        trap 'rm -f "$LOCK_FILE"' EXIT
+        sleep 60
+        /etc/init.d/dae hot_reload 2>&1
+      fi
+    ) &
+    ;;
+esac
