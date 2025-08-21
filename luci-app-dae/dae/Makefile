@@ -5,12 +5,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2025.08.19
+PKG_VERSION:=2025.08.21
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=e64a4e2c1e2b2d44b32b146e6cdec9486d820885
+PKG_SOURCE_VERSION:=64668de04df02a89c87ef738ccd6b47e28533f58
 PKG_SOURCE_URL:=https://github.com/LostAttractor/dae.git
 PKG_MIRROR_HASH:=skip
 
@@ -79,7 +79,6 @@ define Build/Compile
 	( \
 		pushd $(PKG_BUILD_DIR) ; \
 		wget -qO - https://github.com/QiuSimons/dae/commit/bdea911.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/4248b61.patch | patch -p1 -N || true ; \
 		popd ; \
 		export \
 		$(GO_GENERAL_BUILD_CONFIG_VARS) \
