@@ -37,7 +37,7 @@ Signed-off-by: Álvaro Fernández Rojas <noltari@gmail.com>
  #include <linux/netdevice.h>
  #include <linux/etherdevice.h>
  #include <linux/delay.h>
-@@ -5046,6 +5047,38 @@ rtl8125_link_down_patch(struct net_devic
+@@ -5052,6 +5053,38 @@ rtl8125_link_down_patch(struct net_devic
  #endif
  }
  
@@ -76,7 +76,7 @@ Signed-off-by: Álvaro Fernández Rojas <noltari@gmail.com>
  static void
  _rtl8125_check_link_status(struct net_device *dev, unsigned int link_state)
  {
-@@ -5058,11 +5091,18 @@ _rtl8125_check_link_status(struct net_de
+@@ -5064,11 +5097,18 @@ _rtl8125_check_link_status(struct net_de
          if (link_state == R8125_LINK_STATE_ON) {
                  rtl8125_link_on_patch(dev);
  
