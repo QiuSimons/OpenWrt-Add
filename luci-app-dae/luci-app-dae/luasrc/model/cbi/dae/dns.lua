@@ -41,8 +41,13 @@ s.addremove = false
 s.anonymous = true
 
 o = s:option(Button, "_reload", translate("Reload Service"), translate("Reload service to apply configuration."))
+o.inputstyle = "reload"
 o.write = function()
-    sys.exec("/etc/init.d/dae hot_reload")
+    -- 使用luci.sys.call替代sys.exec，它不会阻塞界面
+    luci.sys.call("/etc/init.d/dae hot_reload >/dev/null 2>&1 &")
+    
+    -- 立即显示操作成功的提示信息
+    luci.http.redirect(luci.dispatcher.build_url("admin", "services", "dae", "dns") .. "?reload=1")
 end
 
 -- DNS configuration editor

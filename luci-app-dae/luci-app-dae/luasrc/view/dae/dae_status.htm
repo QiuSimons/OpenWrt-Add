@@ -16,6 +16,33 @@
 			}
 		}
 	);
+// 检查URL参数，显示reload成功的提示
+window.addEventListener('load', function() {
+    var urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('reload')) {
+        var notification = document.createElement('div');
+        notification.className = 'alert alert-success';
+        notification.style = 'margin-top: 10px;';
+        notification.textContent = '<%:Service reloaded successfully%>';
+        
+        var container = document.querySelector('.cbi-section');
+        if (container) {
+            container.parentNode.insertBefore(notification, container);
+            
+            // 3秒后自动移除提示
+            setTimeout(function() {
+                notification.style.opacity = '0';
+                notification.style.transition = 'opacity 0.5s ease';
+                setTimeout(function() {
+                    notification.remove();
+                }, 500);
+            }, 3000);
+        }
+        
+        // 从URL中移除参数，避免刷新页面再次显示提示
+        history.replaceState({}, document.title, window.location.pathname);
+    }
+});
 //]]></script>
 
 <style>.mar-10 {margin-left: 50px; margin-right: 10px;}</style>

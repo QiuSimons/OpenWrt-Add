@@ -64,6 +64,9 @@ msgstr "日志"
 msgid "Clear logs"
 msgstr "清空日志"
 
+msgid "Service reloaded successfully"
+msgstr "服务重载成功"
+
 msgid "Enable Auto Subscribe Update"
 msgstr "启用订阅自动更新"
 
