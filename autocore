@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/sh /etc/rc.common
 
 START=99
 
@@ -17,7 +17,6 @@ start() {
         ethtool -K "$1" "$2" on 2>/dev/null || :
     }
 
-    # 遍历物理接口
     for NIC_PATH in /sys/class/net/*; do
         NIC=$(basename "$NIC_PATH")
 
