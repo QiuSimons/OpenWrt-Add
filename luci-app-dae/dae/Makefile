@@ -32,36 +32,20 @@ GO_PKG_TARGET_VARS:=$(filter-out CGO_ENABLED=%,$(GO_PKG_TARGET_VARS)) \
 	CGO_ENABLED=1 \
 	GOEXPERIMENT=greenteagc
 
+PGO_PROFILE:=$(CURDIR)/pprof/default.pgo
+
 include $(INCLUDE_DIR)/package.mk
 include $(INCLUDE_DIR)/bpf.mk
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
-define Package/dae/Default
+define Package/dae
   SECTION:=net
   CATEGORY:=Network
   SUBMENU:=Web Servers/Proxies
-  URL:=https://github.com/daeuniverse/dae
-endef
-
-define Package/dae
-  $(call Package/dae/Default)
   TITLE:=A lightweight and high-performance transparent proxy solution
-  # You need enable KERNEL_DEBUG_INFO_BTF and KERNEL_BPF_EVENTS
   DEPENDS:=$(GO_ARCH_DEPENDS) $(BPF_DEPENDS) \
     +ca-bundle +kmod-sched-core +kmod-sched-bpf +kmod-xdp-sockets-diag \
     +kmod-veth +v2ray-geoip +v2ray-geosite
-endef
-
-define Package/dae/description
-  dae, means goose, is a lightweight and high-performance transparent
-  proxy solution.
-
-  In order to improve the traffic diversion performance as much as possible,
-  dae runs the transparent proxy and traffic diversion suite in the linux
-  kernel by eBPF. Therefore, we have the opportunity to make the direct
-  traffic bypass the forwarding by proxy application and achieve true direct
-  traffic through. Under such a magic trick, there is almost no performance
-  loss and additional resource consumption for direct traffic.
 endef
 
 define Package/dae/conffiles
@@ -74,6 +58,11 @@ DAE_CFLAGS:= \
 	-DMAX_MATCH_SET_LEN=1024 \
 	-I$(BPF_HEADERS_DIR)/tools/lib \
 	-I$(BPF_HEADERS_DIR)/arch/$(BPF_KARCH)/include/asm/mach-generic
+	
+define Build/Prepare
+	$(call Build/Prepare/Default)
+	[ -f "$(PGO_PROFILE)" ] && $(CP) "$(PGO_PROFILE)" "$(PKG_BUILD_DIR)/default.pgo" || true
+endef
 
 define Build/Compile
 	( \
@@ -97,13 +86,10 @@ endef
 
 define Package/dae/install
 	$(call GoPackage/Package/Install/Bin,$(1))
-
 	$(INSTALL_DIR) $(1)/etc/dae/
 	$(INSTALL_CONF) $(PKG_BUILD_DIR)/example.dae $(1)/etc/dae/
-
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) $(CURDIR)/files/dae.config $(1)/etc/config/dae
-
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) $(CURDIR)/files/dae.init $(1)/etc/init.d/dae
 endef
