@@ -737,7 +737,7 @@ select[multiple="multiple"] {
   display: flex;
   flex-direction: column;
   align-items: center;
-  max-width: 26rem;
+  max-width: 28rem;
 }
 .login-page .login-container .login-form .brand {
   display: flex;
