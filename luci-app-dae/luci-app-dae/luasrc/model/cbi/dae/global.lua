@@ -29,6 +29,7 @@ global {
     enable_local_tcp_fast_redirect:"true"
     auto_config_kernel_parameter:"true"
     sniffing_timeout:"300ms"
+    no_connectivity_behavior:"direct"
 }]])
 end
 
