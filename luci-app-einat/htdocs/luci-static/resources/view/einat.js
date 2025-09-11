@@ -130,9 +130,9 @@ return view.extend({
 		o.default = o.disabled;
 		o.rmempty = false;
 
-		//o = s.option(form.Flag, 'nat66', _('NAT66'));
-		//o.default = o.disabled;
-		//o.rmempty = false;
+		o = s.option(form.Flag, 'nat66', _('NAT66'));
+		o.default = o.disabled;
+		o.rmempty = false;
 
 		o = s.option(widgets.DeviceSelect, 'ifname', _('External interface'));
 		o.multiple = false;
