@@ -88,21 +88,22 @@ uci commit firewall
         uci set firewall.@defaults[0].fullcone='0'
         uci set firewall.@defaults[0].brcmfullcone='0'
         uci commit firewall
-        
-        . /lib/functions/network.sh
+
         retry=0
-        while [ "$retry" -lt 30 ]; do
-            network_find_wan wanif
-            network_get_device ifdev "$wanif"
-            [ -n "$ifdev" ] && break
-            retry=$((retry + 1))
-            sleep 2
+        wanif=""
+        while [ "$retry" -lt 30 ] && [ -z "$wanif" ]; do
+            wanif=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
+            if [ -z "$wanif" ]; then
+                retry=$((retry + 1))
+                sleep 1
+            fi
         done
-        [ -n "$ifdev" ] && {
-            uci set einat.config.ifname="$ifdev"
+
+        if [ -n "$wanif" ]; then
+            uci set einat.config.ifname="$wanif"
             uci set einat.config.enabled='1'
             uci commit einat
-        }
+        fi
     fi
 ) &
 
