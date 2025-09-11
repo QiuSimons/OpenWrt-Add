@@ -10,22 +10,6 @@ uci commit fstab
 
 #Argon 主题
 ln -sf "/www/luci-static/argon/favicon.ico" "/www/favicon.ico"
-ln -sf "/www/luci-static/argon/icon/apple-icon-144x144.png" "/www/apple-touch-icon-precomposed.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-144x144.png" "/www/apple-touch-icon.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-144x144.png" "/www/apple-touch-icon-152x152-precomposed.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-144x144.png" "/www/apple-touch-icon-152x152.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-144x144.png" "/www/apple-touch-icon-144x144-precomposed.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-144x144.png" "/www/apple-touch-icon-144x144.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-144x144.png" "/www/apple-touch-icon-120x120-precomposed.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-144x144.png" "/www/apple-touch-icon-120x120.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-144x144.png" "/www/apple-touch-icon-114x114-precomposed.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-144x144.png" "/www/apple-touch-icon-114x114.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-72x72.png" "/www/apple-touch-icon-72x72-precomposed.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-72x72.png" "/www/apple-touch-icon-72x72.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-60x60.png" "/www/apple-touch-icon-60x60-precomposed.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-60x60.png" "/www/apple-touch-icon-60x60.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-60x60.png" "/www/apple-touch-icon-57x57-precomposed.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-60x60.png" "/www/apple-touch-icon-57x57.png"
 uci set luci.main.mediaurlbase='/luci-static/argon'
 uci commit luci
 uci set argon.@global[0].bing_background='1'
@@ -97,6 +81,22 @@ for key in $(uci show firewall | grep fullcone6 | cut -d '=' -f 1); do
 done
 uci commit firewall
 /etc/init.d/autocore restart
+
+#einat
+if [ -f /etc/init.d/einat ]; then
+    uci set firewall.@defaults[0].fullcone='0'
+    uci set firewall.@defaults[0].brcmfullcone='0'
+    uci commit firewall
+
+    uci set einat.config.enabled='1'
+
+    . /lib/functions/network.sh
+    network_find_wan wanif
+    network_get_device ifdev "$wanif"
+
+    uci set einat.config.ifname="$ifdev"
+    uci commit einat
+fi
 
 #SFE
 sed -i '/shortcutfe/d' /usr/share/rpcd/ucode/luci
