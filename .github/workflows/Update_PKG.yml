@@ -45,6 +45,10 @@ jobs:
           git clone -b next --depth 1 https://github.com/QiuSimons/luci-app-dae
           git clone --depth 1 https://github.com/QiuSimons/openwrt-natflow
           git clone --depth 1 https://github.com/muink/openwrt-einat-ebpf
+          pushd openwrt-einat-ebpf
+          wget -qO - https://github.com/muink/openwrt-einat-ebpf/commit/66d09a2.patch | patch -p1
+          wget -qO - https://github.com/muink/openwrt-einat-ebpf/commit/aa766bd.patch | patch -p1
+          popd
           git clone --depth 1 https://github.com/muink/luci-app-einat
           git clone --depth 1 https://github.com/timsaya/openwrt-bandix
           git clone --depth 1 https://github.com/timsaya/luci-app-bandix
