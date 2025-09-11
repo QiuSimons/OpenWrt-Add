@@ -16,7 +16,7 @@ jobs:
 
       - name: Update Makefile
         run: |
-          rm -rf openwrt-einat-ebpf luci-app-einat nft-fullcone shortcut-fe luci-app-airconnect feeds_packages_lang_node-prebuilt package_kernel_r8125 OpenAppFilter luci-app-mosdns packages_new_nat6 luci-app-daed openwrt-r8168 luci-theme-argon luci-app-ramfree luci-app-argon-config luci-app-dnsfilter luci-theme-edge luci-app-xlnetacc luci-app-mentohust MentoHUST-OpenWrt-ipk luci-app-oled homeproxy OpenClash luci-app-wechatpush luci-app-v2raya luci-app-natmapt openwrt-natmapt openwrt-stuntman luci-app-unblockneteasemusic OpenWrt-mihomo wrtbwmon luci-app-wrtbwmon openwrt_helloworld openwrt_pkgs openwrt-natflow autocore-arm luci-app-taskplan luci-app-partexp luci-app-frps luci-app-frpc luci-app-uugamebooster uugamebooster luci-app-ap-modem luci-app-arpbind imm_pkg openwrt-qBittorrent luci-app-filemanager luci-app-dae
+          rm -rf openwrt-bandix luci-app-bandix openwrt-einat-ebpf luci-app-einat nft-fullcone shortcut-fe luci-app-airconnect feeds_packages_lang_node-prebuilt package_kernel_r8125 OpenAppFilter luci-app-mosdns packages_new_nat6 luci-app-daed openwrt-r8168 luci-theme-argon luci-app-ramfree luci-app-argon-config luci-app-dnsfilter luci-theme-edge luci-app-xlnetacc luci-app-mentohust MentoHUST-OpenWrt-ipk luci-app-oled homeproxy OpenClash luci-app-wechatpush luci-app-v2raya luci-app-natmapt openwrt-natmapt openwrt-stuntman luci-app-unblockneteasemusic OpenWrt-mihomo wrtbwmon luci-app-wrtbwmon openwrt_helloworld openwrt_pkgs openwrt-natflow autocore-arm luci-app-taskplan luci-app-partexp luci-app-frps luci-app-frpc luci-app-uugamebooster uugamebooster luci-app-ap-modem luci-app-arpbind imm_pkg openwrt-qBittorrent luci-app-filemanager luci-app-dae
           git clone --depth 1 https://git.cooluc.com/sbwml/nft-fullcone
           git clone --depth 1 https://git.cooluc.com/sbwml/shortcut-fe
           git clone --depth 1 https://github.com/sbwml/luci-app-airconnect
@@ -46,6 +46,8 @@ jobs:
           git clone --depth 1 https://github.com/QiuSimons/openwrt-natflow
           git clone --depth 1 https://github.com/muink/openwrt-einat-ebpf
           git clone --depth 1 https://github.com/muink/luci-app-einat
+          git clone --depth 1 https://github.com/timsaya/openwrt-bandix
+          git clone --depth 1 https://github.com/timsaya/luci-app-bandix
           git clone --depth 1 https://github.com/BROBIRD/openwrt-r8168
           git clone -b master https://github.com/jerrykuku/luci-theme-argon
           #git -C ./luci-theme-argon checkout 88cd27c
