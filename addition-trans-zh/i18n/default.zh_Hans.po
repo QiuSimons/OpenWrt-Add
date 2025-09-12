@@ -138,3 +138,9 @@ msgstr "级别:"
 
 msgid "including:"
 msgstr "包含:"
+
+msgid "einat-ebpf"
+msgstr "eBPF开放NAT"
+
+msgid "eBPF-based Endpoint-Independent NAT"
+msgstr "基于eBPF实现的开放式NAT"
