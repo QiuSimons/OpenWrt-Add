@@ -2,8 +2,8 @@
 
 . "${IPKG_INSTROOT}/lib/functions/network.sh"
 
-START=60
-STOP=60
+START=99
+STOP=99
 USE_PROCD=1
 
 # einat
