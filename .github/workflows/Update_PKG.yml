@@ -48,6 +48,7 @@ jobs:
           pushd openwrt-einat-ebpf
           wget -qO - https://github.com/muink/openwrt-einat-ebpf/commit/66d09a2.patch | patch -p1
           wget -qO - https://github.com/muink/openwrt-einat-ebpf/commit/aa766bd.patch | patch -p1
+          sed -i 's/=60/=99/g' ./files/einat.init
           popd
           git clone --depth 1 https://github.com/muink/luci-app-einat
           pushd luci-app-einat
