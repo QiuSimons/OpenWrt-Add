@@ -88,6 +88,8 @@ uci commit firewall
         uci set firewall.@defaults[0].fullcone='0'
         uci set firewall.@defaults[0].brcmfullcone='0'
         uci commit firewall
+        uci set einat.config.enabled='0'
+        uci commit einat
 
         retry=0
         wanif=""
@@ -100,6 +102,7 @@ uci commit firewall
         done
 
         if [ -n "$wanif" ]; then
+            sleep 60
             uci set einat.config.ifname="$wanif"
             uci set einat.config.enabled='1'
             uci commit einat
