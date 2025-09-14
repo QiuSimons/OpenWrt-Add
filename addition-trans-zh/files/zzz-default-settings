@@ -110,6 +110,17 @@ uci commit firewall
     fi
 ) &
 
+#dae
+(
+    enabled=$(uci get dae.config.enabled 2>/dev/null)
+    [ "$enabled" = "1" ] || exit 0
+
+    sleep 90
+    if ! ps | grep '[d]ae' >/dev/null 2>&1; then
+        /etc/init.d/dae start
+    fi
+) &
+
 #SFE
 sed -i '/shortcutfe/d' /usr/share/rpcd/ucode/luci
 sed -i '/offloading/ a\                shortcutfe: access('\''/etc/init.d/shortcut-fe'\'') == true,' /usr/share/rpcd/ucode/luci
