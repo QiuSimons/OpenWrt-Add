@@ -108,7 +108,7 @@ nohup sh -c '
             fi
         fi
     fi
-' &
+' >/dev/null 2>&1 &
 
 
 # dae
@@ -126,7 +126,7 @@ nohup sh -c '
     if ! ps | grep "[d]ae" >/dev/null 2>&1; then
         /etc/init.d/dae start
     fi
-' &
+' >/dev/null 2>&1 &
 
 #SFE
 sed -i '/shortcutfe/d' /usr/share/rpcd/ucode/luci
