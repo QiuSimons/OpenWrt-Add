@@ -82,12 +82,12 @@ done
 uci commit firewall
 /etc/init.d/autocore restart
 
-#einat
-(
+#einat(
     if [ -f /etc/init.d/einat ]; then
         uci set firewall.@defaults[0].fullcone='0'
         uci set firewall.@defaults[0].brcmfullcone='0'
         uci commit firewall
+
         uci set einat.config.enabled='0'
         uci commit einat
 
@@ -102,10 +102,14 @@ uci commit firewall
         done
 
         if [ -n "$wanif" ]; then
-            sleep 60
+            sleep 100
             uci set einat.config.ifname="$wanif"
             uci set einat.config.enabled='1'
             uci commit einat
+
+            if ! ps | grep '[e]inat' >/dev/null 2>&1; then
+                /etc/init.d/einat start
+            fi
         fi
     fi
 ) &
