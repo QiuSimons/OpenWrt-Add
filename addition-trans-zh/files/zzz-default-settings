@@ -82,51 +82,52 @@ done
 uci commit firewall
 /etc/init.d/autocore restart
 
-# einat
-nohup sh -c '
-    if [ -f /etc/init.d/einat ]; then
-        uci set firewall.@defaults[0].fullcone="0"
-        uci set firewall.@defaults[0].brcmfullcone="0"
-        uci commit firewall
+# einat 启动并确认
+(
+if [ -f /etc/init.d/einat ]; then
+    uci set firewall.@defaults[0].fullcone="0"
+    uci set firewall.@defaults[0].brcmfullcone="0"
+    uci commit firewall
 
-        uci set einat.config.enabled="0"
-        uci commit einat
-
-        retry=0
-        wanif=""
-        while [ "$retry" -lt 30 ] && [ -z "$wanif" ]; do
-            wanif=$(ip route show default 2>/dev/null | awk "{print \$5; exit}")
-            [ -z "$wanif" ] && retry=$((retry + 1)) && sleep 1
-        done
-
-        if [ -n "$wanif" ]; then
-            uci set einat.config.ifname="$wanif"
-            uci set einat.config.enabled="1"
-            uci commit einat
-            if ! ps | grep "[e]inat" >/dev/null 2>&1; then
-                /etc/init.d/einat start
-            fi
-        fi
-    fi
-' >/dev/null 2>&1 &
-
-
-# dae
-nohup sh -c '
-    enabled=$(uci get dae.config.enabled 2>/dev/null)
-    [ "$enabled" = "1" ] || exit 0
+    uci set einat.config.enabled="0"
+    uci commit einat
 
     retry=0
     wanif=""
     while [ "$retry" -lt 30 ] && [ -z "$wanif" ]; do
-        wanif=$(ip route show default 2>/dev/null | awk "{print \$5; exit}")
+        wanif=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
         [ -z "$wanif" ] && retry=$((retry + 1)) && sleep 1
     done
 
-    if ! ps | grep "[d]ae" >/dev/null 2>&1; then
-        /etc/init.d/dae start
+    if [ -n "$wanif" ]; then
+        uci set einat.config.ifname="$wanif"
+        uci set einat.config.enabled="1"
+        uci commit einat
+
+        max_retry=10
+        count=0
+        until ps | grep "[e]inat" >/dev/null 2>&1 || [ "$count" -ge "$max_retry" ]; do
+            /etc/init.d/einat start
+            count=$((count + 1))
+            sleep 1
+        done
     fi
-' >/dev/null 2>&1 &
+fi
+) >/dev/null 2>&1 &
+
+#dae
+(
+enabled=$(uci get dae.config.enabled 2>/dev/null)
+[ "$enabled" = "1" ] || exit 0
+
+max_retry=10
+count=0
+until ps | grep "[d]ae" >/dev/null 2>&1 || [ "$count" -ge "$max_retry" ]; do
+    /etc/init.d/dae start
+    count=$((count + 1))
+    sleep 1
+done
+) >/dev/null 2>&1 &
 
 #SFE
 sed -i '/shortcutfe/d' /usr/share/rpcd/ucode/luci
