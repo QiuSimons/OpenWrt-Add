@@ -96,7 +96,10 @@ if [ -f /etc/init.d/einat ]; then
     wanif=""
     while [ "$retry" -lt 30 ] && [ -z "$wanif" ]; do
         wanif=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
-        [ -z "$wanif" ] && retry=$((retry + 1)) && sleep 1
+        if [ -z "$wanif" ]; then
+            retry=`expr $retry + 1`
+            sleep 1
+        fi
     done
 
     if [ -n "$wanif" ]; then
@@ -106,25 +109,35 @@ if [ -f /etc/init.d/einat ]; then
 
         max_retry=10
         count=0
-        until ps | grep "[e]inat" >/dev/null 2>&1 || [ "$count" -ge "$max_retry" ]; do
+        until ps | grep "[e]inat" >/dev/null 2>&1
+        do
             /etc/init.d/einat start
-            count=$((count + 1))
+            count=`expr $count + 1`
+            if [ "$count" -ge "$max_retry" ]; then
+                break
+            fi
             sleep 1
         done
     fi
 fi
 ) >/dev/null 2>&1 &
 
-#dae
+# dae 启动并确认
 (
 enabled=$(uci get dae.config.enabled 2>/dev/null)
-[ "$enabled" = "1" ] || exit 0
+if [ "$enabled" != "1" ]; then
+    exit 0
+fi
 
 max_retry=10
 count=0
-until ps | grep "[d]ae" >/dev/null 2>&1 || [ "$count" -ge "$max_retry" ]; do
+until ps | grep "[d]ae" >/dev/null 2>&1
+do
     /etc/init.d/dae start
-    count=$((count + 1))
+    count=`expr $count + 1`
+    if [ "$count" -ge "$max_retry" ]; then
+        break
+    fi
     sleep 1
 done
 ) >/dev/null 2>&1 &
