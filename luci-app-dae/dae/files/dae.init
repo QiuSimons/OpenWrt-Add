@@ -86,9 +86,6 @@ start_service() {
 
 stop_service() {
     rm -rf "$LOG"
-    procd_kill "$CONF" TERM || true
-    sleep 1
-    procd_kill "$CONF" KILL || true
 }
 
 service_triggers() {
