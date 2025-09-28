@@ -6,9 +6,10 @@
 # 从UCI配置读取端口号，如果读取失败则使用默认端口8686
 BANDIX_PORT=$(uci get bandix.general.port 2>/dev/null || echo "8686")
 readonly BANDIX_API_BASE="http://127.0.0.1:$BANDIX_PORT"
-readonly BANDIX_DEVICES_API="$BANDIX_API_BASE/api/devices"
-readonly BANDIX_LIMIT_API="$BANDIX_API_BASE/api/limit"
-readonly BANDIX_METRICS_API="$BANDIX_API_BASE/api/metrics"
+readonly BANDIX_DEVICES_API="$BANDIX_API_BASE/api/traffic/devices"
+readonly BANDIX_LIMITS_API="$BANDIX_API_BASE/api/traffic/limits"
+readonly BANDIX_METRICS_API="$BANDIX_API_BASE/api/traffic/metrics"
+readonly BANDIX_CONNECTION_API="$BANDIX_API_BASE/api/connection/devices"
 readonly DHCP_LEASES_FILE="/tmp/dhcp.leases"
 readonly BANDIX_TMP_DIR="/tmp/bandix"
 
@@ -101,12 +102,42 @@ get_device_status() {
 		return
 	fi
 	
+	# 检查API状态
+	local api_status
+	json_get_var api_status status
+	if [ "$api_status" != "success" ]; then
+		json_init
+		json_add_object "status"
+		json_add_boolean "success" 0
+		json_add_string "error" "API returned failure status"
+		json_close_object
+		json_add_array "devices"
+		json_close_array
+		json_dump
+		json_cleanup
+		return
+	fi
+
+	# 提取data对象
+	if ! json_select "data"; then
+		json_init
+		json_add_object "status"
+		json_add_boolean "success" 0
+		json_add_string "error" "No data field in API response"
+		json_close_object
+		json_add_array "devices"
+		json_close_array
+		json_dump
+		json_cleanup
+		return
+	fi
+
 	# 提取设备数组
 	if ! json_select "devices"; then
 		json_init
 		json_add_object "status"
 		json_add_boolean "success" 0
-		json_add_string "error" "No devices field in API response"
+		json_add_string "error" "No devices field in data"
 		json_close_object
 		json_add_array "devices"
 		json_close_array
@@ -236,19 +267,41 @@ get_metrics() {
         url="$url?mac=$mac_escaped"
     fi
 
-    local api_result=$(curl -s "$url" 2>/dev/null)
-    if [ $? -ne 0 ] || [ -z "$api_result" ]; then
-        # 返回空结果
-        json_init
-        json_add_array "metrics"
-        json_close_array
-        json_dump
-        json_cleanup
+    # logger "luci.bandix.metrics: entering mac=$mac url=$url"
+    local api_result=$(curl -s --connect-timeout 1 --max-time 3 "$url" 2>/dev/null)
+    local curl_exit_code=$?
+    # logger "luci.bandix.metrics: curl finished with exit code: $curl_exit_code"
+    
+    if [ $curl_exit_code -ne 0 ] || [ -z "$api_result" ]; then
+        # logger "luci.bandix.metrics: curl failed or empty response, returning empty metrics"
+        # 返回空结果（原始格式）
+        echo '{"retention_seconds":600,"mac":"","metrics":[]}'
         return
     fi
 
-    # 直接输出API返回（应为合法JSON）
-    echo "$api_result"
+    local response_size=${#api_result}
+    # logger "luci.bandix.metrics: response size: $response_size bytes, processing new API format"
+    
+    # 检查响应格式并使用 jsonfilter 提取状态
+    local api_status=$(echo "$api_result" | jsonfilter -e '$.status' 2>/dev/null)
+    if [ "$api_status" != "success" ]; then
+        # logger "luci.bandix.metrics: API status is not success: '$api_status'"
+        echo '{"retention_seconds":600,"mac":"","metrics":[]}'
+        return
+    fi
+    # logger "luci.bandix.metrics: confirmed API success status"
+    
+    # 使用 jsonfilter 提取 data 部分（根据文档，这是处理大JSON的推荐方式）
+    local data_part=$(echo "$api_result" | jsonfilter -e '$.data' 2>/dev/null)
+    if [ -n "$data_part" ]; then
+        local data_size=${#data_part}
+        # logger "luci.bandix.metrics: extracted data part using jsonfilter, size: $data_size bytes"
+        echo "$data_part"
+        return
+    else
+        # logger "luci.bandix.metrics: jsonfilter failed to extract data part"
+        echo '{"retention_seconds":600,"mac":"","metrics":[]}'
+    fi
 }
 
 # 设置设备限速
@@ -279,7 +332,7 @@ set_device_rate_limit() {
 	# logger "luci.bandix: request_data=$request_data"
 	
 	# 发送请求到bandix API
-	local response=$(curl -s -X POST -H "Content-Type: application/json" -d "$request_data" "$BANDIX_LIMIT_API" 2>/dev/null)
+	local response=$(curl -s -X POST -H "Content-Type: application/json" -d "$request_data" "$BANDIX_LIMITS_API" 2>/dev/null)
 	
 	# 确保临时目录存在
 	ensure_tmp_dir
@@ -309,6 +362,98 @@ set_device_rate_limit() {
 	rm -f "$BANDIX_TMP_DIR/luci.bandix.response" 2>/dev/null
 }
 
+# 获取连接监控数据
+get_connection_devices() {
+	# 检查连接监控是否启用
+	local connection_enabled=$(uci get bandix.connections.enabled 2>/dev/null)
+	if [ "$connection_enabled" != "1" ]; then
+		make_error "Connection monitoring is not enabled"
+		return
+	fi
+	
+	# 从 Bandix API 获取连接数据
+	local response=$(curl -s -X GET "$BANDIX_CONNECTION_API" 2>/dev/null)
+	
+	if [ $? -eq 0 ] && [ -n "$response" ]; then
+		# 检查响应状态
+		local status=$(echo "$response" | jsonfilter -e '$.status' 2>/dev/null)
+		if [ "$status" = "success" ]; then
+			# 获取设备数据并添加主机名信息
+			local devices_data=$(echo "$response" | jsonfilter -e '$.data.devices')
+			local global_stats=$(echo "$response" | jsonfilter -e '$.data.global_stats')
+			local total_devices=$(echo "$response" | jsonfilter -e '$.data.total_devices')
+			local last_updated=$(echo "$response" | jsonfilter -e '$.data.last_updated')
+			
+			# 构建增强的响应数据
+			json_init
+			json_add_string "status" "success"
+			json_add_object "data"
+			
+			# 添加全局统计
+			if [ -n "$global_stats" ]; then
+				json_add_object "global_stats"
+				json_add_int "total_connections" $(echo "$response" | jsonfilter -e '$.data.global_stats.total_connections' 2>/dev/null || echo "0")
+				json_add_int "tcp_connections" $(echo "$response" | jsonfilter -e '$.data.global_stats.tcp_connections' 2>/dev/null || echo "0")
+				json_add_int "udp_connections" $(echo "$response" | jsonfilter -e '$.data.global_stats.udp_connections' 2>/dev/null || echo "0")
+				json_add_int "established_tcp" $(echo "$response" | jsonfilter -e '$.data.global_stats.established_tcp' 2>/dev/null || echo "0")
+				json_add_int "time_wait_tcp" $(echo "$response" | jsonfilter -e '$.data.global_stats.time_wait_tcp' 2>/dev/null || echo "0")
+				json_add_int "close_wait_tcp" $(echo "$response" | jsonfilter -e '$.data.global_stats.close_wait_tcp' 2>/dev/null || echo "0")
+				json_add_int "last_updated" $(echo "$response" | jsonfilter -e '$.data.global_stats.last_updated' 2>/dev/null || echo "0")
+				json_close_object
+			fi
+			
+			# 添加设备数据
+			json_add_array "devices"
+			if [ -n "$devices_data" ]; then
+				# 解析设备数组
+				local device_count=$(echo "$response" | jsonfilter -e '$.data.devices[*]' | wc -l)
+				local i=0
+				while [ $i -lt $device_count ]; do
+					local mac=$(echo "$response" | jsonfilter -e "$.data.devices[$i].mac_address" 2>/dev/null)
+					local ip=$(echo "$response" | jsonfilter -e "$.data.devices[$i].ip_address" 2>/dev/null)
+					local tcp_connections=$(echo "$response" | jsonfilter -e "$.data.devices[$i].tcp_connections" 2>/dev/null || echo "0")
+					local udp_connections=$(echo "$response" | jsonfilter -e "$.data.devices[$i].udp_connections" 2>/dev/null || echo "0")
+					local established_tcp=$(echo "$response" | jsonfilter -e "$.data.devices[$i].established_tcp" 2>/dev/null || echo "0")
+					local time_wait_tcp=$(echo "$response" | jsonfilter -e "$.data.devices[$i].time_wait_tcp" 2>/dev/null || echo "0")
+					local close_wait_tcp=$(echo "$response" | jsonfilter -e "$.data.devices[$i].close_wait_tcp" 2>/dev/null || echo "0")
+					local total_connections=$(echo "$response" | jsonfilter -e "$.data.devices[$i].total_connections" 2>/dev/null || echo "0")
+					local device_last_updated=$(echo "$response" | jsonfilter -e "$.data.devices[$i].last_updated" 2>/dev/null || echo "0")
+					
+					if [ -n "$mac" ] || [ -n "$ip" ]; then
+						json_add_object
+						json_add_string "mac_address" "$mac"
+						json_add_string "ip_address" "$ip"
+						json_add_string "hostname" "$(get_dhcp_hostname "$mac")"
+						json_add_int "tcp_connections" "$tcp_connections"
+						json_add_int "udp_connections" "$udp_connections"
+						json_add_int "established_tcp" "$established_tcp"
+						json_add_int "time_wait_tcp" "$time_wait_tcp"
+						json_add_int "close_wait_tcp" "$close_wait_tcp"
+						json_add_int "total_connections" "$total_connections"
+						json_add_int "last_updated" "$device_last_updated"
+						json_close_object
+					fi
+					
+					i=$((i + 1))
+				done
+			fi
+			json_close_array
+			
+			json_add_int "total_devices" "${total_devices:-0}"
+			json_add_int "last_updated" "${last_updated:-0}"
+			json_close_object
+			json_add_string "message" ""
+			json_dump
+			json_cleanup
+		else
+			local error_msg=$(echo "$response" | jsonfilter -e '$.message' 2>/dev/null)
+			make_error "${error_msg:-Failed to get connection data}"
+		fi
+	else
+		make_error "Failed to connect to Bandix service"
+	fi
+}
+
 case "$1" in
 	list)
 		json_init
@@ -325,6 +470,9 @@ case "$1" in
 		json_add_int "wide_tx_rate_limit"
 		json_close_object
 		
+		json_add_object "getConnection"
+		json_close_object
+		
 		json_dump
 		json_cleanup
 		;;
@@ -335,10 +483,14 @@ case "$1" in
 				;;
 			getMetrics)
 				# logger "luci.bandix: getMetrics called"
-				# 读取参数：优先 STDIN，其次位置参数（$3）
+				# 读取参数：优先 STDIN（带超时，避免阻塞），其次位置参数（$3）
 				# 很奇怪收到的是 received input: {"mac":"70:e2:84:2b:9f:42","ubus_rpc_session":"4b0c5dcd9baf9963e4f13647fa71228a"}
 				mac=""
-				input="$(cat)"
+				input=""
+				# 尝试读取一行 STDIN，1 秒超时以避免在无输入场景下阻塞
+				if read -t 1 -r input; then
+					:
+				fi
 				if [ -n "$input" ]; then
 					# logger "luci.bandix: received input: $input"
 					# 支持数组或对象两种风格
@@ -386,6 +538,10 @@ case "$1" in
 					# logger "luci.bandix: setRateLimit 没有接收到输入"
 					make_error "No input received"
 				fi
+				;;
+			getConnection)
+				# logger "luci.bandix: getConnection called"
+				get_connection_devices
 				;;
 		esac
 		;;
