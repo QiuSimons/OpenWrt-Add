@@ -138,8 +138,8 @@ jobs:
           sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/packages|g' imm_pkg/frp/Makefile
           cp -rf ./packages/net/subconverter ./imm_pkg/subconverter
           cp -rf ./packages/net/zerotier ./imm_pkg/zerotier
-          rm -rf ./imm_pkg/zerotier/patches/0006-add-support-for-miniupnpc-2.2.8.patch
-          wget https://github.com/sbwml/feeds_packages_net_zerotier/raw/refs/heads/main/patches/0006-fix-UPNP_GetValidIGD-function-call-for-miniupnpc-2.2.patch -O imm_pkg/zerotier/patches/0006-fix-UPNP_GetValidIGD-function-call-for-miniupnpc-2.2.patch
+          #rm -rf ./imm_pkg/zerotier/patches/0006-add-support-for-miniupnpc-2.2.8.patch
+          #wget https://github.com/sbwml/feeds_packages_net_zerotier/raw/refs/heads/main/patches/0006-fix-UPNP_GetValidIGD-function-call-for-miniupnpc-2.2.patch -O imm_pkg/zerotier/patches/0006-fix-UPNP_GetValidIGD-function-call-for-miniupnpc-2.2.patch
           cp -rf ./packages/libs/jpcre2 ./imm_pkg/jpcre2
           cp -rf ./packages/libs/rapidjson ./imm_pkg/rapidjson
           cp -rf ./packages/libs/libcron ./imm_pkg/libcron
