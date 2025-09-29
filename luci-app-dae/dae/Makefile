@@ -5,13 +5,13 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2025.08.30
+PKG_VERSION:=2025.09.28
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=8ed51eefc8e9b6c619523fa18f55ec6e3d67c093
-PKG_SOURCE_URL:=https://github.com/LostAttractor/dae.git
+PKG_SOURCE_VERSION:=41d51d7cbffbc7f2517ff7408d2be5e9722ea49f
+PKG_SOURCE_URL:=https://github.com/ppdragon16/dae.git
 PKG_MIRROR_HASH:=skip
 
 PKG_LICENSE:=AGPL-3.0-only
@@ -68,7 +68,6 @@ define Build/Compile
 	( \
 		pushd $(PKG_BUILD_DIR) ; \
 		wget -qO - https://github.com/QiuSimons/dae/commit/f6b4438.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/b00a14a.patch | patch -p1 -N || true ; \
 		popd ; \
 		export \
 		$(GO_GENERAL_BUILD_CONFIG_VARS) \
