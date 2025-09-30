@@ -68,7 +68,6 @@ define Build/Compile
 	( \
 		pushd $(PKG_BUILD_DIR) ; \
 		wget -qO - https://github.com/QiuSimons/dae/commit/f6b4438.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/b00a14a.patch | patch -p1 -N || true ; \
 		popd ; \
 		export \
 		$(GO_GENERAL_BUILD_CONFIG_VARS) \
