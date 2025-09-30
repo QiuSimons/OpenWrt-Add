@@ -54,7 +54,8 @@ dellocaluse() {
 
 start_service() {
 	local enabled config_file log_maxbackups log_maxsize
-	
+
+	mkdir -p /var/log/dae
 	set_chmod_640
 	setlocaluse
 	delcron
