@@ -2,7 +2,8 @@
 # Copyright (C) 2023 Tianling Shen <cnsztl@immortalwrt.org>
 
 USE_PROCD=1
-START=95
+START=96
+STOP=10
 
 extra_command "hot_reload" "Hot-reload service"
 
@@ -27,6 +28,7 @@ delcron() {
 
 set_chmod_640() {
 	chmod -R 640 /etc/dae/
+	mkdir -p /var/log/dae
 }
 
 setlocaluse() {
@@ -54,17 +56,15 @@ dellocaluse() {
 
 start_service() {
 	local enabled config_file log_maxbackups log_maxsize
-	mkdir -p /var/log/dae
 	set_chmod_640
-	setlocaluse
-	delcron
 	config_load "$CONF"
 	
 	config_get_bool enabled "config" "enabled" "0"
 	[ "$enabled" -eq "1" ] || return 1
-	setcron
 	config_get config_file "config" "config_file" "/etc/dae/config.dae"
 	"$PROG" validate -c "$config_file" || return 1
+	setcron
+	dellocaluse
 	config_get log_maxbackups "config" "log_maxbackups" "1"
 	config_get log_maxsize "config" "log_maxsize" "1"
 	procd_open_instance "$CONF"
@@ -80,11 +80,12 @@ start_service() {
 	procd_set_param limits nofile="1000000 1000000"
 	procd_set_param respawn
 	procd_set_param stderr 1
-	dellocaluse
 	procd_close_instance
 }
 
 stop_service() {
+    delcron
+    setlocaluse
     rm -rf "$LOG"
 }
 
