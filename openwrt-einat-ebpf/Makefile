@@ -94,13 +94,14 @@ define Package/$(PKG_NAME)/config
 
 		config EINAT_EBPF_IPV6
 			bool "Enable IPV6 NAT66 feature"
-			default y
+			default n
 			help
 			  It would increase load time of eBPF programs to
 			  about 4 times.
 
 		config EINAT_EBPF_BACKEND_LIBBPF
 			bool "Enable libbpf backend"
+			default y if (aarch64 || x86_64)
 			default n
 			help
 			  Add fallback BPF loading backend: "libbpf".
