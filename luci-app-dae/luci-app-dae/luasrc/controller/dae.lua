@@ -31,6 +31,15 @@ function act_status()
 	local sys  = require "luci.sys"
 	local e = { }
 	e.running = sys.call("pidof dae >/dev/null") == 0
+	if e.running then
+		e.memory = sys.exec("awk '/VmRSS/ {print $2/1024 \" MB\"}' /proc/$(pidof dae | cut -d' ' -f1)/status 2>/dev/null")
+		if e.memory then
+			e.memory = e.memory:gsub("\n", "")
+			if e.memory == "" then
+				e.memory = nil
+			end
+		end
+	end
 	luci.http.prepare_content("application/json")
 	luci.http.write_json(e)
 end

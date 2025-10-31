@@ -64,6 +64,9 @@ msgstr "日志"
 msgid "Clear logs"
 msgstr "清空日志"
 
+msgid "Memory Usage"
+msgstr "内存占用"
+
 msgid "Service reloaded successfully"
 msgstr "服务重载成功"
 

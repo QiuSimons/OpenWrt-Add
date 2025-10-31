@@ -6,9 +6,13 @@
 			if (data && tb)
 			{
 				if (data.running)
-				{
-					tb.innerHTML = '<em style=\"color:green\"><b><%:DAE%> <%:RUNNING%></b></em>';
+			{
+				if (data.memory) {
+					tb.innerHTML = '<em style="color:green"><b><%:DAE%> <%:RUNNING%></b></em> <span style="color:#666; font-size:0.9em;">(<%:Memory Usage%>: ' + data.memory + ')</span>';
+				} else {
+					tb.innerHTML = '<em style="color:green"><b><%:DAE%> <%:RUNNING%></b></em>';
 				}
+			}
 				else
 				{
 					tb.innerHTML = '<em style=\"color:red\"><b><%:DAE%> <%:NOT RUNNING%></b></em>';
