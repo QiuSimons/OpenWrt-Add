@@ -24,7 +24,7 @@ LuCI Bandix 基于 LuCI 框架开发，为 OpenWrt 路由器提供网络流量�
 
 ## 系统要求
 
-- **OpenWrt 版本**: 建议使用 OpenWrt 24.10 及以上版本，或者 Linux kernel 6.x 及以上
+- **OpenWrt 版本**: 建议使用 OpenWrt 24.10 及以上版本
 - **包格式支持**: 支持 APK 和 IPK 包格式
 
 
@@ -49,7 +49,8 @@ LuCI Bandix 基于 LuCI 框架开发，为 OpenWrt 路由器提供网络流量�
 
 luci-app-bandix 需要以下依赖包：
 
-`curl` , `luci-lib-jsonc` , `jsonfilter` , `jshn`
+- **curl**: HTTP 客户端库，用于网络请求
+- **luci-lib-jsonc**: JSON 解析库，用于数据处理
 
 这些依赖会在安装 luci-app-bandix 时自动安装，但某些固件可能需要手动安装这些依赖包。
 
@@ -65,7 +66,6 @@ luci-app-bandix 需要以下依赖包：
 | 0.4.x               | 0.4.x                   |
 | 0.5.x               | 0.5.x                   |
 | 0.6.x               | 0.6.x                   |
-| 0.7.x               | 0.7.x                   |
 
 请确保安装匹配的版本以确保兼容性和正常功能。
 
