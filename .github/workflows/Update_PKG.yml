@@ -28,6 +28,7 @@ jobs:
           git clone --depth 1 https://github.com/sbwml/luci-app-mosdns
           git clone --depth 1 https://github.com/sbwml/packages_new_nat6
           git clone --depth 1 https://github.com/sbwml/openwrt_helloworld
+          wget https://github.com/kongfl888/openwrt-dns2socks/raw/refs/heads/master/Makefile -O ./openwrt_helloworld/dns2socks/Makefile
           rm -rf ./openwrt_helloworld/{sing-box,luci-app-mihomo,mihomo,luci-app-nikki,nikki,luci-app-homeproxy,luci-app-openclash,luci-app-daed,daed,luci-app-dae,dae}
           sed -i 's/result.insecure = "0"/result.insecure = "1"/g' ./openwrt_helloworld/luci-app-ssr-plus/root/usr/share/shadowsocksr/subscribe.lua
           sed -i 's|Loyalsoldier/geoip|MetaCubeX/meta-rules-dat|g; s|Loyalsoldier/v2ray-rules-dat|MetaCubeX/meta-rules-dat|g' ./openwrt_helloworld/v2ray-geodata/Makefile
