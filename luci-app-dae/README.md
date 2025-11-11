@@ -9,7 +9,7 @@
 -----------
 
 
-## Build on OpenWrt Official 23.05/SNAPSHOT
+## Build on OpenWrt Official 24.10/SNAPSHOT
 
 ### 1. Get Source
 
