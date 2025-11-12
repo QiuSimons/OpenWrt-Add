@@ -5,12 +5,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2025.11.11
+PKG_VERSION:=2025.11.12
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=fad4c8ab65b4ee3ff2d9d1ea21ccfd34b3e07e26
+PKG_SOURCE_VERSION:=4d720930e3c4599c943e516287dd3c79aa68f37e
 PKG_SOURCE_URL:=https://github.com/ppdragon16/dae.git
 PKG_MIRROR_HASH:=skip
 
@@ -68,7 +68,6 @@ define Build/Compile
 	( \
 		pushd $(PKG_BUILD_DIR) ; \
 		wget -qO - https://github.com/QiuSimons/dae/commit/f6b4438.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/3e1b6fa.patch | patch -p1 -N || true ; \
 		popd ; \
 		export \
 		$(GO_GENERAL_BUILD_CONFIG_VARS) \
