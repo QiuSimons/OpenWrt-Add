@@ -57,6 +57,7 @@ dellocaluse() {
 start_service() {
 	local enabled config_file log_maxbackups log_maxsize
 	set_chmod_640
+	uci commit "$CONF" 2>/dev/null
 	config_load "$CONF"
 	
 	config_get_bool enabled "config" "enabled" "0"
