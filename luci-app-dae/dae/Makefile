@@ -5,12 +5,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2025.11.12
+PKG_VERSION:=2025.11.15
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=b4e4dee389dace24d034d2a5f0b18f23867a8236
+PKG_SOURCE_VERSION:=59c6eb1fc3d64fc5773c1e03dbe472c21bda3629
 PKG_SOURCE_URL:=https://github.com/ppdragon16/dae.git
 PKG_MIRROR_HASH:=skip
 
@@ -27,11 +27,13 @@ GO_PKG_EXCLUDES:=control/kern/tests
 GO_PKG_LDFLAGS_X:= \
 	$(GO_PKG)/cmd.Version=$(PKG_VERSION) \
 	$(GO_PKG)/common/consts.MaxMatchSetLen_=1024
+
 GO_PKG_TAGS:=trace
 GO_PKG_TARGET_VARS:=$(filter-out CGO_ENABLED=%,$(GO_PKG_TARGET_VARS)) \
 	CGO_ENABLED=0 \
 	GOEXPERIMENT=greenteagc
 
+GO_PKG_DEFAULT_LDFLAGS:=-w -s -extldflags "-static"
 PGO_PROFILE:=$(CURDIR)/pprof/default.pgo
 
 include $(INCLUDE_DIR)/package.mk
