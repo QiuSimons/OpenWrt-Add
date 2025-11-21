@@ -28,16 +28,18 @@ GO_PKG_LDFLAGS_X:= \
 	$(GO_PKG)/cmd.Version=$(PKG_VERSION) \
 	$(GO_PKG)/common/consts.MaxMatchSetLen_=1024
 GO_PKG_TAGS:=trace
-GO_PKG_TARGET_VARS:=$(filter-out CGO_ENABLED=%,$(GO_PKG_TARGET_VARS)) \
-	CGO_ENABLED=1 \
-	GOEXPERIMENT=greenteagc
 
-GO_PKG_DEFAULT_LDFLAGS:=-w -s -extldflags "-static"
 PGO_PROFILE:=$(CURDIR)/pprof/default.pgo
 
 include $(INCLUDE_DIR)/package.mk
 include $(INCLUDE_DIR)/bpf.mk
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
+
+GO_PKG_TARGET_VARS+= \
+	CGO_LDFLAGS="$(TARGET_LDFLAGS) -static" \
+	GOEXPERIMENT=greenteagc
+
+GO_PKG_DEFAULT_LDFLAGS:=-w -s -linkmode external -extldflags '-static'
 
 define Package/dae
   SECTION:=net

@@ -45,7 +45,7 @@ function act_status()
 end
 
 function get_log()
-	http.write(sys.exec("cat /var/log/dae/dae.log"))
+	http.write(sys.exec("tail -n 1000 /var/log/dae/dae.log 2>/dev/null"))
 end
 
 function clear_log()
