@@ -8,6 +8,40 @@
 
 // 暗色模式检测已改为使用 CSS 媒体查询 @media (prefers-color-scheme: dark)
 
+// 检测主题类型：返回 'wide'（宽主题，如 Argon）或 'narrow'（窄主题，如 Bootstrap）
+function getThemeType() {
+    // 获取 LuCI 主题设置
+    var mediaUrlBase = uci.get('luci', 'main', 'mediaurlbase');
+    
+    if (!mediaUrlBase) {
+        // 如果无法获取，尝试从 DOM 中检测
+        var linkTags = document.querySelectorAll('link[rel="stylesheet"]');
+        for (var i = 0; i < linkTags.length; i++) {
+            var href = linkTags[i].getAttribute('href') || '';
+            if (href.toLowerCase().includes('argon')) {
+                return 'wide';
+            }
+        }
+        // 默认返回窄主题
+        return 'narrow';
+    }
+    
+    var mediaUrlBaseLower = mediaUrlBase.toLowerCase();
+    
+    // 宽主题关键词列表（可以根据需要扩展）
+    var wideThemeKeywords = ['argon', 'material', 'design', 'edge'];
+    
+    // 检查是否是宽主题
+    for (var i = 0; i < wideThemeKeywords.length; i++) {
+        if (mediaUrlBaseLower.includes(wideThemeKeywords[i])) {
+            return 'wide';
+        }
+    }
+    
+    // 默认是窄主题（Bootstrap 等）
+    return 'narrow';
+}
+
 function formatTimestamp(timestamp) {
     if (!timestamp) return '-';
     var date = new Date(timestamp);
@@ -88,7 +122,7 @@ function formatResponseResult(query) {
 var callGetDnsQueries = rpc.declare({
     object: 'luci.bandix',
     method: 'getDnsQueries',
-    params: ['domain', 'device', 'is_query', 'dns_server', 'page', 'page_size'],
+    params: ['domain', 'device', 'is_query', 'dns_server', 'query_type', 'page', 'page_size'],
     expect: {}
 });
 
@@ -138,6 +172,21 @@ return view.extend({
                 font-size: 0.875rem;
             }
             
+            /* 只在宽模式下应用警告样式 */
+            .bandix-alert.wide-theme {
+                background-color: rgba(251, 191, 36, 0.1);
+                border: 1px solid rgba(251, 191, 36, 0.3);
+                color: #92400e;
+            }
+            
+            @media (prefers-color-scheme: dark) {
+                .bandix-alert.wide-theme {
+                    background-color: rgba(251, 191, 36, 0.15);
+                    border-color: rgba(251, 191, 36, 0.4);
+                    color: #fbbf24;
+                }
+            }
+            
             .bandix-alert-icon {
                 font-size: 0.875rem;
                 font-weight: 700;
@@ -175,8 +224,16 @@ return view.extend({
                 padding: 6px 12px;
                 border-radius: 4px;
                 font-size: 0.875rem;
-                min-width: 150px;
+                min-width: 120px;
+                max-width: 200px;
+                width: 120px;
                 opacity: 1;
+            }
+            
+            .filter-section .cbi-select {
+                min-width: 120px;
+                max-width: 200px;
+                width: 120px;
             }
             
             .bandix-table {
@@ -258,6 +315,35 @@ return view.extend({
                 gap: 8px;
             }
             
+            /* 刷新按钮加载状态 */
+            .refresh-btn-loading {
+                position: relative;
+                pointer-events: none;
+                opacity: 0.8;
+            }
+            
+            .refresh-btn-loading::before {
+                content: '';
+                display: inline-block;
+                width: 14px;
+                height: 14px;
+                border: 2px solid currentColor;
+                border-top-color: transparent;
+                border-right-color: transparent;
+                border-radius: 50%;
+                animation: refresh-btn-spin 0.6s linear infinite;
+                margin-right: 8px;
+                vertical-align: middle;
+            }
+            
+            @keyframes refresh-btn-spin {
+                0% {
+                    transform: rotate(0deg);
+                }
+                100% {
+                    transform: rotate(360deg);
+                }
+            }
             
             .loading-state {
                 text-align: center;
@@ -402,6 +488,183 @@ return view.extend({
                 font-weight: 600;
                 opacity: 0.9;
             }
+            
+            /* 移动端优化 */
+            @media (max-width: 768px) {
+                /* 移动端隐藏表格，显示卡片 */
+                .bandix-table {
+                    display: none;
+                }
+                
+                .dns-query-cards {
+                    display: block;
+                }
+                
+                /* 移动端卡片样式 */
+                .dns-query-card {
+                    background-color: var(--cbi-section-bg, #fff);
+                    border: 1px solid rgba(0, 0, 0, 0.1);
+                    border-radius: 8px;
+                    padding: 12px;
+                    margin-bottom: 12px;
+                    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+                }
+                
+                @media (prefers-color-scheme: dark) {
+                    .dns-query-card {
+                        background-color: var(--cbi-section-bg, rgba(30, 30, 30, 0.98));
+                        border-color: rgba(255, 255, 255, 0.15);
+                    }
+                }
+                
+                .dns-query-card-header {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    margin-bottom: 12px;
+                    padding-bottom: 12px;
+                    border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+                }
+                
+                @media (prefers-color-scheme: dark) {
+                    .dns-query-card-header {
+                        border-bottom-color: rgba(255, 255, 255, 0.15);
+                    }
+                }
+                
+                .dns-query-card-time {
+                    font-size: 0.75rem;
+                    opacity: 0.7;
+                    font-weight: 500;
+                }
+                
+                .dns-query-card-type {
+                    display: inline-block;
+                    padding: 2px 8px;
+                    border-radius: 4px;
+                    font-size: 0.7rem;
+                    font-weight: 600;
+                }
+                
+                .dns-query-card-body {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                }
+                
+                .dns-query-card-row {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                }
+                
+                .dns-query-card-label {
+                    font-size: 0.75rem;
+                    opacity: 0.7;
+                    font-weight: 500;
+                }
+                
+                .dns-query-card-value {
+                    font-size: 0.875rem;
+                    font-weight: 600;
+                    word-break: break-word;
+                }
+                
+                .dns-query-card-domain {
+                    font-size: 0.9375rem;
+                    font-weight: 600;
+                    color: #3b82f6;
+                    word-break: break-word;
+                }
+                
+                .dns-query-card-response-result {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 4px;
+                    margin-top: 4px;
+                }
+                
+                .dns-query-card-response-badge {
+                    display: inline-block;
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                    font-size: 0.7rem;
+                    background-color: rgba(0, 0, 0, 0.05);
+                }
+                
+                @media (prefers-color-scheme: dark) {
+                    .dns-query-card-response-badge {
+                        background-color: rgba(255, 255, 255, 0.1);
+                    }
+                }
+                
+                /* 移动端过滤器优化 */
+                .filter-section {
+                    flex-direction: column;
+                    align-items: stretch;
+                    padding: 12px;
+                    gap: 10px;
+                }
+                
+                .filter-group {
+                    width: 100%;
+                    flex-direction: column;
+                    align-items: stretch;
+                    gap: 6px;
+                }
+                
+                .filter-label {
+                    font-size: 0.8125rem;
+                }
+                
+                .filter-input,
+                .filter-section .cbi-select {
+                    width: 100%;
+                    max-width: 100%;
+                    min-width: 100%;
+                }
+                
+                /* 移动端分页优化 */
+                .pagination {
+                    flex-direction: column;
+                    align-items: stretch;
+                    gap: 12px;
+                    padding: 12px;
+                }
+                
+                .pagination-info {
+                    text-align: center;
+                    font-size: 0.8125rem;
+                }
+                
+                .pagination-controls {
+                    width: 100%;
+                    justify-content: center;
+                    flex-wrap: wrap;
+                }
+                
+                .pagination-controls .cbi-select {
+                    width: 100%;
+                    margin-right: 0;
+                    margin-bottom: 8px;
+                }
+                
+                .pagination-controls button {
+                    flex: 1;
+                    min-width: 100px;
+                }
+            }
+            
+            /* PC端显示表格，隐藏卡片 */
+            @media (min-width: 769px) {
+                .bandix-table {
+                    display: table;
+                }
+                
+                .dns-query-cards {
+                    display: none;
+                }
+            }
         `);
         document.head.appendChild(style);
 
@@ -413,11 +676,16 @@ return view.extend({
         container.appendChild(header);
 
         if (!dnsEnabled) {
-            var alertDiv = E('div', { 'class': 'bandix-alert' }, [
-                E('div', {}, [
-                    E('strong', {}, _('DNS Monitoring Disabled')),
-                    E('p', { 'style': 'margin: 4px 0 0 0;' },
-                        _('Please enable DNS monitoring in settings'))
+            var alertDiv = E('div', { 
+                'class': 'bandix-alert' + (getThemeType() === 'wide' ? ' wide-theme' : '')
+            }, [
+                E('div', { 'style': 'display: flex; align-items: center; gap: 8px;' }, [
+                    E('span', { 'style': 'font-size: 1rem;' }, '⚠'),
+                    E('div', {}, [
+                        E('strong', {}, _('DNS Monitoring Disabled')),
+                        E('p', { 'style': 'margin: 4px 0 0 0;' },
+                            _('Please enable DNS monitoring in settings'))
+                    ])
                 ])
             ]);
             container.appendChild(alertDiv);
@@ -435,8 +703,13 @@ return view.extend({
         }
 
         // 添加提示信息
-        var infoAlert = E('div', { 'class': 'bandix-alert' }, [
-            E('span', {}, _('Does not include DoH and DoT'))
+        var infoAlert = E('div', { 
+            'class': 'bandix-alert' + (getThemeType() === 'wide' ? ' wide-theme' : '')
+        }, [
+            E('div', { 'style': 'display: flex; align-items: center; gap: 8px;' }, [
+                E('span', { 'style': 'font-size: 1rem;' }, '⚠'),
+                E('span', {}, _('Does not include DoH and DoT'))
+            ])
         ]);
         container.appendChild(infoAlert);
 
@@ -463,8 +736,24 @@ return view.extend({
                         'type': 'text',
                         'class': 'filter-input',
                         'id': 'domain-filter',
-                        'placeholder': _('Search Domain')
+                        'placeholder': _('Domain')
                     })
+                ]),
+                E('div', { 'class': 'filter-group' }, [
+                    E('label', { 'class': 'filter-label' }, _('Query Type') + ':'),
+                    E('select', { 'class': 'cbi-select', 'id': 'query-type-filter' }, [
+                        E('option', { 'value': '' }, _('All')),
+                        E('option', { 'value': 'A' }, 'A'),
+                        E('option', { 'value': 'AAAA' }, 'AAAA'),
+                        E('option', { 'value': 'CNAME' }, 'CNAME'),
+                        E('option', { 'value': 'MX' }, 'MX'),
+                        E('option', { 'value': 'TXT' }, 'TXT'),
+                        E('option', { 'value': 'NS' }, 'NS'),
+                        E('option', { 'value': 'PTR' }, 'PTR'),
+                        E('option', { 'value': 'SOA' }, 'SOA'),
+                        E('option', { 'value': 'HTTPS' }, 'HTTPS'),
+                        E('option', { 'value': 'SVCB' }, 'SVCB')
+                    ])
                 ]),
                 E('div', { 'class': 'filter-group' }, [
                     E('label', { 'class': 'filter-label' }, _('Device Filter') + ':'),
@@ -472,7 +761,7 @@ return view.extend({
                         'type': 'text',
                         'class': 'filter-input',
                         'id': 'device-filter',
-                        'placeholder': _('Search Device')
+                        'placeholder': _('Device')
                     })
                 ]),
                 E('div', { 'class': 'filter-group' }, [
@@ -481,7 +770,7 @@ return view.extend({
                         'type': 'text',
                         'class': 'filter-input',
                         'id': 'dns-server-filter',
-                        'placeholder': _('Search DNS Server')
+                        'placeholder': _('DNS Server')
                     })
                 ]),
                 E('div', { 'class': 'filter-group', 'style': 'margin-left: auto;' }, [
@@ -505,7 +794,8 @@ return view.extend({
             domain: '',
             device: '',
             is_query: '',
-            dns_server: ''
+            dns_server: '',
+            query_type: ''
         };
 
 
@@ -556,6 +846,7 @@ return view.extend({
                 currentFilters.device,
                 currentFilters.is_query,
                 currentFilters.dns_server,
+                currentFilters.query_type,
                 currentPage,
                 pageSize
             ).then(function (result) {
@@ -602,17 +893,20 @@ return view.extend({
                     return;
                 }
 
-                // 移除旧的表格和分页
+                // 移除旧的表格、卡片和分页
                 var oldTable = container.querySelector('.bandix-table');
+                var oldCards = container.querySelector('.dns-query-cards');
                 var oldPagination = container.querySelector('.pagination');
                 var oldLoadingState = container.querySelector('.loading-state');
                 if (oldTable) oldTable.remove();
+                if (oldCards) oldCards.remove();
                 if (oldPagination) oldPagination.remove();
                 if (oldLoadingState) oldLoadingState.remove();
                 
                 // 确保容器是相对定位（用于遮罩层）
                 container.style.position = 'relative';
 
+                // 创建表格（PC端）
                 var table = E('table', { 'class': 'bandix-table' }, [
                     E('thead', {}, [
                         E('tr', {}, [
@@ -666,6 +960,78 @@ return view.extend({
                         ]);
                     }))
                 ]);
+                
+                // 创建移动端卡片容器
+                var cardsContainer = E('div', { 'class': 'dns-query-cards' });
+                
+                // 为每个查询创建卡片
+                queries.forEach(function (query) {
+                    var result = formatResponseResult(query);
+                    var responseResultBadges = [];
+                    if (result.display.length === 0) {
+                        responseResultBadges.push(E('span', { 'class': 'dns-query-card-response-badge' }, '-'));
+                    } else {
+                        result.display.forEach(function (item) {
+                            responseResultBadges.push(E('span', { 'class': 'dns-query-card-response-badge' }, item));
+                        });
+                        if (result.hasMore) {
+                            responseResultBadges.push(E('span', { 
+                                'class': 'dns-query-card-response-badge',
+                                'style': 'opacity: 0.7;'
+                            }, '...'));
+                        }
+                    }
+                    
+                    var card = E('div', { 'class': 'dns-query-card' }, [
+                        // 卡片头部：时间和类型
+                        E('div', { 'class': 'dns-query-card-header' }, [
+                            E('div', { 'class': 'dns-query-card-time' }, formatTimestamp(query.timestamp)),
+                            E('span', {
+                                'class': 'query-badge ' + (query.is_query ? 'query' : 'response')
+                            }, query.is_query ? _('Query') : _('Response'))
+                        ]),
+                        // 卡片主体
+                        E('div', { 'class': 'dns-query-card-body' }, [
+                            // 域名
+                            E('div', { 'class': 'dns-query-card-row' }, [
+                                E('div', { 'class': 'dns-query-card-label' }, _('Domain')),
+                                E('div', { 'class': 'dns-query-card-value dns-query-card-domain' }, query.domain || '-')
+                            ]),
+                            // 查询类型
+                            E('div', { 'class': 'dns-query-card-row' }, [
+                                E('div', { 'class': 'dns-query-card-label' }, _('Query Type')),
+                                E('div', { 'class': 'dns-query-card-value' }, query.query_type || '-')
+                            ]),
+                            // 响应时间
+                            E('div', { 'class': 'dns-query-card-row' }, [
+                                E('div', { 'class': 'dns-query-card-label' }, _('Response Time')),
+                                E('div', { 'class': 'dns-query-card-value' }, query.response_time_ms ? query.response_time_ms + ' ' + _('ms') : '-')
+                            ]),
+                            // 设备
+                            E('div', { 'class': 'dns-query-card-row' }, [
+                                E('div', { 'class': 'dns-query-card-label' }, _('Device')),
+                                E('div', { 'class': 'dns-query-card-value' }, formatDeviceName(query))
+                            ]),
+                            // DNS服务器
+                            E('div', { 'class': 'dns-query-card-row' }, [
+                                E('div', { 'class': 'dns-query-card-label' }, _('DNS Server')),
+                                E('div', { 'class': 'dns-query-card-value' }, formatDnsServer(query))
+                            ]),
+                            // 响应结果
+                            E('div', { 'class': 'dns-query-card-row' }, [
+                                E('div', { 'class': 'dns-query-card-label' }, _('Response Result')),
+                                E('div', { 
+                                    'class': 'dns-query-card-value',
+                                    'title': result.full.length > 0 ? result.full.join('\n') : ''
+                                }, [
+                                    E('div', { 'class': 'dns-query-card-response-result' }, responseResultBadges)
+                                ])
+                            ])
+                        ])
+                    ]);
+                    
+                    cardsContainer.appendChild(card);
+                });
 
                 var pagination = E('div', { 'class': 'pagination' }, [
                     E('div', { 'class': 'pagination-info' },
@@ -696,6 +1062,7 @@ return view.extend({
                 ]);
 
                 container.appendChild(table);
+                container.appendChild(cardsContainer);
                 container.appendChild(pagination);
 
                 // 绑定分页事件
@@ -943,9 +1310,10 @@ return view.extend({
             var deviceFilter = document.getElementById('device-filter');
             var dnsServerFilter = document.getElementById('dns-server-filter');
             var typeFilter = document.getElementById('type-filter');
+            var queryTypeFilter = document.getElementById('query-type-filter');
             var refreshBtn = document.getElementById('refresh-queries-btn');
 
-            if (domainFilter && deviceFilter && dnsServerFilter && typeFilter) {
+            if (domainFilter && deviceFilter && dnsServerFilter && typeFilter && queryTypeFilter) {
                 var searchTimer = null;
                 
                 function performSearch() {
@@ -953,6 +1321,7 @@ return view.extend({
                     currentFilters.device = deviceFilter.value.trim();
                     currentFilters.dns_server = dnsServerFilter.value.trim();
                     currentFilters.is_query = typeFilter.value;
+                    currentFilters.query_type = queryTypeFilter.value;
                     currentPage = 1;
                     updateQueries();
                 }
@@ -972,16 +1341,34 @@ return view.extend({
                 
                 // 下拉框立即搜索（不需要防抖）
                 typeFilter.addEventListener('change', performSearch);
+                queryTypeFilter.addEventListener('change', performSearch);
 
                 // 刷新按钮
                 if (refreshBtn) {
+                    var originalBtnText = refreshBtn.textContent || refreshBtn.innerText || _('Refresh');
+                    
                     refreshBtn.addEventListener('click', function () {
+                        // 保存原始按钮文本（如果还没有保存）
+                        if (!originalBtnText) {
+                            originalBtnText = refreshBtn.textContent || refreshBtn.innerText || _('Refresh');
+                        }
+                        
+                        // 设置按钮为加载状态
+                        refreshBtn.classList.add('refresh-btn-loading');
+                        refreshBtn.textContent = _('Loading...');
+                        refreshBtn.disabled = true;
+                        
                         // 同时刷新统计数据和查询记录
                         updateStats();
                         
                         var container = document.getElementById('dns-queries-container');
                         if (!container) {
-                            updateQueries();
+                            updateQueries().finally(function() {
+                                // 恢复按钮状态
+                                refreshBtn.classList.remove('refresh-btn-loading');
+                                refreshBtn.textContent = originalBtnText;
+                                refreshBtn.disabled = false;
+                            });
                             return;
                         }
                         
@@ -1006,7 +1393,12 @@ return view.extend({
                         }, 50);
                         
                         // 刷新数据（蒙版会在 updateQueries 中自动移除）
-                        updateQueries();
+                        updateQueries().finally(function() {
+                            // 恢复按钮状态
+                            refreshBtn.classList.remove('refresh-btn-loading');
+                            refreshBtn.textContent = originalBtnText;
+                            refreshBtn.disabled = false;
+                        });
                     });
                 }
             }
@@ -1048,6 +1440,12 @@ return view.extend({
                     // 应用到统计卡片
                     var statsCards = document.querySelectorAll('.stats-grid .cbi-section');
                     statsCards.forEach(function(card) {
+                        card.style.backgroundColor = bgColor;
+                    });
+                    
+                    // 应用到 DNS 查询卡片（移动端）
+                    var dnsQueryCards = document.querySelectorAll('.dns-query-card');
+                    dnsQueryCards.forEach(function(card) {
                         card.style.backgroundColor = bgColor;
                     });
                     
