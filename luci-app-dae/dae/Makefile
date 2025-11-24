@@ -72,6 +72,7 @@ define Build/Compile
 		pushd $(PKG_BUILD_DIR) ; \
 		wget -qO - https://github.com/QiuSimons/dae/commit/f6b4438.patch | patch -p1 -N || true ; \
 		wget -qO - https://github.com/QiuSimons/dae/commit/27673e2.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/c4af175.patch | patch -p1 -N || true ; \
 		go mod edit -replace="github.com/daeuniverse/outbound=github.com/lostattractor/outbound@next" ; \
 		go get -u=patch ; \
 		go mod tidy ; \
