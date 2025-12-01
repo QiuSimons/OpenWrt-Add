@@ -6,7 +6,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=daed
 PKG_VERSION:=2025.11.03
-DAED_VERSION:=daed-b7900c3
+DAED_VERSION:=daed-ff221cc
 WING_VERSION:=wing-e3c6847
 CORE_VERSION:=core-7e67e31
 WING_HASH_SHORT:=$(shell echo $(WING_VERSION) | cut -d- -f2)
@@ -15,7 +15,7 @@ PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=b7900c30c81c24d6fee878641978263c81d7a180
+PKG_SOURCE_VERSION:=ff221cc5083f476b17fef89df91d73ebc808c0f0
 PKG_SOURCE_URL:=https://github.com/daeuniverse/daed.git
 PKG_MIRROR_HASH:=skip
 
@@ -35,15 +35,16 @@ GO_PKG_LDFLAGS_X= \
 	$(GO_PKG)/db.AppName=$(PKG_NAME) \
 	$(GO_PKG)/db.AppVersion=$(DAED_VERSION)_$(WING_VERSION)_$(CORE_VERSION)
 GO_PKG_TAGS:=embedallowed
-GO_PKG_TARGET_VARS:=$(filter-out CGO_ENABLED=%,$(GO_PKG_TARGET_VARS)) \
-	CGO_ENABLED=1 \
-	GOEXPERIMENT=greenteagc
 
 include $(INCLUDE_DIR)/package.mk
 include $(INCLUDE_DIR)/bpf.mk
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
-GO_PKG_DEFAULT_LDFLAGS:=-w -s -extldflags "-static"
+GO_PKG_TARGET_VARS+= \
+	CGO_LDFLAGS="$(TARGET_LDFLAGS) -static" \
+	GOEXPERIMENT=greenteagc
+GO_PKG_DEFAULT_LDFLAGS:=-w -s -linkmode external -extldflags '-static'
+
 TAR_CMD=$(HOST_TAR) -C $(BUILD_DIR)/ $(TAR_OPTIONS)
 
 define Package/daed/Default
@@ -79,16 +80,18 @@ define Build/Prepare
 		rm -rf $(PKG_BUILD_DIR)/dae-core && git clone https://github.com/daeuniverse/dae $(PKG_BUILD_DIR)/dae-core && git -C $(PKG_BUILD_DIR)/dae-core checkout $(CORE_HASH_SHORT) ; \
 		pushd $(PKG_BUILD_DIR)/dae-core ; \
 		git submodule update --init ; \
+		go get -u=patch ; \
+		go get github.com/cilium/ebpf@latest ; \
 		go mod tidy ; \
 		popd ; \
 		pushd $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/wing ; \
 		go mod tidy ; \
 		popd ; \
-		pushd $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION) ; \
-		npm install -g pnpm ; \
-		pnpm install ; \
-		pnpm build ; \
-		popd ; \
+		( \
+			cd $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION) && \
+			/usr/bin/pnpm install && \
+			/usr/bin/pnpm build \
+		) ; \
 		mkdir -p $(PKG_BUILD_DIR)/webrender/web ; \
 		cp -rf $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/dist/* $(PKG_BUILD_DIR)/webrender/web ; \
 		find $(PKG_BUILD_DIR)/webrender/web -type f -size +4k ! -name "*.gz" ! -name "*.woff"  ! -name "*.woff2" -exec sh -c '\
@@ -105,13 +108,8 @@ endef
 DAE_CFLAGS:= \
 	-O2 -Wall -Werror \
 	-DMAX_MATCH_SET_LEN=1024 \
-	-D__UNROLL_ROUTE_LOOP \
 	-I$(BPF_HEADERS_DIR)/tools/lib \
 	-I$(BPF_HEADERS_DIR)/arch/$(BPF_KARCH)/include/asm/mach-generic
-
-ifneq ($(CONFIG_USE_MUSL),)
-  TARGET_CFLAGS += -D_LARGEFILE64_SOURCE
-endif
 
 define Build/Compile
 	( \
