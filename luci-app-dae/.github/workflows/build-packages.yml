@@ -47,6 +47,7 @@ jobs:
           FEEDNAME: packages_ci
           PACKAGES: luci-app-dae
           NO_REFRESH_CHECK: true
+          V: s
 
       - name: Upload artifacts
         uses: actions/upload-artifact@main
