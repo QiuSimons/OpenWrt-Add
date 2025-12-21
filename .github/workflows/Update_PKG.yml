@@ -164,6 +164,7 @@ jobs:
           bash move_2_services.sh
           bash fix_permissions.sh
           bash list.sh
+          bash fix_pkg_version.sh
 
       - name: Commit file
         run: |
