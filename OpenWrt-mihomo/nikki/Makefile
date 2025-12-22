@@ -89,7 +89,6 @@ endef
 
 define Package/nikki/postrm
 #!/bin/sh
-# Compatible with both APK (APK_ROOT) and OPKG (IPKG_INSTROOT)
 if [ -z $${IPKG_INSTROOT} ]; then
 	uci -q batch <<-EOF > /dev/null
 		del firewall.nikki

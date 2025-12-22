@@ -49,11 +49,8 @@ endef
 
 define Package/coremark/postinst
 #!/bin/sh
-# Compatible with both APK (APK_ROOT) and OPKG (IPKG_INSTROOT)
 [ -n "$${IPKG_INSTROOT}" ] || sed -i '/coremark/d' /etc/crontabs/root
-# Compatible with both APK (APK_ROOT) and OPKG (IPKG_INSTROOT)
 [ -n "$${IPKG_INSTROOT}" ] || echo "0 4 * * * /etc/coremark.sh" >> /etc/crontabs/root
-# Compatible with both APK (APK_ROOT) and OPKG (IPKG_INSTROOT)
 [ -n "$${IPKG_INSTROOT}" ] || crontab /etc/crontabs/root
 endef
 

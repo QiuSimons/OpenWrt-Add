@@ -34,7 +34,6 @@ endef
 
 define Package/luci-app-adguardhome/prerm
 #!/bin/sh
-# Compatible with both APK (APK_ROOT) and OPKG (IPKG_INSTROOT)
 if [ -z "$${IPKG_INSTROOT}" ]; then
      /etc/init.d/AdGuardHome disable
      /etc/init.d/AdGuardHome stop >/dev/null 2>&1

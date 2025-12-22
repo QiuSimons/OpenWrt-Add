@@ -59,7 +59,6 @@ endef
 
 define Package/$(PKG_NAME)/postinst
 #!/bin/sh
-# Compatible with both APK (APK_ROOT) and OPKG (IPKG_INSTROOT)
 if [ -z "$${IPKG_INSTROOT}" ]; then
     
     # 添加到 sysupgrade.conf 以在系统升级时保留
