@@ -24,22 +24,27 @@ find . -type f -name "Makefile" | while read -r makefile; do
 
         # --- 判断处理模式 ---
         if [[ "$raw_val" == *"\$"* ]]; then
-            # 动态版本: 只把 ~ 换成 . (保守策略)
+            # 动态版本: 仍然保持保守策略，只换 ~ 为 .
             if [[ "$raw_val" == *"~"* ]]; then
                 mode="动态(保守)"
                 new_val=$(echo "$raw_val" | sed 's/~/./g')
             fi
         else
-            # 静态版本: 强力清洗 (去掉v, 非法字符变点, 合并点)
-            # 1. 掐头 (去掉非数字开头)
-            s1=$(echo "$raw_val" | sed 's/^[^0-9]*//')
+            # 静态版本: 强力清洗
+            # 【修复点 1】: 优先截断 ~ 及后面的内容 (针对 2023.01.25~xxxx -> 2023.01.25)
+            s_cut=$(echo "$raw_val" | sed 's/~.*//')
+
+            # 1. 掐头 (去掉非数字开头，例如 v1.0 -> 1.0)
+            s1=$(echo "$s_cut" | sed 's/^[^0-9]*//')
+            
             # 2. 清洗 (非字母数字点 -> .)
             s2=$(echo "$s1" | sed 's/[^a-zA-Z0-9.]/./g')
-            # 3. 整形 (合并点)
+            
+            # 3. 整形 (合并多余的点，去掉末尾的点)
             final_static=$(echo "$s2" | sed 's/\.\{2,\}/./g' | sed 's/\.$//')
             
             if [ "$raw_val" != "$final_static" ]; then
-                mode="静态(强力)"
+                mode="静态(强力截断)"
                 new_val="$final_static"
             fi
         fi
@@ -59,9 +64,12 @@ find . -type f -name "Makefile" | while read -r makefile; do
                     perl -pi -e 's/\Q$ENV{F_OLD}\E/$ENV{F_NEW}/' "$makefile"
                 else
                     # Sed 降级方案
+                    # 【修复点 2】: 你的 safe_old 已经转义了特殊字符，不需要也不应该在 sed 中再加 \Q \E (这是 Perl 语法)
                     safe_old=$(echo "PKG_VERSION:=$raw_val" | sed 's/\[/\\\[/g' | sed 's/\]/\\\]/g' | sed 's/\*/\\*/g' | sed 's/\./\\./g' | sed 's/\$/\\$/g')
                     safe_new="PKG_VERSION:=$new_val"
-                    sed -i "s|^\Q$safe_old\E|$safe_new|" "$makefile" 2>/dev/null || \
+                    
+                    # 尝试精确匹配行首
+                    sed -i "s|^$safe_old|$safe_new|" "$makefile" 2>/dev/null || \
                     sed -i "s|^PKG_VERSION:=.*|$safe_new|" "$makefile"
                 fi
                 echo "  -> 已修正版本号"
@@ -97,10 +105,8 @@ find . -type f -name "Makefile" | while read -r makefile; do
     # =======================================================
     
     # 检查是否有 PKG_MIRROR_HASH 且当前值不完全等于 skip
-    # 这里使用 grep -v 排除掉已经是 skip 的行
     if grep -q "^PKG_MIRROR_HASH:=" "$makefile" && grep "^PKG_MIRROR_HASH:=" "$makefile" | grep -qv "^PKG_MIRROR_HASH:=skip[[:space:]]*$"; then
         
-        #以此获取旧值用于显示
         old_hash=$(grep "^PKG_MIRROR_HASH:=" "$makefile")
         
         echo "[修复 Mirror Hash] $makefile"
@@ -108,7 +114,6 @@ find . -type f -name "Makefile" | while read -r makefile; do
         echo "  目标: PKG_MIRROR_HASH:=skip"
         
         if [ "$DO_EDIT" = true ]; then
-            # 替换整行
             sed -i 's/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=skip/' "$makefile"
             echo "  -> 已修改为 skip"
             file_changed=1
