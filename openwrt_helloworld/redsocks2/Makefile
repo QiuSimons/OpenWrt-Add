@@ -12,7 +12,7 @@ PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/semigodking/redsocks.git
 PKG_SOURCE_DATE:=2025-12-12
 PKG_SOURCE_VERSION:=fca772289edc56fa54b2eb413209ca38d55a57f3
-PKG_MIRROR_HASH:=44942065750e9ee5c80a34300fc3ff57d7ea8a4dc72df06b562a6273c755d371
+PKG_MIRROR_HASH:=skip
 
 PKG_MAINTAINER:=semigodking <semigodking@gmail.com>
 PKG_LICENSE:=Apache-2.0
