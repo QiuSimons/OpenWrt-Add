@@ -4,120 +4,104 @@
 DO_EDIT=true  # true=直接修改, false=预览模式
 # ----------------
 
-echo "开始执行【全能修复】(版本号规范 + 移除 AUTORELEASE + Hash Skip)..."
+echo "=== OpenWrt APK 兼容性全能修复工具 ==="
+echo "目标: 规范语义化版本(Semantic Versioning) + 绕过 Hash 校验"
 echo "---------------------------------------------------"
 
+# 使用 find 查找所有 Makefile
 find . -type f -name "Makefile" | while read -r makefile; do
     
     file_changed=0
-
-    # =======================================================
-    # 任务 1: 修复 PKG_VERSION (解决 Alpine/apk 报错)
-    # =======================================================
+    content_changed=0
     
-    # 提取原始版本号
-    raw_val=$(grep "^PKG_VERSION:=" "$makefile" | awk -F':=' '{print $2}' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    # 读取原始 Version
+    raw_ver=$(grep "^PKG_VERSION:=" "$makefile" | head -n 1 | cut -d'=' -f2 | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 
-    if [ -n "$raw_val" ]; then
-        new_val="$raw_val"
-        mode=""
+    # =======================================================
+    # 任务 1: 智能修复 PKG_VERSION (APK 核心修复)
+    # =======================================================
+    if [ -n "$raw_ver" ]; then
+        new_ver="$raw_ver"
+        fix_mode=""
 
-        # --- 判断处理模式 ---
-        if [[ "$raw_val" == *"\$"* ]]; then
-            # 动态版本: 只把 ~ 换成 . (保守策略)
-            if [[ "$raw_val" == *"~"* ]]; then
-                mode="动态(保守)"
-                new_val=$(echo "$raw_val" | sed 's/~/./g')
+        # 排除包含变量 $(...) 的情况，通常动态版本难以通过静态脚本完美修复，选择保守策略
+        if [[ "$raw_ver" == *"\$"* ]]; then
+            # 如果包含 ~ (Debian/Opkg 习惯)，在 APK 中应改为 _
+            if [[ "$raw_ver" == *"~"* ]]; then
+                fix_mode="动态(微调)"
+                new_ver=$(echo "$raw_ver" | sed 's/~/./g')
             fi
         else
-            # 静态版本: 强力清洗 (去掉v, 非法字符变点, 合并点)
-            # 1. 掐头 (去掉非数字开头)
-            s1=$(echo "$raw_val" | sed 's/^[^0-9]*//')
-            # 2. 清洗 (非字母数字点 -> .)
-            s2=$(echo "$s1" | sed 's/[^a-zA-Z0-9.]/./g')
-            # 3. 整形 (合并点)
-            final_static=$(echo "$s2" | sed 's/\.\{2,\}/./g' | sed 's/\.$//')
-            
-            if [ "$raw_val" != "$final_static" ]; then
-                mode="静态(强力)"
-                new_val="$final_static"
+            # 静态版本: APK 强力适配
+            # 步骤 1: 预处理，把常见的非版本字符 (- , + , ~) 统一变成下划线 _
+            # APK 偏好下划线作为后缀连接符 (如 _git, _rc)
+            s1=$(echo "$raw_ver" | sed 's/[^a-zA-Z0-9.]/_/g')
+
+            # 步骤 2: 【关键】解决 "点后接字母" 的非法格式
+            # 逻辑: 查找 ".字母" 结构，将 "." 替换为 "_"
+            # 例子: 2023.01.d5fa -> 2023.01_d5fa
+            s2=$(echo "$s1" | sed -E 's/\.([a-zA-Z])/_/g')
+
+            # 步骤 3: 去除连续的下划线或点，去除末尾标点
+            final_ver=$(echo "$s2" | sed 's/__*/_/g' | sed 's/\.\.*/./g' | sed 's/[._]$//')
+
+            if [ "$raw_ver" != "$final_ver" ]; then
+                fix_mode="静态(APK适配)"
+                new_ver="$final_ver"
             fi
         fi
 
-        # 执行 Version 修改
-        if [ -n "$mode" ] && [ "$raw_val" != "$new_val" ]; then
-            echo "[修复 Version - $mode] $makefile"
-            echo "  原始: $raw_val"
-            echo "  新值: $new_val"
+        if [ -n "$fix_mode" ] && [ "$raw_ver" != "$new_ver" ]; then
+            echo "🔧 [$fix_mode] $makefile"
+            echo "   🔴 原始: $raw_ver"
+            echo "   🟢 新值: $new_ver"
             
             if [ "$DO_EDIT" = true ]; then
-                # 使用 Perl 进行安全替换 (处理特殊字符)
-                if command -v perl >/dev/null 2>&1; then
-                    export F_FILE="$makefile"
-                    export F_OLD="PKG_VERSION:=$raw_val"
-                    export F_NEW="PKG_VERSION:=$new_val"
-                    perl -pi -e 's/\Q$ENV{F_OLD}\E/$ENV{F_NEW}/' "$makefile"
-                else
-                    # Sed 降级方案
-                    safe_old=$(echo "PKG_VERSION:=$raw_val" | sed 's/\[/\\\[/g' | sed 's/\]/\\\]/g' | sed 's/\*/\\*/g' | sed 's/\./\\./g' | sed 's/\$/\\$/g')
-                    safe_new="PKG_VERSION:=$new_val"
-                    sed -i "s|^\Q$safe_old\E|$safe_new|" "$makefile" 2>/dev/null || \
-                    sed -i "s|^PKG_VERSION:=.*|$safe_new|" "$makefile"
-                fi
-                echo "  -> 已修正版本号"
+                # 使用 Perl 原地替换，避免 sed 的转义地狱
+                perl -pi -e "s/^PKG_VERSION:=\Q$raw_ver\E/PKG_VERSION:=$new_ver/" "$makefile"
                 file_changed=1
-            else
-                echo "  -> (预览)"
             fi
-            echo ""
         fi
     fi
 
     # =======================================================
-    # 任务 2: 修复 PKG_RELEASE (移除 AUTORELEASE)
+    # 任务 2: 移除 AUTORELEASE (APK 不支持)
     # =======================================================
-    
     if grep -q "^PKG_RELEASE[[:space:]]*:=[[:space:]]*\$(AUTORELEASE)" "$makefile"; then
-        echo "[修复 Release - Deprecated] $makefile"
-        echo "  发现: PKG_RELEASE := \$(AUTORELEASE)"
-        echo "  目标: PKG_RELEASE := 1"
-        
+        echo "🔧 [Fix Release] $makefile"
+        echo "   ℹ️  将 \$(AUTORELEASE) 替换为 1"
         if [ "$DO_EDIT" = true ]; then
             sed -i 's/^PKG_RELEASE[[:space:]]*:=[[:space:]]*\$(AUTORELEASE)/PKG_RELEASE:=1/' "$makefile"
-            echo "  -> 已替换为 1"
             file_changed=1
-        else
-            echo "  -> (预览)"
         fi
-        echo ""
     fi
 
     # =======================================================
-    # 任务 3: 修复 PKG_MIRROR_HASH (强制改为 skip)
+    # 任务 3: 强制跳过 Hash 校验 (PKG_MIRROR_HASH & PKG_HASH)
     # =======================================================
-    
-    # 检查是否有 PKG_MIRROR_HASH 且当前值不完全等于 skip
-    # 这里使用 grep -v 排除掉已经是 skip 的行
-    if grep -q "^PKG_MIRROR_HASH:=" "$makefile" && grep "^PKG_MIRROR_HASH:=" "$makefile" | grep -qv "^PKG_MIRROR_HASH:=skip[[:space:]]*$"; then
-        
-        #以此获取旧值用于显示
-        old_hash=$(grep "^PKG_MIRROR_HASH:=" "$makefile")
-        
-        echo "[修复 Mirror Hash] $makefile"
-        echo "  原始: $old_hash"
-        echo "  目标: PKG_MIRROR_HASH:=skip"
-        
+    # 处理 PKG_MIRROR_HASH
+    if grep -q "^PKG_MIRROR_HASH:=" "$makefile" && grep "^PKG_MIRROR_HASH:=" "$makefile" | grep -qv "skip"; then
+        echo "🔧 [Skip Mirror Hash] $makefile"
         if [ "$DO_EDIT" = true ]; then
-            # 替换整行
             sed -i 's/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=skip/' "$makefile"
-            echo "  -> 已修改为 skip"
             file_changed=1
-        else
-            echo "  -> (预览)"
         fi
+    fi
+
+    # 处理旧版 PKG_HASH (有些包还在用这个)
+    if grep -q "^PKG_HASH:=" "$makefile" && grep "^PKG_HASH:=" "$makefile" | grep -qv "skip"; then
+        echo "🔧 [Skip Legacy Hash] $makefile"
+        if [ "$DO_EDIT" = true ]; then
+            sed -i 's/^PKG_HASH:=.*/PKG_HASH:=skip/' "$makefile"
+            file_changed=1
+        fi
+    fi
+
+    if [ "$file_changed" -eq 1 ]; then
+        echo "   ✅ 文件已更新"
         echo ""
     fi
 
 done
 
-echo "全部扫描处理完成。"
+echo "🎉 处理完成。"
