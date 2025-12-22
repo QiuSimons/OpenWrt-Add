@@ -9,12 +9,41 @@ import { cursor } from 'uci';
 import { init_list, init_index, init_enabled, init_action, conntrack_list, process_list } from 'luci.sys';
 import { revision, branch } from 'luci.version';
 import { statvfs, uname } from 'luci.core';
+import { connect } from 'ubus';
 
 import timezones from 'luci.zoneinfo';
 
 
 function shellquote(s) {
 	return `'${replace(s, "'", "'\\''")}'`;
+}
+
+function callPackageVersionCheck(pkg) {
+	let version = "";
+
+	if ( access('/bin/opkg') ) {
+		// <= v24.10
+		let fd = popen('opkg list-installed ' + shellquote(pkg) + ' 2>/dev/null');
+		if (fd) {
+			const re = regexp('^' + pkg + ' - (.+)$', 's');
+			const m = match(fd.read('all'), re);
+			version = m?.[1];
+
+			fd.close();
+		}
+	}
+	else if ( access('/usr/bin/apk') ) {
+		// > v24.10
+		let fd = popen('apk list -I ' + shellquote(pkg) + ' 2>/dev/null');
+		if (fd) {
+			const re = regexp('^' + pkg + '-(.+)$', 's');
+			const m = match(fd.read('all'), re);
+			version = m?.[1];
+
+			fd.close();
+		}
+	}
+	return version;
 }
 
 const methods = {
@@ -66,8 +95,9 @@ const methods = {
 		}
 	},
 
-	getLocaltime: {
+	getUnixtime: {
 		call: function(request) {
+			// time() ; Returns the current UNIX epoch.
 			return { result: time() };
 		}
 	},
@@ -213,11 +243,28 @@ const methods = {
 				relayd:     access('/usr/sbin/relayd') == true,
 				apk:        access('/usr/bin/apk') == true,
 				wifi:       access('/sbin/wifi') == true,
+				ufpd:       access('/usr/sbin/ufpd') == true,
+				vrf:        access('/sys/module/vrf/refcnt') == true, // vrf.ko is loaded
+				netifd_vrf: false,
 				iptables:   access('/usr/sbin/iptables') == true,
 				offload_hw: system((`[[ $(. /etc/openwrt_release ; echo $DISTRIB_TARGET) == "mediatek"* || $(. /etc/openwrt_release ; echo $DISTRIB_TARGET) == *"bcm"* ]]`)) == 0,
 			};
 
-			const wifi_features = [ 'eap', '11ac', '11ax', '11be', '11r', 'acs', 'sae', 'owe', 'suiteb192', 'wep', 'wps', 'ocv' ];
+			const wifi_features = [ 
+				'11ac',
+				'11ax',
+				'11be',
+				'11r',
+				'acs',
+				'eap',
+				'mesh',
+				'ocv',
+				'owe',
+				'sae',
+				'suiteb192',
+				'wep',
+				'wps',
+			];
 
 			if (access('/usr/sbin/hostapd')) {
 				result.hostapd = { cli: access('/usr/sbin/hostapd_cli') == true };
@@ -247,6 +294,28 @@ const methods = {
 
 				fd.close();
 			}
+
+			result.odhcpd = false;
+			fd = popen('odhcpd -h 2>/dev/null');
+
+			if (fd) {
+				const output = fd.read('all');
+
+				if (output) {
+					result.odhcpd = {};
+					const m = match(output, /^Features: (.+)$/s);
+
+					for (let opt in split(m?.[1], ' ')) {
+						let f = replace(opt, 'no-', '', 1);
+						result.odhcpd[lc(f)] = (f == opt);
+					}
+				}
+
+				fd.close();
+			}
+
+			// This check can be removed after v25 release
+			result.netifd_vrf = match(callPackageVersionCheck('netifd'), /^20[0-9][0-9]/s)?.[0] >= 2025;
 
 			fd = popen('ipset --help 2>/dev/null');
 
@@ -501,6 +570,7 @@ const methods = {
 			}
 		}
 	},
+
 	getRealtimeStats: {
 		args: { mode: 'interface', device: 'eth0' },
 		call: function(request) {
@@ -589,6 +659,31 @@ const methods = {
 			}
 
 			return { result: ports };
+		}
+	},
+
+	getOdhcp6cStats: {
+		call: function() {
+			const ubus = connect();
+			const devs = ubus.call('network.device', 'status');
+
+			if (!devs)
+				return false;
+
+			const dev_stats = {};
+
+			for (let dev in devs) {
+				const m = ubus.call(`odhcp6c.${dev}`, 'get_statistics');
+
+				// not all interfaces are exposed unless odhcp6c runs on it
+				if (!m)
+					continue;
+
+				push(dev_stats, dev);
+				dev_stats[dev] = m;
+			}
+
+			return { result: dev_stats };
 		}
 	},
 
