@@ -49,6 +49,7 @@ endef
 
 define Package/$(PKG_NAME)/prerm
 	#!/bin/sh
+# Compatible with both APK (APK_ROOT) and OPKG (IPKG_INSTROOT)
 	[ -z "$${IPKG_INSTROOT}" ] && /etc/init.d/ddns stop >/dev/null 2>&1
 	exit 0 # suppress errors
 endef
