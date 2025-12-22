@@ -6,7 +6,7 @@ PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.xz
 PKG_SOURCE_URL:=https://github.com/scop/bash-completion/releases/download/$(PKG_VERSION)
-PKG_HASH:=5c7494f968280832d6adb5aa19f745a56f1a79df311e59338c5efa6f7285e168
+PKG_HASH:=skip
 
 PKG_MAINTAINER:=sbwml <admin@cooluc.com>
 PKG_LICENSE:=GPL-2.0
