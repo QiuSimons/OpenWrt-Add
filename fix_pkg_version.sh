@@ -4,7 +4,7 @@
 DO_EDIT=true  # true=直接修改, false=预览模式
 # ----------------
 
-echo "开始执行【全能修复】(版本号规范化 + 移除 AUTORELEASE)..."
+echo "开始执行【全能修复】(版本号规范 + 移除 AUTORELEASE + Hash Skip)..."
 echo "---------------------------------------------------"
 
 find . -type f -name "Makefile" | while read -r makefile; do
@@ -77,17 +77,40 @@ find . -type f -name "Makefile" | while read -r makefile; do
     # 任务 2: 修复 PKG_RELEASE (移除 AUTORELEASE)
     # =======================================================
     
-    # 检查是否存在 PKG_RELEASE:=$(AUTORELEASE)
-    # 正则解释: 匹配行首 -> PKG_RELEASE -> 任意空格 -> := -> 任意空格 -> $(AUTORELEASE)
     if grep -q "^PKG_RELEASE[[:space:]]*:=[[:space:]]*\$(AUTORELEASE)" "$makefile"; then
         echo "[修复 Release - Deprecated] $makefile"
         echo "  发现: PKG_RELEASE := \$(AUTORELEASE)"
         echo "  目标: PKG_RELEASE := 1"
         
         if [ "$DO_EDIT" = true ]; then
-            # 替换逻辑
             sed -i 's/^PKG_RELEASE[[:space:]]*:=[[:space:]]*\$(AUTORELEASE)/PKG_RELEASE:=1/' "$makefile"
             echo "  -> 已替换为 1"
+            file_changed=1
+        else
+            echo "  -> (预览)"
+        fi
+        echo ""
+    fi
+
+    # =======================================================
+    # 任务 3: 修复 PKG_MIRROR_HASH (强制改为 skip)
+    # =======================================================
+    
+    # 检查是否有 PKG_MIRROR_HASH 且当前值不完全等于 skip
+    # 这里使用 grep -v 排除掉已经是 skip 的行
+    if grep -q "^PKG_MIRROR_HASH:=" "$makefile" && grep "^PKG_MIRROR_HASH:=" "$makefile" | grep -qv "^PKG_MIRROR_HASH:=skip[[:space:]]*$"; then
+        
+        #以此获取旧值用于显示
+        old_hash=$(grep "^PKG_MIRROR_HASH:=" "$makefile")
+        
+        echo "[修复 Mirror Hash] $makefile"
+        echo "  原始: $old_hash"
+        echo "  目标: PKG_MIRROR_HASH:=skip"
+        
+        if [ "$DO_EDIT" = true ]; then
+            # 替换整行
+            sed -i 's/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=skip/' "$makefile"
+            echo "  -> 已修改为 skip"
             file_changed=1
         else
             echo "  -> (预览)"
