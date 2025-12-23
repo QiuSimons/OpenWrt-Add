@@ -6,11 +6,23 @@ start() {
     echo 1 > /proc/sys/net/ipv4/conf/br-lan/proxy_arp
 
     echo 65535 > /proc/sys/net/core/somaxconn
-    echo 8192 > /proc/sys/net/ipv4/tcp_max_syn_backlog
-    echo 7500000 > /proc/sys/net/core/rmem_max
-    echo 7500000 > /proc/sys/net/core/wmem_max
-    echo "4096 16384 16777216" > /proc/sys/net/ipv4/tcp_wmem
-    echo "4096 87380 16777216" > /proc/sys/net/ipv4/tcp_rmem
+    echo 16384 > /proc/sys/net/ipv4/tcp_max_syn_backlog
+    echo 16384 > /proc/sys/net/core/netdev_max_backlog
+
+    mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+    if [ "$mem_kb" -ge 4194304 ]; then
+        t_max=134217728; c_max=4194304
+    elif [ "$mem_kb" -ge 1048576 ]; then
+        t_max=67108864; c_max=4194304
+    else
+        t_max=33554432; c_max=2097152
+    fi
+
+    echo "$t_max" > /proc/sys/net/core/rmem_max
+    echo "$t_max" > /proc/sys/net/core/wmem_max
+    echo "4096 87380 $t_max" > /proc/sys/net/ipv4/tcp_rmem
+    echo "4096 65536 $t_max" > /proc/sys/net/ipv4/tcp_wmem
+    echo "$c_max" > /proc/sys/net/ipv4/tcp_collapse_max_bytes
 
     enable_offload() {
         ethtool -K "$1" "$2" on 2>/dev/null || :
