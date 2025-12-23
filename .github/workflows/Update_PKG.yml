@@ -63,9 +63,9 @@ jobs:
           git clone --depth 1 https://github.com/timsaya/openwrt-bandix
           git clone --depth 1 https://github.com/timsaya/luci-app-bandix
           git clone -b master https://github.com/jerrykuku/luci-theme-argon
-          sed -i 's/26rem/30rem/g' ./luci-theme-argon/htdocs/luci-static/argon/css/cascade.css
-          #git -C ./luci-theme-argon checkout 88cd27c
-          #sed -i 's/420px/440px/g' ./luci-theme-argon/htdocs/luci-static/argon/css/cascade.css
+          git -C ./luci-theme-argon checkout 88cd27c
+          #sed -i 's/26rem/30rem/g' ./luci-theme-argon/htdocs/luci-static/argon/css/cascade.css
+          sed -i 's/420px/440px/g' ./luci-theme-argon/htdocs/luci-static/argon/css/cascade.css
           git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config
           git clone --depth 1 https://github.com/kiddin9/luci-app-dnsfilter
           git clone --depth 1 https://github.com/kiddin9/luci-theme-edge
