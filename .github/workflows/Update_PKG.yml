@@ -64,6 +64,7 @@ jobs:
           git clone --depth 1 https://github.com/timsaya/luci-app-bandix
           git clone -b master https://github.com/jerrykuku/luci-theme-argon
           sed -i 's/26rem/30rem/g' ./luci-theme-argon/htdocs/luci-static/argon/css/cascade.css
+          sed -i 's/\.login-page \.login-container{margin-left:0rem !important;width:100%}/.login-page .login-container{margin-left:0rem !important;width:100%;height:auto!important;position:fixed;top:0;bottom:0;overflow-y:auto}/' ./luci-theme-argon/htdocs/luci-static/argon/css/cascade.css
           #git -C ./luci-theme-argon checkout 88cd27c
           #sed -i 's/420px/440px/g' ./luci-theme-argon/htdocs/luci-static/argon/css/cascade.css
           git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config
