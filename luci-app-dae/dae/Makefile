@@ -80,8 +80,8 @@ define Build/Compile
 		wget -qO - https://github.com/QiuSimons/dae/commit/c8d514e.patch | patch -p1 -N || true ; \
 		wget -qO - https://github.com/QiuSimons/dae/commit/9cba1b1.patch | patch -p1 -N || true ; \
 		echo "fix" ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/c09c1b0.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/1cc8932.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/013b60e.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/a14e9c5.patch | patch -p1 -N || true ; \
 		go mod edit -replace="github.com/daeuniverse/outbound=github.com/lostattractor/outbound@next" ; \
 		go get -u=patch ; \
 		go get github.com/cilium/ebpf@latest ; \
