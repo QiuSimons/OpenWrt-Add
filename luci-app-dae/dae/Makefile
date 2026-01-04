@@ -79,6 +79,7 @@ define Build/Compile
 		wget -qO - https://github.com/QiuSimons/dae/commit/957aa73.patch | patch -p1 -N || true ; \
 		wget -qO - https://github.com/QiuSimons/dae/commit/c8d514e.patch | patch -p1 -N || true ; \
 		wget -qO - https://github.com/QiuSimons/dae/commit/9cba1b1.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/187da32.patch | patch -p1 -N || true ; \
 		wget -qO - https://github.com/QiuSimons/dae/commit/aaaf0c8.patch | patch -p1 -N || true ; \
 		echo "fix" ; \
 		wget -qO - https://github.com/QiuSimons/dae/commit/013b60e.patch | patch -p1 -N || true ; \
