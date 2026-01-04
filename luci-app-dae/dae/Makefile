@@ -71,19 +71,11 @@ define Build/Compile
 	( \
 		pushd $(PKG_BUILD_DIR) ; \
 		echo "fix" ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/f6b4438.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/b689ffe.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/fc06996.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/3350695.patch | patch -p1 -N || true ; \
-		echo "boost" ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/957aa73.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/c8d514e.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/9cba1b1.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/187da32.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/87f9bac.patch | patch -p1 -N || true ; \
-		echo "fix" ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/013b60e.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/a14e9c5.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/9a97d86.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/b7000b8.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/5d79bc2.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/b9e76e3.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/bd0a7dd.patch | patch -p1 -N || true ; \
 		go mod edit -replace="github.com/daeuniverse/outbound=github.com/lostattractor/outbound@next" ; \
 		go get -u=patch ; \
 		go get github.com/cilium/ebpf@latest ; \
