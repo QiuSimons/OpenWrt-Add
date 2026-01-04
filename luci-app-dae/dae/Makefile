@@ -76,6 +76,10 @@ define Build/Compile
 		wget -qO - https://github.com/QiuSimons/dae/commit/5d79bc2.patch | patch -p1 -N || true ; \
 		wget -qO - https://github.com/QiuSimons/dae/commit/b9e76e3.patch | patch -p1 -N || true ; \
 		wget -qO - https://github.com/QiuSimons/dae/commit/bd0a7dd.patch | patch -p1 -N || true ; \
+		echo "boost" ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/8e5a658.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/9fc0134.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/47a93b1.patch | patch -p1 -N || true ; \
 		go mod edit -replace="github.com/daeuniverse/outbound=github.com/lostattractor/outbound@next" ; \
 		go get -u=patch ; \
 		go get github.com/cilium/ebpf@latest ; \
