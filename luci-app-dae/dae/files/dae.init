@@ -11,6 +11,7 @@ CONF="dae"
 PROG="/usr/bin/dae"
 LOG="/var/log/dae/dae.log"
 CRON_FILE="/etc/crontabs/root"
+DAENETNS="/run/netns/daens"
 RANDOM_SEED=$RANDOM
 RANDOM_NUM=$((RANDOM_SEED % 10 + 1))
 
@@ -87,6 +88,7 @@ start_service() {
 stop_service() {
     delcron
     setlocaluse
+    [ -f "$DAENETNS" ] && unmount "$DAENETNS"
     rm -rf "$LOG"
 }
 
