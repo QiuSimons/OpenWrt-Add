@@ -80,7 +80,6 @@ define Package/$(PKG_NAME)
     +EINAT_EBPF_BACKEND_LIBBPF:libbpf \
     +@KERNEL_DEBUG_FS +@KERNEL_DEBUG_INFO_BTF
   USERID:=einat:einat
-  PROVIDES:=einat
 endef
 
 define Package/$(PKG_NAME)/description
