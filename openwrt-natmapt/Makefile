@@ -86,7 +86,7 @@ define Package/natmapt-scripts/Default
 	CATEGORY:=Network
 	TITLE:=NATMap $(1) scripts ($(2))
 	DEPENDS:=+natmapt
-	PROVIDES:=@natmapt-$(1)-scripts-$(2)
+	PROVIDES:=@natmapt-$(1)-scripts @natmapt-$(1)-script-$(2)
 	VERSION:=$(SCRIPTS_VERSION)
 	PKGARCH:=all
 endef

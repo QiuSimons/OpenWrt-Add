@@ -88,7 +88,7 @@ start_service() {
 stop_service() {
     delcron
     setlocaluse
-    [ -f "$DAENETNS" ] && unmount "$DAENETNS"
+    [ -f "$DAENETNS" ] && umount "$DAENETNS"
     rm -rf "$LOG"
 }
 
