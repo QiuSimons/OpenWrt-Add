@@ -7,7 +7,7 @@ include $(TOPDIR)/rules.mk
 PKG_NAME:=einat-ebpf
 PKG_UPSTREAM_VERSION:=0.1.10
 PKG_UPSTREAM_GITHASH:=
-PKG_VERSION:=$(PKG_UPSTREAM_VERSION)
+PKG_VERSION:=$(PKG_UPSTREAM_VERSION)$(if $(PKG_UPSTREAM_GITHASH),~$(call version_abbrev,$(PKG_UPSTREAM_GITHASH)))
 PKG_RELEASE:=2
 
 PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_UPSTREAM_VERSION)
@@ -22,7 +22,7 @@ else
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/EHfive/einat-ebpf.git
 PKG_SOURCE_VERSION:=$(PKG_UPSTREAM_GITHASH)
-PKG_MIRROR_HASH:=skip
+PKG_MIRROR_HASH:=6cc83cb1fb80896bb4c3d364d88e6009de0f05cf77373f1f18b1181057b6eff5
 
 PKG_SOURCE:=$(PKG_SOURCE_SUBDIR)-$(PKG_SOURCE_VERSION).tar.gz
 endif
@@ -95,13 +95,14 @@ define Package/$(PKG_NAME)/config
 
 		config EINAT_EBPF_IPV6
 			bool "Enable IPV6 NAT66 feature"
-			default y
+			default n
 			help
 			  It would increase load time of eBPF programs to
 			  about 4 times.
 
 		config EINAT_EBPF_BACKEND_LIBBPF
 			bool "Enable libbpf backend"
+			default y if (aarch64 || x86_64)
 			default n
 			help
 			  Add fallback BPF loading backend: "libbpf".
