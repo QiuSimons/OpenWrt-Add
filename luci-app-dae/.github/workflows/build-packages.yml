@@ -35,8 +35,8 @@ jobs:
           sudo -E apt-get -qq install clang-15 llvm-15 npm
           sudo npm install -g pnpm
           sudo npm i taze -g
-          latest_commit="$(curl -s https://api.github.com/repos/LostAttractor/dae/commits/next | jq -r '.sha' | cut -b 1-7)"
-          timestamp=$(curl -s https://api.github.com/repos/LostAttractor/dae/commits/next | jq -r '.commit.author.date')
+          latest_commit="$(curl -s https://api.github.com/repos/ppdragon16/dae/commits/next-new-dns-lib | jq -r '.sha' | cut -b 1-7)"
+          timestamp=$(curl -s https://api.github.com/repos/ppdragon16/dae/commits/next-new-dns-lib | jq -r '.commit.author.date')
           formatted_timestamp=$(date --date="$timestamp" "+%Y-%m-%d")
           echo "version=$latest_commit" >> "$GITHUB_ENV"
 
@@ -58,10 +58,10 @@ jobs:
       - name: Upload packages
         uses: ncipollo/release-action@v1
         with:
-          name: dae_${{ env.version }}
+          name: dae_ppd_${{ env.version }}
           allowUpdates: true
-          tag: dae_${{ env.version }}
-          commit: next
+          tag: dae_ppd_${{ env.version }}
+          commit: ppdragon16
           token: ${{secrets.ACTIONS_DEPLOY_KEY}}
           replacesArtifacts: true
           artifacts: "bin/packages/${{ matrix.arch }}/packages_ci/*.ipk"

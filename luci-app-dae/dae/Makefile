@@ -5,13 +5,13 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2026.01.13
+PKG_VERSION:=2026.01.14
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=d7040bcd25d80d764896a861df2d7f254ce723ad
-PKG_SOURCE_URL:=https://github.com/LostAttractor/dae.git
+PKG_SOURCE_VERSION:=76017b2a19d43ae1ba3633e0a5e00fd5bc15ec40
+PKG_SOURCE_URL:=https://github.com/ppdragon16/dae.git
 PKG_MIRROR_HASH:=skip
 
 PKG_LICENSE:=AGPL-3.0-only
@@ -70,13 +70,7 @@ endef
 define Build/Compile
 	( \
 		pushd $(PKG_BUILD_DIR) ; \
-		echo "fix" ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/031b788.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/dc3b905.patch | patch -p1 -N || true ; \
-		echo "boost" ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/7a816f1.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/9def2a3.patch | patch -p1 -N || true ; \
-		go mod edit -replace="github.com/daeuniverse/outbound=github.com/lostattractor/outbound@next" ; \
+		go mod edit -replace="github.com/daeuniverse/outbound=github.com/ppdragon16/outbound@next" ; \
 		go get -u=patch ; \
 		go get github.com/cilium/ebpf@latest ; \
 		go mod tidy ; \
