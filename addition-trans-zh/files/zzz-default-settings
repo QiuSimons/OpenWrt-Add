@@ -194,6 +194,10 @@ echo "log-facility=/dev/null" >> /etc/dnsmasq.conf
 sed -i 's/eth1/eth1.*/g' /etc/hotplug.d/net/40-net-smp-affinity
 sed -i 's/eth0/eth0.*/g' /etc/hotplug.d/net/40-net-smp-affinity
 
+#bandix
+uci set bandix.general.log_level='error'
+uci commit bandix
+
 #SIP fix
 sed -i '/sip/d' /etc/modules.d/nf-nathelper-extra
 
