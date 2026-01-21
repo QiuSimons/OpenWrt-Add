@@ -18,18 +18,21 @@ if not fs.access(dns_file) then
     fs.writefile(dns_file, [[# dns.dae
 dns {
     upstream {
-        localdns:'udp://127.0.0.1:53'
-        overseadns:'udp://dns.google:53'
+        localdns: 'udp://127.0.0.1:53'
+        overseadns: 'tcp+udp://dns.google:53'
     }
     routing {
         request {
             qtype(https) -> reject
             qname(geosite:gfw) -> overseadns
-            fallback:localdns
+            fallback: localdns
         }
         response {
-            upstream(localdns) && !ip(geoip:cn) -> overseadns
-            fallback:accept
+            qname(geosite:private) -> accept
+            upstream(overseadns) -> accept
+            ip(geoip:private) -> accept
+            !ip(geoip:cn) -> overseadns
+            fallback: accept
         }
     }
 }]]
