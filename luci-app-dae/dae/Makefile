@@ -5,12 +5,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2026.01.18
+PKG_VERSION:=2026.01.21
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=b874d4842463c71e1142f46adf47c3d961e811b9
+PKG_SOURCE_VERSION:=e2de3c2a638f62bc071870c3954a84f567ac0ddd
 PKG_SOURCE_URL:=https://github.com/ppdragon16/dae.git
 PKG_MIRROR_HASH:=skip
 
@@ -70,9 +70,11 @@ endef
 define Build/Compile
 	( \
 		pushd $(PKG_BUILD_DIR) ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/7ded606.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/dae/commit/44b2bb5.patch | patch -p1 -N || true ; \
-		go mod edit -replace="github.com/daeuniverse/outbound=github.com/ppdragon16/outbound@next" ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/ce19c8f.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/f9cf72e.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/aa435bd.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/dae/commit/3c76088.patch | patch -p1 -N || true ; \
+		go mod edit -replace="github.com/daeuniverse/outbound=github.com/QiuSimons/outbound@next" ; \
 		go get -u=patch ; \
 		go get github.com/cilium/ebpf@latest ; \
 		go mod tidy ; \
