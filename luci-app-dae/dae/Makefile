@@ -5,12 +5,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2026.01.25
+PKG_VERSION:=2026.01.26
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=1e71cc8741eecec5492fb561be0e69c69a22a103
+PKG_SOURCE_VERSION:=2c58b162bcbf007085b57aa51f74d05d0f113524
 PKG_SOURCE_URL:=https://github.com/ppdragon16/dae.git
 PKG_MIRROR_HASH:=skip
 
@@ -37,7 +37,7 @@ include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
 GO_PKG_TARGET_VARS+= \
 	CGO_LDFLAGS="$(TARGET_LDFLAGS) -static" \
-	GOEXPERIMENT=greenteagc,newinliner,runtimefreegc,simd
+	GOEXPERIMENT=newinliner,runtimefreegc,simd
 
 GO_PKG_DEFAULT_LDFLAGS:=-w -s -linkmode external -extldflags '-static'
 
