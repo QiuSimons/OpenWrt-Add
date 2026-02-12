@@ -10,6 +10,7 @@ local chnlist_path = "/usr/share/passwall/rules/chnlist"
 local chnroute_path = "/usr/share/passwall/rules/chnroute"
 
 m = Map(appname)
+api.set_apply_on_parse(m)
 
 function clean_text(text)
 	local nbsp = string.char(0xC2, 0xA0) -- 不间断空格（U+00A0）
@@ -338,18 +339,8 @@ if api.finded_com("geoview") and fs.access(geosite_path) and fs.access(geoip_pat
 	end
 end
 
-function m.on_before_save(self)
+m.on_before_save = function(self)
 	m:set("@global[0]", "flush_set", "1")
-end
-
-if api.is_js_luci() then
-	function m.on_before_save(self)
-		api.sh_uci_set(appname, "@global[0]", "flush_set", "1", true)
-	end
-	m.apply_on_parse = true
-	function m.on_apply(self)
-		luci.sys.call("/etc/init.d/passwall reload > /dev/null 2>&1 &")
-	end
 end
 
 return m

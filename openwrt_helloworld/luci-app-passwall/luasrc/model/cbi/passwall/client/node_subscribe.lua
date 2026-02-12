@@ -12,6 +12,7 @@ local trojan_type = {}
 local vmess_type = {}
 local vless_type = {}
 local hysteria2_type = {}
+local xray_version = api.get_app_version("xray")
 if has_ss then
 	local s = "shadowsocks-libev"
 	table.insert(ss_type, s)
@@ -38,6 +39,9 @@ if has_xray then
 	table.insert(ss_type, s)
 	table.insert(vmess_type, s)
 	table.insert(vless_type, s)
+	if api.compare_versions(xray_version, ">=", "26.1.13") then
+		table.insert(hysteria2_type, s)
+	end
 end
 if has_hysteria2 then
 	local s = "hysteria2"
@@ -45,12 +49,9 @@ if has_hysteria2 then
 end
 
 m = Map(appname)
+api.set_apply_on_parse(m)
 
--- [[ Subscribe Settings ]]--
-s = m:section(TypedSection, "global_subscribe", "")
-s.anonymous = true
-
-function m.commit_handler(self)
+function m.on_before_save(self)
 	if self.no_commit then
 		return
 	end
@@ -59,10 +60,9 @@ function m.commit_handler(self)
 	end)
 end
 
-m.render = function(self, ...)
-	Map.render(self, ...)
-	api.optimize_cbi_ui()
-end
+-- [[ Subscribe Settings ]]--
+s = m:section(TypedSection, "global_subscribe", "")
+s.anonymous = true
 
 o = s:option(ListValue, "filter_keyword_mode", translate("Filter keyword Mode"))
 o:value("0", translate("Close"))
@@ -137,7 +137,7 @@ o = s:option(DummyValue, "_stop", translate("Delete All Subscribe Node"))
 o.rawhtml = true
 function o.cfgvalue(self, section)
 	return string.format(
-		[[<button type="button" class="cbi-button cbi-button-remove" onclick="return confirmDeleteAll()">%s</button>]],
+		[[<input type="button" class="btn cbi-button cbi-button-remove" onclick="return confirmDeleteAll()" value="%s" />]],
 		translate("Delete All Subscribe Node"))
 end
 
@@ -145,7 +145,7 @@ o = s:option(DummyValue, "_update", translate("Manual subscription All"))
 o.rawhtml = true
 o.cfgvalue = function(self, section)
     return string.format([[
-        <button type="button" class="cbi-button cbi-button-apply" onclick="ManualSubscribeAll()">%s</button>]],
+        <input type="button" class="btn cbi-button cbi-button-apply" onclick="ManualSubscribeAll()" value="%s" />]],
 	 translate("Manual subscription All"))
 end
 
@@ -156,6 +156,7 @@ s.sortable = true
 s.template = "cbi/tblsection"
 s.extedit = api.url("node_subscribe_config", "%s")
 function s.create(e, t)
+	m.no_commit = true
 	local id = TypedSection.create(e, t)
 	luci.http.redirect(e.extedit:format(id))
 end
@@ -186,6 +187,18 @@ o.write = function(self, section, value)
 		m.uci:foreach(appname, "nodes", function(e)
 			if e["group"] and e["group"]:lower() == old:lower() then
 				m.uci:set(appname, e[".name"], "group", value)
+			end
+			if e["protocol"] and (e["protocol"] == "_balancing" or e["protocol"] == "_urltest") and e["node_group"] then
+				local gs = ""
+				for g in e["node_group"]:gmatch("%S+") do
+					if api.UrlEncode(old) == g then
+						gs = gs .. " " .. api.UrlEncode(value)
+					else
+						gs = gs .. " " .. g
+					end
+				end
+				gs = api.trim(gs)
+				m.uci:set(appname, e[".name"], "node_group", gs)
 			end
 		end)
 	end
@@ -220,7 +233,7 @@ o.rawhtml = true
 function o.cfgvalue(self, section)
 	local remark = m:get(section, "remark") or ""
 	return string.format(
-		[[<button type="button" class="cbi-button cbi-button-remove" onclick="return confirmDeleteNode('%s')">%s</button>]],
+		[[<input type="button" class="btn cbi-button cbi-button-remove" onclick="return confirmDeleteNode('%s')" value="%s" />]],
 		remark, translate("Delete the subscribed node"))
 end
 
@@ -228,10 +241,10 @@ o = s:option(DummyValue, "_update", translate("Manual subscription"))
 o.rawhtml = true
 o.cfgvalue = function(self, section)
     return string.format([[
-        <button type="button" class="cbi-button cbi-button-apply" onclick="ManualSubscribe('%s')">%s</button>]],
+        <input type="button" class="btn cbi-button cbi-button-apply" onclick="ManualSubscribe('%s')" value="%s" />]],
 	section, translate("Manual subscription"))
 end
 
-s:append(Template(appname .. "/node_subscribe/js"))
+m:append(Template(appname .. "/node_subscribe/js"))
 
 return m

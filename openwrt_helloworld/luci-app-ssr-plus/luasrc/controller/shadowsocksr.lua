@@ -7,7 +7,7 @@ function index()
 		call("act_reset")
 	end
 	local page
-	page = entry({"admin", "services", "shadowsocksr"}, alias("admin", "services", "shadowsocksr", "client"), _("ShadowSocksR Plus+"), 1)
+	page = entry({"admin", "services", "shadowsocksr"}, alias("admin", "services", "shadowsocksr", "client"), _("ShadowSocksR Plus+"), 10)
 	page.dependent = true
 	page.acl_depends = { "luci-app-ssr-plus" }
 	entry({"admin", "services", "shadowsocksr", "client"}, cbi("shadowsocksr/client"), _("SSR Client"), 10).leaf = true
@@ -98,10 +98,14 @@ function act_ping()
         end
 
         if not e.ping then
-            e.ping = tonumber(luci.sys.exec(string.format(
+            local ping_result = tonumber(luci.sys.exec(string.format(
                 "nping --udp -c 1 -p %d %s 2>/dev/null | grep -o 'Avg rtt: [0-9.]*ms' | awk '{print $3}' | sed 's/ms//' | head -1",
                 port, domain
             )))
+            local ping_num = tonumber(ping_result)
+            if ping_num then
+                e.ping = math.floor(ping_num)
+            end
         end
     end
 

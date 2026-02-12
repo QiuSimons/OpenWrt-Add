@@ -1,12 +1,13 @@
 # Copyright (C) 2018-2020 L-WRT Team
 # Copyright (C) 2021-2025 xiaorouji
+# Copyright (C) 2026 Openwrt-Passwall Organization
 #
 # This is free software, licensed under the GNU General Public License v3.
 
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-passwall
-PKG_VERSION:=25.12.1
+PKG_VERSION:=26.2.6
 PKG_RELEASE:=1
 PKG_PO_VERSION:=$(PKG_VERSION)
 
@@ -69,7 +70,7 @@ config PACKAGE_$(PKG_NAME)_Nftables_Transparent_Proxy
 config PACKAGE_$(PKG_NAME)_INCLUDE_Geoview
 	bool "Include Geoview"
 	select PACKAGE_geoview
-	default n
+	default y if aarch64||arm||i386||x86_64
 
 config PACKAGE_$(PKG_NAME)_INCLUDE_Haproxy
 	bool "Include Haproxy"
