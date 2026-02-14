@@ -20,8 +20,8 @@ load_sfe() {
 start() {
 	[ "$(uci -q get firewall.@defaults[0].shortcut_fe)" != 1 ] && return 1
 	rmmod qca-nss-sfe 2>/dev/null
-	insmod shortcut-fe 2>/dev/null
-	insmod shortcut-fe-ipv6  2>/dev/null
+	modprobe shortcut-fe 2>/dev/null
+	modprobe shortcut-fe-ipv6  2>/dev/null
 	module=$(uci -q get firewall.@defaults[0].shortcut_fe_module)
 	[ ! -d "/sys/kernel/debug/ecm" ] && load_sfe $module
 }
