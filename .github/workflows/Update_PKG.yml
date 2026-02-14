@@ -18,6 +18,8 @@ jobs:
         run: |
           rm -rf lede_pkg openwrt-bandix luci-app-bandix openwrt-einat-ebpf luci-app-einat nft-fullcone shortcut-fe luci-app-airconnect feeds_packages_lang_node-prebuilt package_kernel_r8125 OpenAppFilter luci-app-mosdns packages_new_nat6 luci-app-daed openwrt-r8168 luci-theme-argon luci-app-ramfree luci-app-argon-config luci-app-dnsfilter luci-theme-edge luci-app-xlnetacc luci-app-mentohust MentoHUST-OpenWrt-ipk luci-app-oled homeproxy OpenClash luci-app-wechatpush luci-app-v2raya luci-app-natmapt openwrt-natmapt openwrt-stuntman luci-app-unblockneteasemusic OpenWrt-mihomo wrtbwmon luci-app-wrtbwmon openwrt_helloworld openwrt_pkgs openwrt-natflow autocore-arm luci-app-taskplan luci-app-partexp luci-app-frps luci-app-frpc luci-app-uugamebooster uugamebooster luci-app-ap-modem luci-app-arpbind imm_pkg openwrt-qBittorrent luci-app-filemanager luci-app-dae
           git clone --depth 1 https://git.cooluc.com/sbwml/shortcut-fe
+          sed -i '/AUTOLOAD/d' ./shortcut-fe/shortcut-fe/Makefile
+          cp -rf ./shortcut-fe.bak ./shortcut-fe/shortcut-fe/files/etc/init.d/shortcut-fe
           git clone --depth 1 https://github.com/sbwml/luci-app-airconnect
           sed -i 's,respawn,respawn 3600 5 0,g' ./luci-app-airconnect/airconnect/files/airconnect.init
           sed -i '/^PKG_HASH/d; /PKG_SOURCE_URL/a PKG_HASH:=skip' ./luci-app-airconnect/airconnect/Makefile
