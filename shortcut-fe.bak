@@ -1,0 +1,35 @@
+#!/bin/sh /etc/rc.common
+
+START=70
+
+#load shortcut-fe and connection manager
+load_sfe() {
+	local kernel_version=$(uname -r)
+
+	echo 1 > /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal
+
+	[ "$1" = "shortcut-fe-cm" ] && module_path=shortcut_fe_cm
+	[ "$1" = "fast-classifier" ] && module_path=fast_classifier
+
+	[ -e "/lib/modules/$kernel_version/$1.ko" ] && {
+		[ -d "/sys/module/$module_path" ] || insmod /lib/modules/$kernel_version/$1.ko
+	}
+	[ "$1" = "fast-classifier" ] && echo 4 > /sys/fast_classifier/offload_at_pkts
+}
+
+start() {
+	[ "$(uci -q get firewall.@defaults[0].shortcut_fe)" != 1 ] && return 1
+	rmmod qca-nss-sfe 2>/dev/null
+	insmod shortcut-fe 2>/dev/null
+	insmod shortcut-fe-ipv6  2>/dev/null
+	module=$(uci -q get firewall.@defaults[0].shortcut_fe_module)
+	[ ! -d "/sys/kernel/debug/ecm" ] && load_sfe $module
+}
+
+stop() {
+	rmmod shortcut-fe 2>/dev/null
+	rmmod shortcut-fe-ipv6 2>/dev/null
+	[ -d "/sys/module/fast_classifier" ] && rmmod fast_classifier
+	[ -d "/sys/module/shortcut_fe_cm" ] && rmmod shortcut_fe_cm
+	echo 0 > /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal
+}
