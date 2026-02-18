@@ -5,13 +5,13 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2026.02.11
+PKG_VERSION:=2026.02.18
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=aa87ec061b6c035b56119f80dc9bd38bd6b6ee59
-PKG_SOURCE_URL:=https://github.com/ppdragon16/dae.git
+PKG_SOURCE_VERSION:=7b4ecfd39368b67f96d14e87578093d87f064c97
+PKG_SOURCE_URL:=https://github.com/olicesx/dae.git
 PKG_MIRROR_HASH:=skip
 
 PKG_LICENSE:=AGPL-3.0-only
@@ -70,9 +70,7 @@ endef
 define Build/Compile
 	( \
 		pushd $(PKG_BUILD_DIR) ; \
-		go mod edit -replace="github.com/daeuniverse/outbound=github.com/ppdragon16/outbound@next" ; \
-		go get -u=patch ; \
-		go get github.com/cilium/ebpf@latest ; \
+        go get -u=patch ; \
 		go mod tidy ; \
 		popd ; \
 		export \
