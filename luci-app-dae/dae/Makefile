@@ -65,6 +65,7 @@ DAE_CFLAGS:= \
 define Build/Prepare
 	$(call Build/Prepare/Default)
 	[ -f "$(PGO_PROFILE)" ] && $(CP) "$(PGO_PROFILE)" "$(PKG_BUILD_DIR)/default.pgo" || true
+	printf 'package scripts\n' > $(PKG_BUILD_DIR)/scripts/doc.go || true
 endef
 
 define Build/Compile
