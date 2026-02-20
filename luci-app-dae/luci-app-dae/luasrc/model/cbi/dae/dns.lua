@@ -19,7 +19,7 @@ if not fs.access(dns_file) then
 dns {
     upstream {
         localdns: 'udp://127.0.0.1:53'
-        overseadns: 'tcp+udp://dns.google:53'
+        overseadns: 'tcp+udp://one.one.one.one:53'
     }
     routing {
         request {
