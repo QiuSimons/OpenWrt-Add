@@ -5,12 +5,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2026.02.19
+PKG_VERSION:=2026.02.20
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=8828b245b1ad00b50d122c33ff78b69e2db108d0
+PKG_SOURCE_VERSION:=b9aa60012de9c3243637935a7ffd92f82f32f39a
 PKG_SOURCE_URL:=https://github.com/olicesx/dae.git
 PKG_MIRROR_HASH:=skip
 
@@ -23,7 +23,7 @@ PKG_BUILD_PARALLEL:=1
 PKG_BUILD_FLAGS:=no-mips16
 
 GO_PKG:=github.com/daeuniverse/dae
-GO_PKG_EXCLUDES:=control/kern/tests scripts
+GO_PKG_EXCLUDES:=control/kern/tests
 GO_PKG_LDFLAGS_X:= \
 	$(GO_PKG)/cmd.Version=$(PKG_VERSION) \
 	$(GO_PKG)/common/consts.MaxMatchSetLen_=1024
