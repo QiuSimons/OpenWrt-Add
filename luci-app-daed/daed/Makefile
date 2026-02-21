@@ -5,10 +5,10 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=daed
-PKG_VERSION:=2026.02.20
+PKG_VERSION:=2026.02.21
 DAED_VERSION:=daed-f045ecd
 WING_VERSION:=wing-6bb6a31
-CORE_VERSION:=core-fc49453
+CORE_VERSION:=core-de65f12
 WING_HASH_SHORT:=$(shell echo $(WING_VERSION) | cut -d- -f2)
 CORE_HASH_SHORT:=$(shell echo $(CORE_VERSION) | cut -d- -f2)
 PKG_RELEASE:=1
@@ -87,7 +87,7 @@ define Build/Prepare
 		go mod tidy ; \
 		popd ; \
         rm -rf $(PKG_BUILD_DIR)/../outbound ; \
-		git clone --depth=1 -b feat/ss2022-support https://github.com/olicesx/outbound.git $(PKG_BUILD_DIR)/../outbound ; \
+		git clone --depth=1 -b perf/complete-optimizations https://github.com/olicesx/outbound.git $(PKG_BUILD_DIR)/../outbound ; \
 		pushd $(PKG_BUILD_DIR) ; \
 		go mod edit -replace github.com/daeuniverse/outbound=../outbound ; \
 		wget -qO - https://github.com/daeuniverse/dae-wing/commit/157668a.patch | patch -p1 -N || true ; \
