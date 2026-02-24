@@ -19,7 +19,7 @@ load_sfe() {
 
 start() {
 	[ "$(uci -q get firewall.@defaults[0].shortcut_fe)" != 1 ] && return 1
-	rmmod qca-nss-sfe 2>/dev/null
+    lsmod | grep -q "^qca[-_]nss[-_]sfe " && rmmod qca-nss-sfe
 	modprobe shortcut-fe 2>/dev/null
 	modprobe shortcut-fe-ipv6  2>/dev/null
 	module=$(uci -q get firewall.@defaults[0].shortcut_fe_module)
@@ -27,8 +27,8 @@ start() {
 }
 
 stop() {
-	rmmod shortcut-fe 2>/dev/null
-	rmmod shortcut-fe-ipv6 2>/dev/null
+	lsmod | grep -q "^shortcut[-_]fe " && rmmod shortcut-fe
+	lsmod | grep -q "^shortcut[-_]fe[-_]ipv6 " && rmmod shortcut-fe-ipv6
 	[ -d "/sys/module/fast_classifier" ] && rmmod fast_classifier
 	[ -d "/sys/module/shortcut_fe_cm" ] && rmmod shortcut_fe_cm
 	echo 0 > /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal
