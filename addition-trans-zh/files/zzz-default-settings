@@ -1,5 +1,9 @@
 #!/bin/sh
 
+#aurora
+uci set luci.main.mediaurlbase='/luci-static/aurora'
+uci commit luci
+
 #自动语言
 uci set luci.main.lang=auto
 uci commit luci
@@ -7,15 +11,6 @@ uci commit luci
 #自动挂载
 uci set fstab.@global[0].anon_mount=1
 uci commit fstab
-
-#Argon 主题
-ln -sf "/www/luci-static/argon/favicon.ico" "/www/favicon.ico"
-ln -sf "/www/luci-static/argon/icon/apple-icon-144x144.png" "/www/apple-touch-icon-precomposed.png"
-ln -sf "/www/luci-static/argon/icon/apple-icon-144x144.png" "/www/apple-touch-icon.png"
-uci set luci.main.mediaurlbase='/luci-static/argon'
-uci commit luci
-uci set argon.@global[0].bing_background='1'
-uci commit argon
 
 #时区设置
 uci set system.@system[0].zram_comp_algo='lz4'
