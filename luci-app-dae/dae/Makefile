@@ -5,12 +5,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2026.02.23
+PKG_VERSION:=2026.02.24
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=3f7aeac9a2dad941c18492ba20c3dae910090a39
+PKG_SOURCE_VERSION:=589b72121865b4f5c9c508829fe4085ced3c62e6
 PKG_SOURCE_URL:=https://github.com/olicesx/dae.git
 PKG_MIRROR_HASH:=skip
 
@@ -37,7 +37,7 @@ include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
 GO_PKG_TARGET_VARS+= \
 	CGO_LDFLAGS="$(TARGET_LDFLAGS) -static" \
-	GOEXPERIMENT=newinliner,runtimefreegc,simd,arenas,loopvar
+	GOEXPERIMENT=newinliner,simd
 
 GO_PKG_DEFAULT_LDFLAGS:=-w -s -linkmode external -extldflags '-static'
 
