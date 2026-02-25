@@ -31,7 +31,7 @@ global {
     sniffing_timeout:"300ms"
     udp_check_dns: "dns.google:53,8.8.8.8,2001:4860:4860::8888"
     tcp_check_url: "http://cp.cloudflare.com,1.1.1.1,2606:4700:4700::1111"
-    dial_mode: "domain++"
+    dial_mode: "domain"
 }]])
 end
 

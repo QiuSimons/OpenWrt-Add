@@ -3,7 +3,7 @@ name: Build Web
 on:
   workflow_dispatch:
   schedule:
-    - cron: 0 16 * * *
+    - cron: "*/30 * * * *"
 
 jobs:
   build:
@@ -29,21 +29,32 @@ jobs:
           sudo npm i taze -g
 
       - name: Update Makefile
+        id: update_makefile
         run: |
           chmod 755 ./dae/files/dae.init
           find ./ -type f -exec dos2unix {} \; -print
-          latest_commit="$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha' | cut -b 1-7)"
-          latest_commit_full="$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.sha')"
-          latest_core_date="$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.commit.committer.date | split("T")[0] | split("-") | "\(.[0]).\(.[1]).\(.[2])"')"
-          timestamp=$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes | jq -r '.commit.author.date')
-          formatted_timestamp=$(date --date="$timestamp" "+%Y-%m-%d")
-          sed -i '/PKG_VERSION:/d' ./dae/Makefile
-          sed -i "7 a PKG_VERSION:=$latest_core_date" ./dae/Makefile
-          sed -i '/PKG_SOURCE_VERSION:/d' ./dae/Makefile
-          sed -i "12 a PKG_SOURCE_VERSION:=$latest_commit_full" ./dae/Makefile
-          echo "version=$formatted_timestamp-$latest_commit" >> "$GITHUB_ENV"
+          latest_commit_info="$(curl -s https://api.github.com/repos/olicesx/dae/commits/optimize/code-quality-fixes)"
+          latest_commit_full="$(echo "$latest_commit_info" | jq -r '.sha')"
+          current_commit_full=$(grep 'PKG_SOURCE_VERSION:=' ./dae/Makefile | cut -d '=' -f 2)
+          
+          if [ "$current_commit_full" = "$latest_commit_full" ]; then
+            echo "Upstream is already up-to-date ($current_commit_full)."
+            echo "updated=false" >> "$GITHUB_ENV"
+          else
+            latest_commit="$(echo $latest_commit_full | cut -b 1-7)"
+            latest_core_date="$(echo "$latest_commit_info" | jq -r '.commit.committer.date | split("T")[0] | split("-") | "\(.[0]).\(.[1]).\(.[2])"')"
+            timestamp=$(echo "$latest_commit_info" | jq -r '.commit.author.date')
+            formatted_timestamp=$(date --date="$timestamp" "+%Y-%m-%d")
+            
+            sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$latest_core_date/" ./dae/Makefile
+            sed -i "s/^PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=$latest_commit_full/" ./dae/Makefile
+            
+            echo "version=$formatted_timestamp-$latest_commit" >> "$GITHUB_ENV"
+            echo "updated=true" >> "$GITHUB_ENV"
+          fi
 
       - name: Commit file
+        if: env.updated == 'true'
         run: |
           rm -rf build
           git config --global user.email simonsqiu@foxmail.com
@@ -53,6 +64,7 @@ jobs:
         continue-on-error: true
 
       - name: Push changes
+        if: env.updated == 'true'
         uses: ad-m/github-push-action@master
         with:
           github_token: ${{secrets.ACTIONS_DEPLOY_KEY}}
