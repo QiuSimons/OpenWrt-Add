@@ -5,10 +5,10 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=daed
-PKG_VERSION:=2026.02.25
+PKG_VERSION:=2026.02.26
 DAED_VERSION:=daed-f045ecd
 WING_VERSION:=wing-6bb6a31
-CORE_VERSION:=core-abdb126
+CORE_VERSION:=core-429b1d4
 WING_HASH_SHORT:=$(shell echo $(WING_VERSION) | cut -d- -f2)
 CORE_HASH_SHORT:=$(shell echo $(CORE_VERSION) | cut -d- -f2)
 PKG_RELEASE:=1
@@ -90,6 +90,10 @@ define Build/Prepare
 		git clone --depth=1 -b perf/complete-optimizations https://github.com/olicesx/outbound.git $(PKG_BUILD_DIR)/../outbound ; \
 		pushd $(PKG_BUILD_DIR) ; \
 		go mod edit -replace github.com/daeuniverse/outbound=../outbound ; \
+		rm -rf $(PKG_BUILD_DIR)/../quic-go ; \
+		git clone --depth=1 -b main https://github.com/olicesx/quic-go.git $(PKG_BUILD_DIR)/../quic-go ; \
+		pushd $(PKG_BUILD_DIR) ; \
+		go mod edit -replace github.com/daeuniverse/quic-go=../quic-go ; \
 		wget -qO - https://github.com/daeuniverse/dae-wing/commit/157668a.patch | patch -p1 -N || true ; \
 		go get -u=patch ; \
 		go mod tidy ; \
