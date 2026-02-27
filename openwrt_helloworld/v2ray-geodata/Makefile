@@ -37,7 +37,7 @@ define Package/v2ray-geosite
   LICENSE:=GPL-3.0
 endef
 
-GEOIP_URL:=https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/geoip.dat
+GEOIP_URL:=https://github.com/QiuSimons/geoip-moedove/raw/refs/heads/main/geoip.dat
 GEOSITE_URL:=https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/geosite.dat
 
 define Build/Compile
