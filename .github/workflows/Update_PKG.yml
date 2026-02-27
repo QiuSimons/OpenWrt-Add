@@ -42,6 +42,7 @@ jobs:
           sed -i '/select PACKAGE_trojan-plus/{N;s/default y/default n/;}' ./openwrt_helloworld/luci-app-passwall/Makefile
           sed -i 's/result.insecure = "0"/result.insecure = "1"/g' ./openwrt_helloworld/luci-app-ssr-plus/root/usr/share/shadowsocksr/subscribe.lua
           sed -i 's|Loyalsoldier/geoip|MetaCubeX/meta-rules-dat|g; s|Loyalsoldier/v2ray-rules-dat|MetaCubeX/meta-rules-dat|g' ./openwrt_helloworld/v2ray-geodata/Makefile
+          sed -i '/geoip\.dat/ s|https://github\.com/MetaCubeX/meta-rules-dat/releases/latest/download/geoip\.dat|https://github.com/QiuSimons/geoip-moedove/raw/refs/heads/main/geoip.dat|' ./openwrt_helloworld/v2ray-geodata/Makefile
           git clone --depth 1 https://github.com/sbwml/openwrt_pkgs
           rm -rf ./openwrt_pkgs/luci-app-ramfree
           rm -rf ./openwrt_pkgs/luci-app-zerotier
