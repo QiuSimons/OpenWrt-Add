@@ -26,7 +26,6 @@ global {
     check_tolerance:"20ms"
     lan_interface:"br-lan"
     wan_interface:"auto"
-    enable_local_tcp_fast_redirect:"true"
     auto_config_kernel_parameter:"true"
     sniffing_timeout:"300ms"
     udp_check_dns: "dns.google:53,8.8.8.8,2001:4860:4860::8888"
