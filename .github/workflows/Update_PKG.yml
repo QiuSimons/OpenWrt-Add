@@ -100,6 +100,7 @@ jobs:
           git clone --depth 1 https://github.com/brvphoenix/luci-app-wrtbwmon
           git clone --depth 1 https://github.com/sirpdboy/luci-app-taskplan
           #cp -rf ./sirpdboy-package/luci-app-taskplan ./luci-app-taskplan
+          sed -i 's/admin\/control\/taskplan/admin\/system\/taskplan/g' ./luci-app-taskplan/luci-app-taskplan/usr/share/luci/menu.d/luci-app-taskplan.json
           git clone --depth 1 https://github.com/sirpdboy/luci-app-partexp
           #cp -rf ./sirpdboy-package/luci-app-partexp ./luci-app-partexp
           #rm -rf ./luci-app-partexp/luci-app-partexp/po/zh_Hans
