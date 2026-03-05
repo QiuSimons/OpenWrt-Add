@@ -1,0 +1,37 @@
+{
+	"admin/system/taskplan": {
+		"title": "Task Plan",
+		"order": 60,
+		"action": {
+			"type": "firstchild"
+		},
+		"depends": {
+			"acl": [ "luci-app-taskplan" ],
+			"uci": { "taskplan": true }
+		}
+	},
+	"admin/system/taskplan/scheduled": {
+		"title": "Scheduled Tasks",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "taskplan/scheduled"
+		}
+	},
+	"admin/system/taskplan/startup": {
+		"title": "Startup Tasks",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "taskplan/startup"
+		}
+	},
+	"admin/system/taskplan/log": {
+		"title": "Log Viewer",
+		"order": 30,
+		"action": {
+			"type": "view",
+			"path": "taskplan/log"
+		}
+	}
+}
