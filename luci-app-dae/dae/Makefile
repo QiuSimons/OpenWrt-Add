@@ -46,9 +46,10 @@ define Package/dae
   CATEGORY:=Network
   SUBMENU:=Web Servers/Proxies
   TITLE:=A lightweight and high-performance transparent proxy solution
-  DEPENDS:=$(GO_ARCH_DEPENDS) $(BPF_DEPENDS) \
+  DEPENDS:=$(GO_ARCH_DEPENDS) \
     +ca-bundle +kmod-sched-core +kmod-sched-bpf +kmod-xdp-sockets-diag \
-    +kmod-veth +v2ray-geoip +v2ray-geosite
+    +kmod-veth +v2ray-geoip +v2ray-geosite \
+	+@KERNEL_XDP_SOCKETS +@KERNEL_DEBUG_INFO_BTF
 endef
 
 define Package/dae/conffiles
