@@ -5,10 +5,10 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=daed
-PKG_VERSION:=2026.03.07
+PKG_VERSION:=2026.03.09
 DAED_VERSION:=daed-819e043
 WING_VERSION:=wing-6bb6a31
-CORE_VERSION:=core-a43cfae
+CORE_VERSION:=core-070d379
 WING_HASH_SHORT:=$(shell echo $(WING_VERSION) | cut -d- -f2)
 CORE_HASH_SHORT:=$(shell echo $(CORE_VERSION) | cut -d- -f2)
 PKG_RELEASE:=1
@@ -55,9 +55,26 @@ endef
 define Package/daed
   $(call Package/daed/Default)
   TITLE:=A Modern Dashboard For dae
-  DEPENDS:=$(GO_ARCH_DEPENDS) $(BPF_DEPENDS) \
+  DEPENDS:=$(GO_ARCH_DEPENDS) \
     +ca-bundle +kmod-sched-core +kmod-sched-bpf +kmod-xdp-sockets-diag \
-    +kmod-veth +v2ray-geoip +v2ray-geosite
+    +kmod-veth +v2ray-geoip +v2ray-geosite \
+    +@KERNEL_XDP_SOCKETS \
+    +DAED_USE_VMLINUX_BTF:vmlinux-btf
+endef
+
+define Package/daed/config
+	choice
+		prompt "BTF source for CO-RE"
+		default DAED_USE_KERNEL_BTF
+		depends on PACKAGE_daed
+
+	config DAED_USE_KERNEL_BTF
+		bool "Use kernel BTF (integrated)"
+		depends on KERNEL_DEBUG_INFO_BTF
+
+	config DAED_USE_VMLINUX_BTF
+		bool "Use vmlinux-btf package"
+	endchoice
 endef
 
 define Package/daed/description

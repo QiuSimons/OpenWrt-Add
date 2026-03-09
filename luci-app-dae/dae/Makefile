@@ -5,12 +5,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2026.03.07
+PKG_VERSION:=2026.03.09
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=a43cfae13789560368f2e50358b70c01fa4121c4
+PKG_SOURCE_VERSION:=070d379e9daca24ff7215e4de7dbde2694f6d093
 PKG_SOURCE_URL:=https://github.com/olicesx/dae.git
 PKG_MIRROR_HASH:=skip
 
@@ -49,9 +49,8 @@ define Package/dae
   DEPENDS:=$(GO_ARCH_DEPENDS) \
     +ca-bundle +kmod-sched-core +kmod-sched-bpf +kmod-xdp-sockets-diag \
     +kmod-veth +v2ray-geoip +v2ray-geosite \
-	+@KERNEL_XDP_SOCKETS \
-	+DAE_USE_KERNEL_BTF:@KERNEL_DEBUG_INFO_BTF \
-	+DAE_USE_VMLINUX_BTF:vmlinux-btf
+    +@KERNEL_XDP_SOCKETS \
+    +DAE_USE_VMLINUX_BTF:vmlinux-btf
 endef
 
 define Package/dae/config
@@ -62,6 +61,7 @@ define Package/dae/config
 
 	config DAE_USE_KERNEL_BTF
 		bool "Use kernel BTF (integrated)"
+		depends on KERNEL_DEBUG_INFO_BTF
 
 	config DAE_USE_VMLINUX_BTF
 		bool "Use vmlinux-btf package"
