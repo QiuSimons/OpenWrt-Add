@@ -49,7 +49,23 @@ define Package/dae
   DEPENDS:=$(GO_ARCH_DEPENDS) \
     +ca-bundle +kmod-sched-core +kmod-sched-bpf +kmod-xdp-sockets-diag \
     +kmod-veth +v2ray-geoip +v2ray-geosite \
-	+@KERNEL_XDP_SOCKETS +@KERNEL_DEBUG_INFO_BTF
+	+@KERNEL_XDP_SOCKETS \
+	+DAE_USE_KERNEL_BTF:@KERNEL_DEBUG_INFO_BTF \
+	+DAE_USE_VMLINUX_BTF:vmlinux-btf
+endef
+
+define Package/dae/config
+	choice
+		prompt "BTF source for CO-RE"
+		default DAE_USE_KERNEL_BTF
+		depends on PACKAGE_dae
+
+	config DAE_USE_KERNEL_BTF
+		bool "Use kernel BTF (integrated)"
+
+	config DAE_USE_VMLINUX_BTF
+		bool "Use vmlinux-btf package"
+	endchoice
 endef
 
 define Package/dae/conffiles
