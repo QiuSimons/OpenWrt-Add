@@ -1059,8 +1059,14 @@ return view.extend({
             var stateSelect = E('select', { 'class': 'cbi-input-select', 'id': 'flows-state' }, [
                 E('option', { 'value': '' }, _('All')),
                 E('option', { 'value': 'ESTABLISHED' }, 'ESTABLISHED'),
+                E('option', { 'value': 'SYN_SENT' }, 'SYN_SENT'),
+                E('option', { 'value': 'SYN_RECV' }, 'SYN_RECV'),
+                E('option', { 'value': 'FIN_WAIT' }, 'FIN_WAIT'),
+                E('option', { 'value': 'FIN_WAIT2' }, 'FIN_WAIT2'),
                 E('option', { 'value': 'TIME_WAIT' }, 'TIME_WAIT'),
-                E('option', { 'value': 'CLOSE_WAIT' }, 'CLOSE_WAIT')
+                E('option', { 'value': 'CLOSE_WAIT' }, 'CLOSE_WAIT'),
+                E('option', { 'value': 'LAST_ACK' }, 'LAST_ACK'),
+                E('option', { 'value': 'CLOSE' }, 'CLOSE')
             ]);
             var tableBody = E('tbody', { 'class': 'flows-table-body' });
             var tableWrap = E('div', { 'class': 'flows-table-wrap' }, [
@@ -1069,11 +1075,11 @@ return view.extend({
                         E('tr', {}, [
                             E('th', {}, _('Protocol')),
                             E('th', {}, _('State')),
-                            E('th', {}, 'Orig Src'),
-                            E('th', {}, 'Orig Dst'),
+                            E('th', {}, _('Orig Src')),
+                            E('th', {}, _('Orig Dst')),
                             E('th', {}, _('Send')),
-                            E('th', {}, 'Repl Src'),
-                            E('th', {}, 'Repl Dst'),
+                            E('th', {}, _('Repl Src')),
+                            E('th', {}, _('Repl Dst')),
                             E('th', {}, _('Reply')),
                             E('th', {}, _('Flags'))
                         ])
