@@ -63,6 +63,7 @@ jobs:
           wget -qO - https://github.com/muink/openwrt-einat-ebpf/commit/aa766bd.patch | patch -p1
           sed -i 's/=60/=99/g' ./files/einat.init
           popd
+          wget -qO - https://github.com/QiuSimons/OpenWrt-Add/commit/51c1dd4.patch | patch -p1
           git clone --depth 1 https://github.com/muink/luci-app-einat
           pushd luci-app-einat
           wget -qO - https://github.com/muink/luci-app-einat/commit/6bd2ece.patch | patch -p1
