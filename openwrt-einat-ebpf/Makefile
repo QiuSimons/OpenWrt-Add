@@ -63,6 +63,11 @@ endif
 # The LLVM_PATH var is required so that einat's build script finds llvm-strip
 TARGET_PATH_PKG:=$(LLVM_PATH):$(TARGET_PATH_PKG)
 
+define Build/Prepare
+	$(call Build/Prepare/Default)
+	$(SED) 's/const volatile u8 LOG_LEVEL = .*/const u8 LOG_LEVEL = BPF_LOG_LEVEL_NONE;/g' $(PKG_BUILD_DIR)/src/bpf/einat.bpf.c
+endef
+
 # Platform-specific features
 # $(TOPDIR)/feeds/packages/lang/rust/rust-values.mk
 # RUST_ARCH_DEPENDS:=@(aarch64||arm||i386||i686||mips||mipsel||mips64||mips64el||powerpc64||riscv64||x86_64)
