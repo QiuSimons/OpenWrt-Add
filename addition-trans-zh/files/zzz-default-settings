@@ -89,6 +89,7 @@ if [ -f /etc/init.d/einat ]; then
     uci commit firewall
 
     uci set einat.config.enabled="0"
+    uci set einat.config.bpf_log_level='0'
     uci commit einat
 
     retry=0
