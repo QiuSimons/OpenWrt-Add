@@ -9,7 +9,6 @@ include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=vmlinux-btf
 PKG_VERSION:=$(LINUX_VERSION)
-PKG_PATCHVER:=$(word 1,$(subst ., ,$(PKG_VERSION))).$(word 2,$(subst ., ,$(PKG_VERSION)))
 
 PKG_BUILD_PARALLEL:=1
 
@@ -17,12 +16,6 @@ PKG_SOURCE:=$(LINUX_SOURCE)
 PKG_SOURCE_URL:=$(LINUX_SITE)
 PKG_HASH:=$(LINUX_KERNEL_HASH)
 PKG_BUILD_DIR:=$(KERNEL_BUILD_DIR)/vmlinux-btf/linux-$(PKG_VERSION)
-
-GENERIC_PLATFORM_DIR := $(TOPDIR)/target/linux/generic
-GENERIC_BACKPORT_DIR := $(GENERIC_PLATFORM_DIR)/backport$(if $(wildcard $(GENERIC_PLATFORM_DIR)/backport-$(PKG_PATCHVER)),-$(PKG_PATCHVER))
-GENERIC_PATCH_DIR := $(GENERIC_PLATFORM_DIR)/pending$(if $(wildcard $(GENERIC_PLATFORM_DIR)/pending-$(PKG_PATCHVER)),-$(PKG_PATCHVER))
-GENERIC_HACK_DIR := $(GENERIC_PLATFORM_DIR)/hack$(if $(wildcard $(GENERIC_PLATFORM_DIR)/hack-$(PKG_PATCHVER)),-$(PKG_PATCHVER))
-GENERIC_FILES_DIR := $(foreach dir,$(wildcard $(GENERIC_PLATFORM_DIR)/files $(GENERIC_PLATFORM_DIR)/files-$(PKG_PATCHVER)),"$(dir)")
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -51,22 +44,6 @@ define Package/vmlinux-btf/prerm
 [ -d "/usr/lib/debug" ] && rm -rf /usr/lib/debug
 endef
 
-define Build/Prepare
-	$(call Build/Prepare/Default)
-
-	$(foreach dir,$(GENERIC_FILES_DIR),[ -d $(dir) ] && $(CP) $(dir)/* $(PKG_BUILD_DIR)/ || SKIP_GENERIC_PLATFORM_FILES_PATCHES=1;)
-
-	[ -d "$(GENERIC_BACKPORT_DIR)" ] && $(foreach p,$(wildcard $(GENERIC_BACKPORT_DIR)/*.patch),$(PATCH) -p1 -d $(PKG_BUILD_DIR) < $(p);)
-	[ -d "$(GENERIC_PATCH_DIR)" ] && $(foreach p,$(wildcard $(GENERIC_PATCH_DIR)/*.patch), \
-		{ [ -n "$$SKIP_GENERIC_PLATFORM_FILES_PATCHES" ] && grep -Eq "drivers/mtd/Kconfig|drivers/platform/mikrotik/Kconfig" $(p) && echo "Skipping $(p)"; } || \
-		$(PATCH) -p1 -d $(PKG_BUILD_DIR) < $(p); \
-	)
-	[ -d "$(GENERIC_HACK_DIR)" ] && $(foreach p,$(wildcard $(GENERIC_HACK_DIR)/*.patch), \
-		{ [ -n "$$SKIP_GENERIC_PLATFORM_FILES_PATCHES" ] && grep -Eq "drivers/net/phy/b53/Kconfig|drivers/net/phy/rtl8261n/Kconfig|fallback-sprom|mtk_bmt|routerbootpart|myloader" $(p) && echo "Skipping $(p)"; } || \
-		$(PATCH) -p1 -d $(PKG_BUILD_DIR) < $(p); \
-	)
-endef
-
 define Build/Compile
 	$(CP) $(LINUX_DIR)/.config $(PKG_BUILD_DIR)
 
@@ -83,10 +60,9 @@ define Build/Compile
 		--enable BPF_PRELOAD \
 		--enable BPF_STREAM_PARSER \
 		--enable BPF_SYSCALL \
-		--enable CONFIG_CGROUP_BPF \
-		--enable CONFIG_CGROUP_NET_CLASSID \
-		--enable CONFIG_CGROUP_NET_PRIO \
-		--enable CONFIG_NET_NS \
+		--enable CGROUP_BPF \
+		--enable CGROUP_NET_CLASSID \
+		--enable CGROUP_NET_PRIO \
 		--enable DEBUG_INFO_BTF \
 		--enable DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT \
 		--enable FTRACE \
@@ -102,6 +78,7 @@ define Build/Compile
 		--enable NET_CLS_BPF \
 		--enable NET_CLS_FLOWER \
 		--enable NET_CLS_U32 \
+		--enable NET_NS \
 		--enable NET_SCH_CAKE \
 		--enable NET_SCH_FIFO \
 		--enable NET_SCH_FQ \
@@ -121,10 +98,10 @@ define Build/Compile
 
 	+$(MAKE) -C $(PKG_BUILD_DIR) $(PKG_JOBS) $(KERNEL_MAKE_FLAGS) olddefconfig
 	+$(MAKE) -C $(PKG_BUILD_DIR) \
-		$(PKG_JOBS) \
-		$(KERNEL_MAKE_FLAGS) \
-		KBUILD_HOSTLDFLAGS="$(KBUILD_HOSTLDFLAGS) -lz" \
-		vmlinux
+	  $(PKG_JOBS) \
+	  $(KERNEL_MAKE_FLAGS) \
+	  KBUILD_HOSTLDFLAGS="-L$(STAGING_DIR_HOST)/lib -lz" \
+	  vmlinux
 	pahole --btf_encode_detached $(PKG_BUILD_DIR)/vmlinux.btf $(PKG_BUILD_DIR)/vmlinux
 endef
 
