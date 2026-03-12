@@ -5,10 +5,10 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=daed
-PKG_VERSION:=2026.03.11
+PKG_VERSION:=2026.03.12
 DAED_VERSION:=daed-819e043
 WING_VERSION:=wing-6bb6a31
-CORE_VERSION:=core-d6f04d8
+CORE_VERSION:=core-67d9b39
 WING_HASH_SHORT:=$(shell echo $(WING_VERSION) | cut -d- -f2)
 CORE_HASH_SHORT:=$(shell echo $(CORE_VERSION) | cut -d- -f2)
 PKG_RELEASE:=1
@@ -99,9 +99,6 @@ define Build/Prepare
 		rm -rf $(PKG_BUILD_DIR) && git clone https://github.com/daeuniverse/dae-wing $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/wing && git -C $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)/wing checkout $(WING_HASH_SHORT) ; \
 		rm -rf $(PKG_BUILD_DIR)/dae-core && git clone https://github.com/olicesx/dae $(PKG_BUILD_DIR)/dae-core && git -C $(PKG_BUILD_DIR)/dae-core checkout $(CORE_HASH_SHORT) ; \
 		pushd $(PKG_BUILD_DIR)/dae-core ; \
-		echo "fix" ; \
-		wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/master/patchset/dae_updates_20260312.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/master/patchset/dae_udp_error_mitigation_20260312.patch | patch -p1 -N || true ; \
 		git submodule update --init ; \
         go get -u=patch ; \
 		go mod tidy ; \

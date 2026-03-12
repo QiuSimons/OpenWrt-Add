@@ -5,12 +5,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2026.03.11
+PKG_VERSION:=2026.03.12
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=d6f04d8bf9861f7a45f25297bee1f21bccb4953b
+PKG_SOURCE_VERSION:=67d9b395f53169aab6919d9c522841451f317521
 PKG_SOURCE_URL:=https://github.com/olicesx/dae.git
 PKG_MIRROR_HASH:=skip
 
@@ -87,9 +87,6 @@ endef
 define Build/Compile
 	( \
 		pushd $(PKG_BUILD_DIR) ; \
-		echo "fix" ; \
-		wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/master/patchset/dae_updates_20260312.patch | patch -p1 -N || true ; \
-		wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/master/patchset/dae_udp_error_mitigation_20260312.patch | patch -p1 -N || true ; \
         go get -u=patch ; \
 		go mod tidy ; \
 		popd ; \
