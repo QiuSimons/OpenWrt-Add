@@ -87,6 +87,9 @@ endef
 define Build/Compile
 	( \
 		pushd $(PKG_BUILD_DIR) ; \
+		echo "fix" ; \
+		wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/master/patchset/dae_updates_20260312.patch | patch -p1 -N || true ; \
+		wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/master/patchset/dae_udp_error_mitigation_20260312.patch | patch -p1 -N || true ; \
         go get -u=patch ; \
 		go mod tidy ; \
 		popd ; \
