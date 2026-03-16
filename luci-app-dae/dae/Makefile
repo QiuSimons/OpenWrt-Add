@@ -5,12 +5,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2026.03.13
+PKG_VERSION:=2026.03.16
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=2cd611843729b5f4d96c23fe8b2423f98da29e5f
+PKG_SOURCE_VERSION:=a8afeeb85af7d139231dbf51c01f74db8412500b
 PKG_SOURCE_URL:=https://github.com/olicesx/dae.git
 PKG_MIRROR_HASH:=skip
 
@@ -87,7 +87,6 @@ endef
 define Build/Compile
 	( \
 		pushd $(PKG_BUILD_DIR) ; \
-		wget -qO - https://github.com/olicesx/dae/pull/6.patch | patch -p1 -N || true ; \
         go get -u=patch ; \
 		go mod tidy ; \
 		popd ; \
