@@ -19,7 +19,6 @@ if not fs.access(route_file) then
     pname(dnsmasq, zerotier-one) -> must_direct
 
 	dip(224.0.0.0/3, 'ff00::/8') -> direct
-    dip(geoip:private) && l4proto(tcp) && dport(53) -> block
     dip(geoip:private) -> direct
 
 	domain(geosite:category-ai-!cn, geosite:category-entertainment, geosite:gfw, geosite:github, geosite:spotify) && l4proto(udp) && dport(443) -> block
