@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    name: Build ${{ matrix.arch }}-${{ matrix.sdk }}
+    name: Build ${{ matrix.arch }}-${{ matrix.tag }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -45,51 +45,47 @@ jobs:
           - mipsel_mips32
           - riscv64_riscv64
           - x86_64
-        sdk:
+        tag:
           - openwrt-24.10
-          - SNAPSHOT
+          - openwrt-25.12
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Build with Static Linking
+      - name: Build preparation
         run: |
           sed -i '/golang-package/a \\tGO_PKG_DEFAULT_LDFLAGS:=-w -s -extldflags "-static"' mosdns/Makefile
           sed -i '/golang-package/a \\tGO_PKG_DEFAULT_LDFLAGS:=-w -s -extldflags "-static"' v2dat/Makefile
-
-      - name: Get v2ray-geodata
-        run: |
           git clone https://github.com/sbwml/v2ray-geodata
+          echo "SKIP_BUILD=0" >> $GITHUB_ENV
+          if [ "${{ matrix.tag }}" = "openwrt-25.12" ] && [ "${{ matrix.arch }}" = "riscv64_riscv64" ]; then
+            echo "EFFECTIVE_ARCH=riscv64_generic" >> $GITHUB_ENV
+            echo "ARCH=riscv64_generic-${{ matrix.tag }}" >> $GITHUB_ENV
+          elif [ "${{ matrix.tag }}" = "openwrt-25.12" ] && [ "${{ matrix.arch }}" = "mips_4kec" ]; then
+            echo "SKIP_BUILD=1" >> $GITHUB_ENV
+          else
+            echo "EFFECTIVE_ARCH=${{ matrix.arch }}" >> $GITHUB_ENV
+            echo "ARCH=${{ matrix.arch }}-${{ matrix.tag }}" >> $GITHUB_ENV
+          fi
 
       - name: Build Packages
-        uses: sbwml/openwrt-gh-action-sdk@go1.25
+        if: ${{ env.SKIP_BUILD == '0' }}
+        uses: sbwml/openwrt-gh-action-sdk@go1.26
         env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
           FEEDNAME: packages_ci
           PACKAGES: luci-app-mosdns
           NO_REFRESH_CHECK: true
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.arch }}-${{ matrix.sdk }}
-          path: |
-            bin/packages/${{ matrix.arch }}/packages_ci/*.apk
-            bin/packages/riscv64_generic/packages_ci/*.apk
-            bin/packages/${{ matrix.arch }}/packages_ci/*.ipk
-
       - name: Create compress files
+        if: ${{ env.SKIP_BUILD == '0' }}
         continue-on-error: true
         run: |
-          if [ "${{ matrix.arch }}" = "riscv64_riscv64" ] && [ "${{ matrix.sdk }}" = "SNAPSHOT" ]; then
-            tar -zcvf ${{ matrix.sdk }}-${{ matrix.arch }}.tar.gz -C bin/packages/riscv64_generic/ packages_ci
-          else
-            tar -zcvf ${{ matrix.sdk }}-${{ matrix.arch }}.tar.gz -C bin/packages/${{ matrix.arch }}/ packages_ci
-          fi
+          tar -zcvf ${{ env.ARCH }}.tar.gz -C bin/packages/${{ env.EFFECTIVE_ARCH }}/ packages_ci
 
       - name: Upload packages
+        if: ${{ env.SKIP_BUILD == '0' }}
         uses: ncipollo/release-action@v1
         with:
           name: ${{ github.ref_name }}
@@ -97,4 +93,4 @@ jobs:
           allowUpdates: true
           replacesArtifacts: true
           prerelease: false
-          artifacts: "${{ matrix.sdk }}-${{ matrix.arch }}.tar.gz"
+          artifacts: "${{ env.ARCH }}.tar.gz"
