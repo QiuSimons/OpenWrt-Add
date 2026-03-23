@@ -1,9 +1,3 @@
-/***************************************************************************
- *
- *  OpenWrt OTA lightweight downloader - by sbwml
- *
- ***************************************************************************/
-
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,7 +69,16 @@ int downloadFile(const char *url, const char *outputPath, const char *userAgent,
     curl = curl_easy_init();
     if (curl)
     {
-        fp = fopen(outputPath, "wb");
+        long local_file_size = 0;
+        fp = fopen(outputPath, "rb");
+        if (fp != NULL)
+        {
+            fseek(fp, 0, SEEK_END);
+            local_file_size = ftell(fp);
+            fclose(fp);
+        }
+
+        fp = fopen(outputPath, "ab");
         if (fp == NULL)
         {
             fprintf(stderr, "Failed to open file for writing\n");
@@ -83,13 +86,17 @@ int downloadFile(const char *url, const char *outputPath, const char *userAgent,
         }
 
         curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE, (curl_off_t)local_file_size);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NULL);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
         curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, progressCallback);
         curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, NULL);
 
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, userAgent);
+        if (userAgent)
+        {
+            curl_easy_setopt(curl, CURLOPT_USERAGENT, userAgent);
+        }
         curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
 
         if (timeout > 0)
@@ -120,7 +127,9 @@ int downloadFile(const char *url, const char *outputPath, const char *userAgent,
         res = curl_easy_perform(curl);
         if (res != CURLE_OK)
         {
-            fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+            long http_code = 0;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+            fprintf(stderr, "curl_easy_perform() failed: %s (HTTP code: %ld)\n", curl_easy_strerror(res), http_code);
             fclose(fp);
             remove(outputPath);
             return 255;
@@ -137,7 +146,7 @@ int main(int argc, char *argv[])
 {
     const char *url;
     const char *outputPath = NULL;
-    const char *userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+    const char *userAgent = NULL;
     long timeout = 0;
     int skipSSL = 0;
     int followRedirects = 0;
@@ -232,7 +241,6 @@ int main(int argc, char *argv[])
     if (result != 0)
     {
         fprintf(stderr, "Download failed.\n");
-        remove(outputPath);
         return 255;
     }
 

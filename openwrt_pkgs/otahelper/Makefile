@@ -6,7 +6,8 @@
 
 include $(TOPDIR)/rules.mk
 
-PKG_NAME:=fw_download_tool
+PKG_NAME:=otahelper
+PKG_VERSION:=1.0.0
 PKG_RELEASE:=1
 
 PKG_LICENSE:=GPL-3.0
@@ -24,7 +25,7 @@ endef
 
 define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/fw_download_tool $(1)/usr/bin/fw_download_tool
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/otahelper $(1)/usr/bin/otahelper
 endef
 
 $(eval $(call BuildPackage,$(PKG_NAME)))
