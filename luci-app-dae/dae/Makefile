@@ -5,12 +5,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2026.03.23
+PKG_VERSION:=2026.03.24
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=593afbb5c10f128ce2088b0f5d8add9621435a73
+PKG_SOURCE_VERSION:=d1a405614b59f3049467c6489379c81d44144762
 PKG_SOURCE_URL:=https://github.com/olicesx/dae.git
 PKG_MIRROR_HASH:=skip
 
@@ -87,12 +87,6 @@ endef
 define Build/Compile
 	( \
 		pushd $(PKG_BUILD_DIR) ; \
-        rm -rf $(PKG_BUILD_DIR)/../outbound ; \
-		rm -rf $(PKG_BUILD_DIR)/../quic-go ; \
-		git clone --depth=1 -b perf/complete-optimizations https://github.com/olicesx/outbound.git $(PKG_BUILD_DIR)/../outbound ; \
-		go mod edit -replace github.com/daeuniverse/outbound=../outbound ; \
-		wget -qO - https://github.com/QiuSimons/luci-app-dae/raw/refs/heads/tmp/0001-Optimize-eBPF-process-name-gathering-and-skip-SNI-sn.patch | patch -p1 ; \
-		wget -qO - https://github.com/QiuSimons/luci-app-dae/raw/refs/heads/tmp/0002-chore-globally-fix-golangci-lint-warnings-including-.patch | patch -p1 ; \
         go get -u=patch ; \
 		go mod tidy ; \
 		popd ; \
