@@ -5,10 +5,10 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=daed
-PKG_VERSION:=2026.03.24
+PKG_VERSION:=2026.03.25
 DAED_VERSION:=daed-819e043
 WING_VERSION:=wing-6bb6a31
-CORE_VERSION:=core-a47bdea
+CORE_VERSION:=core-7a2f970
 WING_HASH_SHORT:=$(shell echo $(WING_VERSION) | cut -d- -f2)
 CORE_HASH_SHORT:=$(shell echo $(CORE_VERSION) | cut -d- -f2)
 PKG_RELEASE:=1
@@ -104,7 +104,7 @@ define Build/Prepare
 		go mod tidy ; \
 		popd ; \
         rm -rf $(PKG_BUILD_DIR)/../outbound ; \
-		git clone --depth=1 -b perf/complete-optimizations https://github.com/olicesx/outbound.git $(PKG_BUILD_DIR)/../outbound ; \
+		git clone --depth=1 -b fix/direct-memory-safety https://github.com/olicesx/outbound.git $(PKG_BUILD_DIR)/../outbound ; \
 		pushd $(PKG_BUILD_DIR) ; \
 		go mod edit -replace github.com/daeuniverse/outbound=../outbound ; \
 		rm -rf $(PKG_BUILD_DIR)/../quic-go ; \
