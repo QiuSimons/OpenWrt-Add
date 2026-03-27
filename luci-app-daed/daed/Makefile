@@ -5,10 +5,10 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=daed
-PKG_VERSION:=2026.03.26
+PKG_VERSION:=2026.03.27
 DAED_VERSION:=daed-819e043
 WING_VERSION:=wing-6bb6a31
-CORE_VERSION:=core-5c336c8
+CORE_VERSION:=core-6f1d572
 WING_HASH_SHORT:=$(shell echo $(WING_VERSION) | cut -d- -f2)
 CORE_HASH_SHORT:=$(shell echo $(CORE_VERSION) | cut -d- -f2)
 PKG_RELEASE:=1
@@ -104,7 +104,7 @@ define Build/Prepare
 		go mod tidy ; \
 		popd ; \
         rm -rf $(PKG_BUILD_DIR)/../outbound ; \
-		git clone --depth=1 -b fix/direct-memory-safety https://github.com/olicesx/outbound.git $(PKG_BUILD_DIR)/../outbound ; \
+		git clone --depth=1 -b perf/complete-optimizations https://github.com/olicesx/outbound.git $(PKG_BUILD_DIR)/../outbound ; \
 		pushd $(PKG_BUILD_DIR) ; \
 		go mod edit -replace github.com/daeuniverse/outbound=../outbound ; \
 		rm -rf $(PKG_BUILD_DIR)/../quic-go ; \
@@ -152,7 +152,7 @@ define Build/Compile
 		$(GO_PKG_BUILD_CONFIG_VARS) \
 		$(GO_PKG_BUILD_VARS) ; \
 		go generate ./... ; \
-		cd dae-core ; \
+		pushd dae-core ; \
 		export \
 		BPF_CLANG="$(CLANG)" \
 		BPF_STRIP_FLAG="-strip=$(LLVM_STRIP)" \
@@ -161,6 +161,9 @@ define Build/Compile
 		BPF_TRACE_TARGET="$(GO_ARCH)" ; \
 		go generate control/control.go ; \
 		go generate trace/trace.go ; \
+		go mod tidy ; \
+		popd ; \
+		go mod tidy ; \
 		popd ; \
 		$(call GoPackage/Build/Compile) ; \
 	)
