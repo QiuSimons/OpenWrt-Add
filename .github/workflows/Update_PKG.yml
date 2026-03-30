@@ -68,6 +68,7 @@ jobs:
           wget -qO - https://github.com/muink/luci-app-einat/commit/6bd2ece.patch | patch -p1
           popd
           git clone --depth 1 https://github.com/timsaya/openwrt-bandix
+          sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' openwrt-bandix/openwrt-bandix/Makefile
           git clone --depth 1 https://github.com/timsaya/luci-app-bandix
           git clone -b master https://github.com/jerrykuku/luci-theme-argon
           sed -i 's/26rem/30rem/g' ./luci-theme-argon/htdocs/luci-static/argon/css/cascade.css
