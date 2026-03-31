@@ -5,17 +5,17 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=daed
-PKG_VERSION:=2026.03.30
-DAED_VERSION:=daed-819e043
+PKG_VERSION:=2026.03.31
+DAED_VERSION:=daed-745dce1
 WING_VERSION:=wing-6bb6a31
-CORE_VERSION:=core-3c0e605
+CORE_VERSION:=core-5489095
 WING_HASH_SHORT:=$(shell echo $(WING_VERSION) | cut -d- -f2)
 CORE_HASH_SHORT:=$(shell echo $(CORE_VERSION) | cut -d- -f2)
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=819e043a7972ef53477e1180a5310faf069e7871
+PKG_SOURCE_VERSION:=745dce1185f1d1fe13cf9dbf7a5b9ce036e9e7a2
 PKG_SOURCE_URL:=https://github.com/daeuniverse/daed.git
 PKG_MIRROR_HASH:=skip
 
@@ -56,7 +56,7 @@ define Package/daed
   $(call Package/daed/Default)
   TITLE:=A Modern Dashboard For dae
   DEPENDS:=$(GO_ARCH_DEPENDS) \
-    +ca-bundle +kmod-sched-core +kmod-sched-bpf +kmod-xdp-sockets-diag \
+    +ca-bundle +kmod-sched-core +kmod-sched-bpf \
     +kmod-veth +v2ray-geoip +v2ray-geosite \
     +@KERNEL_XDP_SOCKETS \
     +DAED_USE_VMLINUX_BTF:vmlinux-btf

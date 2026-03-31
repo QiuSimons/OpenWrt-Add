@@ -5,12 +5,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2026.03.30
+PKG_VERSION:=2026.03.31
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=3c0e605c729f8c1adf4efe1a88d1e3d4bbeaa053
+PKG_SOURCE_VERSION:=5489095e149a6127ebf1435ed3d47bfe861ff073
 PKG_SOURCE_URL:=https://github.com/olicesx/dae.git
 PKG_MIRROR_HASH:=skip
 
@@ -47,7 +47,7 @@ define Package/dae
   SUBMENU:=Web Servers/Proxies
   TITLE:=A lightweight and high-performance transparent proxy solution
   DEPENDS:=$(GO_ARCH_DEPENDS) \
-    +ca-bundle +kmod-sched-core +kmod-sched-bpf +kmod-xdp-sockets-diag \
+    +ca-bundle +kmod-sched-core +kmod-sched-bpf \
     +kmod-veth +v2ray-geoip +v2ray-geosite \
     +@KERNEL_XDP_SOCKETS \
     +DAE_USE_VMLINUX_BTF:vmlinux-btf

@@ -24,8 +24,6 @@ else
 	DNSMASQ_DIR="/tmp/dnsmasq.d"
 fi
 
-if [ "$(uci get unblockneteasemusic.config.enable)" = "1" ] && ! command -v node &> /dev/null; then opkg update &> /dev/null && opkg install node &> /dev/null; fi
-
 is_enabled() {
 	local enabled
 	config_get_bool enabled "$1" "$2" "${3:-0}"
