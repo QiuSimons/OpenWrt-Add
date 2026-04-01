@@ -5,12 +5,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2026.03.31
+PKG_VERSION:=2026.04.01
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=5489095e149a6127ebf1435ed3d47bfe861ff073
+PKG_SOURCE_VERSION:=51eca943c915adb8411619aa93cf5dc30fa664fe
 PKG_SOURCE_URL:=https://github.com/olicesx/dae.git
 PKG_MIRROR_HASH:=skip
 
@@ -24,6 +24,10 @@ PKG_BUILD_FLAGS:=no-mips16
 
 GO_PKG:=github.com/daeuniverse/dae
 GO_PKG_EXCLUDES:=control/kern/tests
+
+GO_PKG_LDFLAGS:= \
+	-s -w -buildid= \
+	-linkmode external -extldflags '-static -Wl,-s'
 GO_PKG_LDFLAGS_X:= \
 	$(GO_PKG)/cmd.Version=$(PKG_VERSION) \
 	$(GO_PKG)/common/consts.MaxMatchSetLen_=1024
@@ -35,11 +39,12 @@ include $(INCLUDE_DIR)/package.mk
 include $(INCLUDE_DIR)/bpf.mk
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
-GO_PKG_TARGET_VARS+= \
-	CGO_LDFLAGS="$(TARGET_LDFLAGS) -static" \
-	GOEXPERIMENT=newinliner,simd
+GO_PKG_BUILD_VARS+= \
+	GOFLAGS="-trimpath -buildvcs=false"
 
-GO_PKG_DEFAULT_LDFLAGS:=-w -s -linkmode external -extldflags '-static'
+GO_PKG_TARGET_VARS+= \
+	CGO_LDFLAGS="$(TARGET_LDFLAGS) -static -Wl,-s" \
+	GOEXPERIMENT=newinliner,simd
 
 define Package/dae
   SECTION:=net
@@ -87,9 +92,8 @@ endef
 define Build/Compile
 	( \
 		pushd $(PKG_BUILD_DIR) ; \
-        go get -u=patch ; \
+		go get -u=patch ; \
 		go mod tidy ; \
-		popd ; \
 		export \
 		$(GO_GENERAL_BUILD_CONFIG_VARS) \
 		$(GO_PKG_BUILD_CONFIG_VARS) \
@@ -99,10 +103,11 @@ define Build/Compile
 		BPF_CFLAGS="$(DAE_CFLAGS)" \
 		BPF_TARGET="bpfel,bpfeb" \
 		BPF_TRACE_TARGET="$(GO_ARCH)" ; \
-		go generate $(PKG_BUILD_DIR)/control/control.go ; \
-		go generate $(PKG_BUILD_DIR)/trace/trace.go ; \
-		$(call GoPackage/Build/Compile) ; \
+		go generate ./control/control.go ; \
+		go generate ./trace/trace.go ; \
+		popd ; \
 	)
+	$(call GoPackage/Build/Compile)
 endef
 
 define Package/dae/install

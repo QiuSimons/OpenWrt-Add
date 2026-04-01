@@ -1,0 +1,28 @@
+diff --git a/graphql/service/config/global/generator/input/input.go b/graphql/service/config/global/generator/input/input.go
+index dc2ae0e..7d00286 100644
+--- a/graphql/service/config/global/generator/input/input.go
++++ b/graphql/service/config/global/generator/input/input.go
+@@ -75,6 +75,9 @@ func (b *builder) Build() (string, error) {
+ 		if !ok {
+ 			return "", fmt.Errorf("field %v has no required mapstructure", structField.Name)
+ 		}
++		if name == "_" {
++			continue
++		}
+ 		switch field := field.Interface().(type) {
+ 		case uint, uint8, uint16, uint32, uint64,
+ 			int, int8, int16, int32, int64:
+diff --git a/graphql/service/config/global/generator/resolver/resolver.go b/graphql/service/config/global/generator/resolver/resolver.go
+index daba474..28362ca 100644
+--- a/graphql/service/config/global/generator/resolver/resolver.go
++++ b/graphql/service/config/global/generator/resolver/resolver.go
+@@ -62,6 +62,9 @@ func (b *builder) Build() (string, error) {
+ 		if !ok {
+ 			return "", fmt.Errorf("field %v has no required mapstructure", structField.Name)
+ 		}
++		if name == "_" {
++			continue
++		}
+ 		switch field := field.Interface().(type) {
+ 		case uint, uint8, uint16, uint32, uint64,
+ 			int, int8, int16, int32, int64:

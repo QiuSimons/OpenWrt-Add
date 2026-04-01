@@ -128,7 +128,13 @@ jobs:
             base="$(basename "$f")"
             ext="${base##*.}"
             name="${base%.*}"
-            cp "$f" "dist/${name}-${{ matrix.arch }}-${{ matrix.sdk }}.${ext}"
+            if [ "$ext" = "ipk" ]; then
+              new_name="${name}-${{ matrix.sdk }}.${ext}"
+            else
+              new_name="${name}-${{ matrix.arch }}-${{ matrix.sdk }}.${ext}"
+            fi
+            
+            cp "$f" "dist/${new_name}"
           done
           ls -lah dist
 
