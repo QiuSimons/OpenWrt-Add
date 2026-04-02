@@ -5,10 +5,10 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=daed
-PKG_VERSION:=2026.04.01
+PKG_VERSION:=2026.04.02
 DAED_VERSION:=daed-1c45f45
 WING_VERSION:=wing-6bb6a31
-CORE_VERSION:=core-cdb32fa
+CORE_VERSION:=core-4de2e56
 WING_HASH_SHORT:=$(shell echo $(WING_VERSION) | cut -d- -f2)
 CORE_HASH_SHORT:=$(shell echo $(CORE_VERSION) | cut -d- -f2)
 PKG_RELEASE:=1
@@ -118,7 +118,6 @@ define Build/Prepare
 			go mod tidy ; \
 		popd ; \
 		pushd $(PKG_BUILD_DIR) ; \
-			wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/kix/patchset/build_fixes.patch | patch -p1 ; \
 			go mod edit -replace github.com/daeuniverse/outbound=../outbound ; \
 			go mod edit -replace github.com/daeuniverse/quic-go=../quic-go ; \
 			go get -u=patch ; \
