@@ -52,9 +52,6 @@ jobs:
           - arch: aarch64_generic
             sdk: openwrt-24.10
             pkg_ext: ipk
-          - arch: aarch64
-            sdk: openwrt-24.10
-            pkg_ext: ipk
           - arch: i386_pentium4
             sdk: openwrt-24.10
             pkg_ext: ipk
@@ -62,9 +59,6 @@ jobs:
             sdk: openwrt-24.10
             pkg_ext: ipk
           - arch: aarch64_generic
-            sdk: openwrt-25.12
-            pkg_ext: apk
-          - arch: aarch64
             sdk: openwrt-25.12
             pkg_ext: apk
           - arch: i386_pentium4
