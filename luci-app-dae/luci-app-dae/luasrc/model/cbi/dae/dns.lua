@@ -9,9 +9,11 @@ local dns_file = "/etc/dae/config.d/dns.dae"
 if not fs.access(dns_file) then
     fs.writefile(dns_file, [[# dns.dae
 dns {
+    optimistic_cache_ttl: 86400
+    max_cache_size: 4096
     upstream {
         localdns: 'udp://127.0.0.1:53'
-        overseadns: 'tcp+udp://one.one.one.one:53'
+        overseadns: 'tcp+udp://1.0.0.1:53'
     }
     routing {
         request {
@@ -20,11 +22,10 @@ dns {
             fallback: localdns
         }
         response {
-            qname(geosite:private) -> accept
             upstream(overseadns) -> accept
-            ip(geoip:private) -> accept
-            !ip(geoip:cn) -> overseadns
-            fallback: accept
+            qname(geosite:private) -> accept
+            ip(geoip:cn) -> accept
+            fallback: overseadns
         }
     }
 }]]

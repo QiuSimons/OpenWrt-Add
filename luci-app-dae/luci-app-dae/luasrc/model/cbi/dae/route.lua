@@ -9,15 +9,15 @@ local route_file = "/etc/dae/config.d/route.dae"
 if not fs.access(route_file) then
     fs.writefile(route_file, [[routing {
     pname(dnsmasq, zerotier-one) -> must_direct
+    dip(224.0.0.0/3, 'ff00::/8', geoip:private) -> direct
 
-	dip(224.0.0.0/3, 'ff00::/8') -> direct
-    dip(geoip:private) -> direct
+    domain(geosite:category-bank-cn, geosite:boc@!cn, geosite:synology) -> direct
 
-	domain(geosite:category-ai-!cn, geosite:category-entertainment, geosite:gfw, geosite:github, geosite:spotify) && l4proto(udp) && dport(443) -> block
-    domain(geosite:geolocation-cn, geosite:synology) -> direct
-    domain(geosite:category-ai-!cn, geosite:github) -> proxy
-	domain(geosite:spotify) -> proxy
+    domain(geosite:category-ai-!cn, geosite:google, geosite:category-entertainment, geosite:gfw, geosite:github, geosite:spotify) && l4proto(udp) && dport(443) -> block
+
+    domain(geosite:spotify) -> proxy
     domain(geosite:category-entertainment) -> proxy
+    domain(geosite:category-ai-!cn, geosite:google, geosite:github) -> proxy
     domain(geosite:gfw) -> proxy
 
     dip(geoip:telegram) -> proxy
