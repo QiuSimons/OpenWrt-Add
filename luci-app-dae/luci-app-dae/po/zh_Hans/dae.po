@@ -78,3 +78,6 @@ msgstr "更新周期"
 
 msgid "Update Time (Every Day)"
 msgstr "更新时间（每天）"
+
+msgid "Format Code"
+msgstr "格式化代码"

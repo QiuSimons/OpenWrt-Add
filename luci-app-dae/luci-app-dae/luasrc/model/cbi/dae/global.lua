@@ -1,16 +1,8 @@
 local fs = require "nixio.fs"
-local sys = require "luci.sys"
-local m, s
+local dae = require "luci.model.dae_tools"
+local m, s, o
 
-m = Map("dae", translate("Global Settings"))
-m.description = translate("Configure global settings for DAE.")
-
-m:section(SimpleSection).template = "dae/dae_status"
-
--- Create directory if not exists
-if not fs.stat("/etc/dae/config.d") then
-    fs.mkdirr("/etc/dae/config.d")
-end
+m = Map("dae", translate("Global Settings"), translate("Configure global settings for DAE."))
 
 -- Check if config file exists, create if not
 local config_file = "/etc/dae/config.dae"
@@ -34,65 +26,26 @@ global {
 }]])
 end
 
-s = m:section(TypedSection, "dae")
-s.addremove = false
-s.anonymous = true
+s = dae.init_editor(m, "global")
 
-o = s:option(Flag, "enabled", translate("Enabled"))
-o.rmempty = false
-
-o = s:option(Button, "_reload", translate("Reload Service"), translate("Reload service to apply configuration."))
-o.inputstyle = "reload"
-o.write = function()
-    -- 使用luci.sys.call替代sys.exec，它不会阻塞界面
-    luci.sys.call("/etc/init.d/dae hot_reload >/dev/null 2>&1 &")
-    
-    -- 立即显示操作成功的提示信息
-    luci.http.redirect(luci.dispatcher.build_url("admin", "services", "dae", "global") .. "?reload=1")
-end
+s:option(Flag, "enabled", translate("Enabled")).rmempty = false
 
 -- Auto update settings
-enable = s:option(Flag, "subscribe_auto_update", translate("Enable Auto Subscribe Update"))
-enable.rmempty = false
+o = s:option(Flag, "subscribe_auto_update", translate("Enable Auto Subscribe Update"))
+o.rmempty = false
 
--- Update cycle
-weekly = s:option(ListValue, "subscribe_update_week_time", translate("Update Cycle"))
-weekly:value("*", translate("Every Day"))
-weekly:value("1", translate("Every Monday"))
-weekly:value("2", translate("Every Tuesday"))
-weekly:value("3", translate("Every Wednesday"))
-weekly:value("4", translate("Every Thursday"))
-weekly:value("5", translate("Every Friday"))
-weekly:value("6", translate("Every Saturday"))
-weekly:value("7", translate("Every Sunday"))
-weekly.default = "*"
-weekly:depends('subscribe_auto_update', '1')
-
--- Update time
-daily = s:option(ListValue, "subscribe_update_day_time", translate("Update Time (Every Day)"))
-for t = 0, 23 do
-  daily:value(t, t..":00")
+o = s:option(ListValue, "subscribe_update_week_time", translate("Update Cycle"))
+for i, v in ipairs({ translate("Every Day"), translate("Every Monday"), translate("Every Tuesday"), translate("Every Wednesday"), translate("Every Thursday"), translate("Every Friday"), translate("Every Saturday"), translate("Every Sunday") }) do
+    o:value(i == 1 and "*" or tostring(i - 1), v)
 end
-daily.default = 0
-daily:depends('subscribe_auto_update', '1')
+o.default = "*"
+o:depends('subscribe_auto_update', '1')
 
--- Global configuration editor
-o = s:option(TextValue, "globalconf", translate("Global Configuration"), translate("Correctly configure the include field for separate-config to work, or enter complete configuration here (other sub-pages won't need configuration and won't take effect)."))
-o.rmempty = true
-o.wrap = "off"
+o = s:option(ListValue, "subscribe_update_day_time", translate("Update Time (Every Day)"))
+for t = 0, 23 do o:value(t, t..":00") end
+o.default = 0
+o:depends('subscribe_auto_update', '1')
 
--- Read global configuration
-function o.cfgvalue(self, section)
-    return fs.readfile(config_file) or ""
-end
-
--- Write global configuration
-function o.write(self, section, value)
-    value = value:gsub("\r\n?", "\n")
-    fs.writefile(config_file, value)
-end
-
-o = s:option(DummyValue, "")
-o.template = "dae/dae_editor"
+dae.add_editor(s, config_file, "globalconf", translate("Global Configuration"), translate("Correctly configure the include field for separate-config to work, or enter complete configuration here."))
 
 return m

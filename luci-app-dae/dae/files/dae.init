@@ -29,6 +29,7 @@ delcron() {
 
 set_chmod_640() {
 	chmod -R 640 /etc/dae/
+	mkdir -p /etc/dae/config.d
 	mkdir -p /var/log/dae
 }
 
@@ -89,7 +90,6 @@ stop_service() {
     delcron
     setlocaluse
     [ -f "$DAENETNS" ] && umount "$DAENETNS"
-    rm -rf "$LOG"
 }
 
 service_triggers() {
@@ -98,5 +98,5 @@ service_triggers() {
 
 hot_reload() {
 	set_chmod_640
-	/etc/init.d/dae running && "$PROG" reload "$(cat /var/run/dae.pid)"
+	/etc/init.d/dae running && "$PROG" reload $(pidof dae | cut -d' ' -f1)
 }

@@ -29,14 +29,16 @@ end
 
 function act_status()
 	local sys  = require "luci.sys"
+	local fs   = require "nixio.fs"
 	local e = { }
-	e.running = sys.call("pidof dae >/dev/null") == 0
+	local pid = sys.exec("pidof dae | cut -d' ' -f1"):gsub("\n", "")
+	e.running = (pid ~= "")
 	if e.running then
-		e.memory = sys.exec("awk '/VmRSS/ {print $2/1024 \" MB\"}' /proc/$(pidof dae | cut -d' ' -f1)/status 2>/dev/null")
-		if e.memory then
-			e.memory = e.memory:gsub("\n", "")
-			if e.memory == "" then
-				e.memory = nil
+		local status = fs.readfile("/proc/" .. pid .. "/status")
+		if status then
+			local rss = status:match("VmRSS:%s+(%d+)%s+kB")
+			if rss then
+				e.memory = string.format("%.1f MB", tonumber(rss) / 1024)
 			end
 		end
 	end
