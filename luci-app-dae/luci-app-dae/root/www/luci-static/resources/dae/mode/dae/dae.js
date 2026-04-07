@@ -24,28 +24,43 @@ CodeMirror.defineMode("dae", function(config) {
       return tokenBlockComment(stream, state);
     }
 
-    // Operators (Official: keyword.operator.*)
-    if (stream.match("->")) return "operator marker";
-    if (stream.match("&&") || stream.match("!")) return "operator";
-
-    // Quoted Strings (Official: quote_literal)
-    if (stream.match(/^"([^"\\]|\\.)*"/ ) || stream.match(/^'([^'\\]|\\.)*'/)) return "string";
-
-    // Numbers (Official: literal - styled as constants in Dracula)
-    if (stream.match(/^[0-9]+(\.[0-9]+)?(%|[a-zA-Z]+)?/)) return "number";
-
     // Word Pattern (Official: bare_literal - ANTLR4 based)
     // ID: [a-zA-Z_]([a-zA-Z_]|[/\\^*.+0-9-]|[=@$!#%])*
     // NON ID: [/\\^*.+0-9-]([a-zA-Z_]|[/\\^*.+0-9-]|[=@$!#%])*
     var wordPattern = /^([a-zA-Z_][a-zA-Z_0-9\/\^*.+\-=@$!#%]*|[\/\^*.+\-0-9][a-zA-Z_0-9\/\^*.+\-=@$!#%]*)/;
-    
+
+    // Outbound detection (Anything after -> or fallback:)
+    if (state.expectOutbound) {
+      if (stream.match(wordPattern)) {
+        state.expectOutbound = false;
+        return "keyword";
+      }
+    }
+
+    // Operators (Official: keyword.operator.*)
+    if (stream.match("->")) return "operator marker";
+    if (stream.match("&&") || stream.match("!")) return "operator";
+    if (stream.match(":")) return "operator";
+
+    // Quoted Strings (Official: quote_literal)
+    if (stream.match(/^"([^"\\]|\\.)*"/ ) || stream.match(/^'([^'\\]|\\.)*'/)) return "string";
+
+    // Numbers & IPs (Official: literal - styled as constants in Dracula)
+    // Supports IPv4, IPv6 (including hex prefix), and CIDR notation
+    if (stream.match(/^([0-9]+(\.[0-9]+)+(?:\/[0-9]+)?|[a-fA-F0-9:]*::[a-fA-F0-9:]*(?:\/[0-9]+)?|[a-fA-F0-9]+(:[a-fA-F0-9]+){2,}(?:\/[0-9]+)?|[0-9]+(\.[0-9]+)?(%|[a-zA-Z]+)?)/)) return "number";
+
     // Struct/Block Header (Official: storage.type.struct)
     if (stream.match(new RegExp(wordPattern.source.slice(1) + "\\s*(?={)"))) {
       return "keyword";
     }
 
-    // Parameters (Official: variable.parameter)
-    if (stream.match(new RegExp(wordPattern.source.slice(1) + "\\s*(?=: )"))) {
+    // Tag Prefixes (Official: constant.other.id - Styled as variable-2 Cyan)
+    if (stream.match(/^(geosite|geoip|pname|domain|dip|sip|dport|sport|l4proto|ipversion_prefer|fixed_domain_ttl)(?=\s*:)/)) {
+        return "variable-2";
+    }
+
+    // Parameters (Official: variable.parameter - Styled as variable-3 Orange)
+    if (stream.match(new RegExp(wordPattern.source.slice(1) + "(?=\\s*:)"))) {
         return "variable-3"; 
     }
 
@@ -85,11 +100,18 @@ CodeMirror.defineMode("dae", function(config) {
 
   return {
     startState: function() {
-      return { tokenize: tokenBase, stack: [] };
+      return { tokenize: tokenBase, stack: [], expectOutbound: false };
     },
     token: function(stream, state) {
       var style = state.tokenize(stream, state);
       var cur = stream.current();
+      if (style === "operator marker") {
+        state.expectOutbound = true;
+      } else if (style === "variable-3" && cur === "fallback") {
+        state.expectOutbound = true;
+      } else if (style !== null && style !== "comment" && !/^\s*:?\s*$/.test(cur)) {
+        state.expectOutbound = false;
+      }
       if (cur == "{") state.stack.push("{");
       else if (cur == "}") state.stack.pop();
       return style;

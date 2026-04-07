@@ -84,9 +84,37 @@
 				formatBtn.innerText = '<%:Format Code%>';
 				formatBtn.onclick = function() {
 					editor.operation(function() {
+						var cursor = editor.getCursor();
+						var content = editor.getValue();
+						
+						// Semantic Pass
+						var lines = content.split('\n');
+						var formattedLines = lines.map(function(line) {
+							if (line.trim().startsWith('#') || line.trim().startsWith('//')) return line; // Skip comments
+							
+							// 1. Spacing around ->
+							line = line.replace(/\s*->\s*/g, ' -> ');
+							
+							// 2. Spacing around &&
+							line = line.replace(/\s*&&\s*/g, ' && ');
+							
+							// 3. Ultra-Safe Quote normalization
+							// Only remove quotes from pure alphanumeric identifiers (e.g. 'direct', 'my_group')
+							// NEVER remove quotes if the string contains :, /, ., @, or spaces.
+							line = line.replace(/(['"])([a-zA-Z0-9_-]+)\1/g, function(match, quote, word) {
+								return word;
+							});
+
+							return line.trimEnd();
+						});
+						
+						editor.setValue(formattedLines.join('\n'));
+						
+						// Indentation Pass
 						for (var i = 0; i < editor.lineCount(); i++) {
 							editor.indentLine(i, "smart");
 						}
+						editor.setCursor(cursor);
 					});
 				};
 				
