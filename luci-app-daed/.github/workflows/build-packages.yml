@@ -6,6 +6,7 @@ on:
     branches:
       - kix
 
+
 permissions:
   contents: write
 
@@ -19,7 +20,7 @@ jobs:
       release_name: ${{ steps.meta.outputs.release_name }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -70,27 +71,17 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
-      - name: Get node-empty
-        run: |
-          git clone https://github.com/sbwml/node-empty
 
       - name: Init build dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
         shell: bash
         run: |
-          sudo swapoff -a || true
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo -E apt-get update
-          sudo -E apt-get install -y clang llvm npm curl jq
-          sudo npm install -g pnpm
-          sudo npm install -g n
-          sudo npm install -g taze
-          sudo n stable
+          sudo -E apt-get install -y clang llvm curl jq
 
       - name: Build packages
         uses: sbwml/openwrt-gh-action-sdk@go1.26
@@ -108,16 +99,6 @@ jobs:
           find bin/packages -type f | grep -E '\.(ipk|apk)$' || true
           echo "==========================="
 
-      - name: Verify expected package format exists
-        shell: bash
-        run: |
-          shopt -s nullglob
-          files=(bin/packages/${{ matrix.arch }}/packages_ci/*.${{ matrix.pkg_ext }})
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No .${{ matrix.pkg_ext }} files found in bin/packages/${{ matrix.arch }}/packages_ci/"
-            exit 1
-          fi
-          printf '%s\n' "${files[@]}"
 
       - name: Prepare renamed artifacts
         shell: bash
@@ -128,7 +109,9 @@ jobs:
             base="$(basename "$f")"
             ext="${base##*.}"
             name="${base%.*}"
-            if [ "$ext" = "ipk" ]; then
+
+            # Avoid duplicating architecture in name, and skip architecture suffix for LuCI/all packages
+            if [[ "$name" == *"${{ matrix.arch }}"* ]] || [[ "$name" == *"all"* ]] || [[ "$name" == luci-* ]]; then
               new_name="${name}-${{ matrix.sdk }}.${ext}"
             else
               new_name="${name}-${{ matrix.arch }}-${{ matrix.sdk }}.${ext}"
@@ -139,7 +122,7 @@ jobs:
           ls -lah dist
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.arch }}-${{ matrix.sdk }}-${{ matrix.pkg_ext }}
           path: dist/*.${{ matrix.pkg_ext }}
@@ -154,25 +137,42 @@ jobs:
       - build
     steps:
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
-          path: release-assets
-
-      - name: Show release assets
-        shell: bash
-        run: |
-          echo "=== Release assets ==="
-          find release-assets -type f | sort
-          echo "======================"
+          path: release-dist
+          merge-multiple: true
 
       - name: Create or update GitHub release
-        uses: ncipollo/release-action@v1
+        uses: softprops/action-gh-release@v2
         with:
-          tag: ${{ needs.prepare.outputs.release_tag }}
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
           name: ${{ needs.prepare.outputs.release_name }}
-          allowUpdates: true
-          replacesArtifacts: true
-          generateReleaseNotes: true
+          files: release-dist/*
+          generate_release_notes: true
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit: ${{ github.sha }}
-          artifacts: "release-assets/**/*.ipk,release-assets/**/*.apk"
+          target_commitish: ${{ github.sha }}
+
+      - name: Delete Older Releases
+        uses: dev-drprasad/delete-older-releases@master
+        with:
+          keep_latest: 3
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{secrets.ACTIONS_DEPLOY_KEY}}
+        continue-on-error: true
+
+      - name: Cleanup Old Action Artifacts
+        uses: c-hive/gha-remove-artifacts@master
+        with:
+          age: '3 days'
+          skip-recent: 3
+        continue-on-error: true
+
+      - name: Cleanup Workflow Logs
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{secrets.ACTIONS_DEPLOY_KEY}}
+          repository: ${{ github.repository }}
+          retain_days: 3
+        continue-on-error: true
+

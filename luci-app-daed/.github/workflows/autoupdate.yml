@@ -1,4 +1,4 @@
-name: Build Web
+name: Auto Update
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ jobs:
       latest_wing_short: ${{ steps.check.outputs.latest_wing_short }}
       latest_core_short: ${{ steps.check.outputs.latest_core_short }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -72,31 +72,23 @@ jobs:
     if: needs.check_update.outputs.update_needed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-node@main
-        with:
-          node-version: 18
 
       - name: Build System Setup
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
-          sudo apt-get install -y squashfs-tools jq dos2unix
-          sudo npm install -g pnpm
-          sudo npm i taze -g
+          sudo apt-get install -y jq dos2unix
 
       - name: Update Makefile
         run: |
           chmod 755 ./daed/files/daed.init ./luci-app-daed/root/etc/init.d/luci_daed ./luci-app-daed/root/etc/hotplug.d/iface/98-daed
           find . -type f -exec dos2unix {} \; -print
-          dos2unix ./daed/files/daed.init
-          dos2unix ./luci-app-daed/root/etc/init.d/luci_daed
-          dos2unix ./luci-app-daed/root/etc/hotplug.d/iface/98-daed
 
           sed -i '/PKG_VERSION:/d' ./daed/Makefile
           sed -i "7 a PKG_VERSION:=${{ needs.check_update.outputs.pkg_version }}" ./daed/Makefile
@@ -115,7 +107,6 @@ jobs:
 
       - name: Commit file
         run: |
-          rm -rf build
           git config --global user.email simonsqiu@foxmail.com
           git config --global user.name SimonsQiu
           git add .
@@ -129,26 +120,4 @@ jobs:
           branch: kix
         continue-on-error: true
 
-      - name: Delete Older Releases
-        uses: dev-drprasad/delete-older-releases@master
-        with:
-          keep_latest: 3
-          delete_tags: true
-        env:
-          GITHUB_TOKEN: ${{secrets.ACTIONS_DEPLOY_KEY}}
-        continue-on-error: true
 
-      - name: Cleanup Old Action Artifacts
-        uses: c-hive/gha-remove-artifacts@master
-        with:
-          age: '3 days'
-          skip-recent: 3
-        continue-on-error: true
-
-      - name: Cleanup Workflow Logs
-        uses: Mattraks/delete-workflow-runs@main
-        with:
-          token: ${{secrets.ACTIONS_DEPLOY_KEY}}
-          repository: ${{ github.repository }}
-          retain_days: 3
-        continue-on-error: true
