@@ -144,3 +144,21 @@ msgstr "einat-eBPF全锥NAT"
 
 msgid "eBPF-based Endpoint-Independent NAT"
 msgstr "基于eBPF实现的全锥型 NAT 方案"
+
+msgid "Network Speed"
+msgstr "网络速率"
+
+msgid "Interface"
+msgstr "接口"
+
+msgid "Download Rate (RX)"
+msgstr "下载速率 (RX)"
+
+msgid "Upload Rate (TX)"
+msgstr "上传速率 (TX)"
+
+msgid "Calculating..."
+msgstr "计算中..."
+
+msgid "No active network interfaces"
+msgstr "无活动网络接口"
