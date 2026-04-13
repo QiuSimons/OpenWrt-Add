@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    name: Build the IPK
+    name: Build the APK
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
@@ -15,25 +15,26 @@ jobs:
     - name: Prepare
       run: |
         mkdir -p bin/luci-app-argon-config
-        cp -rf ./luasrc ./po ./root ./Makefile ./bin/luci-app-argon-config
+        cp -rf ./htdocs ./po ./root ./Makefile ./bin/luci-app-argon-config
+        echo "DIR=$(pwd)/bin/luci-app-argon-config"
     - name: Docker Build
       run: |
         docker pull openwrt/sdk
-        docker run --rm -u root -v "$(pwd)"/bin/:/home/build/openwrt/bin -v ${{ github.workspace }}/.github/workflows:/home/build/workflows openwrt/sdk /bin/sh /home/build/workflows/build.sh
+        docker run --rm -u root -v ${{ github.workspace }}/bin/:/builder/bin -v ${{ github.workspace }}/.github/workflows:/builder/workflows openwrt/sdk /bin/sh /builder/workflows/build.sh
     - name: Release
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         set -x
         assets=()
-        for asset in ./bin/packages/x86_64/base/*argon-config*.ipk; do
-          assets+=("-a" "$asset")
+        for asset in ./bin/packages/x86_64/base/*argon-config*.apk; do
+          assets+=("$asset")
         done
-        tag_name=$(basename ${{github.ref}})
-        hub release create -p "${assets[@]}" -m "$tag_name" "$tag_name"
+        tag_name=${GITHUB_REF#refs/tags/}
+        gh release create "$tag_name" "${assets[@]}" --title "$tag_name" --notes "Release $tag_name"
     - name: Upload Log
       if: ${{ always() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: buildlog
         path: bin/logs.tar.xz
