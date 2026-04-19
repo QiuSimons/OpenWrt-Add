@@ -1,23 +1,27 @@
-#!/usr/bin/lua
+#!/usr/bin/env ucode
 
-local util = require "luci.util"
-local jsonc = require "luci.jsonc"
+let ubus = require("ubus");
+let conn = ubus.connect();
 
-local eth_info = {}
-local ifname, stat
-for ifname, stat in pairs(util.ubus("network.device", "status")) do
-	if ifname:match("^(eth%d+)$") == ifname or ifname:match("^(usb%d+)$") or ifname:match("^(lan%d+)$") or ifname:match("wan") == ifname then
-		eth_info[#eth_info + 1] = {
-			device = ifname
+let eth_info = [];
+
+if (conn) {
+	let stat = conn.call("network.device", "status");
+	if (type(stat) == "object") {
+		for (let ifname in stat) {
+			if (match(ifname, /^eth\d+$/) || match(ifname, /^usb\d+$/) || match(ifname, /^lan\d+$/) || ifname == "wan") {
+				push(eth_info, {
+					device: ifname
+				});
+			}
 		}
-	end
-end
+	}
+}
 
-table.sort(
-	eth_info,
-	function(a, b)
-		return a.device < b.device
-	end
-)
+sort(eth_info, function(a, b) {
+	if (a.device < b.device) return -1;
+	if (a.device > b.device) return 1;
+	return 0;
+});
 
-print(jsonc.stringify(eth_info))
+print(sprintf("%J\n", eth_info));
