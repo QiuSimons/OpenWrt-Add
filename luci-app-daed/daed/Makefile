@@ -5,18 +5,18 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=daed
-PKG_VERSION:=2026.04.18
-DAED_VERSION:=daed-4a519fc
-WING_VERSION:=wing-20225e3
-CORE_VERSION:=core-9a8eb1a
+PKG_VERSION:=2026.04.20
+DAED_VERSION:=daed-9f051d3
+WING_VERSION:=wing-4c9286f
+CORE_VERSION:=core-5a2efa1
 WING_HASH_SHORT:=$(shell echo $(WING_VERSION) | cut -d- -f2)
 CORE_HASH_SHORT:=$(shell echo $(CORE_VERSION) | cut -d- -f2)
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=4a519fcbaa7004e50e80a309c68d6811596468cf
-PKG_SOURCE_URL:=https://github.com/daeuniverse/daed.git
+PKG_SOURCE_VERSION:=9f051d30104e76053f68811204febf6e9cbf1b60
+PKG_SOURCE_URL:=https://github.com/ksong008/daed.git
 PKG_MIRROR_HASH:=skip
 
 PKG_LICENSE:=AGPL-3.0-only MIT
@@ -103,7 +103,7 @@ define Build/Prepare
 		rm -rf $(DAED_BUILD_DIR) ; \
 		mkdir -p $(DAED_BUILD_DIR) ; \
 		$(TAR) --strip-components=1 -C $(DAED_BUILD_DIR) -xzf $(DL_DIR)/$(PKG_NAME)-$(PKG_VERSION).tar.gz ; \
-		git clone https://github.com/daeuniverse/dae-wing $(PKG_BUILD_DIR) && \
+		git clone https://github.com/ksong008/dae-wing $(PKG_BUILD_DIR) && \
 			git -C $(PKG_BUILD_DIR) checkout $(WING_HASH_SHORT) ; \
 		rm -rf $(PKG_BUILD_DIR)/dae-core ; \
 		git clone https://github.com/olicesx/dae $(PKG_BUILD_DIR)/dae-core && \

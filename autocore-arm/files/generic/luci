@@ -21,7 +21,7 @@ function shellquote(s) {
 function callPackageVersionCheck(pkg) {
 	let version = "";
 
-	if ( access('/bin/opkg') ) {
+	if (access('/bin/opkg')) {
 		// <= v24.10
 		let fd = popen('opkg list-installed ' + shellquote(pkg) + ' 2>/dev/null');
 		if (fd) {
@@ -32,7 +32,7 @@ function callPackageVersionCheck(pkg) {
 			fd.close();
 		}
 	}
-	else if ( access('/usr/bin/apk') ) {
+	else if (access('/usr/bin/apk')) {
 		// > v24.10
 		let fd = popen('apk list -I ' + shellquote(pkg) + ' 2>/dev/null');
 		if (fd) {
@@ -48,14 +48,14 @@ function callPackageVersionCheck(pkg) {
 
 const methods = {
 	getVersion: {
-		call: function(request) {
+		call: function (request) {
 			return { revision, branch };
 		}
 	},
 
 	getInitList: {
 		args: { name: 'name' },
-		call: function(request) {
+		call: function (request) {
 			let scripts = {};
 
 			for (let name in filter(init_list(), i => !request.args.name || i == request.args.name)) {
@@ -74,29 +74,29 @@ const methods = {
 
 	setInitAction: {
 		args: { name: 'name', action: 'action' },
-		call: function(request) {
+		call: function (request) {
 			switch (request.args.action) {
-			case 'enable':
-			case 'disable':
-			case 'start':
-			case 'stop':
-			case 'restart':
-			case 'reload':
-				const rc = init_action(request.args.name, request.args.action);
+				case 'enable':
+				case 'disable':
+				case 'start':
+				case 'stop':
+				case 'restart':
+				case 'reload':
+					const rc = init_action(request.args.name, request.args.action);
 
-				if (rc === false)
-					return { error: 'No such init script' };
+					if (rc === false)
+						return { error: 'No such init script' };
 
-				return { result: rc == 0 };
+					return { result: rc == 0 };
 
-			default:
-				return { error: 'Invalid action' };
+				default:
+					return { error: 'Invalid action' };
 			}
 		}
 	},
 
 	getUnixtime: {
-		call: function(request) {
+		call: function (request) {
 			// time() ; Returns the current UNIX epoch.
 			return { result: time() };
 		}
@@ -104,7 +104,7 @@ const methods = {
 
 	setLocaltime: {
 		args: { localtime: 0 },
-		call: function(request) {
+		call: function (request) {
 			let t = localtime(request.args.localtime);
 
 			if (t) {
@@ -117,7 +117,7 @@ const methods = {
 	},
 
 	getTimezones: {
-		call: function(request) {
+		call: function (request) {
 			let tz = trim(readfile('/etc/TZ'));
 			let zn = cursor()?.get?.('system', '@system[0]', 'zonename');
 			let result = {};
@@ -134,7 +134,7 @@ const methods = {
 	},
 
 	getLEDs: {
-		call: function() {
+		call: function () {
 			let result = {};
 
 			for (let led in lsdir('/sys/class/leds')) {
@@ -162,7 +162,7 @@ const methods = {
 	},
 
 	getUSBDevices: {
-		call: function() {
+		call: function () {
 			let result = { devices: [], ports: [] };
 
 			for (let path in glob('/sys/bus/usb/devices/[0-9]*/manufacturer')) {
@@ -170,11 +170,11 @@ const methods = {
 
 				push(result.devices, {
 					id,
-					vid:     trim(readfile(`/sys/bus/usb/devices/${id}/idVendor`)),
-					pid:     trim(readfile(`/sys/bus/usb/devices/${id}/idProduct`)),
-					vendor:  trim(readfile(path)),
+					vid: trim(readfile(`/sys/bus/usb/devices/${id}/idVendor`)),
+					pid: trim(readfile(`/sys/bus/usb/devices/${id}/idProduct`)),
+					vendor: trim(readfile(path)),
 					product: trim(readfile(`/sys/bus/usb/devices/${id}/product`)),
-					speed:   +readfile(`/sys/bus/usb/devices/${id}/speed`)
+					speed: +readfile(`/sys/bus/usb/devices/${id}/speed`)
 				});
 			}
 
@@ -193,7 +193,7 @@ const methods = {
 	},
 
 	getConntrackHelpers: {
-		call: function() {
+		call: function () {
 			const uci = cursor();
 			let helpers = [];
 			let package;
@@ -221,36 +221,36 @@ const methods = {
 	},
 
 	getFeatures: {
-		call: function() {
+		call: function () {
 			let result = {
-				firewall:   access('/sbin/fw3') == true,
-				firewall4:  access('/sbin/fw4') == true,
-				opkg:       access('/bin/opkg') == true,
-				bonding:    access('/sys/module/bonding'),
-				mii_tool:   access('/usr/sbin/mii-tool'),
+				firewall: access('/sbin/fw3') == true,
+				firewall4: access('/sbin/fw4') == true,
+				opkg: access('/bin/opkg') == true,
+				bonding: access('/sys/module/bonding'),
+				mii_tool: access('/usr/sbin/mii-tool'),
 				offloading: access('/sys/module/xt_FLOWOFFLOAD/refcnt') == true || access('/sys/module/nft_flow_offload/refcnt') == true,
-				fullcone:   access('/sys/module/xt_FULLCONENAT/refcnt') == true || access('/sys/module/nft_fullcone/refcnt') == true,
+				fullcone: access('/sys/module/xt_FULLCONENAT/refcnt') == true || access('/sys/module/nft_fullcone/refcnt') == true,
 				shortcutfe: access('/sys/module/shortcut_fe/refcnt') == true,
-				natflow:    access('/dev/natflow_ctl') == true,
-				br2684ctl:  access('/usr/sbin/br2684ctl') == true,
-				swconfig:   access('/sbin/swconfig') == true,
-				zram:       access('/sys/class/zram-control') == true,
-				sysntpd:    readlink('/usr/sbin/ntpd') != null,
-				ipv6:       access('/proc/net/ipv6_route') == true,
-				dropbear:   access('/usr/sbin/dropbear') == true,
-				cabundle:   access('/etc/ssl/certs/ca-certificates.crt') == true,
-				relayd:     access('/usr/sbin/relayd') == true,
-				apk:        access('/usr/bin/apk') == true,
-				wifi:       access('/sbin/wifi') == true,
-				ufpd:       access('/usr/sbin/ufpd') == true,
-				vrf:        access('/sys/module/vrf/refcnt') == true, // vrf.ko is loaded
+				natflow: access('/dev/natflow_ctl') == true,
+				br2684ctl: access('/usr/sbin/br2684ctl') == true,
+				swconfig: access('/sbin/swconfig') == true,
+				zram: access('/sys/class/zram-control') == true,
+				sysntpd: readlink('/usr/sbin/ntpd') != null,
+				ipv6: access('/proc/net/ipv6_route') == true,
+				dropbear: access('/usr/sbin/dropbear') == true,
+				cabundle: access('/etc/ssl/certs/ca-certificates.crt') == true,
+				relayd: access('/usr/sbin/relayd') == true,
+				apk: access('/usr/bin/apk') == true,
+				wifi: access('/sbin/wifi') == true,
+				ufpd: access('/usr/sbin/ufpd') == true,
+				vrf: access('/sys/module/vrf/refcnt') == true, // vrf.ko is loaded
 				netifd_vrf: false,
-				mptcp:      access('/proc/sys/net/mptcp/enabled'),
-				iptables:   access('/usr/sbin/iptables') == true,
+				mptcp: access('/proc/sys/net/mptcp/enabled'),
+				iptables: access('/usr/sbin/iptables') == true,
 				offload_hw: system((`[[ $(. /etc/openwrt_release ; echo $DISTRIB_TARGET) == "mediatek"* || $(. /etc/openwrt_release ; echo $DISTRIB_TARGET) == *"bcm"* ]]`)) == 0,
 			};
 
-			const wifi_features = [ 
+			const wifi_features = [
 				'11ac',
 				'11ax',
 				'11be',
@@ -343,7 +343,7 @@ const methods = {
 
 	getSwconfigFeatures: {
 		args: { switch: 'switch0' },
-		call: function(request) {
+		call: function (request) {
 			// Parse some common switch properties from swconfig help output.
 			const swc = popen(`swconfig dev ${shellquote(request.args.switch)} help 2>/dev/null`);
 
@@ -362,8 +362,8 @@ const methods = {
 					}
 					else if (match(line, /cpu @/)) {
 						result.switch_title = match(line, /^switch[0-9]+: \w+\((.+)\)/)?.[1];
-						result.num_vlans    = match(line, /vlans: ([0-9]+)/)?.[1] ?? 16;
-						result.min_vid      = 1;
+						result.num_vlans = match(line, /vlans: ([0-9]+)/)?.[1] ?? 16;
+						result.min_vid = 1;
 					}
 					else if (match(line, /: (pvid|tag|vid)/)) {
 						if (is_vlan_attr)
@@ -401,7 +401,7 @@ const methods = {
 
 	getSwconfigPortState: {
 		args: { switch: 'switch0' },
-		call: function(request) {
+		call: function (request) {
 			const swc = popen(`swconfig dev ${shellquote(request.args.switch)} show 2>/dev/null`);
 
 			if (swc) {
@@ -471,7 +471,7 @@ const methods = {
 
 	setPassword: {
 		args: { username: 'root', password: 'password' },
-		call: function(request) {
+		call: function (request) {
 			const u = shellquote(request.args.username);
 			const p = shellquote(request.args.password);
 
@@ -482,7 +482,7 @@ const methods = {
 	},
 
 	getBlockDevices: {
-		call: function() {
+		call: function () {
 			const block = popen('/sbin/block info 2>/dev/null');
 
 			if (block) {
@@ -533,13 +533,13 @@ const methods = {
 	},
 
 	setBlockDetect: {
-		call: function() {
+		call: function () {
 			return { result: system('/sbin/block detect > /etc/config/fstab') == 0 };
 		}
 	},
 
 	getMountPoints: {
-		call: function() {
+		call: function () {
 			const fd = open('/proc/mounts', 'r');
 
 			if (fd) {
@@ -548,15 +548,15 @@ const methods = {
 				for (let line = fd.read('line'); length(line); line = fd.read('line')) {
 					const m = split(line, ' ');
 					const device = replace(m[0], /\\([0-9][0-9][0-9])/g, (m, n) => chr(int(n, 8)));
-					const mount  = replace(m[1], /\\([0-9][0-9][0-9])/g, (m, n) => chr(int(n, 8)));
+					const mount = replace(m[1], /\\([0-9][0-9][0-9])/g, (m, n) => chr(int(n, 8)));
 					const stat = statvfs(mount);
 
 					if (stat?.blocks > 0) {
 						push(result, {
 							device, mount,
-							size:  stat.bsize * stat.blocks,
+							size: stat.bsize * stat.blocks,
 							avail: stat.bsize * stat.bavail,
-							free:  stat.bsize * stat.bfree
+							free: stat.bsize * stat.bfree
 						});
 					}
 				}
@@ -573,7 +573,7 @@ const methods = {
 
 	getRealtimeStats: {
 		args: { mode: 'interface', device: 'eth0' },
-		call: function(request) {
+		call: function (request) {
 			let flags;
 
 			if (request.args.mode == 'interface')
@@ -608,24 +608,24 @@ const methods = {
 	},
 
 	getConntrackList: {
-		call: function() {
+		call: function () {
 			return { result: conntrack_list() };
 		}
 	},
 
 	getProcessList: {
-		call: function() {
+		call: function () {
 			return { result: process_list() };
 		}
 	},
 
 	getBuiltinEthernetPorts: {
-		call: function() {
+		call: function () {
 			let fd = open('/etc/board.json', 'r');
 			let board = fd ? json(fd) : {};
 			let ports = [];
 
-			for (let k in [ 'lan', 'wan' ]) {
+			for (let k in ['lan', 'wan']) {
 				if (!board?.network?.[k])
 					continue;
 
@@ -640,8 +640,8 @@ const methods = {
 			}
 
 			/* Workaround for targets that do not enumerate  all netdevs in board.json */
-			if (uname().machine in [ 'x86_64' ] &&
-			    match(ports[0]?.device, /^eth\d+$/)) {
+			if (uname().machine in ['x86_64'] &&
+				match(ports[0]?.device, /^eth\d+$/)) {
 				let bus = realpath(`/sys/class/net/${ports[0].device}/device/subsystem`);
 
 				for (let netdev in lsdir('/sys/class/net')) {
@@ -663,7 +663,7 @@ const methods = {
 	},
 
 	getOdhcp6cStats: {
-		call: function() {
+		call: function () {
 			const ubus = connect();
 			const devs = ubus.call('network.device', 'status');
 
@@ -688,32 +688,143 @@ const methods = {
 	},
 
 	getCPUBench: {
-		call: function() {
+		call: function () {
 			return { cpubench: readfile('/etc/bench.log') || '' };
 		}
 	},
 
 	getCPUInfo: {
-		call: function() {
-			if (!access('/sbin/cpuinfo'))
-				return {};
+		call: function () {
+			let CPUINFO_PATH = "/proc/cpuinfo";
+			let CPUFREQ_PATH = "/sys/devices/system/cpu/cpufreq";
+			let THERMAL_PATH = "/sys/class/thermal";
 
-			const fd = popen('/sbin/cpuinfo');
-			if (fd) {
-				let cpuinfo = fd.read('all');
-				if (!cpuinfo)
-					cpuinfo = '?';
-				fd.close();
-
-				return { cpuinfo: cpuinfo };
-			} else {
-				return { cpuinfo: error() };
+			let distrib_target = "";
+			let release_content = readfile("/etc/openwrt_release") || "";
+			let m_target = match(release_content, /DISTRIB_TARGET=['"]?([^'"\n]+)['"]?/);
+			if (m_target) {
+				distrib_target = m_target[1];
 			}
+
+			let cpuinfo_content = readfile(CPUINFO_PATH) || "";
+
+			let cpu_arch = "";
+			let m_arch = match(cpuinfo_content, /model name\s*:\s*([^\n]+)/);
+			if (m_arch) {
+				cpu_arch = trim(m_arch[1]);
+			}
+			if (!cpu_arch) {
+				let p = popen("uname -m");
+				if (p) {
+					cpu_arch = trim(p.read("all"));
+					p.close();
+				}
+			}
+
+			let cpu_cores = "";
+			if (match(distrib_target, /^x86\//)) {
+				let cores = {};
+				let threads = 0;
+				for (let line in split(cpuinfo_content, "\n")) {
+					if (match(line, /^processor/)) threads++;
+					let cm = match(line, /^core id\s*:\s*(\d+)/);
+					if (cm) cores[cm[1]] = true;
+				}
+				let num_cores = length(keys(cores));
+				cpu_cores = sprintf("%dC %dT", num_cores, threads);
+			} else {
+				let threads = 0;
+				for (let line in split(cpuinfo_content, "\n")) {
+					if (match(line, /^processor/)) threads++;
+				}
+				cpu_cores = sprintf("%d", threads);
+			}
+
+			let cpu_freq = "";
+			let big_cpu_freq = "";
+
+			if (match(distrib_target, /^bcm27xx\//)) {
+				let p = popen("vcgencmd measure_clock arm 2>/dev/null");
+				if (p) {
+					let res = p.read("all");
+					p.close();
+					let m = match(res, /=([0-9]+)/);
+					if (m) cpu_freq = sprintf("%dMhz", m[1] / 1000000);
+				}
+			} else if (match(distrib_target, /^bcm53xx\//)) {
+				let p = popen("nvram get clkfreq 2>/dev/null");
+				if (p) {
+					let res = p.read("all");
+					p.close();
+					let m = match(res, /^([0-9]+)/);
+					if (m) cpu_freq = sprintf("%dMHz", m[1]);
+				}
+			} else if (match(distrib_target, /^mvebu\//)) {
+				let m = match(cpuinfo_content, /BogoMIPS\s*:\s*([0-9.]+)/);
+				if (m) cpu_freq = sprintf("%sMHz", m[1]);
+			} else if (match(distrib_target, /^x86\//)) {
+				let m = match(cpuinfo_content, /MHz\s*:\s*([0-9.]+)/);
+				if (m) cpu_freq = sprintf("%sMHz", m[1]);
+			} else {
+				let freq0 = readfile(CPUFREQ_PATH + "/policy0/cpuinfo_cur_freq");
+				if (freq0) cpu_freq = sprintf("%.0fMHz", trim(freq0) / 1000);
+
+				let freq4 = readfile(CPUFREQ_PATH + "/policy4/cpuinfo_cur_freq");
+				if (freq4) big_cpu_freq = sprintf("%.0fMHz ", trim(freq4) / 1000);
+			}
+
+			let cpu_temp = "";
+
+			if (match(distrib_target, /^bcm27xx\//)) {
+				let p = popen("vcgencmd measure_temp 2>/dev/null");
+				if (p) {
+					let res = p.read("all");
+					p.close();
+					let m = match(res, /temp=([0-9.]+)/);
+					if (m) cpu_temp = sprintf("%s°C", m[1]);
+				}
+			} else if (match(distrib_target, /^x86\//)) {
+				let p = popen("sensors 'coretemp-*' 2>/dev/null");
+				if (p) {
+					let res = p.read("all");
+					p.close();
+					let m = match(res, /(?:Package id \d+|Core \d+)[^\+]+\+([0-9.]+)°C/);
+					if (m) {
+						cpu_temp = sprintf("%s°C", m[1]);
+					} else {
+						let p2 = popen("sensors 'k10temp-*' 2>/dev/null");
+						if (p2) {
+							let res2 = p2.read("all");
+							p2.close();
+							let m2 = match(res2, /(?:Tctl|Tdie)[^\+]+\+([0-9.]+)/);
+							if (m2) cpu_temp = sprintf("%s°C", m2[1]);
+						}
+					}
+				}
+			} else {
+				let temp0 = readfile(THERMAL_PATH + "/thermal_zone0/temp");
+				if (temp0) cpu_temp = sprintf("%.1f°C", trim(temp0) / 1000);
+			}
+
+			let out = "";
+			let freq_str = big_cpu_freq + cpu_freq;
+
+			if (length(freq_str) == 0 && length(cpu_temp) > 0) {
+				out = sprintf("%s x %s (%s)", cpu_arch, cpu_cores, cpu_temp);
+			} else if ((length(cpu_temp) == 0 && length(freq_str) > 0) || match(release_content, /ipq|mt7622/)) {
+				out = sprintf("%s x %s (%s)", cpu_arch, cpu_cores, freq_str);
+			} else if (length(cpu_temp) > 0 && length(freq_str) > 0) {
+				out = sprintf("%s x %s (%s, %s)", cpu_arch, cpu_cores, freq_str, cpu_temp);
+			} else {
+				out = sprintf("%s x %s", cpu_arch, cpu_cores);
+			}
+
+			return { cpuinfo: out };
 		}
 	},
 
 	getCPUUsage: {
-		call: function() {
+		call: function () {
 			const fd = popen('/bin/busybox top -n1 | awk \'/^CPU/ {printf("%d%", 100 - $8)}\'');
 			if (fd) {
 				let cpuusage = fd.read('all');
@@ -729,7 +840,7 @@ const methods = {
 	},
 
 	getTempInfo: {
-		call: function() {
+		call: function () {
 			if (!access('/sbin/tempinfo'))
 				return {};
 
@@ -748,7 +859,7 @@ const methods = {
 	},
 
 	getOnlineUsers: {
-		call: function() {
+		call: function () {
 			const fd = open('/proc/net/arp', 'r');
 			if (fd) {
 				let onlineusers = 0;
@@ -767,22 +878,30 @@ const methods = {
 	},
 
 	getETHInfo: {
-		call: function() {
-			if (!access('/sbin/ethinfo'))
-				return {};
+		call: function () {
+			let eth_info = [];
+			let conn = connect();
 
-			const fd = popen('/sbin/ethinfo');
-			if (fd) {
-				let ethinfo = fd.read('all');
-				if (!ethinfo)
-					ethinfo = '{}';
-				ethinfo = json(ethinfo);
-				fd.close();
-
-				return { result: ethinfo };
-			} else {
-				return { result: error() };
+			if (conn) {
+				let stat = conn.call("network.device", "status");
+				if (type(stat) == "object") {
+					for (let ifname in stat) {
+						if (match(ifname, /^eth\d+$/) || match(ifname, /^usb\d+$/) || match(ifname, /^lan\d+$/) || ifname == "wan") {
+							push(eth_info, {
+								device: ifname
+							});
+						}
+					}
+				}
 			}
+
+			sort(eth_info, function (a, b) {
+				if (a.device < b.device) return -1;
+				if (a.device > b.device) return 1;
+				return 0;
+			});
+
+			return { result: eth_info };
 		}
 	}
 };
