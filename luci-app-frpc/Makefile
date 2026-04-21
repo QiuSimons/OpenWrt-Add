@@ -3,10 +3,9 @@
 include $(TOPDIR)/rules.mk
 
 LUCI_TITLE:=LuCI Support for frp client
-LUCI_DEPENDS:=+frpc
+LUCI_DEPENDS:=+luci-base +frpc
 
 PKG_LICENSE:=Apache-2.0
-PKG_MAINTAINER:=Richard Yu <yurichard3839@gmail.com>
 
 include $(TOPDIR)/feeds/luci/luci.mk
 
