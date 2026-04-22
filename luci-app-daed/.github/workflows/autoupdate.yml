@@ -23,8 +23,8 @@ jobs:
       - name: Check Upstream Updates
         id: check
         run: |
-          DAED_JSON=$(curl -s https://api.github.com/repos/ksong008/daed/commits/olicesxcore/stable)
-          WING_JSON=$(curl -s https://api.github.com/repos/ksong008/dae-wing/commits/olicesxcore/stable)
+          DAED_JSON=$(curl -s https://api.github.com/repos/daeuniverse/daed/commits/main)
+          WING_JSON=$(curl -s https://api.github.com/repos/daeuniverse/dae-wing/commits/main)
           CORE_JSON=$(curl -s https://api.github.com/repos/olicesx/dae/commits/kdae)
 
           UPSTREAM_DAED_FULL=$(echo "$DAED_JSON" | jq -r '.sha')

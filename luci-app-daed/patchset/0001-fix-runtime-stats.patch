@@ -1,0 +1,56 @@
+diff --git a/dae-core/control/runtime_stats.go b/dae-core/control/runtime_stats.go
+index 1a75d5f..5a692bf 100644
+--- a/dae-core/control/runtime_stats.go
++++ b/dae-core/control/runtime_stats.go
+@@ -62,7 +62,10 @@ type runtimeStats struct {
+ 	historyLen    int
+ }
+ 
+-var globalRuntimeStats = newRuntimeStats()
++var (
++	globalRuntimeStats = newRuntimeStats()
++	activeRuntimeStats atomic.Pointer[runtimeStats]
++)
+ 
+ func newRuntimeStats() *runtimeStats {
+ 	return &runtimeStats{}
+@@ -77,6 +80,10 @@ func RecordUploadTraffic(n int64) {
+ 	if n <= 0 {
+ 		return
+ 	}
++	if active := activeRuntimeStats.Load(); active != nil {
++		active.record(uint64(n), 0)
++		return
++	}
+ 	if globalRuntimeStats != nil {
+ 		globalRuntimeStats.record(uint64(n), 0)
+ 	}
+@@ -87,6 +94,10 @@ func RecordDownloadTraffic(n int64) {
+ 	if n <= 0 {
+ 		return
+ 	}
++	if active := activeRuntimeStats.Load(); active != nil {
++		active.record(0, uint64(n))
++		return
++	}
+ 	if globalRuntimeStats != nil {
+ 		globalRuntimeStats.record(0, uint64(n))
+ 	}
+@@ -95,6 +106,9 @@ func RecordDownloadTraffic(n int64) {
+ // Deprecated: prefer (*ControlPlane).SnapshotRuntimeStats for per-instance stats.
+ // SnapshotRuntimeStats returns the current runtime traffic snapshot.
+ func SnapshotRuntimeStats(activeConnections int, udpSessions int, windowSec int, maxPoints int) RuntimeStatsSnapshot {
++	if active := activeRuntimeStats.Load(); active != nil {
++		return active.snapshot(activeConnections, udpSessions, windowSec, maxPoints, time.Now())
++	}
+ 	if globalRuntimeStats == nil {
+ 		return RuntimeStatsSnapshot{
+ 			UpdatedAt:         time.Now(),
+@@ -124,6 +138,7 @@ func (s *runtimeStats) startRoller(ctx context.Context) {
+ 		return
+ 	}
+ 	s.rollerOnce.Do(func() {
++		activeRuntimeStats.Store(s)
+ 		s.roll(time.Now())
+ 		go func() {
+ 			ticker := time.NewTicker(runtimeBucketDuration)

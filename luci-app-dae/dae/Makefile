@@ -5,12 +5,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2026.04.21
+PKG_VERSION:=2026.04.22
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=ffa0ae58d90bda3f25bddcbd425c515516b7b1bf
+PKG_SOURCE_VERSION:=0f8305771e76ecf9ad8a870b36b1efa262b65b55
 PKG_SOURCE_URL:=https://github.com/olicesx/dae.git
 PKG_MIRROR_HASH:=skip
 
@@ -40,7 +40,7 @@ include $(INCLUDE_DIR)/bpf.mk
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
 GO_PKG_BUILD_VARS+= \
-	GOFLAGS="-trimpath -buildvcs=false"
+	GOFLAGS="-trimpath -buildvcs=false -pgo=auto"
 
 GO_PKG_TARGET_VARS+= \
 	CGO_LDFLAGS="$(TARGET_LDFLAGS) -static -Wl,-s" \

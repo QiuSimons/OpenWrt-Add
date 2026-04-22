@@ -5,18 +5,18 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=daed
-PKG_VERSION:=2026.04.21
-DAED_VERSION:=daed-9f051d3
-WING_VERSION:=wing-4c9286f
-CORE_VERSION:=core-ffa0ae5
+PKG_VERSION:=2026.04.22
+DAED_VERSION:=daed-d6e118b
+WING_VERSION:=wing-20225e3
+CORE_VERSION:=core-0f83057
 WING_HASH_SHORT:=$(shell echo $(WING_VERSION) | cut -d- -f2)
 CORE_HASH_SHORT:=$(shell echo $(CORE_VERSION) | cut -d- -f2)
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=9f051d30104e76053f68811204febf6e9cbf1b60
-PKG_SOURCE_URL:=https://github.com/ksong008/daed.git
+PKG_SOURCE_VERSION:=d6e118bfc22ae9035c34c73a9448a593738e27da
+PKG_SOURCE_URL:=https://github.com/daeuniverse/daed.git
 PKG_MIRROR_HASH:=skip
 
 PKG_LICENSE:=AGPL-3.0-only MIT
@@ -46,7 +46,7 @@ include $(INCLUDE_DIR)/bpf.mk
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
 GO_PKG_BUILD_VARS+= \
-	GOFLAGS="-trimpath -buildvcs=false"
+	GOFLAGS="-trimpath -buildvcs=false -pgo=auto"
 
 GO_PKG_TARGET_VARS+= \
 	CGO_LDFLAGS="$(TARGET_LDFLAGS) -static -Wl,-s" \
@@ -103,7 +103,7 @@ define Build/Prepare
 		rm -rf $(DAED_BUILD_DIR) ; \
 		mkdir -p $(DAED_BUILD_DIR) ; \
 		$(TAR) --strip-components=1 -C $(DAED_BUILD_DIR) -xzf $(DL_DIR)/$(PKG_NAME)-$(PKG_VERSION).tar.gz ; \
-		git clone https://github.com/ksong008/dae-wing $(PKG_BUILD_DIR) && \
+		git clone https://github.com/daeuniverse/dae-wing $(PKG_BUILD_DIR) && \
 			git -C $(PKG_BUILD_DIR) checkout $(WING_HASH_SHORT) ; \
 		rm -rf $(PKG_BUILD_DIR)/dae-core ; \
 		git clone https://github.com/olicesx/dae $(PKG_BUILD_DIR)/dae-core && \
@@ -113,6 +113,7 @@ define Build/Prepare
 		rm -rf $(DAED_BUILD_DIR)/quic-go ; \
 		git clone --depth=1 -b main https://github.com/olicesx/quic-go.git $(DAED_BUILD_DIR)/quic-go ; \
 		pushd $(PKG_BUILD_DIR)/dae-core ; \
+			wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/kix/patchset/0001-fix-runtime-stats.patch | patch -p1 ; \
 			git submodule update --init ; \
 			go get -u=patch ; \
 			go mod tidy ; \
@@ -122,6 +123,7 @@ define Build/Prepare
 			go mod edit -replace github.com/daeuniverse/quic-go=../quic-go ; \
 			go get -u=patch ; \
 			go mod tidy ; \
+			wget -qO default.pgo "https://github.com/QiuSimons/luci-app-dae/raw/refs/heads/kix/dae/pprof/default.pgo" ; \
 		popd ; \
 		mkdir -p $(DAED_BUILD_DIR)/.node_tmp/config ; \
 		wget -qO - "$(NODE_URL)" | tar -xJ -C $(DAED_BUILD_DIR)/.node_tmp --strip-components=1 ; \
