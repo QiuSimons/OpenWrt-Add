@@ -12,7 +12,7 @@ PKG_MAINTAINER:=Alexandru Ardelean <ardeleanalex@gmail.com>
 PKG_LICENSE:=Apache-2.0
 PKG_LICENSE_FILES:=LICENSE
 
-PKG_BUILD_DEPENDS:=golang/host node/host
+PKG_BUILD_DEPENDS:=golang/host
 PKG_BUILD_PARALLEL:=1
 PKG_BUILD_FLAGS:=no-mips16
 
@@ -24,14 +24,6 @@ GO_PKG_LDFLAGS_X:=github.com/fatedier/frp/pkg/util/version.version=$(PKG_VERSION
 include $(INCLUDE_DIR)/package.mk
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
-define Build/Compile
-	( \
-		$(MAKE) -C $(PKG_BUILD_DIR)/web/frpc install ; \
-		$(MAKE) -C $(PKG_BUILD_DIR)/web/frps install ; \
-		$(MAKE) -C $(PKG_BUILD_DIR) web ; \
-		$(call GoPackage/Build/Compile) ; \
-	)
-endef
 
 define Package/frp/install
 	$(INSTALL_DIR) $(1)/usr/bin/
