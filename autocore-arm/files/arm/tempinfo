@@ -1,21 +1,49 @@
-#!/bin/sh
+#!/usr/bin/env ucode
 
-IEEE_PATH="/sys/class/ieee80211"
-THERMAL_PATH="/sys/class/thermal"
+let fs = require("fs");
 
-if grep -Eq "ipq40xx|ipq806x" "/etc/openwrt_release"; then
-	wifi_temp="$(awk '{printf("%.1f°C ", $0 / 1000)}' "$IEEE_PATH"/phy*/device/hwmon/hwmon*/temp1_input | awk '$1=$1')"
-else
-	wifi_temp="$(awk '{printf("%.1f°C ", $0 / 1000)}' "$IEEE_PATH"/phy*/hwmon*/temp1_input | awk '$1=$1')"
-fi
+let IEEE_PATH = "/sys/class/ieee80211";
+let THERMAL_PATH = "/sys/class/thermal";
 
-if grep -q "ipq40xx" "/etc/openwrt_release"; then
-	if [ -e "$IEEE_PATH/phy0/hwmon0/temp1_input" ]; then
-		mt76_temp=" $(awk -F ': ' '{print $2}' "$IEEE_PATH/phy0/hwmon0/temp1_input")°C"
-	fi
+let release_content = fs.readfile("/etc/openwrt_release") || "";
+let is_ipq = match(release_content, /ipq40xx|ipq806x/);
+let is_ipq40xx = match(release_content, /ipq40xx/);
 
-	echo -n "WiFi:${mt76_temp} ${wifi_temp}"
-else
-	cpu_temp="$(awk '{printf("%.1f°C", $0 / 1000)}' "$THERMAL_PATH/thermal_zone0/temp")"
-	echo -n "CPU: ${cpu_temp}, WiFi: ${wifi_temp}"
-fi
+let wifi_temp_arr = [];
+let hwmon_paths = is_ipq 
+	? fs.glob(IEEE_PATH + "/phy*/device/hwmon/hwmon*/temp1_input")
+	: fs.glob(IEEE_PATH + "/phy*/hwmon*/temp1_input");
+
+if (type(hwmon_paths) == "array") {
+	for (let p in hwmon_paths) {
+		let t = fs.readfile(p);
+		if (t != null) {
+			push(wifi_temp_arr, sprintf("%.1f°C", trim(t) / 1000));
+		}
+	}
+}
+
+let wifi_temp = join(" ", wifi_temp_arr);
+
+if (is_ipq40xx) {
+	let mt76_temp = "";
+	let t = fs.readfile(IEEE_PATH + "/phy0/hwmon0/temp1_input");
+	if (t != null) {
+		let parts = split(trim(t), ": ");
+		if (length(parts) > 1) {
+			mt76_temp = sprintf(" %s°C", parts[1]);
+		} else {
+			mt76_temp = " °C";
+		}
+	}
+	
+	print(sprintf("WiFi:%s %s", mt76_temp, wifi_temp));
+} else {
+	let cpu_temp = "";
+	let t = fs.readfile(THERMAL_PATH + "/thermal_zone0/temp");
+	if (t != null) {
+		cpu_temp = sprintf("%.1f°C", trim(t) / 1000);
+	}
+	
+	print(sprintf("CPU: %s, WiFi: %s", cpu_temp, wifi_temp));
+}
