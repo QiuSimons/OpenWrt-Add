@@ -1,12 +1,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=frp
-PKG_VERSION:=0.68.1
+PKG_VERSION:=0.66.0
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
-PKG_SOURCE_URL:=https://codeload.github.com/fatedier/frp/tar.gz/v$(PKG_VERSION)?
-PKG_HASH:=44ed7107bf35e4f68dc0e77cd5805102effa5301528b89ee5ab0ab379088edc6
+PKG_SOURCE_URL:=https://codeload.github.com/fatedier/frp/tar.gz/v${PKG_VERSION}?
+PKG_HASH:=afe1aca9f6e7680a95652e8acf84aef4a74bcefe558b5b91270876066fff3019
 
 PKG_MAINTAINER:=Alexandru Ardelean <ardeleanalex@gmail.com>
 PKG_LICENSE:=Apache-2.0
@@ -18,17 +18,12 @@ PKG_BUILD_FLAGS:=no-mips16
 
 GO_PKG:=github.com/fatedier/frp
 GO_PKG_BUILD_PKG:=github.com/fatedier/frp/cmd/...
-GO_PKG_LDFLAGS:=-s -w
-GO_PKG_LDFLAGS_X:=github.com/fatedier/frp/pkg/util/version.version=$(PKG_VERSION)
 
 include $(INCLUDE_DIR)/package.mk
-GO_PKG_TAGS:=noweb
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
-
 
 define Package/frp/install
 	$(INSTALL_DIR) $(1)/usr/bin/
-
 	$(INSTALL_BIN) $(GO_PKG_BUILD_BIN_DIR)/$(2) $(1)/usr/bin/
 
 endef
@@ -44,8 +39,8 @@ define Package/frp/template
   endef
 
   define Package/$(1)/description
-    $(1) is a fast reverse proxy $(2) that helps you expose a local server
-    behind a NAT or firewall to the internet.
+    $(1) is a fast reverse proxy $(2) to help you expose a local server behind
+    a NAT or firewall to the internet.
   endef
 
   define Package/$(1)/conffiles
