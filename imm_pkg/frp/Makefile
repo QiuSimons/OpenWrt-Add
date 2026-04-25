@@ -22,6 +22,7 @@ GO_PKG_LDFLAGS:=-s -w
 GO_PKG_LDFLAGS_X:=github.com/fatedier/frp/pkg/util/version.version=$(PKG_VERSION)
 
 include $(INCLUDE_DIR)/package.mk
+GO_PKG_TAGS:=noweb
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
 
