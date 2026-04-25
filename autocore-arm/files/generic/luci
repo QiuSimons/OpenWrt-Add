@@ -695,20 +695,135 @@ const methods = {
 
 	getCPUInfo: {
 		call: function() {
-			if (!access('/sbin/cpuinfo'))
-				return {};
+			let CPUINFO_PATH = "/proc/cpuinfo";
+			let CPUFREQ_PATH = "/sys/devices/system/cpu/cpufreq";
+			let THERMAL_PATH = "/sys/class/thermal";
 
-			const fd = popen('/sbin/cpuinfo');
-			if (fd) {
-				let cpuinfo = fd.read('all');
-				if (!cpuinfo)
-					cpuinfo = '?';
-				fd.close();
-
-				return { cpuinfo: cpuinfo };
-			} else {
-				return { cpuinfo: error() };
+			let distrib_target = "";
+			let release_content = readfile("/etc/openwrt_release") || "";
+			let m_target = match(release_content, /DISTRIB_TARGET=['"]?([^'"\n]+)['"]?/);
+			if (m_target) {
+				distrib_target = m_target[1];
 			}
+
+			let cpuinfo_content = readfile(CPUINFO_PATH) || "";
+
+			let cpu_arch = "";
+			let m_arch = match(cpuinfo_content, /model name\s*:\s*([^\n]+)/);
+			if (m_arch) {
+				cpu_arch = trim(m_arch[1]);
+			}
+			if (!cpu_arch) {
+				let p = popen("uname -m");
+				if (p) {
+					cpu_arch = trim(p.read("all") || "");
+					p.close();
+				}
+			}
+
+			let cpu_cores = "";
+			if (match(distrib_target, /^x86\//)) {
+				let cores = {};
+				let threads = 0;
+				for (let line in split(cpuinfo_content, "\n")) {
+					if (match(line, /^processor/)) threads++;
+					let cm = match(line, /^core id\s*:\s*(\d+)/);
+					if (cm) cores[cm[1]] = true;
+				}
+				let num_cores = length(keys(cores));
+				cpu_cores = sprintf("%dC %dT", num_cores, threads);
+			} else {
+				let threads = 0;
+				for (let line in split(cpuinfo_content, "\n")) {
+					if (match(line, /^processor/)) threads++;
+				}
+				cpu_cores = sprintf("%d", threads);
+			}
+
+			let cpu_freq = "";
+			let big_cpu_freq = "";
+
+			if (match(distrib_target, /^bcm27xx\//)) {
+				let p = popen("vcgencmd measure_clock arm 2>/dev/null");
+				if (p) {
+					let res = p.read("all") || "";
+					p.close();
+					let m = match(res, /=([0-9]+)/);
+					if (m) cpu_freq = sprintf("%dMhz", m[1] / 1000000);
+				}
+			} else if (match(distrib_target, /^bcm53xx\//)) {
+				let p = popen("nvram get clkfreq 2>/dev/null");
+				if (p) {
+					let res = p.read("all") || "";
+					p.close();
+					let m = match(res, /^([0-9]+)/);
+					if (m) cpu_freq = sprintf("%dMHz", m[1]);
+				}
+			} else if (match(distrib_target, /^mvebu\//)) {
+				let m = match(cpuinfo_content, /BogoMIPS\s*:\s*([0-9.]+)/);
+				if (m) cpu_freq = sprintf("%sMHz", m[1]);
+			} else if (match(distrib_target, /^x86\//)) {
+				let m = match(cpuinfo_content, /[Cc]pu MHz\s*:\s*([0-9.]+)/);
+				if (m) cpu_freq = sprintf("%.0fMHz", m[1]);
+			} else {
+				let freq0 = readfile(CPUFREQ_PATH + "/policy0/cpuinfo_cur_freq");
+				if (freq0) cpu_freq = sprintf("%.0fMHz", trim(freq0) / 1000);
+
+				let freq4 = readfile(CPUFREQ_PATH + "/policy4/cpuinfo_cur_freq");
+				if (freq4) big_cpu_freq = sprintf("%.0fMHz ", trim(freq4) / 1000);
+			}
+
+			let cpu_temp = "";
+
+			try {
+				if (match(distrib_target, /^bcm27xx\//)) {
+					let p = popen("vcgencmd measure_temp 2>/dev/null");
+					if (p) {
+						let res = p.read("all") || "";
+						p.close();
+						let m = match(res, /temp=([0-9.]+)/);
+						if (m) cpu_temp = sprintf("%s°C", m[1]);
+					}
+				} else if (match(distrib_target, /^x86\//)) {
+					let p = popen("sensors 'coretemp-*' 2>/dev/null");
+					if (p) {
+						let res = p.read("all") || "";
+						p.close();
+						let m = match(res, /(Package id|Core)\s+\d+:\s*[+-]?([0-9.]+)/);
+						if (m) {
+							cpu_temp = sprintf("%s°C", m[2]);
+						} else {
+							let p2 = popen("sensors 'k10temp-*' 2>/dev/null");
+							if (p2) {
+								let res2 = p2.read("all") || "";
+								p2.close();
+								let m2 = match(res2, /(Tctl|Tdie):\s+\+([0-9.]+)/);
+								if (m2) cpu_temp = sprintf("%s°C", m2[2]);
+							}
+						}
+					}
+				} else {
+					let temp0 = readfile(THERMAL_PATH + "/thermal_zone0/temp");
+					if (temp0) cpu_temp = sprintf("%.1f°C", trim(temp0) / 1000);
+				}
+			} catch (e) {
+				cpu_temp = "";
+			}
+
+			let out = "";
+			let freq_str = trim(big_cpu_freq + cpu_freq);
+
+			if (length(freq_str) == 0 && length(cpu_temp) > 0) {
+				out = sprintf("%s x %s (%s)", cpu_arch, cpu_cores, cpu_temp);
+			} else if ((length(cpu_temp) == 0 && length(freq_str) > 0) || match(release_content, /ipq|mt7622/)) {
+				out = sprintf("%s x %s (%s)", cpu_arch, cpu_cores, freq_str);
+			} else if (length(cpu_temp) > 0 && length(freq_str) > 0) {
+				out = sprintf("%s x %s (%s, %s)", cpu_arch, cpu_cores, freq_str, cpu_temp);
+			} else {
+				out = sprintf("%s x %s", cpu_arch, cpu_cores);
+			}
+
+			return { cpuinfo: out };
 		}
 	},
 
@@ -768,21 +883,29 @@ const methods = {
 
 	getETHInfo: {
 		call: function() {
-			if (!access('/sbin/ethinfo'))
-				return {};
+			let eth_info = [];
+			let conn = connect();
 
-			const fd = popen('/sbin/ethinfo');
-			if (fd) {
-				let ethinfo = fd.read('all');
-				if (!ethinfo)
-					ethinfo = '{}';
-				ethinfo = json(ethinfo);
-				fd.close();
-
-				return { result: ethinfo };
-			} else {
-				return { result: error() };
+			if (conn) {
+				let stat = conn.call("network.device", "status");
+				if (type(stat) == "object") {
+					for (let ifname in stat) {
+						if (match(ifname, /^eth\d+$/) || match(ifname, /^usb\d+$/) || match(ifname, /^lan\d+$/) || ifname == "wan") {
+							push(eth_info, {
+								device: ifname
+							});
+						}
+					}
+				}
 			}
+
+			sort(eth_info, function (a, b) {
+				if (a.device < b.device) return -1;
+				if (a.device > b.device) return 1;
+				return 0;
+			});
+
+			return { result: eth_info };
 		}
 	}
 };
