@@ -139,16 +139,10 @@ jobs:
           cp -rf ./lede/package/network/services/fullconenat-nft ./lede_pkg/fullconenat-nft
           cp -rf ./lede/package/kernel/r8168 ./lede_pkg/r8168
           rm -rf ./lede
-          git clone --depth 1 https://github.com/immortalwrt/packages
+          git clone https://github.com/immortalwrt/packages
           mkdir -p imm_pkg
           cp -rf ./packages/utils/cpulimit ./imm_pkg/cpulimit
           cp -rf ./packages/net/3proxy ./imm_pkg/3proxy
-          cp -rf ./packages/net/frp ./imm_pkg/frp
-          sed -i '/etc/d' imm_pkg/frp/Makefile
-          sed -i '/defaults/{N;d;}' imm_pkg/frp/Makefile
-          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/packages|g' imm_pkg/frp/Makefile
-          sed -i 's/ node\/host//;/Build\/Compile/,/endef/d' imm_pkg/frp/Makefile
-          sed -i '/golang-package.mk/i GO_PKG_TAGS:=noweb' imm_pkg/frp/Makefile
           cp -rf ./packages/net/subconverter ./imm_pkg/subconverter
           cp -rf ./packages/net/zerotier ./imm_pkg/zerotier
           #rm -rf ./imm_pkg/zerotier/patches/0006-add-support-for-miniupnpc-2.2.8.patch
@@ -159,6 +153,11 @@ jobs:
           cp -rf ./packages/libs/quickjspp ./imm_pkg/quickjspp
           cp -rf ./packages/libs/toml11 ./imm_pkg/toml11
           cp -rf ./packages/net/sing-box ./imm_pkg/sing-box
+          git -C packages checkout 8d3c004
+          cp -rf ./packages/net/frp ./imm_pkg/frp
+          sed -i '/etc/d' imm_pkg/frp/Makefile
+          sed -i '/defaults/{N;d;}' imm_pkg/frp/Makefile
+          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/packages|g' imm_pkg/frp/Makefile
           rm -rf ./packages
           #git clone --depth 1 https://github.com/Ysurac/openmptcprouter-feeds
           #mkdir -p autorate
