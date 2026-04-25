@@ -46,7 +46,8 @@ jobs:
           git clone --depth 1 https://github.com/sbwml/openwrt_pkgs
           rm -rf ./openwrt_pkgs/luci-app-ramfree
           rm -rf ./openwrt_pkgs/luci-app-zerotier
-          git clone --depth 1 https://github.com/sbwml/autocore-arm
+          git clone https://github.com/sbwml/autocore-arm
+          git -C autocore-arm checkout b465a40
           sed -i '/init/d' ./autocore-arm/Makefile
           sed -i '/autocore.json/a\\	$(INSTALL_BIN) ./files/x86/autocore $(1)/etc/init.d/' ./autocore-arm/Makefile
           sed -i '/autocore.json/a\\	$(INSTALL_DIR) $(1)/etc/init.d' ./autocore-arm/Makefile
