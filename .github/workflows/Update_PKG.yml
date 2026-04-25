@@ -148,6 +148,7 @@ jobs:
           sed -i '/defaults/{N;d;}' imm_pkg/frp/Makefile
           sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/packages|g' imm_pkg/frp/Makefile
           sed -i 's/ node\/host//;/Build\/Compile/,/endef/d' imm_pkg/frp/Makefile
+          sed -i '/golang-package.mk/i GO_PKG_TAGS:=noweb' imm_pkg/frp/Makefile
           cp -rf ./packages/net/subconverter ./imm_pkg/subconverter
           cp -rf ./packages/net/zerotier ./imm_pkg/zerotier
           #rm -rf ./imm_pkg/zerotier/patches/0006-add-support-for-miniupnpc-2.2.8.patch
