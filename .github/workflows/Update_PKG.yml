@@ -16,7 +16,7 @@ jobs:
 
       - name: Update Makefile
         run: |
-          rm -rf lede_pkg openwrt-bandix luci-app-bandix openwrt-einat-ebpf luci-app-einat nft-fullcone shortcut-fe luci-app-airconnect feeds_packages_lang_node-prebuilt package_kernel_r8125 OpenAppFilter luci-app-mosdns packages_new_nat6 luci-app-daed openwrt-r8168 luci-theme-argon luci-app-ramfree luci-app-argon-config luci-app-dnsfilter luci-theme-edge luci-app-xlnetacc luci-app-mentohust MentoHUST-OpenWrt-ipk luci-app-oled homeproxy OpenClash luci-app-wechatpush luci-app-v2raya luci-app-natmapt openwrt-natmapt openwrt-stuntman luci-app-unblockneteasemusic OpenWrt-mihomo wrtbwmon luci-app-wrtbwmon openwrt_helloworld openwrt_pkgs openwrt-natflow autocore-arm luci-app-taskplan luci-app-partexp luci-app-frps luci-app-frpc luci-app-uugamebooster uugamebooster luci-app-ap-modem luci-app-arpbind imm_pkg openwrt-qBittorrent luci-app-filemanager luci-app-dae luci-theme-aurora luci-app-aurora-config
+          rm -rf lede_pkg openwrt-bandix luci-app-bandix luci-app-frpc_frps openwrt-einat-ebpf luci-app-einat nft-fullcone shortcut-fe luci-app-airconnect feeds_packages_lang_node-prebuilt package_kernel_r8125 OpenAppFilter luci-app-mosdns packages_new_nat6 luci-app-daed openwrt-r8168 luci-theme-argon luci-app-ramfree luci-app-argon-config luci-app-dnsfilter luci-theme-edge luci-app-xlnetacc luci-app-mentohust MentoHUST-OpenWrt-ipk luci-app-oled homeproxy OpenClash luci-app-wechatpush luci-app-v2raya luci-app-natmapt openwrt-natmapt openwrt-stuntman luci-app-unblockneteasemusic OpenWrt-mihomo wrtbwmon luci-app-wrtbwmon openwrt_helloworld openwrt_pkgs openwrt-natflow autocore-arm luci-app-taskplan luci-app-partexp luci-app-frps luci-app-frpc luci-app-uugamebooster uugamebooster luci-app-ap-modem luci-app-arpbind imm_pkg openwrt-qBittorrent luci-app-filemanager luci-app-dae luci-theme-aurora luci-app-aurora-config
           git clone --depth 1 https://git.cooluc.com/sbwml/shortcut-fe
           sed -i '/AUTOLOAD/d' ./shortcut-fe/shortcut-fe/Makefile
           cp -rf ./shortcut-fe.bak ./shortcut-fe/shortcut-fe/files/etc/init.d/shortcut-fe
@@ -109,11 +109,8 @@ jobs:
           #sed -i 's, - !, -o !,g' luci-app-partexp/luci-app-partexp/root/etc/init.d/partexp
           #sed -i 's,expquit 1 ,#expquit 1 ,g' luci-app-partexp/luci-app-partexp/root/etc/init.d/partexp
           #rm -rf ./sirpdboy-package
+          git clone --depth 1 https://github.com/superzjg/luci-app-frpc_frps
           git clone --depth 1 https://github.com/coolsnowwolf/luci
-          cp -rf ./luci/applications/luci-app-frps ./luci-app-frps
-          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-frps/Makefile
-          cp -rf ./luci/applications/luci-app-frpc ./luci-app-frpc
-          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-frpc/Makefile
           cp -rf ./luci/applications/luci-app-uugamebooster ./luci-app-uugamebooster
           sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-uugamebooster/Makefile
           rm -rf ./luci
