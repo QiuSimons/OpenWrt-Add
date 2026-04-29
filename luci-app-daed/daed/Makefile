@@ -8,7 +8,7 @@ PKG_NAME:=daed
 PKG_VERSION:=2026.04.29
 DAED_VERSION:=daed-4cab3b7
 WING_VERSION:=wing-20225e3
-CORE_VERSION:=core-f4a4204
+CORE_VERSION:=core-805b8d4
 WING_HASH_SHORT:=$(shell echo $(WING_VERSION) | cut -d- -f2)
 CORE_HASH_SHORT:=$(shell echo $(CORE_VERSION) | cut -d- -f2)
 PKG_RELEASE:=1
@@ -111,9 +111,8 @@ define Build/Prepare
 		rm -rf $(DAED_BUILD_DIR)/outbound ; \
 		git clone --depth=1 -b perf/complete-optimizations https://github.com/olicesx/outbound.git $(DAED_BUILD_DIR)/outbound ; \
 		rm -rf $(DAED_BUILD_DIR)/quic-go ; \
-		git clone --depth=1 -b main https://github.com/olicesx/quic-go.git $(DAED_BUILD_DIR)/quic-go ; \
+		git clone --depth=1 -b perf/node-pooling-v2 https://github.com/olicesx/quic-go.git $(DAED_BUILD_DIR)/quic-go ; \
 		pushd $(PKG_BUILD_DIR)/dae-core ; \
-			wget -qO - https://github.com/QiuSimons/luci-app-daed/raw/refs/heads/kix/patchset/0001-fix-runtime-stats.patch | patch -p1 ; \
 			git submodule update --init ; \
 			go get -u=patch ; \
 			go mod tidy ; \
