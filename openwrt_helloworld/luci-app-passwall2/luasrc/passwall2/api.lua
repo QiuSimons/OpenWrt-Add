@@ -122,21 +122,17 @@ function get_new_port()
 end
 
 function exec_call(cmd)
-	local process = io.popen(cmd .. '; echo -e "\n$?"')
-	local lines = {}
-	local result = ""
-	local return_code
-	for line in process:lines() do
-		lines[#lines + 1] = line
+	math.randomseed(os.time())
+	local tag = "\x01__RC__" .. tostring(math.random(100000, 999999)) .. "\x01"
+	local f = io.popen('(' .. cmd .. '); printf "\\n' .. tag .. '%d" "$?"')
+	local out = f:read("*a") or ""
+	f:close()
+	local rc = out:match(tag .. "(%d+)%s*$")
+	if not rc then
+		return 255, trim(out)
 	end
-	process:close()
-	if #lines > 0 then
-		return_code = lines[#lines]
-		for i = 1, #lines - 1 do
-			result = result .. lines[i] .. ((i == #lines - 1) and "" or "\n")
-		end
-	end
-	return tonumber(return_code), trim(result)
+	out = out:gsub("\n?" .. tag .. "%d+%s*$", "")
+	return tonumber(rc), trim(out)
 end
 
 function base64Decode(text)
@@ -1550,4 +1546,45 @@ function get_core(field, candidates)
 		if c[1] then return c[2] end
 	end
 	return nil
+end
+
+function cleanEmptyTables(t)
+	if type(t) ~= "table" then return nil end
+	for k, v in pairs(t) do
+		if type(v) == "table" then
+			t[k] = cleanEmptyTables(v)
+		end
+	end
+	return next(t) and t or nil
+end
+
+function get_dnsmasq_server_domain()
+	local dnsmasq_server = uci:get("dhcp", "@dnsmasq[0]", "server")
+	local dnsmasq_server_t = {}
+	if dnsmasq_server and #dnsmasq_server > 0 then
+		for k, v in ipairs(dnsmasq_server) do
+			if v:find("/") then
+				local split1 = split(v, "/")
+				if #split1 > 2 then
+					local domain = split1[2]
+					local upstream_dns = split1[#split1]
+					local upstream_dns_server
+					local upstream_dns_port = "53"
+					local dns_split = split(upstream_dns, "#")
+					if #dns_split > 1 then
+						upstream_dns_server = dns_split[1]
+						upstream_dns_port = dns_split[#dns_split]
+					else
+						upstream_dns_server = upstream_dns
+					end
+					dnsmasq_server_t[domain] = {
+						dnsmasq_dns = upstream_dns,
+						server = upstream_dns_server,
+						port = tonumber(upstream_dns_port)
+					}
+				end
+			end
+		end
+	end
+	return dnsmasq_server_t
 end

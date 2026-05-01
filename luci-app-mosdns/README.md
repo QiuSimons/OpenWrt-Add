@@ -16,6 +16,36 @@
 
 **DNS-over-QUIC:** `quic://dns.alidns.com` **&** `doq://dns.alidns.com`
 
+## New Data Provider: `adblock_set`
+
+The parser supports the following common DNS-related rule formats:
+
+- `||example.com^`: Subdomain match.
+- `example.com`: Exact match.
+- `|example.com|`: Exact match.
+- `/regexp/`: Regular expression match.
+- `*keyword*`: Keyword match.
+- `@@`: Prefix for whitelisting rules.
+- mosdns rules: `domain:`, `full:`, `keyword:`, `regexp:`
+
+You can now use the new provider in your `config.yaml`:
+
+```yaml
+plugins:
+  - tag: "ad_rules"
+    type: adblock_set
+    args:
+      files:
+        - "./adguard_dns.txt"
+        - "./easylist.txt"
+
+  - tag: "query_is_ad"
+    type: query_matcher
+    args:
+      domain:
+        - "provider:ad_rules"
+```
+
 --------------
 
 ## How to build
@@ -24,14 +54,14 @@
 
 - Openwrt official SnapShots
 
-  * requires golang 1.24.x or latest version
+  * requires golang 1.25.x or latest version
   ```shell
   rm -rf feeds/packages/lang/golang
-  git clone https://github.com/sbwml/packages_lang_golang -b 24.x feeds/packages/lang/golang
+  git clone https://github.com/sbwml/packages_lang_golang -b 26.x feeds/packages/lang/golang
   ```
 
   ```shell
-  # remove v2ray-geodata package from feeds (openwrt-22.03 & master)
+  # remove v2ray-geodata package from feeds
   rm -rf feeds/packages/net/v2ray-geodata
 
   git clone https://github.com/sbwml/luci-app-mosdns -b v5 package/mosdns
@@ -61,11 +91,11 @@
 
 - Install `curl` package
   ```shell
-  # for opkg package manager (openwrt 21.02 ~ 24.10)
+  # for opkg package manager (24.10)
   opkg update
   opkg install curl
   
-  # for apk package manager
+  # for apk package manager (25.12 or latest)
   apk update
   apk add curl
   ```
