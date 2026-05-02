@@ -1,0 +1,170 @@
+--- a/Makefile
++++ b/Makefile
+@@ -25,3 +25,7 @@ ccflags-y += -Werror -Wall
+ 
+ # clang
+ ccflags-y += -Wno-frame-address -Wno-unused-but-set-parameter
++
++ifdef SFE_SUPPORT_IPV6
++ccflags-y += -DSFE_SUPPORT_IPV6
++endif
+--- a/sfe_cm.c
++++ b/sfe_cm.c
+@@ -103,6 +103,9 @@ struct sfe_cm {
+ 
+ static struct sfe_cm __sc;
+ 
++int (*athrs_fast_nat_recv)(struct sk_buff *skb) __rcu __read_mostly;
++EXPORT_SYMBOL(athrs_fast_nat_recv);
++
+ /*
+  * sfe_cm_incr_exceptions()
+  *	increase an exception counter.
+--- a/sfe_ipv4.c
++++ b/sfe_ipv4.c
+@@ -409,7 +409,7 @@ struct sfe_ipv4 {
+ 					/* Tail of the list of all connections */
+ 	unsigned int num_connections;	/* Number of connections */
+ 	struct timer_list timer;	/* Timer used for periodic sync ops */
+-	sfe_sync_rule_callback_t __rcu sync_rule_callback;
++	void * __rcu sync_rule_callback;
+ 					/* Callback function registered by a connection manager for stats syncing */
+ 	struct sfe_ipv4_connection *conn_hash[SFE_IPV4_CONNECTION_HASH_SIZE];
+ 					/* Connection hash table */
+@@ -1152,7 +1152,7 @@ static void sfe_ipv4_flush_sfe_ipv4_conn
+ 	rcu_read_lock();
+ 	spin_lock_bh(&si->lock);
+ 	si->connection_flushes++;
+-	sync_rule_callback = rcu_dereference(si->sync_rule_callback);
++	sync_rule_callback = (sfe_sync_rule_callback_t)rcu_dereference(si->sync_rule_callback);
+ 	spin_unlock_bh(&si->lock);
+ 
+ 	if (sync_rule_callback) {
+@@ -1474,7 +1474,9 @@ static int sfe_ipv4_recv_udp(struct sfe_
+ 	/*
+ 	 * Mark that this packet has been fast forwarded.
+ 	 */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
+ 	skb->fast_forwarded = 1;
++#endif
+ 
+ 	/*
+ 	 * Send the packet on its way.
+@@ -2047,7 +2049,9 @@ static int sfe_ipv4_recv_tcp(struct sfe_
+ 	/*
+ 	 * Mark that this packet has been fast forwarded.
+ 	 */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
+ 	skb->fast_forwarded = 1;
++#endif
+ 
+ 	/*
+ 	 * Send the packet on its way.
+@@ -2865,8 +2869,12 @@ static void sfe_ipv4_periodic_sync(struc
+ #if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 15, 0))
+ 	struct sfe_ipv4 *si = (struct sfe_ipv4 *)arg;
+ #else
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
++	struct sfe_ipv4 *si = container_of(tl, struct sfe_ipv4, timer);
++#else
+ 	struct sfe_ipv4 *si = from_timer(si, tl, timer);
+ #endif
++#endif
+ 	u64 now_jiffies;
+ 	int quota;
+ 	sfe_sync_rule_callback_t sync_rule_callback;
+@@ -2874,7 +2882,7 @@ static void sfe_ipv4_periodic_sync(struc
+ 	now_jiffies = get_jiffies_64();
+ 
+ 	rcu_read_lock();
+-	sync_rule_callback = rcu_dereference(si->sync_rule_callback);
++	sync_rule_callback = (sfe_sync_rule_callback_t)rcu_dereference(si->sync_rule_callback);
+ 	if (!sync_rule_callback) {
+ 		rcu_read_unlock();
+ 		goto done;
+@@ -3585,7 +3593,11 @@ static void __exit sfe_ipv4_exit(void)
+ 	 */
+ 	sfe_ipv4_destroy_all_rules_for_dev(NULL);
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
++	timer_delete_sync(&si->timer);
++#else
+ 	del_timer_sync(&si->timer);
++#endif
+ 
+ 	unregister_chrdev(si->debug_dev, "sfe_ipv4");
+ 
+--- a/sfe_ipv6.c
++++ b/sfe_ipv6.c
+@@ -436,7 +436,7 @@ struct sfe_ipv6 {
+ 					/* Tail of the list of all connections */
+ 	unsigned int num_connections;	/* Number of connections */
+ 	struct timer_list timer;	/* Timer used for periodic sync ops */
+-	sfe_sync_rule_callback_t __rcu sync_rule_callback;
++	void * __rcu sync_rule_callback;
+ 					/* Callback function registered by a connection manager for stats syncing */
+ 	struct sfe_ipv6_connection *conn_hash[SFE_IPV6_CONNECTION_HASH_SIZE];
+ 					/* Connection hash table */
+@@ -1212,7 +1212,7 @@ static void sfe_ipv6_flush_connection(st
+ 	rcu_read_lock();
+ 	spin_lock_bh(&si->lock);
+ 	si->connection_flushes++;
+-	sync_rule_callback = rcu_dereference(si->sync_rule_callback);
++	sync_rule_callback = (sfe_sync_rule_callback_t)rcu_dereference(si->sync_rule_callback);
+ 	spin_unlock_bh(&si->lock);
+ 
+ 	if (sync_rule_callback) {
+@@ -1513,7 +1513,9 @@ static int sfe_ipv6_recv_udp(struct sfe_
+ 	/*
+ 	 * Mark that this packet has been fast forwarded.
+ 	 */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
+ 	skb->fast_forwarded = 1;
++#endif
+ 
+ 	/*
+ 	 * Send the packet on its way.
+@@ -2070,7 +2072,9 @@ static int sfe_ipv6_recv_tcp(struct sfe_
+ 	/*
+ 	 * Mark that this packet has been fast forwarded.
+ 	 */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
+ 	skb->fast_forwarded = 1;
++#endif
+ 
+ 	/*
+ 	 * Send the packet on its way.
+@@ -2873,8 +2877,12 @@ static void sfe_ipv6_periodic_sync(struc
+ #if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 15, 0))
+ 	struct sfe_ipv6 *si = (struct sfe_ipv6 *)arg;
+ #else
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
++	struct sfe_ipv6 *si = container_of(tl, struct sfe_ipv6, timer);
++#else
+ 	struct sfe_ipv6 *si = from_timer(si, tl, timer);
+ #endif
++#endif
+ 	u64 now_jiffies;
+ 	int quota;
+ 	sfe_sync_rule_callback_t sync_rule_callback;
+@@ -2882,7 +2890,7 @@ static void sfe_ipv6_periodic_sync(struc
+ 	now_jiffies = get_jiffies_64();
+ 
+ 	rcu_read_lock();
+-	sync_rule_callback = rcu_dereference(si->sync_rule_callback);
++	sync_rule_callback = (sfe_sync_rule_callback_t)rcu_dereference(si->sync_rule_callback);
+ 	if (!sync_rule_callback) {
+ 		rcu_read_unlock();
+ 		goto done;
+@@ -3593,7 +3601,11 @@ static void __exit sfe_ipv6_exit(void)
+ 	 */
+ 	sfe_ipv6_destroy_all_rules_for_dev(NULL);
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
++	timer_delete_sync(&si->timer);
++#else
+ 	del_timer_sync(&si->timer);
++#endif
+ 
+ 	unregister_chrdev(si->debug_dev, "sfe_ipv6");
+ 
