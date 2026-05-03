@@ -8,18 +8,6 @@
 +ifdef SFE_SUPPORT_IPV6
 +ccflags-y += -DSFE_SUPPORT_IPV6
 +endif
---- a/sfe_cm.c
-+++ b/sfe_cm.c
-@@ -103,6 +103,9 @@ struct sfe_cm {
- 
- static struct sfe_cm __sc;
- 
-+int (*athrs_fast_nat_recv)(struct sk_buff *skb) __rcu __read_mostly;
-+EXPORT_SYMBOL(athrs_fast_nat_recv);
-+
- /*
-  * sfe_cm_incr_exceptions()
-  *	increase an exception counter.
 --- a/sfe_ipv4.c
 +++ b/sfe_ipv4.c
 @@ -409,7 +409,7 @@ struct sfe_ipv4 {

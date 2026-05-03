@@ -124,6 +124,8 @@ function gen_outbound(flag, node, tag, proxy_table)
 			tag = tag .. ":" .. remarks
 		end
 
+		node.address = (node.address or ""):lower()
+
 		result = {
 			_id = node_id,
 			_flag = flag,
@@ -458,7 +460,7 @@ function gen_config_server(node)
 	local settings = nil
 	local routing = nil
 	local outbounds = {
-		{ protocol = "freedom", tag = "direct" }, { protocol = "blackhole", tag = "blocked" }
+		{ protocol = "freedom", tag = "direct", settings = { finalRules = {{ action = "allow" }}}}, { protocol = "blackhole", tag = "blocked" }
 	}
 
 	if node.protocol == "vmess" or node.protocol == "vless" then
@@ -580,6 +582,9 @@ function gen_config_server(node)
 						mark = 255,
 						interface = node.outbound_node_iface
 					}
+				},
+				settings = {
+					finalRules = {{ action = "allow" }}
 				}
 			}
 			sys.call(string.format("mkdir -p %s && touch %s/%s", api.TMP_IFACE_PATH, api.TMP_IFACE_PATH, node.outbound_node_iface))
@@ -1007,7 +1012,7 @@ function gen_config(var)
 				blc_nodes = _node.balancing_node
 			end
 			local valid_nodes = {}
-			for i = 1, #blc_nodes do
+			for i = 1, #(blc_nodes or {}) do
 				local blc_node_id = blc_nodes[i]
 				local blc_node_tag = "blc-" .. blc_node_id
 				local is_new_blc_node = true
@@ -1236,6 +1241,9 @@ function gen_config(var)
 									mark = 255,
 									interface = node.iface
 								}
+							},
+							settings = {
+								finalRules = {{ action = "allow" }}
 							}
 						}
 						sys.call(string.format("mkdir -p %s && touch %s/%s", api.TMP_IFACE_PATH, api.TMP_IFACE_PATH, node.iface))
@@ -1539,6 +1547,7 @@ function gen_config(var)
 			local domain = {}
 			local nodes_domain_text = sys.exec([[uci show passwall | sed -n "s/.*\.\(address\|download_address\)='\([^']*\)'/\2/p" | sort -u]])
 			string.gsub(nodes_domain_text, '[^' .. "\r\n" .. ']+', function(w)
+				w = (w or ""):lower()
 				if not api.vps_domain_exclude(w) and api.datatypes.hostname(w) and not GLOBAL.VPS_EXCLUDE[w] then
 					table.insert(domain, "full:" .. w)
 				end
@@ -1845,7 +1854,8 @@ function gen_config(var)
 			protocol = "freedom",
 			tag = "direct",
 			settings = {
-				domainStrategy = (direct_dns_query_strategy and direct_dns_query_strategy ~= "") and direct_dns_query_strategy or "UseIP"
+				domainStrategy = (direct_dns_query_strategy and direct_dns_query_strategy ~= "") and direct_dns_query_strategy or "UseIP",
+				finalRules = (api.compare_versions(xray_version, ">", "26.4.25")) and {{ action = "allow" }} or nil  -- Todo: Remove version check
 			},
 			streamSettings = {
 				sockopt = {
@@ -1972,7 +1982,7 @@ function gen_proto_config(var)
 
 	-- 额外传出连接
 	table.insert(outbounds, {
-		protocol = "freedom", tag = "direct", settings = {keep = ""}, sockopt = {mark = 255}
+		protocol = "freedom", tag = "direct", settings = {finalRules = {{ action = "allow" }}}, sockopt = {mark = 255}
 	})
 
 	local config = {
