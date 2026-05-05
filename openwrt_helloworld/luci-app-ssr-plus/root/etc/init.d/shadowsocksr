@@ -176,11 +176,35 @@ supports_builtin_dns() {
 get_builtin_dns_fallback_mode() {
 	if is_finded "dns2tcp"; then
 		echo "1"
+	elif is_finded "chinadns-ng"; then
+		echo "6"
 	elif is_finded "mosdns"; then
 		echo "4"
 	else
 		echo "0"
 	fi
+}
+
+get_dns2tcp_fallback_mode() {
+	if is_finded "dns2tcp"; then
+		echo "1"
+	else
+		echo "0"
+	fi
+}
+
+force_dns2tcp_fallback() {
+	local reason="$1"
+	local fallback_mode="$(get_dns2tcp_fallback_mode)"
+
+	if [ "$fallback_mode" = "1" ]; then
+		echolog "提示：${reason}，强制回退到 dns2tcp 模式。"
+		echo "1"
+		return 0
+	fi
+
+	echolog "错误：${reason}，且未安装 dns2tcp，启动终止。"
+	return 1
 }
 
 is_builtin_dns_active() {
@@ -242,6 +266,31 @@ get_ss_server_mihomo_runtime_file() {
 	echo "$(get_ss_server_mihomo_workdir "$1")/config.yaml"
 }
 
+link_mihomo_geodata() {
+	local workdir="$1"
+
+	[ -n "$workdir" ] || return 0
+
+	[ -s /usr/share/shadowsocksr/Country.mmdb ] && ln -sf /usr/share/shadowsocksr/Country.mmdb "$workdir/Country.mmdb"
+	[ -s /usr/share/shadowsocksr/Country.mmdb ] && ln -sf /usr/share/shadowsocksr/Country.mmdb "$workdir/geoip.metadb"
+	[ ! -e "$workdir/Country.mmdb" ] && [ -s /etc/openclash/Country.mmdb ] && ln -sf /etc/openclash/Country.mmdb "$workdir/Country.mmdb"
+	[ ! -e "$workdir/geoip.metadb" ] && [ -s /etc/openclash/Country.mmdb ] && ln -sf /etc/openclash/Country.mmdb "$workdir/geoip.metadb"
+
+	if [ -s /usr/share/v2ray/geosite.dat ]; then
+		ln -sf /usr/share/v2ray/geosite.dat "$workdir/GeoSite.dat"
+		ln -sf /usr/share/v2ray/geosite.dat "$workdir/geosite.dat"
+	else
+		[ -s /etc/openclash/GeoSite.dat ] && ln -sf /etc/openclash/GeoSite.dat "$workdir/GeoSite.dat"
+		[ -s /etc/openclash/geosite.dat ] && ln -sf /etc/openclash/geosite.dat "$workdir/geosite.dat"
+	fi
+
+	if [ -s /usr/share/v2ray/geoip.dat ]; then
+		ln -sf /usr/share/v2ray/geoip.dat "$workdir/geoip.dat"
+	else
+		[ -s /etc/openclash/geoip.dat ] && ln -sf /etc/openclash/geoip.dat "$workdir/geoip.dat"
+	fi
+}
+
 prepare_tuic_runtime_config() {
 	local sid="$1"
 	local local_port="$2"
@@ -261,13 +310,7 @@ prepare_tuic_runtime_config() {
 	fi
 
 	# Reuse existing local geodata files so Mihomo does not have to fetch them.
-	[ -s /usr/share/shadowsocksr/Country.mmdb ] && ln -sf /usr/share/shadowsocksr/Country.mmdb "$workdir/Country.mmdb"
-	[ -s /usr/share/shadowsocksr/Country.mmdb ] && ln -sf /usr/share/shadowsocksr/Country.mmdb "$workdir/geoip.metadb"
-	[ ! -e "$workdir/Country.mmdb" ] && [ -s /etc/openclash/Country.mmdb ] && ln -sf /etc/openclash/Country.mmdb "$workdir/Country.mmdb"
-	[ ! -e "$workdir/geoip.metadb" ] && [ -s /etc/openclash/Country.mmdb ] && ln -sf /etc/openclash/Country.mmdb "$workdir/geoip.metadb"
-	[ -s /etc/openclash/GeoSite.dat ] && ln -sf /etc/openclash/GeoSite.dat "$workdir/GeoSite.dat"
-	[ -s /usr/share/v2ray/geoip.dat ] && ln -sf /usr/share/v2ray/geoip.dat "$workdir/geoip.dat"
-	[ -s /usr/share/v2ray/geosite.dat ] && ln -sf /usr/share/v2ray/geosite.dat "$workdir/geosite.dat"
+	link_mihomo_geodata "$workdir"
 }
 
 prepare_ss_mihomo_runtime_config() {
@@ -288,13 +331,7 @@ prepare_ss_mihomo_runtime_config() {
 		return 1
 	fi
 
-	[ -s /usr/share/shadowsocksr/Country.mmdb ] && ln -sf /usr/share/shadowsocksr/Country.mmdb "$workdir/Country.mmdb"
-	[ -s /usr/share/shadowsocksr/Country.mmdb ] && ln -sf /usr/share/shadowsocksr/Country.mmdb "$workdir/geoip.metadb"
-	[ ! -e "$workdir/Country.mmdb" ] && [ -s /etc/openclash/Country.mmdb ] && ln -sf /etc/openclash/Country.mmdb "$workdir/Country.mmdb"
-	[ ! -e "$workdir/geoip.metadb" ] && [ -s /etc/openclash/Country.mmdb ] && ln -sf /etc/openclash/Country.mmdb "$workdir/geoip.metadb"
-	[ -s /etc/openclash/GeoSite.dat ] && ln -sf /etc/openclash/GeoSite.dat "$workdir/GeoSite.dat"
-	[ -s /usr/share/v2ray/geoip.dat ] && ln -sf /usr/share/v2ray/geoip.dat "$workdir/geoip.dat"
-	[ -s /usr/share/v2ray/geosite.dat ] && ln -sf /usr/share/v2ray/geosite.dat "$workdir/geosite.dat"
+	link_mihomo_geodata "$workdir"
 }
 
 prepare_ss_server_mihomo_runtime_config() {
@@ -463,13 +500,7 @@ prepare_clash_runtime_config() {
 
 	# Reuse existing local geodata files so Mihomo does not have to fetch them
 	# during startup in environments where DNS or outbound access is not ready yet.
-	[ -s /usr/share/shadowsocksr/Country.mmdb ] && ln -sf /usr/share/shadowsocksr/Country.mmdb "$workdir/Country.mmdb"
-	[ -s /usr/share/shadowsocksr/Country.mmdb ] && ln -sf /usr/share/shadowsocksr/Country.mmdb "$workdir/geoip.metadb"
-	[ ! -e "$workdir/Country.mmdb" ] && [ -s /etc/openclash/Country.mmdb ] && ln -sf /etc/openclash/Country.mmdb "$workdir/Country.mmdb"
-	[ ! -e "$workdir/geoip.metadb" ] && [ -s /etc/openclash/Country.mmdb ] && ln -sf /etc/openclash/Country.mmdb "$workdir/geoip.metadb"
-	[ -s /etc/openclash/GeoSite.dat ] && ln -sf /etc/openclash/GeoSite.dat "$workdir/GeoSite.dat"
-	[ -s /usr/share/v2ray/geoip.dat ] && ln -sf /usr/share/v2ray/geoip.dat "$workdir/geoip.dat"
-	[ -s /usr/share/v2ray/geosite.dat ] && ln -sf /usr/share/v2ray/geosite.dat "$workdir/geosite.dat"
+	link_mihomo_geodata "$workdir"
 }
 
 resolve_global_clash_socks_port() {
@@ -539,6 +570,12 @@ get_host_ip() {
 	[ -z "$ip" ] || uci_set_by_name $1 ip $ip
 	[ -n "$ip" ] || ip=""
 
+	local chinadns="$(uci_get_by_type global chinadns_forward)"
+	if [ -n "$chinadns" ] && [ "$ip" != "$host" ]; then
+		grep -q "$host" "$TMP_DNSMASQ_PATH/chinadns_fixed_server.conf" 2>"/dev/null" || \
+			echo -e "address=/$host/$ip" >> "$TMP_DNSMASQ_PATH/chinadns_fixed_server.conf"
+	fi
+
 	echo $ip
 }
 
@@ -604,7 +641,42 @@ _exit() {
 }
 
 first_type() {
-	type -t -p "/bin/${1}" -p "/usr/bin/${1}" -p "/usr/libexec/${1}" -p "${TMP_BIN_PATH}/${1}" -p "${1}" "$@" | head -n1
+	local candidate
+	for candidate in "/bin/${1}" "/usr/bin/${1}" "/usr/libexec/${1}" "${TMP_BIN_PATH}/${1}"; do
+		[ -x "$candidate" ] && {
+			echo "$candidate"
+			return 0
+		}
+	done
+
+	command -v "${1}" 2>/dev/null | head -n1
+}
+
+is_finded() {
+	[ -n "$(first_type "$1")" ]
+}
+
+has_ss_rust_client_binary() {
+	[ -n "$(first_type sslocal)" ]
+}
+
+has_ss_rust_server_binary() {
+	[ -n "$(first_type ssserver)" ]
+}
+
+has_mihomo_binary() {
+	local mihomo_bin="$(first_type mihomo)"
+	[ -x "$mihomo_bin" ]
+}
+
+use_mihomo_for_ss_rust_client() {
+	has_ss_rust_client_binary && return 1
+	has_mihomo_binary
+}
+
+use_mihomo_for_ss_rust_server() {
+	has_ss_rust_server_binary && return 1
+	has_mihomo_binary
 }
 
 ln_start_bin() {
@@ -739,16 +811,6 @@ normalize_xray_protocol_nodes() {
 	fi
 }
 
-normalize_removed_dns_modes() {
-	local pdnsd_enable="$(uci_get_by_type global pdnsd_enable 0)"
-
-	if [ "$pdnsd_enable" = "6" ]; then
-		local fallback_mode="$(get_builtin_dns_fallback_mode)"
-		echolog "提示：ChinaDNS-NG 模式已移除，自动切换到可用 DNS 模式($fallback_mode)。"
-		uci_set_by_type global pdnsd_enable "$fallback_mode"
-	fi
-}
-
 add_dns_into_ipset() {
 	case "$1" in
 	gfw) ipset add gfwlist ${2%:*} 2>/dev/null ;;
@@ -760,29 +822,26 @@ start_dns() {
 	local ssrplus_dns="$(uci_get_by_type global pdnsd_enable 0)"
 	local global_server_type="$(uci_get_by_name "$GLOBAL_SERVER" type)"
 	local builtin_dns_enabled=0
+	local dnsserver="$(uci_get_by_type global tunnel_forward 8.8.4.4:53)"
 	if [ "$ssrplus_dns" = "5" ]; then
-		ssrplus_dns="$(get_builtin_dns_fallback_mode)"
-		if [ "$ssrplus_dns" = "0" ]; then
-			echolog "提示：旧版 DNSPROXY 模式已移除，且当前无可用 DNS helper，继续使用本地 5335 模式。"
-		else
-			echolog "提示：旧版 DNSPROXY 模式已移除，自动回退到可用 DNS helper 模式($ssrplus_dns)。"
-			uci_set_by_type global pdnsd_enable "$ssrplus_dns"
-		fi
-	else
-		dnsserver="$(uci_get_by_type global tunnel_forward 8.8.4.4:53)"
+		ssrplus_dns="$(force_dns2tcp_fallback "旧版 DNSPROXY 模式已移除")" || return 1
+		uci_set_by_type global pdnsd_enable "$ssrplus_dns"
+	elif [ "$ssrplus_dns" = "6" ]; then
+		dnsserver="$(uci_get_by_type global chinadns_ng_tunnel_forward 8.8.4.4:53)"
 	fi
 	local run_mode="$(normalize_run_mode)"
+
+	if [ "$ssrplus_dns" = "4" ] && ! is_finded "mosdns"; then
+		ssrplus_dns="$(force_dns2tcp_fallback "当前 DNS 模式 MosDNS 不可用")" || return 1
+		uci_set_by_type global pdnsd_enable "$ssrplus_dns"
+	fi
 
 	if [ "$ssrplus_dns" = "7" ]; then
 		if supports_builtin_dns "$global_server_type"; then
 			builtin_dns_enabled=1
 		else
-			ssrplus_dns="$(get_builtin_dns_fallback_mode)"
-			[ "$ssrplus_dns" = "0" ] && {
-				echolog "提示：当前主节点不支持模块内置 DNS，且无可用 DNS helper，继续使用本地 5335 模式。"
-			} || {
-				echolog "提示：当前主节点不支持模块内置 DNS，自动回退到可用 DNS helper 模式($ssrplus_dns)。"
-			}
+			ssrplus_dns="$(force_dns2tcp_fallback "当前主节点不支持模块内置 DNS")" || return 1
+			uci_set_by_type global pdnsd_enable "$ssrplus_dns"
 		fi
 	fi
 
@@ -821,7 +880,58 @@ start_dns() {
 			ln_start_bin $(first_type mosdns) mosdns start -c $TMP_PATH/mosdns-config.yaml
 			pdnsd_enable_flag=4
 			;;
+		6)
+			local chinadns_ng_proto="$(uci_get_by_type global chinadns_ng_proto)"
+			local chinadns_ng_dns=""
+			# 遍历每个 DNS 服务器
+			IFS=','  # 设置分隔符为逗号
+			for chinadns_ng_server in $dnsserver; do
+				# 处理单个服务器地址
+				local chinadns_ng_ip="${chinadns_ng_server%%:*}"
+				local chinadns_ng_port="${chinadns_ng_server##*:}"
+				[ "$chinadns_ng_ip" = "$chinadns_ng_port" ] && chinadns_ng_port="53"
+				chinadns_ng_tls_port="853"
+				# 根据协议类型格式化服务器地址
+				case "$chinadns_ng_proto" in
+					"none")
+            					chinadns_ng_server="${chinadns_ng_ip}#${chinadns_ng_port}"
+            					;;
+					"tls")
+            					chinadns_ng_server="${chinadns_ng_proto}://${chinadns_ng_ip}#${chinadns_ng_tls_port}"
+            					;;
+					*)
+            					chinadns_ng_server="${chinadns_ng_proto}://${chinadns_ng_ip}#${chinadns_ng_port}"
+            					;;
+				esac
+				# 添加到参数列表
+				chinadns_ng_dns="${chinadns_ng_dns} -t ${chinadns_ng_server}"
+			done
+			unset IFS  # 恢复默认分隔符
+			dnsserver="$chinadns_ng_dns"
+			ln_start_bin $(first_type chinadns-ng) chinadns-ng -b 127.0.0.1 -l $tmp_dns_port -l $dns_port -p 3 -d gfw $dnsserver -N --filter-qtype 64,65 -f -r --cache 4096 --cache-stale 86400 --cache-refresh 20
+			echolog "ChinaDNS-NG query and cache Started!"
+			pdnsd_enable_flag=6
+			;;
 		esac
+
+		if [ "$run_mode" = "router" ]; then
+			local chinadns="$(uci_get_by_type global chinadns_forward)"
+			if [ -n "$chinadns" ]; then
+				local wandns="$(ifstatus wan | jsonfilter -e '@["dns-server"][0]' || echo "119.29.29.29")"
+				case "$chinadns" in
+				"wan") chinadns="$wandns" ;;
+				"wan_114") chinadns="$wandns,114.114.114.114" ;;
+				esac
+
+				ln_start_bin $(first_type chinadns-ng) chinadns-ng -l $china_dns_port -4 china -p 3 -c ${chinadns/:/#} -t 127.0.0.1#$dns_port -N -f -r
+
+				cat <<-EOF >> "$TMP_DNSMASQ_PATH/chinadns_fixed_server.conf"
+					no-poll
+					no-resolv
+					server=127.0.0.1#$china_dns_port
+				EOF
+			fi
+		fi
 	fi
 
 	if [ "$(uci_get_by_type global apple_optimization 1)" == "1" ]; then
@@ -833,9 +943,7 @@ start_dns() {
 				sed -i "s,$(printf '%s' "$old_appledns"),$(printf '%s' "$new_appledns"),g" /etc/ssrplus/applechina.conf
 			fi
 		fi
-		echolog "Apple 域名中国大陆 CDN 的 优化规则正在加载。"
 		cp -f /etc/ssrplus/applechina.conf $TMP_DNSMASQ_PATH/
-		echolog "Apple 域名中国大陆 CDN 的 优化规则加载完毕。"
 	fi
 }
 
@@ -997,6 +1105,10 @@ start_udp() {
 			redir_udp=0
 			ARG_UDP=""
 			echolog "UDP TPROXY Relay:Mihomo 单节点由主实例处理。"
+		elif [ "$udp_relay_server_type" = "ss-rust" ] && use_mihomo_for_ss_rust_client; then
+			redir_udp=0
+			ARG_UDP=""
+			echolog "UDP TPROXY Relay:ss-rust 主程序不存在，已回退到 Mihomo 主实例处理。"
 		else
 			gen_config_file $UDP_RELAY_SERVER $type 2 $tmp_udp_port
 			if [ "$udp_relay_server_type" = "ssr" ]; then
@@ -1068,6 +1180,7 @@ start_local() {
 	[ "$LOCAL_SERVER" = "nil" ] && return 1
 	local local_port="${1:-$(uci_get_by_type socks5_proxy local_port)}"
 	local local_server_type=$(uci_get_by_name $LOCAL_SERVER type)
+	local probe_instance_key="$(printf '%s' "${SSR_SWITCH_PROBE_INSTANCE_KEY:-}" | tr -cd '0-9A-Za-z._-')"
 	local type=$local_server_type
 	if [ "$local_server_type" = "ss-rust" ]; then
 		type="ss"
@@ -1084,6 +1197,22 @@ start_local() {
 			fi
 			ln_start_bin $ss_program ${type}-local -c $local_config_file
 			echolog "Global_Socks5:$(get_name $type) Started!"
+		elif [ "$local_server_type" = "ss" ] || { [ "$local_server_type" = "ss-rust" ] && use_mihomo_for_ss_rust_client; }; then
+			local mihomo_bin="$(first_type mihomo)"
+			local instance_key="${LOCAL_SERVER}-local"
+			[ -n "$probe_instance_key" ] && instance_key="$probe_instance_key"
+			[ -x "$mihomo_bin" ] || {
+				echolog "Global_Socks5:Mihomo 内核不存在，请确认 /usr/bin/mihomo 或 /usr/libexec/mihomo 可执行。"
+				return 1
+			}
+			prepare_ss_mihomo_runtime_config "$LOCAL_SERVER" "$local_port" "$local_port" "$instance_key" "socks" || return 1
+			local ss_workdir="$(get_ss_mihomo_workdir "$instance_key")"
+			ln_start_bin "$mihomo_bin" ss-local -d "$ss_workdir" -f "$ss_workdir/config.yaml"
+			if [ "$local_server_type" = "ss-rust" ]; then
+				echolog "Global_Socks5:ss-rust 主程序不存在，已回退到 Mihomo (Shadowsocks) 启动。"
+			else
+				echolog "Global_Socks5:Mihomo (Shadowsocks) Started!"
+			fi
 		else
 			gen_config_file $LOCAL_SERVER $type 4 $local_port
 			ss_program="$(first_type sslocal)"
@@ -1116,6 +1245,7 @@ start_local() {
 	tuic)
 		local mihomo_bin="$(first_type mihomo)"
 		local instance_key="${LOCAL_SERVER}-local"
+		[ -n "$probe_instance_key" ] && instance_key="$probe_instance_key"
 		[ -x "$mihomo_bin" ] || {
 			echolog "Global_Socks5:Mihomo 内核不存在，请确认 /usr/bin/mihomo 或 /usr/libexec/mihomo 可执行。"
 			return 1
@@ -1396,6 +1526,24 @@ Start_Run() {
 				ln_start_bin $ss_program ${type}-redir -c $tcp_config_file
 			done
 			echolog "Main node:$(get_name $type) $threads Threads Started!"
+		elif [ "$global_server_type" = "ss" ] || { [ "$global_server_type" = "ss-rust" ] && use_mihomo_for_ss_rust_client; }; then
+			local mihomo_bin="$(first_type mihomo)"
+			local ss_socks_port=0
+			[ -x "$mihomo_bin" ] || {
+				echolog "Main node:Mihomo 内核不存在，请确认 /usr/bin/mihomo 或 /usr/libexec/mihomo 可执行。"
+				return 1
+			}
+			if [ "$_local" = "1" ] && [ "$LOCAL_SERVER" = "$GLOBAL_SERVER" ]; then
+				ss_socks_port=$(uci_get_by_type socks5_proxy local_port 1080)
+			fi
+			prepare_ss_mihomo_runtime_config "$GLOBAL_SERVER" "$tcp_port" "$ss_socks_port" "$GLOBAL_SERVER" "redir" || return 1
+			local ss_workdir="$(get_ss_mihomo_workdir "$GLOBAL_SERVER")"
+			ln_start_bin "$mihomo_bin" ssr-retcp -d "$ss_workdir" -f "$ss_workdir/config.yaml"
+			if [ "$global_server_type" = "ss-rust" ]; then
+				echolog "Main node:ss-rust 主程序不存在，已回退到 Mihomo (Shadowsocks) 启动。"
+			else
+				echolog "Main node:Mihomo (Shadowsocks) Started!"
+			fi
 		else
 			gen_config_file $GLOBAL_SERVER $type 1 $tcp_port
 			ss_program="$(first_type sslocal)"
@@ -1626,7 +1774,7 @@ start_server() {
 			fi
 			case "$type" in
 			ss | ssr)
-				if [ "$node_type" = "ss" ]; then
+				if [ "$node_type" = "ss" ] || { [ "$node_type" = "ss-rust" ] && use_mihomo_for_ss_rust_server; }; then
 					local mihomo_bin="$(first_type mihomo)"
 					[ -x "$mihomo_bin" ] || {
 						echolog "Server:Mihomo 内核不存在，请确认 /usr/bin/mihomo 或 /usr/libexec/mihomo 可执行。"
@@ -1635,7 +1783,11 @@ start_server() {
 					prepare_ss_server_mihomo_runtime_config "$1" || return 1
 					local ss_server_workdir="$(get_ss_server_mihomo_workdir "$1")"
 					ln_start_bin "$mihomo_bin" ss-server-$server_count -d "$ss_server_workdir" -f "$ss_server_workdir/config.yaml"
-					echolog "Server:Mihomo Shadowsocks Server$server_count Started!"
+					if [ "$node_type" = "ss-rust" ]; then
+						echolog "Server:ss-rust 主程序不存在，已回退到 Mihomo Shadowsocks Server$server_count 启动。"
+					else
+						echolog "Server:Mihomo Shadowsocks Server$server_count Started!"
+					fi
 				else
 					gen_service_file ${type} $1 $TMP_PATH/ssr-server$server_count.json
 					if [ "$node_type" = "ssr" ]; then
@@ -1860,7 +2012,6 @@ start() {
 	check_run_environment
 	normalize_run_mode >/dev/null
 	normalize_xray_protocol_nodes
-	normalize_removed_dns_modes
 	if load_config; then
 		Start_Run
 		start_http_proxy

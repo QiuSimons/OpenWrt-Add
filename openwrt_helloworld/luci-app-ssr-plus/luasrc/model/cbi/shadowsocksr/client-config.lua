@@ -259,17 +259,21 @@ local function migrate_xray_protocol_nodes()
 
 	uci:foreach("shadowsocksr", "servers", function(section)
 		if section.type == "ss" or section.type == "ss-libev" then
-			if has_ss_rust then
-				uci:set("shadowsocksr", section[".name"], "type", "ss-rust")
-				changed = true
-			elseif has_mihomo then
+			if has_mihomo then
 				uci:set("shadowsocksr", section[".name"], "type", "ss")
+				changed = true
+			elseif has_ss_rust then
+				uci:set("shadowsocksr", section[".name"], "type", "ss-rust")
 				changed = true
 			elseif has_xray then
 				uci:set("shadowsocksr", section[".name"], "type", "v2ray")
 				uci:set("shadowsocksr", section[".name"], "v2ray_protocol", "shadowsocks")
 				changed = true
 			end
+		elseif section.type == "v2ray" and section.v2ray_protocol == "shadowsocks" and has_mihomo then
+			uci:set("shadowsocksr", section[".name"], "type", "ss")
+			uci:delete("shadowsocksr", section[".name"], "v2ray_protocol")
+			changed = true
 		end
 		if section.type == "hysteria2" then
 			uci:set("shadowsocksr", section[".name"], "type", "v2ray")
@@ -526,11 +530,18 @@ end
 if has_mihomo or is_finded("v2ray-plugin") then
 	o:value("v2ray-plugin", translate("v2ray-plugin"))
 end
+if has_mihomo then
+	o:value("gost-plugin", translate("gost-plugin"))
+end
 if is_finded("xray-plugin") then
 	o:value("xray-plugin", translate("xray-plugin"))
 end
 if has_mihomo or is_finded("shadow-tls") then
 	o:value("shadow-tls", translate("shadow-tls"))
+end
+if has_mihomo then
+	o:value("restls", translate("restls"))
+	o:value("kcptun", translate("kcptun"))
 end
 o:value("custom", translate("Custom"))
 o.rmempty = true
