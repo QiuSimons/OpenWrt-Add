@@ -2,33 +2,31 @@
 'require baseclass';
 'require rpc';
 
-var callNetworkDeviceStatus = rpc.declare({
+const callNetworkDeviceStatus = rpc.declare({
 	object: 'network.device',
 	method: 'status',
 	expect: {}
 });
 
-var last_stats = {};
-var last_time = 0;
+let last_stats = {};
+let last_time = 0;
 
 return baseclass.extend({
 	title: _('Network Speed'),
 
-	load: function () {
+	load() {
 		return callNetworkDeviceStatus();
 	},
 
-	render: function (devices) {
-		var now = Date.now();
-		var diff = (now - last_time) / 1000;
+	render(devices) {
+		const now = Date.now();
+		let diff = (now - last_time) / 1000;
 		last_time = now;
 
-		var is_first_run = (Object.keys(last_stats).length === 0 || diff <= 0 || diff > 10);
-		if (is_first_run) {
-			diff = 1;
-		}
+		const is_first_run = (Object.keys(last_stats).length === 0 || diff <= 0 || diff > 10);
+		if (is_first_run) diff = 1;
 
-		var table = E('table', { 'class': 'table' }, [
+		const table = E('table', { 'class': 'table' }, [
 			E('tr', { 'class': 'tr table-titles' }, [
 				E('th', { 'class': 'th' }, _('Interface')),
 				E('th', { 'class': 'th' }, _('Download Rate (RX)')),
@@ -36,40 +34,33 @@ return baseclass.extend({
 			])
 		]);
 
-		var devNames = Object.keys(devices).filter(function (d) {
-			return d !== 'lo' && devices[d].up && devices[d].statistics;
-		}).sort();
+		const devNames = Object.keys(devices).filter(d => d !== 'lo' && devices[d].up && devices[d].statistics).sort();
+		let has_active = false;
 
-		var has_active = false;
+		const formatSpeed = bps => {
+			const units = ['B/s', 'KiB/s', 'MiB/s', 'GiB/s', 'TiB/s'];
+			let i = 0;
+			while (bps >= 1024 && i < units.length - 1) {
+				bps /= 1024;
+				i++;
+			}
+			return `${bps.toFixed(1)} ${units[i]}`;
+		};
 
-		for (var i = 0; i < devNames.length; i++) {
-			var name = devNames[i];
-			var stats = devices[name].statistics;
-			var rx_bytes = stats.rx_bytes;
-			var tx_bytes = stats.tx_bytes;
+		for (const name of devNames) {
+			const stats = devices[name].statistics;
+			const rx_bytes = stats.rx_bytes;
+			const tx_bytes = stats.tx_bytes;
+			let rx_rate = 0, tx_rate = 0;
 
 			has_active = true;
-			var rx_rate = 0;
-			var tx_rate = 0;
 
 			if (!is_first_run && last_stats[name]) {
-				rx_rate = (rx_bytes - last_stats[name].rx) / diff;
-				tx_rate = (tx_bytes - last_stats[name].tx) / diff;
-
-				if (rx_rate < 0) rx_rate = 0;
-				if (tx_rate < 0) tx_rate = 0;
+				rx_rate = Math.max(0, (rx_bytes - last_stats[name].rx) / diff);
+				tx_rate = Math.max(0, (tx_bytes - last_stats[name].tx) / diff);
 			}
 
-			last_stats[name] = {
-				rx: rx_bytes,
-				tx: tx_bytes
-			};
-
-			var formatSpeed = function (bps) {
-				if (bps < 1024) return bps.toFixed(1) + ' B/s';
-				if (bps < 1048576) return (bps / 1024).toFixed(1) + ' KB/s';
-				return (bps / 1048576).toFixed(1) + ' MB/s';
-			};
+			last_stats[name] = { rx: rx_bytes, tx: tx_bytes };
 
 			table.appendChild(E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td', 'data-title': _('Interface') }, E('strong', {}, name)),
