@@ -104,6 +104,12 @@ The following table shows the version dependency relationship between luci-app-b
 Please ensure you install matching versions to ensure compatibility and proper functionality.
 
 
+## Team Members
+
+- [timsaya](https://github.com/timsaya)
+- [smallprogram](https://github.com/smallprogram)
+
+
 ## License
 
 This project is licensed under the [Apache 2.0 License](LICENSE).
