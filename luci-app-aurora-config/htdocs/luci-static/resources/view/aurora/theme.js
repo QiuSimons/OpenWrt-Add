@@ -5,45 +5,14 @@
 "require rpc";
 "require ui";
 "require fs";
+"require utils.version-api";
 
-const CACHE_KEY = "aurora.version.cache";
-const CACHE_TTL = 1800000;
 const CONFIG_IMPORT_PATH = "/tmp/aurora_config_import.tmp";
-
-const versionCache = {
-  get() {
-    try {
-      const cached = localStorage.getItem(CACHE_KEY);
-      if (!cached) return null;
-      const { timestamp, value } = JSON.parse(cached);
-      if (Date.now() - timestamp > CACHE_TTL) {
-        this.clear();
-        return null;
-      }
-      return value;
-    } catch (e) {
-      return null;
-    }
-  },
-
-  set(value) {
-    try {
-      const data = { timestamp: Date.now(), value };
-      localStorage.setItem(CACHE_KEY, JSON.stringify(data));
-    } catch (e) {
-      console.error("Failed to cache version data:", e);
-    }
-  },
-
-  clear() {
-    localStorage.removeItem(CACHE_KEY);
-  },
-};
 
 document.querySelector("head").appendChild(
   E("script", {
     type: "text/javascript",
-    src: L.resource("view/aurora/color.global.js"),
+    src: L.resource("utils/color.global.js"),
   }),
 );
 
@@ -58,30 +27,22 @@ const callListIcons = rpc.declare({
   method: "list_icons",
 });
 
+let _iconsPromise = null;
+const getIconsOnce = () => {
+  if (!_iconsPromise)
+    _iconsPromise = L.resolveDefault(callListIcons(), { icons: [] });
+  return _iconsPromise;
+};
+
 const callRemoveIcon = rpc.declare({
   object: "luci.aurora",
   method: "remove_icon",
   params: ["filename"],
 });
 
-const callCheckUpdates = rpc.declare({
-  object: "luci.aurora",
-  method: "check_updates",
-});
-
-const callGetInstalledVersions = rpc.declare({
-  object: "luci.aurora",
-  method: "get_installed_versions",
-});
-
 const callGetThemeConfig = rpc.declare({
   object: "luci.aurora",
   method: "get_theme_config",
-});
-
-const callGetThemePresets = rpc.declare({
-  object: "luci.aurora",
-  method: "get_theme_presets",
 });
 
 const callGetFontPresets = rpc.declare({
@@ -99,7 +60,9 @@ const callPrepareFont = rpc.declare({
   object: "luci.aurora",
   method: "prepare_font",
   params: ["sans", "mono"],
-  expect: { "": { result: -1, error: "RPC call failed (timeout or transport error)" } },
+  expect: {
+    "": { result: -1, error: "RPC call failed (timeout or transport error)" },
+  },
 });
 
 const callGetFontStatus = rpc.declare({
@@ -122,6 +85,11 @@ const callImportConfig = rpc.declare({
 const callResetDefaults = rpc.declare({
   object: "luci.aurora",
   method: "reset_defaults",
+});
+
+const callWritePwaManifest = rpc.declare({
+  object: "luci.aurora",
+  method: "write_pwa_manifest",
 });
 
 const resolveCssColor = (() => {
@@ -337,7 +305,9 @@ const generateLqip = (source) =>
     const img = new Image();
     const isBlob = source instanceof Blob;
     const url = isBlob ? URL.createObjectURL(source) : source;
-    const cleanup = () => { if (isBlob) URL.revokeObjectURL(url); };
+    const cleanup = () => {
+      if (isBlob) URL.revokeObjectURL(url);
+    };
 
     img.onload = () => {
       const W = 32;
@@ -348,7 +318,10 @@ const generateLqip = (source) =>
       cleanup();
       canvas.toBlob(
         (blob) => {
-          if (!blob) { resolve(null); return; }
+          if (!blob) {
+            resolve(null);
+            return;
+          }
           const reader = new FileReader();
           reader.onload = (e) => resolve(e.target.result);
           reader.onerror = () => resolve(null);
@@ -358,7 +331,10 @@ const generateLqip = (source) =>
         0.1,
       );
     };
-    img.onerror = () => { cleanup(); resolve(null); };
+    img.onerror = () => {
+      cleanup();
+      resolve(null);
+    };
     img.src = url;
   });
 
@@ -374,55 +350,45 @@ const fromLoginBgUrl = (value) => {
 const isImageFile = (filename) =>
   /\.(jpg|jpeg|png|gif|webp|avif|svg|bmp|ico)$/i.test(filename);
 
-const getAssetType = (filename) => {
-  if (/^login-bg\./i.test(filename)) return _("Login Background");
-  if (filename === "logo.svg") return _("Site Logo");
-  if (filename === "favicon.ico") return _("Favicon");
-  if (filename.endsWith(".svg")) return _("SVG Icon");
-  if (/\.(png|jpg|jpeg|webp|gif|avif|bmp)$/i.test(filename)) return _("Image");
-  return _("File");
-};
-
 return view.extend({
   handleSave: function (ev) {
     const save = L.bind(function () {
       return this.super("handleSave", ev);
     }, this);
+    const writePwa = () => L.resolveDefault(callWritePwaManifest(), {});
 
     if (typeof this.prepareAuroraFonts === "function") {
-      return this.prepareAuroraFonts().then(save);
+      return this.prepareAuroraFonts().then(save).then(writePwa);
     }
-
-    return save();
+    return save().then(writePwa);
   },
 
   handleSaveApply: function (ev) {
     const saveApply = L.bind(function () {
       return this.super("handleSaveApply", ev);
     }, this);
+    const writePwa = () => L.resolveDefault(callWritePwaManifest(), {});
 
     if (typeof this.prepareAuroraFonts === "function") {
-      return this.prepareAuroraFonts().then(saveApply);
+      return this.prepareAuroraFonts().then(saveApply).then(writePwa);
     }
-
-    return saveApply();
+    return saveApply().then(writePwa);
   },
 
   load: function () {
     return Promise.all([
       uci.load("aurora"),
       L.resolveDefault(callGetThemeConfig(), {}),
-      L.resolveDefault(callGetThemePresets(), {}),
-      L.resolveDefault(callGetInstalledVersions(), {}),
+      L.resolveDefault(utils_version_api.callGetInstalledVersions(), {}),
       L.resolveDefault(callGetFontPresets(), {}),
+      getIconsOnce(),
     ]);
   },
 
   render(loadData) {
     const themeConfig = loadData[1]?.theme || {};
-    const themePresets = loadData[2]?.presets || [];
-    const installedVersions = loadData[3];
-    const fontPresetsBySlot = loadData[4]?.fonts || {};
+    const installedVersions = loadData[2];
+    const fontPresetsBySlot = loadData[3]?.fonts || {};
 
     // Order matches luci-theme-aurora/.dev/src/media/main.css @theme inline
     const baseColorVars = [
@@ -507,24 +473,13 @@ return view.extend({
     let so;
     const viewCtx = this;
 
-    const buildPresetOptions = () => {
-      if (themePresets.length > 0) {
-        const options = themePresets
-          .filter((preset) => preset?.name)
-          .map((preset) => ({
-            name: preset.name,
-            label: preset.label || preset.name,
-          }));
-        if (options.length > 0) return options;
-      }
-      return [
-        { name: "classic", label: _("Classic") },
-        { name: "monochrome", label: _("Monochrome") },
-        { name: "sage-green", label: _("Sage Green") },
-        { name: "amber-sand", label: _("Amber Sand") },
-        { name: "sky-blue", label: _("Sky Blue") },
-      ];
-    };
+    const buildPresetOptions = () => [
+      { name: "classic", label: _("Classic") },
+      { name: "monochrome", label: _("Monochrome") },
+      { name: "sage-green", label: _("Sage Green") },
+      { name: "amber-sand", label: _("Amber Sand") },
+      { name: "sky-blue", label: _("Sky Blue") },
+    ];
 
     const FONT_DEFAULT_STACKS = {
       sans: '"Lato", ui-sans-serif, system-ui, sans-serif',
@@ -559,16 +514,15 @@ return view.extend({
 
     const buildPresetToolbarNode = () => {
       const presetOptions = buildPresetOptions();
-      const defaultPreset = "classic";
+      const uciPreset = themeConfig.active_preset;
       const storedPreset = localStorage.getItem("aurora.theme_preset");
-      const hasStoredPreset = presetOptions.some(
-        (preset) => preset.name === storedPreset,
-      );
-      const initialPreset = hasStoredPreset ? storedPreset : defaultPreset;
+      const initialPreset = presetOptions.some((p) => p.name === uciPreset)
+        ? uciPreset
+        : presetOptions.some((p) => p.name === storedPreset)
+          ? storedPreset
+          : "classic";
 
-      if (!hasStoredPreset) {
-        localStorage.setItem("aurora.theme_preset", initialPreset);
-      }
+      localStorage.setItem("aurora.theme_preset", initialPreset);
 
       const select = E(
         "select",
@@ -845,7 +799,7 @@ return view.extend({
                 "p",
                 {},
                 _(
-                  "Are you sure you want to reset all theme settings (Color, Structure, Login & Branding) back to the default theme's original configuration? This will revert everything to the default theme's initial state.",
+                  "Are you sure you want to reset all theme settings (Color, Layout & Typography, Branding) back to the default theme's original configuration? This will revert everything to the default theme's initial state.",
                 ),
               ),
               E("div", { class: "right" }, [
@@ -969,9 +923,8 @@ return view.extend({
     const s = m.section(form.NamedSection, "theme", "aurora");
 
     s.tab("colors", _("Color"));
-    s.tab("structure", _("Structure"));
-    s.tab("fonts", _("Fonts"));
-    s.tab("icons_branding", _("Login & Branding"));
+    s.tab("layout_typography", _("Layout & Typography"));
+    s.tab("icons_branding", _("Branding"));
 
     const colorSection = s.taboption(
       "colors",
@@ -989,7 +942,7 @@ return view.extend({
     createColorSections(colorSubsection, "dark", colorGroups, themeConfig);
 
     const structureSection = s.taboption(
-      "structure",
+      "layout_typography",
       form.SectionValue,
       "_structure_layout",
       form.NamedSection,
@@ -997,7 +950,7 @@ return view.extend({
       "aurora",
       _("Layout"),
       _(
-        "Customize the layout of your interface. Control how the navigation menu displays, adjust the spacing between interface elements, and set the maximum width of the page content container.",
+        "Adjust navigation style, element spacing, corner radius, and page container width.",
       ),
     );
     const structureSubsection = structureSection.subsection;
@@ -1043,14 +996,16 @@ return view.extend({
     so.render = renderContainerMaxWidthControl;
 
     const fontSection = s.taboption(
-      "fonts",
+      "layout_typography",
       form.SectionValue,
       "_font_settings",
       form.NamedSection,
       "theme",
       "aurora",
       _("Font Settings"),
-      _("Pick a sans-serif font for body text and a monospaced font for code."),
+      _(
+        "Sans-serif sets the global UI typeface for all text and headings. Monospace is used for code blocks, inline code, and variable references.",
+      ),
     );
     const fontSubsection = fontSection.subsection;
 
@@ -1068,11 +1023,6 @@ return view.extend({
     const addFontSlot = (ss, slot) => {
       const options = buildFontOptions(slot);
       const stackKey = "struct_font_" + slot;
-      const legacyPresetKey = "font_" + slot + "_preset";
-      const legacyFont = findFontByPreset(
-        slot,
-        themeConfig[legacyPresetKey] || "default",
-      );
       const defaultFont = getDefaultFont(slot);
 
       const presetOpt = ss.option(
@@ -1080,11 +1030,7 @@ return view.extend({
         stackKey,
         slot === "sans" ? _("Sans-serif Typeface") : _("Monospace Typeface"),
       );
-      presetOpt.default =
-        themeConfig[stackKey] ||
-        legacyFont?.stack ||
-        defaultFont?.stack ||
-        "";
+      presetOpt.default = themeConfig[stackKey] || defaultFont?.stack || "";
       presetOpt.rmempty = false;
       options.forEach((font) => {
         if (font.stack) {
@@ -1107,10 +1053,8 @@ return view.extend({
         (fontSlotOpts[slot] && fontSlotOpts[slot].formvalue("theme")) ||
         getDefaultFont(slot)?.stack ||
         "";
-      const font =
-        findFontByStack(slot, value) ||
-        getDefaultFont(slot) ||
-        { name: "default" };
+      const font = findFontByStack(slot, value) ||
+        getDefaultFont(slot) || { name: "default" };
 
       return {
         preset: font.name || "default",
@@ -1212,7 +1156,10 @@ return view.extend({
           ui.hideModal();
           ui.addNotification(
             null,
-            E("p", _("Font preparation failed: ") + (err.message || String(err))),
+            E(
+              "p",
+              _("Font preparation failed: ") + (err.message || String(err)),
+            ),
             "warning",
           );
           return Promise.reject(err);
@@ -1229,118 +1176,217 @@ return view.extend({
       "theme",
       "aurora",
       _("Asset Library"),
-      _("Manage image files used by the theme. All files are stored in <code>/www/luci-static/aurora/images/</code>."),
+      _(
+        "Manage image files used by the theme. All files are stored in <code>/www/luci-static/aurora/images/</code>.",
+      ),
     );
     const assetSubsection = assetSection.subsection;
 
-    const uploadSo = assetSubsection.option(form.Button, "_upload_asset", _("Upload Asset"));
-    uploadSo.inputstyle = "add";
-    uploadSo.inputtitle = _("Upload image file");
-    uploadSo.onclick = ui.createHandlerFn(this, function () {
-      const fileInput = E("input", { type: "file", style: "display:none", accept: "image/*,.svg" });
-      document.body.appendChild(fileInput);
-
-      return new Promise((resolve) => {
-        const makeRadio = (value, labelText, checked) => {
-          const id = "aurora-asset-type-" + value;
-          const radio = E("input", { type: "radio", id, name: "aurora_asset_type", value });
-          if (checked) radio.checked = true;
-          return E("label", {
-            for: id,
-            style: "display:flex;align-items:center;gap:0.6em;padding:0.35em 0;cursor:pointer;",
-          }, [radio, labelText]);
-        };
-        const cancelFn = () => {
-          document.body.removeChild(fileInput);
-          ui.hideModal();
-          resolve(null);
-        };
-        ui.showModal(_("Upload Asset"), [
-          E("p", { style: "margin-bottom:0.25em;font-weight:600;" }, _("Select what this image will be used for:")),
-          E("div", { style: "margin:0.25em 0 1em;" }, [
-            makeRadio("icon", _("Logo / Icon"), true),
-            makeRadio("media", _("Login background image"), false),
-          ]),
-          E("div", { class: "right" }, [
-            E("button", { class: "btn", click: cancelFn }, _("Cancel")),
-            " ",
-            E("button", {
-              class: "btn cbi-button-action important",
-              click: () => {
-                const checked = document.querySelector('input[name="aurora_asset_type"]:checked');
-                const type = checked ? checked.value : "icon";
-                ui.hideModal();
-                fileInput.onchange = () => {
-                  const file = fileInput.files[0];
-                  document.body.removeChild(fileInput);
-                  resolve(file ? { type, file } : null);
-                };
-                fileInput.click();
-              },
-            }, _("Choose File")),
-          ]),
-        ]);
-      }).then((selection) => {
-        if (!selection) return;
-        const { type, file } = selection;
-        const tmpPath = "/tmp/aurora_icon.tmp";
-
-        ui.showModal(_("Uploading…"), [E("p", { class: "spinning" }, _("Uploading…"))]);
-
-        const formData = new FormData();
-        formData.append("sessionid", rpc.getSessionID());
-        formData.append("filename", tmpPath);
-        formData.append("filemode", "0600");
-        formData.append("filedata", file, file.name);
-
-        return fetch("/cgi-bin/cgi-upload", { method: "POST", credentials: "include", body: formData })
-          .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))))
-          .then(() => {
-              return L.resolveDefault(callUploadIcon(file.name), {}).then((ret) => {
-                if (ret?.result === 0) {
-                  if (type === "media") {
-                    localStorage.setItem("aurora.pending_bg", file.name);
-                  }
-                  ui.addNotification(null, E("p", _("Uploaded: %s").format(file.name)));
-                  window.location.reload();
-                } else {
-                  ui.addNotification(null, E("p", _("Failed to upload: %s").format(ret?.error || "Unknown")));
-                  return L.resolveDefault(fs.remove(tmpPath), {});
-                }
-              });
-          })
-          .catch((err) => {
-
-            ui.hideModal();
-
-            ui.addNotification(null, E("p", _("Upload failed: %s").format(err.message || err)));
-            return L.resolveDefault(fs.remove(tmpPath), {});
-          });
-      });
-    });
-
-    const assetTableSo = assetSubsection.option(form.DummyValue, "_asset_table", " ");
+    const assetTableSo = assetSubsection.option(
+      form.DummyValue,
+      "_asset_table",
+      " ",
+    );
     assetTableSo.load = () => L.resolveDefault(callListIcons(), { icons: [] });
     assetTableSo.cfgvalue = (section_id, data) => data?.icons || [];
     assetTableSo.render = function (option_index, section_id, in_table) {
       return this.load(section_id).then((data) => {
         const icons = this.cfgvalue(section_id, data);
+        const tmpPath = "/tmp/aurora_icon.tmp";
 
-        if (icons.length === 0) {
-          return E("div", { "data-name": this.option, style: "padding:0.5em 0;" }, [
-            E("em", {}, _("No assets uploaded yet.")),
-          ]);
-        }
+        const fileInput = E("input", {
+          type: "file",
+          style: "display:none",
+          accept: "image/*,.svg",
+        });
 
-        const table = E("table", { class: "table" }, [
-          E("tr", { class: "tr table-titles" }, [
-            E("th", { class: "th" }, _("Filename")),
-            E("th", { class: "th" }, _("Usage")),
-            E("th", { class: "th center" }, _("Actions")),
-          ]),
-        ]);
+        const progressBar = E("div", {
+          style:
+            "height:100%;width:0%;transition:width 0.15s;border-radius:2px;background:var(--color-primary,#2196f3);",
+        });
+        const progressFilename = E("span", {}, "");
+        const progressPct = E("span", {}, "0%");
+        const progressRow = E(
+          "div",
+          {
+            style:
+              "display:none;margin-bottom:0.75em;padding:0.6em 0.875em;border-radius:0.375em;border:1px solid var(--border-color,#ddd);",
+          },
+          [
+            E(
+              "div",
+              {
+                style:
+                  "display:flex;justify-content:space-between;align-items:center;font-size:0.85em;margin-bottom:0.4em;",
+              },
+              [progressFilename, progressPct],
+            ),
+            E(
+              "div",
+              {
+                style:
+                  "height:4px;border-radius:2px;overflow:hidden;background:var(--border-color,#eee);",
+              },
+              [progressBar],
+            ),
+          ],
+        );
 
-        icons.forEach((icon) => {
+        const setUploading = (busy) => {
+          dropzone.style.opacity = busy ? "0.5" : "";
+          dropzone.style.pointerEvents = busy ? "none" : "";
+          progressRow.style.display = busy ? "block" : "none";
+        };
+
+        const dropzone = E(
+          "div",
+          {
+            style:
+              "border:2px dashed var(--border-color,#aaa);border-radius:0.5em;padding:1.25em 1em;text-align:center;cursor:pointer;margin-bottom:0.75em;transition:border-color 0.15s,background 0.15s;",
+            click: () => fileInput.click(),
+            dragover: (e) => {
+              e.preventDefault();
+              dropzone.style.borderColor = "var(--color-primary,#2196f3)";
+              dropzone.style.background = "rgba(33,150,243,0.06)";
+            },
+            dragleave: () => {
+              dropzone.style.borderColor = "";
+              dropzone.style.background = "";
+            },
+            drop: (e) => {
+              e.preventDefault();
+              dropzone.style.borderColor = "";
+              dropzone.style.background = "";
+              const file = e.dataTransfer.files[0];
+              if (file) uploadFile(file);
+            },
+          },
+          [
+            E(
+              "div",
+              {
+                style:
+                  "font-size:1.5em;margin-bottom:0.25em;pointer-events:none;",
+              },
+              "⬆",
+            ),
+            E(
+              "strong",
+              { style: "pointer-events:none;" },
+              _("Drop image here, or click to browse"),
+            ),
+            E(
+              "div",
+              {
+                style:
+                  "font-size:0.8em;opacity:0.6;margin-top:0.25em;pointer-events:none;",
+              },
+              _("JPG · PNG · WebP · AVIF · SVG · GIF"),
+            ),
+          ],
+        );
+
+        const uploadFile = (file) => {
+          fileInput.value = "";
+          progressFilename.textContent = file.name;
+          progressPct.textContent = "0%";
+          progressBar.style.width = "0%";
+          setUploading(true);
+
+          const xhr = new XMLHttpRequest();
+
+          xhr.upload.addEventListener("progress", (e) => {
+            if (e.lengthComputable) {
+              const pct = Math.round((e.loaded / e.total) * 100);
+              progressBar.style.width = pct + "%";
+              progressPct.textContent = pct + "%";
+            }
+          });
+
+          xhr.addEventListener("load", () => {
+            if (xhr.status !== 200) {
+              setUploading(false);
+              ui.addNotification(
+                null,
+                E("p", _("Upload failed (HTTP %s)").format(xhr.status)),
+                "error",
+              );
+              return;
+            }
+            L.resolveDefault(callUploadIcon(file.name), {}).then((ret) => {
+              if (ret?.result === 0) {
+                if (/^login-bg\./i.test(file.name)) {
+                  localStorage.setItem("aurora.pending_bg", file.name);
+                }
+                window.location.reload();
+              } else {
+                setUploading(false);
+                ui.addNotification(
+                  null,
+                  E(
+                    "p",
+                    _("Upload failed: %s").format(ret?.error || "Unknown"),
+                  ),
+                  "error",
+                );
+                L.resolveDefault(fs.remove(tmpPath), {});
+              }
+            });
+          });
+
+          xhr.addEventListener("error", () => {
+            setUploading(false);
+            ui.addNotification(null, E("p", _("Upload failed")), "error");
+          });
+
+          const formData = new FormData();
+          formData.append("sessionid", rpc.getSessionID());
+          formData.append("filename", tmpPath);
+          formData.append("filemode", "0600");
+          formData.append("filedata", file, file.name);
+
+          xhr.open("POST", "/cgi-bin/cgi-upload");
+          xhr.withCredentials = true;
+          xhr.send(formData);
+        };
+
+        fileInput.addEventListener("change", () => {
+          const file = fileInput.files[0];
+          fileInput.value = "";
+          if (file) uploadFile(file);
+        });
+
+        const idleCallback = window.requestIdleCallback
+          ? (fn) => window.requestIdleCallback(fn, { timeout: 2000 })
+          : (fn) => setTimeout(fn, 100);
+
+        const makeRow = (icon) => {
+          const placeholder = E("div", {
+            style:
+              "width:40px;height:40px;border-radius:4px;background:var(--border-color,#eee);",
+          });
+          const previewCell = E(
+            "td",
+            { class: "td", style: "width:56px;" },
+            placeholder,
+          );
+
+          idleCallback(() => {
+            generateLqip("/luci-static/aurora/images/" + icon).then(
+              (dataUrl) => {
+                if (!dataUrl) return;
+                placeholder.replaceWith(
+                  E("img", {
+                    src: dataUrl,
+                    style:
+                      "width:40px;height:40px;object-fit:contain;border-radius:4px;display:block;",
+                    alt: "",
+                  }),
+                );
+              },
+            );
+          });
+
           const deleteBtn = E(
             "button",
             {
@@ -1361,24 +1407,31 @@ return view.extend({
                         class: "btn cbi-button-negative",
                         click: () => {
                           ui.showModal(_("Deleting…"), [
-                            E("p", { class: "spinning" }, _("Deleting…")),
+                            E("p", { class: "spinning" }, _("Please wait…")),
                           ]);
-                          L.resolveDefault(callRemoveIcon(icon), {}).then((ret) => {
-                            ui.hideModal();
-                            if (ret?.result === 0) {
-                              ui.addNotification(
-                                null,
-                                E("p", _("Deleted: %s").format(icon)),
-                              );
-                              window.location.reload();
-                            } else {
-                              ui.addNotification(
-                                null,
-                                E("p", _("Failed to delete: %s").format(icon)),
-                                "error",
-                              );
-                            }
-                          });
+                          L.resolveDefault(callRemoveIcon(icon), {}).then(
+                            (ret) => {
+                              ui.hideModal();
+                              if (ret?.result === 0) {
+                                ui.addNotification(
+                                  null,
+                                  E("p", _("Deleted: %s").format(icon)),
+                                );
+                                window.location.reload();
+                              } else {
+                                ui.addNotification(
+                                  null,
+                                  E(
+                                    "p",
+                                    _("Failed to delete: %s").format(
+                                      ret?.error || "Unknown",
+                                    ),
+                                  ),
+                                  "error",
+                                );
+                              }
+                            },
+                          );
                         },
                       },
                       _("Delete"),
@@ -1390,16 +1443,33 @@ return view.extend({
             _("Delete"),
           );
 
-          table.appendChild(
-            E("tr", { class: "tr" }, [
-              E("td", { class: "td", style: "font-family:monospace;" }, icon),
-              E("td", { class: "td" }, getAssetType(icon)),
-              E("td", { class: "td center" }, deleteBtn),
-            ]),
-          );
-        });
+          return E("tr", { class: "tr" }, [
+            previewCell,
+            E("td", { class: "td", style: "font-family:monospace;" }, icon),
+            E("td", { class: "td center" }, deleteBtn),
+          ]);
+        };
 
-        return E("div", { "data-name": this.option }, table);
+        const tableOrEmpty =
+          icons.length === 0
+            ? E("div", { style: "padding:0.5em 0;" }, [
+                E("em", {}, _("No assets uploaded yet.")),
+              ])
+            : E("table", { class: "table" }, [
+                E("tr", { class: "tr table-titles" }, [
+                  E("th", { class: "th", style: "width:56px;" }, _("Preview")),
+                  E("th", { class: "th" }, _("Filename")),
+                  E("th", { class: "th center" }, _("Actions")),
+                ]),
+                ...icons.map(makeRow),
+              ]);
+
+        return E("div", { "data-name": this.option }, [
+          fileInput,
+          dropzone,
+          progressRow,
+          tableOrEmpty,
+        ]);
       });
     };
 
@@ -1412,13 +1482,12 @@ return view.extend({
       "aurora",
       _("Site Branding"),
       _(
-        "Select the SVG icon used as the browser tab favicon and the login page logo. Upload your SVG file using the Asset Library above, then select it here. For PWA home screen icon customization, replace <code>pwa/apple-touch-icon.png</code> in the icon library.",
+        "Choose the favicon, logo, and login background. Upload images via the Asset Library above.",
       ),
     );
     const logoSubsection = logoSection.subsection;
 
-
-    so = logoSubsection.option(form.ListValue, "logo_svg", _("Logo Icon"));
+    so = logoSubsection.option(form.ListValue, "logo_svg", _("Logo / Favicon"));
     so.default = "logo.svg";
     so.rmempty = false;
     so.load = function (section_id) {
@@ -1430,7 +1499,7 @@ return view.extend({
           if (icons.length > 0) {
             icons.forEach(
               L.bind((icon) => {
-                if (icon.endsWith(".svg")) {
+                if (isImageFile(icon)) {
                   this.value(icon, icon);
                 }
               }, this),
@@ -1441,10 +1510,91 @@ return view.extend({
       );
     };
 
-    so = logoSubsection.option(form.ListValue, "struct_login_bg", _("Login Background"));
-    so.description = _(
-      "Select a static image from the Asset Library. Shown as a full-screen background on the login page.",
+    so = logoSubsection.option(
+      form.ListValue,
+      "favicon_png",
+      _("Favicon (PNG)"),
     );
+    so.description = _(
+      "Optional PNG favicon for browsers that do not support SVG favicons.",
+    );
+    so.rmempty = true;
+    so.load = function (section_id) {
+      return L.resolveDefault(callListIcons(), { icons: [] }).then(
+        L.bind(function (response) {
+          const icons = response?.icons || [];
+          this.keylist = [];
+          this.vallist = [];
+          this.value("", _("(None)"));
+          icons.forEach(
+            L.bind(function (icon) {
+              if (/\.png$/i.test(icon)) this.value(icon, icon);
+            }, this),
+          );
+          return form.ListValue.prototype.load.apply(this, [section_id]);
+        }, this),
+      );
+    };
+
+    so = logoSubsection.option(
+      form.ListValue,
+      "favicon_ico",
+      _("Favicon (ICO / Legacy)"),
+    );
+    so.description = _("ICO favicon served to legacy browsers as fallback.");
+    so.default = "favicon.ico";
+    so.rmempty = false;
+    so.load = function (section_id) {
+      return L.resolveDefault(callListIcons(), { icons: [] }).then(
+        L.bind(function (response) {
+          const icons = response?.icons || [];
+          this.keylist = [];
+          this.vallist = [];
+          icons.forEach(
+            L.bind(function (icon) {
+              if (/\.ico$/i.test(icon)) this.value(icon, icon);
+            }, this),
+          );
+          return form.ListValue.prototype.load.apply(this, [section_id]);
+        }, this),
+      );
+    };
+
+    const pwaIconSlots = [
+      ["pwa_apple_touch", _("Apple Touch Icon"), "apple-touch-icon.png"],
+      ["pwa_icon_192", _("App Icon 192×192"), "app-icon-192x192.png"],
+      ["pwa_icon_512", _("App Icon 512×512"), "app-icon-512x512.png"],
+    ];
+
+    pwaIconSlots.forEach(function ([key, label, defaultVal]) {
+      so = logoSubsection.option(form.ListValue, key, label);
+      so.default = defaultVal;
+      so.rmempty = false;
+      so.load = function (section_id) {
+        return L.resolveDefault(callListIcons(), { icons: [] }).then(
+          L.bind(function (response) {
+            const icons = response?.icons || [];
+            this.keylist = [];
+            this.vallist = [];
+            icons.forEach(
+              L.bind(function (icon) {
+                if (isImageFile(icon) && !/\.svg$/i.test(icon)) {
+                  this.value(icon, icon);
+                }
+              }, this),
+            );
+            return form.ListValue.prototype.load.apply(this, [section_id]);
+          }, this),
+        );
+      };
+    });
+
+    so = logoSubsection.option(
+      form.ListValue,
+      "struct_login_bg",
+      _("Login Background"),
+    );
+    so.description = _("Full-screen background on the login page.");
     so.rmempty = true;
     so.load = function (section_id) {
       return L.resolveDefault(callListIcons(), { icons: [] }).then(
@@ -1452,7 +1602,7 @@ return view.extend({
           const icons = response?.icons || [];
           this.keylist = [];
           this.vallist = [];
-          this.value("", _("None (Animated Aurora)"));
+          this.value("", _("None"));
           if (icons.length > 0) {
             icons.forEach(
               L.bind((icon) => {
@@ -1467,17 +1617,9 @@ return view.extend({
       );
     };
     so.cfgvalue = function (section_id) {
-      let value = uci.get("aurora", section_id, "struct_login_bg");
-      if (!value) {
-        const legacy = uci.get("aurora", section_id, "struct_login_bg_media");
-        if (legacy) value = toLoginBgUrl(legacy);
-      }
-      const file = fromLoginBgUrl(value);
-      if (file && /\.(mp4|webm|ogg)$/i.test(file)) return "";
-      return value || "";
+      return uci.get("aurora", section_id, "struct_login_bg") || "";
     };
     so.write = function (section_id, value) {
-      uci.unset("aurora", section_id, "struct_login_bg_media");
       if (!value) {
         uci.unset("aurora", section_id, "struct_login_bg");
         uci.unset("aurora", section_id, "light_login_bg_lqip");
@@ -1549,9 +1691,7 @@ return view.extend({
       form.GridSection,
       "toolbar_item",
       _("Toolbar Buttons"),
-      _(
-        "Customize toolbar buttons by adding new entries, editing existing ones, removing unwanted items, or dragging rows to reorder them.",
-      ),
+      _("Add, remove, and drag to reorder toolbar buttons."),
     );
     so.depends("toolbar_enabled", "1");
     const toolbarGrid = so.subsection;
@@ -1624,57 +1764,59 @@ return view.extend({
               (window.location.href = L.url("admin/system/aurora/version"));
         });
 
-        const cached = versionCache.get();
+        const applyUpdateStatus = (data) => {
+          if (!data) return;
+          updateVersionLabel(labels.theme, data.theme?.update_available);
+          updateVersionLabel(labels.config, data.config?.update_available);
+        };
+
+        const cached = utils_version_api.versionCache?.get?.();
         if (cached) {
-          updateVersionLabel(labels.theme, cached?.theme?.update_available);
-          updateVersionLabel(labels.config, cached?.config?.update_available);
+          applyUpdateStatus(cached);
         } else {
-          L.resolveDefault(callCheckUpdates(), null)
-            .then((updateData) => {
-              if (updateData) {
-                versionCache.set(updateData);
-                updateVersionLabel(
-                  labels.theme,
-                  updateData?.theme?.update_available,
-                );
-                updateVersionLabel(
-                  labels.config,
-                  updateData?.config?.update_available,
-                );
-              }
-            })
-            .catch((err) => console.error("Failed to check version:", err));
+          setTimeout(() => {
+            L.resolveDefault(utils_version_api.callCheckUpdates(), null)
+              .then((data) => {
+                if (data) {
+                  utils_version_api.versionCache.set(data);
+                  applyUpdateStatus(data);
+                }
+              })
+              .catch(() => {});
+          }, 0);
         }
       });
 
-        // Auto-select uploaded background and auto-generate LQIP if missing
-        requestAnimationFrame(() => {
-          const bgInput = mapNode.querySelector(
-            '[name="cbid.aurora.theme.struct_login_bg"]',
-          );
-          const lqipInput = mapNode.querySelector(
-            '[name="cbid.aurora.theme.light_login_bg_lqip"]',
-          );
-          if (!bgInput || !lqipInput) return;
+      // Auto-select uploaded background and auto-generate LQIP if missing
+      requestAnimationFrame(() => {
+        const bgInput = mapNode.querySelector(
+          '[name="cbid.aurora.theme.struct_login_bg"]',
+        );
+        const lqipInput = mapNode.querySelector(
+          '[name="cbid.aurora.theme.light_login_bg_lqip"]',
+        );
+        if (!bgInput || !lqipInput) return;
 
-          const pending = localStorage.getItem("aurora.pending_bg");
-          if (pending) {
-            localStorage.removeItem("aurora.pending_bg");
-            const pendingUrl = toLoginBgUrl(pending);
-            if (bgInput.querySelector(`option[value="${pendingUrl}"]`)) {
-              bgInput.value = pendingUrl;
-              bgInput.dispatchEvent(new Event("change"));
-              return;
-            }
+        const pending = localStorage.getItem("aurora.pending_bg");
+        if (pending) {
+          localStorage.removeItem("aurora.pending_bg");
+          const pendingUrl = toLoginBgUrl(pending);
+          if (bgInput.querySelector(`option[value="${pendingUrl}"]`)) {
+            bgInput.value = pendingUrl;
+            bgInput.dispatchEvent(new Event("change"));
+            return;
           }
+        }
 
-          if (bgInput.value && !lqipInput.value) {
-            const bgMatch = bgInput.value.match(/url\(["']?(.+?)["']?\)/);
-            if (bgMatch) {
-              generateLqip(bgMatch[1]).then((d) => { if (d) lqipInput.value = d; });
-            }
+        if (bgInput.value && !lqipInput.value) {
+          const bgMatch = bgInput.value.match(/url\(["']?(.+?)["']?\)/);
+          if (bgMatch) {
+            generateLqip(bgMatch[1]).then((d) => {
+              if (d) lqipInput.value = d;
+            });
           }
-        });
+        }
+      });
 
       return mapNode;
     });
