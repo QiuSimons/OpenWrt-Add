@@ -37,14 +37,14 @@ return baseclass.extend({
 		const devNames = Object.keys(devices).filter(d => d !== 'lo' && devices[d].up && devices[d].statistics).sort();
 		let has_active = false;
 
-		const formatSpeed = bps => {
+		const formatSpeed = bytesPerSec => {
 			const units = ['B/s', 'KiB/s', 'MiB/s', 'GiB/s', 'TiB/s'];
 			let i = 0;
-			while (bps >= 1024 && i < units.length - 1) {
-				bps /= 1024;
+			while (bytesPerSec >= 1024 && i < units.length - 1) {
+				bytesPerSec /= 1024;
 				i++;
 			}
-			return `${bps.toFixed(1)} ${units[i]}`;
+			return `${bytesPerSec.toFixed(1)} ${units[i]}`;
 		};
 
 		for (const name of devNames) {
