@@ -5,13 +5,13 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dae
-PKG_VERSION:=2026.06.08
+PKG_VERSION:=2026.06.14
 PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_VERSION:=0dd83147223ea0c6af3efb48f465c375a97f30d9
-PKG_SOURCE_URL:=https://github.com/olicesx/dae.git
+PKG_SOURCE_VERSION:=5a51cc747ef9e17185d438dc54ebf32c681984db
+PKG_SOURCE_URL:=https://github.com/daeuniverse/dae.git
 PKG_MIRROR_HASH:=skip
 
 PKG_LICENSE:=AGPL-3.0-only
