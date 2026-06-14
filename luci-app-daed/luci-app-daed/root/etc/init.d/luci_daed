@@ -7,42 +7,52 @@ START=98
 CONF="daed"
 PROG="/usr/bin/daed"
 LOG="/var/log/daed/daed.log"
-CRON_FILE="/etc/crontabs/root"
-RANDOM_SEED=$RANDOM
-RANDOM_NUM=$((RANDOM_SEED % 10 + 1))
+RESOLV_DAED="/tmp/resolv.conf.daed"
 
-setcron() {
-  touch $CRON_FILE
-  sed -i '/daed_sub.sh/d' $CRON_FILE 2>/dev/null
-  [ "$(uci -q get daed.config.subscribe_auto_update)" -eq 1 ] && echo "${RANDOM_NUM} $(uci -q get daed.config.subscribe_update_day_time) * * $(uci -q get daed.config.subscribe_update_week_time) /etc/daed/daed_sub.sh >/dev/null 2>&1" >>$CRON_FILE
-  crontab $CRON_FILE
+update_cron() {
+  local temp_cron="/tmp/root.cron"
+
+  if [ -f /etc/crontabs/root ]; then
+    grep -v '/etc/daed/daed_sub.sh' /etc/crontabs/root > "$temp_cron" 2>/dev/null
+  fi
+  : >> "$temp_cron"
+
+  local auto_update
+  auto_update=$(uci -q get daed.config.subscribe_auto_update)
+  if [ "$1" = "add" ] && [ "${auto_update:-0}" -eq 1 ]; then
+    local min=$((RANDOM % 60))
+    local hr=$(uci -q get daed.config.subscribe_update_day_time)
+    local wk=$(uci -q get daed.config.subscribe_update_week_time)
+    echo "$min ${hr:-*} * * ${wk:-*} /etc/daed/daed_sub.sh >/dev/null 2>&1" >> "$temp_cron"
+  fi
+
+  crontab "$temp_cron" 2>/dev/null
+  rm -f "$temp_cron"
 }
 
-delcron() {
-  sed -i '/daed_sub.sh/d' $CRON_FILE 2>/dev/null
-  crontab $CRON_FILE
+hijack_resolv_conf() {
+  grep -q ' /tmp/resolv\.conf ' /proc/mounts && return 0
+
+  cat /dev/null > "$RESOLV_DAED"
+
+  if [ -f "/tmp/resolv.conf.d/resolv.conf.auto" ]; then
+    grep '^nameserver' "/tmp/resolv.conf.d/resolv.conf.auto" >> "$RESOLV_DAED"
+  fi
+
+  if [ ! -s "$RESOLV_DAED" ]; then
+    echo "nameserver 223.5.5.5" > "$RESOLV_DAED"
+    echo "nameserver 119.29.29.29" >> "$RESOLV_DAED"
+  fi
+
+  mount --bind "$RESOLV_DAED" /tmp/resolv.conf
+  mount -o remount,ro,bind /tmp/resolv.conf
 }
 
-setlocaluse() {
-  uci set dhcp.@dnsmasq[0].localuse="1"
-  uci commit dhcp
-  /etc/init.d/dnsmasq restart
-}
-
-dellocaluse() {
-  uci set dhcp.@dnsmasq[0].localuse="0"
-  uci commit dhcp
-  /etc/init.d/dnsmasq restart
-  . /lib/functions/network.sh
-  network_find_wan LOGICAL_WAN || exit 1
-  dns_list=$(ubus call network.interface.$LOGICAL_WAN status | jsonfilter -e '@["dns-server"]' | sed 's/[]["]//g' | sed 's/,/\n/g' | grep -oE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b')
-  [ -z "$dns_list" ] && dns_list="119.29.29.29 180.76.76.76 223.5.5.5"
-  grep -v '^nameserver ' /etc/resolv.conf > /tmp/resolv.conf.new.daed 2>/dev/null
-  for dns in $dns_list; do
-    echo "nameserver $dns" >> /tmp/resolv.conf.new.daed
-  done
-  cat /tmp/resolv.conf.new.daed > /etc/resolv.conf
-  rm -f /tmp/resolv.conf.new.daed
+restore_resolv_conf() {
+  grep -q ' /tmp/resolv\.conf ' /proc/mounts || return 0
+  mount -o remount,rw,bind /tmp/resolv.conf 2>/dev/null
+  umount /tmp/resolv.conf 2>/dev/null
+  rm -f "$RESOLV_DAED"
 }
 
 start_service() {
@@ -52,17 +62,17 @@ start_service() {
   local enabled
   config_get_bool enabled "config" "enabled" "0"
   if [ "$enabled" -eq 0 ]; then
-    #delcron
-    setlocaluse
+    update_cron "remove"
+    restore_resolv_conf
     return 1
   fi
-  #setcron
-  dellocaluse
+  update_cron "add"
+  hijack_resolv_conf
 }
 
 stop_service() {
-  #delcron
-  setlocaluse
+  update_cron "remove"
+  restore_resolv_conf
 }
 
 service_triggers() {

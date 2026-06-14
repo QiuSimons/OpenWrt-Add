@@ -39,6 +39,13 @@ update_cron() {
     rm -f "$temp_cron"
 }
 
+cleanup_netns() {
+	if [ -e "/run/netns/daens" ]; then
+		ip netns del daens 2>/dev/null
+		rm -f /run/netns/daens 2>/dev/null
+	fi
+}
+
 hijack_resolv_conf() {
     grep -q ' /tmp/resolv\.conf ' /proc/mounts && return 0
 
@@ -78,6 +85,7 @@ start_service() {
     set_chmod_640
     update_cron "add"
     hijack_resolv_conf
+	cleanup_netns
 
     config_get log_maxbackups "config" "log_maxbackups" "1"
     config_get log_maxsize "config" "log_maxsize" "1"
@@ -101,7 +109,7 @@ start_service() {
 stop_service() {
     update_cron "remove"
     restore_resolv_conf
-    [ -f "$DAENETNS" ] && umount "$DAENETNS" 2>/dev/null || true
+    cleanup_netns
 }
 
 service_triggers() {
