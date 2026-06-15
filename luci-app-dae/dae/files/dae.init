@@ -49,16 +49,25 @@ cleanup_netns() {
 hijack_resolv_conf() {
     grep -q ' /tmp/resolv\.conf ' /proc/mounts && return 0
 
-    cat /dev/null > "$RESOLV_DAE"
+    grep -E '^(search|domain) ' /tmp/resolv.conf > "$RESOLV_DAE" 2>/dev/null
 
-    if [ -f "/tmp/resolv.conf.d/resolv.conf.auto" ]; then
-        grep '^nameserver' "/tmp/resolv.conf.d/resolv.conf.auto" >> "$RESOLV_DAE"
+    local dns_list LOGICAL_WAN
+    . /lib/functions/network.sh
+    network_find_wan LOGICAL_WAN 2>/dev/null
+    if [ -n "$LOGICAL_WAN" ]; then
+        dns_list=$(ubus call "network.interface.$LOGICAL_WAN" status 2>/dev/null | \
+            jsonfilter -e '@["dns-server"][*]' 2>/dev/null)
     fi
 
-    if [ ! -s "$RESOLV_DAE" ]; then
-        echo "nameserver 223.5.5.5" > "$RESOLV_DAE"
-        echo "nameserver 119.29.29.29" >> "$RESOLV_DAE"
+    if [ -z "$dns_list" ] && [ -f "/tmp/resolv.conf.d/resolv.conf.auto" ]; then
+        dns_list=$(awk '/^nameserver/{print $2}' "/tmp/resolv.conf.d/resolv.conf.auto")
     fi
+
+    [ -z "$dns_list" ] && dns_list="119.29.29.29 223.5.5.5"
+
+    for dns in $dns_list; do
+        echo "nameserver $dns" >> "$RESOLV_DAE"
+    done
 
     mount --bind "$RESOLV_DAE" /tmp/resolv.conf
     mount -o remount,ro,bind /tmp/resolv.conf
