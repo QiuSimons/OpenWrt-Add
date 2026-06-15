@@ -13,7 +13,7 @@ uci set fstab.@global[0].anon_mount=1
 uci commit fstab
 
 #时区设置
-uci set system.@system[0].zram_comp_algo='lz4'
+uci set system.@system[0].zram_comp_algo='lzo-rle'
 uci set system.@system[0].timezone=CST-8
 uci set system.@system[0].zonename=Asia/Shanghai
 uci del system.ntp.server
