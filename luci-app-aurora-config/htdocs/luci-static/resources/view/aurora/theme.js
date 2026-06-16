@@ -45,6 +45,11 @@ const callListIcons = rpc.declare({
   method: "list_icons",
 });
 
+const callGetInitData = rpc.declare({
+  object: "luci.aurora",
+  method: "get_init_data",
+});
+
 let _iconsPromise = null;
 const getIconsOnce = () => {
   if (!_iconsPromise)
@@ -56,22 +61,6 @@ const callRemoveIcon = rpc.declare({
   object: "luci.aurora",
   method: "remove_icon",
   params: ["filename"],
-});
-
-const callGetThemeConfig = rpc.declare({
-  object: "luci.aurora",
-  method: "get_theme_config",
-});
-
-const callGetThemePreset = rpc.declare({
-  object: "luci.aurora",
-  method: "get_theme_preset",
-  params: ["name"],
-});
-
-const callGetFontPresets = rpc.declare({
-  object: "luci.aurora",
-  method: "get_font_presets",
 });
 
 const callApplyThemePreset = rpc.declare({
@@ -121,71 +110,204 @@ const COLOR_TOKENS = [
     key: "bg",
     label: _("Background"),
     description: _("The outer application background."),
-    layer: 1,
     group: "foundation",
   },
   {
     key: "surface",
     label: _("Surface"),
     description: _("Cards, panels, forms, and page content background."),
-    layer: 1,
     group: "foundation",
   },
   {
     key: "text",
     label: _("Text"),
     description: _("The primary text and icon color."),
-    layer: 1,
     group: "identity",
   },
   {
     key: "brand",
     label: _("Brand"),
     description: _("The main interactive and branded accent."),
-    layer: 1,
     group: "identity",
   },
   {
     key: "on_brand",
     label: _("Content on Brand"),
     description: _("Text and icons shown on the brand color."),
-    layer: 1,
     group: "identity",
   },
   {
     key: "link",
     label: _("Link"),
     description: _("Text links and link-like actions."),
-    layer: 1,
     group: "identity",
   },
   {
     key: "info",
     label: _("Info Accent"),
     description: _("The accent used for informational feedback."),
-    layer: 1,
     group: "status",
   },
   {
     key: "warning",
     label: _("Warning Accent"),
     description: _("The accent used for warning feedback."),
-    layer: 1,
     group: "status",
   },
   {
     key: "success",
     label: _("Success Accent"),
     description: _("The accent used for successful feedback."),
-    layer: 1,
     group: "status",
   },
   {
     key: "danger",
     label: _("Danger Accent"),
     description: _("The accent used for errors and destructive actions."),
-    layer: 1,
     group: "status",
+  },
+];
+
+const DERIVED_COLOR_TOKENS = [
+  {
+    key: "text_muted",
+    label: _("Text Muted"),
+    description: _("Muted secondary text. Source: Text + Background."),
+    group: "hierarchy",
+    derived: true,
+  },
+  {
+    key: "text_subtle",
+    label: _("Text Subtle"),
+    description: _("Lowest-emphasis text. Source: Text + Background."),
+    group: "hierarchy",
+    derived: true,
+  },
+  {
+    key: "surface_sunken",
+    label: _("Surface Sunken"),
+    description: _("Inset backgrounds. Source: Background or Surface."),
+    group: "hierarchy",
+    derived: true,
+  },
+  {
+    key: "surface_overlay",
+    label: _("Surface Overlay"),
+    description: _("Raised panel backgrounds. Source: Background or Surface."),
+    group: "hierarchy",
+    derived: true,
+  },
+  {
+    key: "hairline",
+    label: _("Hairline"),
+    description: _("Subtle borders and dividers. Source: Text."),
+    group: "hierarchy",
+    derived: true,
+  },
+  {
+    key: "hover_faint",
+    label: _("Hover Faint"),
+    description: _("Neutral hover fill. Source: Background or Text."),
+    group: "hierarchy",
+    derived: true,
+  },
+  {
+    key: "brand_hover",
+    label: _("Brand Hover"),
+    description: _("Branded hover color. Source: Brand."),
+    group: "brand_interaction",
+    derived: true,
+  },
+  {
+    key: "brand_subtle",
+    label: _("Brand Subtle"),
+    description: _("Soft brand background. Source: Brand + Background."),
+    group: "brand_interaction",
+    derived: true,
+  },
+  {
+    key: "brand_subtle_hover",
+    label: _("Brand Subtle Hover"),
+    description: _("Soft brand hover fill. Source: Brand Subtle."),
+    group: "brand_interaction",
+    derived: true,
+  },
+  {
+    key: "focus_ring",
+    label: _("Focus Ring"),
+    description: _("Keyboard focus outline. Source: Brand."),
+    group: "brand_interaction",
+    derived: true,
+  },
+  {
+    key: "progress_start",
+    label: _("Progress Start"),
+    description: _("Progress gradient start. Source: Brand + Surface Sunken."),
+    group: "brand_interaction",
+    derived: true,
+  },
+  {
+    key: "progress_end",
+    label: _("Progress End"),
+    description: _("Progress gradient end. Source: Brand."),
+    group: "brand_interaction",
+    derived: true,
+  },
+  {
+    key: "info_surface",
+    label: _("Info Surface"),
+    description: _("Info message background. Source: Info Accent."),
+    group: "status_surfaces",
+    derived: true,
+  },
+  {
+    key: "warning_surface",
+    label: _("Warning Surface"),
+    description: _("Warning message background. Source: Warning Accent."),
+    group: "status_surfaces",
+    derived: true,
+  },
+  {
+    key: "success_surface",
+    label: _("Success Surface"),
+    description: _("Success message background. Source: Success Accent."),
+    group: "status_surfaces",
+    derived: true,
+  },
+  {
+    key: "danger_surface",
+    label: _("Danger Surface"),
+    description: _("Danger message background. Source: Danger Accent."),
+    group: "status_surfaces",
+    derived: true,
+  },
+  {
+    key: "danger_surface_hover",
+    label: _("Danger Surface Hover"),
+    description: _("Danger surface hover fill. Source: Danger Surface."),
+    group: "status_surfaces",
+    derived: true,
+  },
+  {
+    key: "scrim",
+    label: _("Scrim"),
+    description: _("Modal backdrop overlay. Source: Theme default."),
+    group: "hierarchy",
+    derived: true,
+  },
+  {
+    key: "mega_menu_bg",
+    label: _("Mega Menu Background"),
+    description: _("Mega menu panel background. Source: Surface layer."),
+    group: "hierarchy",
+    derived: true,
+  },
+  {
+    key: "mega_menu_scrim",
+    label: _("Mega Menu Scrim"),
+    description: _("Mega menu backdrop overlay. Source: Theme default."),
+    group: "hierarchy",
+    derived: true,
   },
 ];
 
@@ -194,7 +316,6 @@ const COLOR_GROUPS = [
     key: "foundation",
     title: _("Surfaces"),
     description: _("Set the application background and surface colors."),
-    advanced: false,
   },
   {
     key: "identity",
@@ -202,18 +323,79 @@ const COLOR_GROUPS = [
     description: _(
       "Set primary text, brand, content on brand, and link colors.",
     ),
-    advanced: false,
   },
   {
     key: "status",
     title: _("Status Accents"),
     description: _("Set the broad accents used by status families."),
-    advanced: false,
   },
 ];
 
+const DERIVED_COLOR_GROUPS = [
+  {
+    key: "brand_interaction",
+    title: _("Brand Interaction"),
+    description: _("Derived from Brand for interaction details."),
+  },
+  {
+    key: "hierarchy",
+    title: _("Text & Surface Hierarchy"),
+    description: _("Derived from Text, Background, and Surface."),
+  },
+  {
+    key: "status_surfaces",
+    title: _("Status Surfaces"),
+    description: _("Derived from status accent colors."),
+  },
+];
+
+const ALL_COLOR_TOKENS = COLOR_TOKENS.concat(DERIVED_COLOR_TOKENS);
+const COLOR_FORMAT_HELP = _(
+  "Color fields accept #hex, rgb(), hsl(), lab(), and oklch(). The picker fills hex.",
+);
+
 const cssTokenName = (key) => key.replaceAll("_", "-");
 const colorOptionName = (mode, key) => `${mode}_${key}`;
+
+const toRuntimeColor = (value) => {
+  const raw = value?.trim?.() || "";
+  if (!raw || typeof Color !== "function") return raw;
+
+  try {
+    return new Color(raw).to("srgb").toString({ format: "hex" });
+  } catch (_error) {
+    return raw;
+  }
+};
+
+const toPickerColor = (value) => {
+  const color = new Color(value).to("srgb");
+  color.alpha = 1;
+  return color.toString({ format: "hex" });
+};
+
+const sameColorValue = (a, b) =>
+  Boolean(a && b) &&
+  toRuntimeColor(a).toLowerCase() === toRuntimeColor(b).toLowerCase();
+
+const readThemeConfigFromUci = () => {
+  const config = {};
+  const copyOption = (option) => {
+    const value = uci.get("aurora", "theme", option);
+    if (value != null) config[option] = value;
+  };
+
+  copyOption("active_preset");
+  copyOption("struct_font_sans");
+  copyOption("struct_font_mono");
+  ["light", "dark"].forEach((mode) => {
+    ALL_COLOR_TOKENS.forEach(({ key }) =>
+      copyOption(colorOptionName(mode, key)),
+    );
+  });
+
+  return config;
+};
 
 const createColorResolver = () => {
   let framePromise = null;
@@ -276,21 +458,22 @@ const createColorResolver = () => {
     return framePromise;
   };
 
-  const resolveMode = (mode, values) => {
+  const resolveMode = (mode, values, tokens = COLOR_TOKENS) => {
     queue = queue.catch(() => {}).then(async () => {
       const { root, probe } = await ensureFrame();
       root.setAttribute("data-darkmode", mode === "dark" ? "true" : "false");
 
-      COLOR_TOKENS.forEach(({ key }) => {
+      ALL_COLOR_TOKENS.forEach(({ key }) => {
         root.style.removeProperty(`--${cssTokenName(key)}`);
       });
-      COLOR_TOKENS.forEach(({ key }) => {
+      ALL_COLOR_TOKENS.forEach(({ key }) => {
         const value = values[key]?.trim();
-        if (value) root.style.setProperty(`--${cssTokenName(key)}`, value);
+        if (value)
+          root.style.setProperty(`--${cssTokenName(key)}`, toRuntimeColor(value));
       });
 
       const results = new Map();
-      COLOR_TOKENS.forEach(({ key }) => {
+      tokens.forEach(({ key }) => {
         const name = cssTokenName(key);
         probe.parentElement.style.color = "rgb(1 2 3)";
         probe.style.color = `var(--${name}, rgb(1 2 3))`;
@@ -327,6 +510,7 @@ const createColorEditor = (themeConfig, presetColors) => {
   const resolver = createColorResolver();
   const fields = { light: new Map(), dark: new Map() };
   const states = { light: new Map(), dark: new Map() };
+  const derivedOverrides = { light: new Map(), dark: new Map() };
   const timers = { light: null, dark: null };
   const previewOriginal = new Map();
   let modeObserver = null;
@@ -349,15 +533,16 @@ const createColorEditor = (themeConfig, presetColors) => {
     return themeConfig[colorOptionName(mode, key)] || "";
   };
 
+  const isInputToken = (key) => COLOR_TOKENS.some((token) => token.key === key);
+  const isDerivedToken = (key) =>
+    DERIVED_COLOR_TOKENS.some((token) => token.key === key);
+
   const valuesForMode = (mode) =>
     Object.fromEntries(
-      COLOR_TOKENS.map(({ key }) => [key, valueFor(mode, key)]),
+      ALL_COLOR_TOKENS.map(({ key }) => [key, valueFor(mode, key)]),
     );
 
-  // Expand the 10 editable inputs into the full resolved token set (inputs +
-  // derived) via the shared engine. Returns null if the engine is not loaded
-  // yet or any input is blank, so callers fall back to the baked theme values.
-  const resolvedForMode = (mode) => {
+  const automaticForMode = (mode) => {
     if (typeof AuroraTokens === "undefined") return null;
     const inputs = {};
     for (const { key } of COLOR_TOKENS) {
@@ -372,7 +557,48 @@ const createColorEditor = (themeConfig, presetColors) => {
     }
   };
 
-  const isInputToken = (key) => COLOR_TOKENS.some((token) => token.key === key);
+  const isDerivedOverride = (mode, key) =>
+    Boolean(derivedOverrides[mode].get(key));
+
+  const setDerivedOverride = (mode, key, enabled) => {
+    if (!isDerivedToken(key)) return;
+    derivedOverrides[mode].set(key, Boolean(enabled));
+  };
+
+  const syncDerivedInitialState = (mode, automatic) => {
+    if (!automatic) return;
+    DERIVED_COLOR_TOKENS.forEach(({ key }) => {
+      const field = fields[mode].get(key);
+      if (!field || field.initialized) return;
+
+      const saved = field.input.value.trim();
+      const autoValue = automatic[key]?.trim() || "";
+      const override = Boolean(saved && !sameColorValue(saved, autoValue));
+      field.initialized = true;
+      setDerivedOverride(mode, key, override);
+      if (!override) field.input.value = "";
+    });
+  };
+
+  // Expand the 10 input colors into a full token snapshot. Derived tokens use
+  // automatic values unless the user explicitly supplied an override.
+  const resolvedForMode = (mode) => {
+    const automatic = automaticForMode(mode);
+    if (!automatic) return null;
+    syncDerivedInitialState(mode, automatic);
+
+    const resolved = { ...automatic };
+    for (const { key } of DERIVED_COLOR_TOKENS) {
+      const value = valueFor(mode, key).trim();
+      const state = stateFor(mode, key);
+      if (isDerivedOverride(mode, key) && value) {
+        if (!state.valid) return null;
+        resolved[key] = value;
+      }
+    }
+
+    return resolved;
+  };
 
   const rememberPreview = (property) => {
     if (previewOriginal.has(property)) return;
@@ -415,7 +641,7 @@ const createColorEditor = (themeConfig, presetColors) => {
       const value = valueFor(mode, key).trim();
       rememberPreview(property);
       if (value) {
-        document.documentElement.style.setProperty(property, value);
+        document.documentElement.style.setProperty(property, toRuntimeColor(value));
       } else {
         restorePreviewProperty(property);
       }
@@ -429,7 +655,10 @@ const createColorEditor = (themeConfig, presetColors) => {
         if (isInputToken(key)) return;
         const property = `--${cssTokenName(key)}`;
         rememberPreview(property);
-        document.documentElement.style.setProperty(property, resolved[key]);
+        document.documentElement.style.setProperty(
+          property,
+          toRuntimeColor(resolved[key]),
+        );
       });
     }
   };
@@ -462,27 +691,19 @@ const createColorEditor = (themeConfig, presetColors) => {
     }
 
     try {
-      const color = new Color(result.color);
-      if (color.alpha < 1) color.alpha = 1;
-      const hex = color.to("srgb").toString({ format: "hex" });
-      field.picker.value = hex;
-      field.swatch.style.backgroundColor = result.color;
-      field.swatch.title = `${_("Resolved color")}: ${result.color}`;
-      if (field.token.layer === 1) {
+      const runtimeColor = toRuntimeColor(result.color);
+      field.picker.value = toPickerColor(result.color);
+      field.swatch.style.backgroundColor = runtimeColor;
+      field.swatch.title = `${_("Resolved color")}: ${runtimeColor}`;
+      if (field.token.derived) {
+        if (result.autoValue)
+          field.input.placeholder = _("Automatic: %s").format(
+            toRuntimeColor(result.autoValue),
+          );
         field.status.textContent = "";
-        triggerValidation(field);
-        return;
+      } else {
+        field.status.textContent = "";
       }
-      const expression = field.input.value.trim();
-      const dependencies = Array.from(
-        expression.matchAll(/--([a-z0-9-]+)/g),
-        (match) => match[1],
-      );
-      field.status.textContent = expression
-        ? dependencies.length
-          ? _("Formula: %s").format(dependencies.join(", "))
-          : _("Literal")
-        : _("Following theme stylesheet");
     } catch (error) {
       state.valid = false;
       state.error = _("Resolved color cannot be shown by the picker.");
@@ -494,17 +715,48 @@ const createColorEditor = (themeConfig, presetColors) => {
   };
 
   const refresh = (mode) =>
-    resolver
-      .resolveMode(mode, valuesForMode(mode))
-      .then((results) => colorLibraryReady.then(() => results))
+    colorLibraryReady
+      .then(() => {
+        const automatic = automaticForMode(mode);
+        syncDerivedInitialState(mode, automatic);
+
+        const validationTokens = COLOR_TOKENS.concat(
+          DERIVED_COLOR_TOKENS.filter(
+            ({ key }) => isDerivedOverride(mode, key) && valueFor(mode, key).trim(),
+          ),
+        );
+
+        return resolver
+          .resolveMode(mode, valuesForMode(mode), validationTokens)
+          .then((results) => ({ automatic, results }));
+      })
       .then((results) => {
         COLOR_TOKENS.forEach(({ key }) => {
-          updateField(mode, key, results.get(key));
+          updateField(mode, key, results.results.get(key));
+        });
+
+        DERIVED_COLOR_TOKENS.forEach(({ key }) => {
+          if (isDerivedOverride(mode, key) && valueFor(mode, key).trim()) {
+            const result = results.results.get(key);
+            updateField(mode, key, {
+              ...result,
+              autoValue: results.automatic?.[key] || "",
+            });
+            return;
+          }
+
+          const autoValue = results.automatic?.[key];
+          updateField(mode, key, autoValue
+            ? { valid: true, color: autoValue, autoValue }
+            : {
+                valid: false,
+                error: _("Unable to generate the automatic derived value."),
+              });
         });
         applyPreview(mode);
       })
       .catch((error) => {
-        COLOR_TOKENS.forEach(({ key }) => {
+        ALL_COLOR_TOKENS.forEach(({ key }) => {
           updateField(mode, key, {
             valid: false,
             error: error?.message || _("Unable to resolve color expressions."),
@@ -515,7 +767,7 @@ const createColorEditor = (themeConfig, presetColors) => {
 
   const schedule = (mode) => {
     window.clearTimeout(timers[mode]);
-    COLOR_TOKENS.forEach(({ key }) => {
+    ALL_COLOR_TOKENS.forEach(({ key }) => {
       const state = stateFor(mode, key);
       state.pending = true;
     });
@@ -541,6 +793,7 @@ const createColorEditor = (themeConfig, presetColors) => {
     });
     input.addEventListener("input", () => {
       themeConfig[colorOptionName(mode, token.key)] = input.value;
+      if (token.derived) setDerivedOverride(mode, token.key, Boolean(input.value.trim()));
       schedule(mode);
     });
     schedule(mode);
@@ -608,7 +861,12 @@ const renderColorField = function (optionIndex, sectionId, inTable) {
     const editor = this.colorEditor;
     const optionKey = colorOptionName(mode, token.key);
     const presetValue = editor.presetColors?.[optionKey] || "";
-    input.placeholder = presetValue || _("Follow theme stylesheet");
+    element.dataset.auroraColorMode = mode;
+    element.dataset.auroraColorKind = token.derived ? "derived" : "base";
+    element.dataset.auroraColorGroup = token.group || "";
+    input.placeholder = token.derived
+      ? _("Automatic from base colors")
+      : presetValue || _("Follow theme stylesheet");
 
     const picker = E("input", {
       type: "color",
@@ -634,32 +892,9 @@ const renderColorField = function (optionIndex, sectionId, inTable) {
     input.parentNode.appendChild(controls);
     input.parentNode.appendChild(status);
 
-    if (token.layer === 2) {
-      const restore = E(
-        "button",
-        {
-          type: "button",
-          class: "cbi-button",
-          style: "margin-left:.5rem;",
-          disabled: presetValue ? null : "disabled",
-          title: _("Restore the active preset expression for this token"),
-          click: (event) => {
-            event.preventDefault();
-            if (!presetValue) return;
-            input.value = presetValue;
-            input.dispatchEvent(new Event("input", { bubbles: true }));
-          },
-        },
-        _("Restore Preset Formula"),
-      );
-      controls.appendChild(restore);
-    }
-
     picker.addEventListener("change", () => {
       try {
-        input.value = new Color(picker.value)
-          .to("oklch")
-          .toString({ precision: 5 });
+        input.value = picker.value;
         input.dispatchEvent(new Event("input", { bubbles: true }));
         input.dispatchEvent(new Event("change", { bubbles: true }));
       } catch (error) {
@@ -698,53 +933,182 @@ const addColorInputs = (section, mode, tokens, editor) => {
       editor.validate(mode, token.key, value);
     option.write = (sectionId, value) => {
       const trimmed = value?.trim();
+      if (token.derived) {
+        if (trimmed)
+          uci.set("aurora", sectionId, optionKey, toRuntimeColor(trimmed));
+        return;
+      }
       if (trimmed) {
-        uci.set("aurora", sectionId, optionKey, trimmed);
+        uci.set("aurora", sectionId, optionKey, toRuntimeColor(trimmed));
       } else {
         uci.unset("aurora", sectionId, optionKey);
       }
     };
     option.remove = (sectionId) => {
+      if (token.derived) return;
       uci.unset("aurora", sectionId, optionKey);
     };
   });
 };
 
 const createColorSections = (section, mode, editor) => {
-  COLOR_GROUPS.forEach((group) => {
-    const tokens = COLOR_TOKENS.filter((token) => token.group === group.key);
-    const sectionValue = section.taboption(
-      mode,
-      form.SectionValue,
-      `_${mode}_${group.key}`,
-      form.NamedSection,
-      "theme",
-      "aurora",
-      group.advanced ? "" : group.title,
-      group.advanced ? "" : group.description,
+  const baseSection = section.taboption(
+    mode,
+    form.SectionValue,
+    `_${mode}_base_colors`,
+    form.NamedSection,
+    "theme",
+    "aurora",
+    _("Base Colors"),
+    _(
+      "These are the main input colors. Derived variables are generated from these values.",
+    ) + ` ${COLOR_FORMAT_HELP}`,
+  );
+  addColorInputs(baseSection.subsection, mode, COLOR_TOKENS, editor);
+
+  const derivedSection = section.taboption(
+    mode,
+    form.SectionValue,
+    `_${mode}_derived_colors`,
+    form.NamedSection,
+    "theme",
+    "aurora",
+    _("Derived Variables"),
+    _(
+      "Detail colors generated from base colors. Leave a field empty to follow its source; enter a value to override it. Clear an override to restore automatic updates.",
+    ) + ` ${COLOR_FORMAT_HELP}`,
+  );
+  addColorInputs(
+    derivedSection.subsection,
+    mode,
+    DERIVED_COLOR_GROUPS.flatMap((group) =>
+      DERIVED_COLOR_TOKENS.filter((token) => token.group === group.key),
+    ),
+    editor,
+  );
+};
+
+const colorGroupFor = (kind, key) =>
+  (kind === "derived" ? DERIVED_COLOR_GROUPS : COLOR_GROUPS).find(
+    (group) => group.key === key,
+  );
+
+const ensureColorGroupStyles = () => {
+  if (document.getElementById("aurora-color-group-styles")) return;
+  document.head.appendChild(
+    E(
+      "style",
+      { id: "aurora-color-group-styles" },
+      `
+.aurora-token-group {
+  border: 1px solid var(--hairline);
+  border-radius: calc(var(--radius-base) * 1.5);
+  margin: 0 0 1rem;
+  overflow: hidden;
+}
+.aurora-token-group[open] {
+  background: var(--surface);
+}
+.aurora-token-group > summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  list-style: none;
+  padding: 1rem 1.25rem;
+}
+.aurora-token-group > summary::-webkit-details-marker {
+  display: none;
+}
+.aurora-token-group-title {
+  display: block;
+  font-size: 1rem;
+  font-weight: 700;
+}
+.aurora-token-group-description {
+  color: var(--text-muted);
+  display: block;
+  font-size: .875rem;
+  line-height: 1.45;
+  margin-top: .25rem;
+}
+.aurora-token-group-count {
+  background: var(--surface-sunken);
+  border-radius: 999px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-size: .75rem;
+  font-weight: 700;
+  padding: .25rem .625rem;
+}
+.aurora-token-group-body {
+  border-top: 1px solid var(--hairline);
+  padding: 1rem 1.25rem;
+}
+`,
+    ),
+  );
+};
+
+const enhanceColorTokenGroups = (root) => {
+  ensureColorGroupStyles();
+  const rows = Array.from(root.querySelectorAll("[data-aurora-color-group]"));
+  const containers = new Set(rows.map((row) => row.parentElement).filter(Boolean));
+
+  containers.forEach((container) => {
+    if (container.dataset.auroraTokenGroupsEnhanced === "true") return;
+    const children = Array.from(container.children).filter(
+      (child) => child.dataset?.auroraColorGroup,
     );
-    if (group.advanced) {
-      const baseRender = sectionValue.render.bind(sectionValue);
-      sectionValue.render = (...args) =>
-        Promise.resolve(baseRender(...args)).then((node) =>
-          E("details", { class: "cbi-section aurora-advanced-group" }, [
+    if (children.length === 0) return;
+
+    container.dataset.auroraTokenGroupsEnhanced = "true";
+    let index = 0;
+    while (index < children.length) {
+      const first = children[index];
+      const groupKey = first.dataset.auroraColorGroup;
+      const kind = first.dataset.auroraColorKind;
+      const groupRows = [];
+
+      while (
+        index < children.length &&
+        children[index].dataset.auroraColorGroup === groupKey
+      ) {
+        groupRows.push(children[index]);
+        index += 1;
+      }
+
+      const group = colorGroupFor(kind, groupKey);
+      if (!group) continue;
+
+      const body = E("div", { class: "aurora-token-group-body" });
+      const details = E(
+        "details",
+        { class: "aurora-token-group", open: "" },
+        [
+          E("summary", {}, [
+            E("span", {}, [
+              E("span", { class: "aurora-token-group-title" }, group.title),
+              E(
+                "span",
+                { class: "aurora-token-group-description" },
+                group.description,
+              ),
+            ]),
             E(
-              "summary",
-              { style: "cursor:pointer;font-weight:600;margin:.5em 0;" },
-              group.title,
+              "span",
+              { class: "aurora-token-group-count" },
+              _("%d variables").format(groupRows.length),
             ),
-            group.description
-              ? E(
-                  "div",
-                  { style: "opacity:.75;margin:.25em 0 .5em;" },
-                  group.description,
-                )
-              : "",
-            node,
           ]),
-        );
+          body,
+        ],
+      );
+
+      container.insertBefore(details, first);
+      groupRows.forEach((row) => body.appendChild(row));
     }
-    addColorInputs(sectionValue.subsection, mode, tokens, editor);
   });
 };
 
@@ -906,6 +1270,28 @@ const fromLoginBgUrl = (value) => {
 const isImageFile = (filename) =>
   /\.(jpg|jpeg|png|gif|webp|avif|svg|bmp|ico)$/i.test(filename);
 
+const makeIconListLoader = (
+  filterFn,
+  { prepend = [], empty = [], valueForIcon = (icon) => icon } = {},
+) =>
+  function (section_id) {
+    return getIconsOnce().then(
+      L.bind(function (response) {
+        const icons = response?.icons || [];
+        const matches = icons.filter(filterFn);
+        this.keylist = [];
+        this.vallist = [];
+        prepend.forEach(([value, label]) => this.value(value, label));
+        if (matches.length > 0) {
+          matches.forEach((icon) => this.value(valueForIcon(icon), icon));
+        } else {
+          empty.forEach(([value, label]) => this.value(value, label));
+        }
+        return form.ListValue.prototype.load.apply(this, [section_id]);
+      }, this),
+    );
+  };
+
 // Expand the 10 editable inputs into the full resolved token set and stage every
 // resulting key (inputs + derived) into UCI so the saved snapshot fully overrides
 // the theme's baked _tokens.css defaults. No-op until the engine is loaded and all
@@ -916,62 +1302,45 @@ const persistDerivedTokens = (editor) => {
     const resolved = editor.resolvedForMode(mode);
     if (!resolved) return;
     Object.keys(resolved).forEach((key) => {
-      uci.set("aurora", "theme", `${mode}_${key}`, resolved[key]);
+      uci.set("aurora", "theme", `${mode}_${key}`, toRuntimeColor(resolved[key]));
     });
   });
 };
 
+const runSavePipeline = function (ev, after) {
+  const save = L.bind(function () {
+    return colorLibraryReady
+      .catch(() => {})
+      .then(() => persistDerivedTokens(this.colorEditor))
+      .then(() => this.super("handleSave", [ev]));
+  }, this);
+  const writePwa = () => L.resolveDefault(callWritePwaManifest(), {});
+  const cleanup = () => this.colorEditor?.cleanupPreview();
+  const handleFailure = (error) => {
+    cleanup();
+    throw error;
+  };
+  const saveReady =
+    typeof this.prepareAuroraFonts === "function"
+      ? this.prepareAuroraFonts().then(save)
+      : save();
+
+  return saveReady.then(writePwa).then(after).catch(handleFailure);
+};
+
 return view.extend({
   handleSave: function (ev) {
-    const save = L.bind(function () {
-      return colorLibraryReady
-        .catch(() => {})
-        .then(() => persistDerivedTokens(this.colorEditor))
-        .then(() => this.super("handleSave", [ev]));
-    }, this);
-    const writePwa = () => L.resolveDefault(callWritePwaManifest(), {});
-    const cleanup = () => this.colorEditor?.cleanupPreview();
-    const handleFailure = (error) => {
-      cleanup();
-      throw error;
-    };
-
-    if (typeof this.prepareAuroraFonts === "function") {
-      return this.prepareAuroraFonts()
-        .then(save)
-        .then(writePwa)
-        .then(cleanup)
-        .catch(handleFailure);
-    }
-    return save().then(writePwa).then(cleanup).catch(handleFailure);
+    return runSavePipeline.call(this, ev, () =>
+      this.colorEditor?.cleanupPreview(),
+    );
   },
 
   handleSaveApply: function (ev, mode) {
-    const save = L.bind(function () {
-      return colorLibraryReady
-        .catch(() => {})
-        .then(() => persistDerivedTokens(this.colorEditor))
-        .then(() => this.super("handleSave", [ev]));
-    }, this);
-    const writePwa = () => L.resolveDefault(callWritePwaManifest(), {});
-    const cleanup = () => this.colorEditor?.cleanupPreview();
     const apply = () => {
-      cleanup();
+      this.colorEditor?.cleanupPreview();
       ui.changes.apply(mode === "0");
     };
-    const handleFailure = (error) => {
-      cleanup();
-      throw error;
-    };
-
-    if (typeof this.prepareAuroraFonts === "function") {
-      return this.prepareAuroraFonts()
-        .then(save)
-        .then(writePwa)
-        .then(apply)
-        .catch(handleFailure);
-    }
-    return save().then(writePwa).then(apply).catch(handleFailure);
+    return runSavePipeline.call(this, ev, apply);
   },
 
   handleReset: function (ev) {
@@ -985,16 +1354,27 @@ return view.extend({
   load: function () {
     return Promise.all([
       uci.load("aurora"),
-      L.resolveDefault(callGetThemeConfig(), {}),
-      L.resolveDefault(utils_version_api.callGetInstalledVersions(), {}),
-      L.resolveDefault(callGetFontPresets(), {}),
-      getIconsOnce(),
-    ]).then((loadData) => {
-      const activePreset = loadData[1]?.theme?.active_preset || "classic";
-      return L.resolveDefault(callGetThemePreset(activePreset), {
-        result: -1,
-        colors: {},
-      }).then((preset) => loadData.concat(preset));
+      L.resolveDefault(callGetInitData(), {}),
+    ]).then(([uciData, initData]) => {
+      // Theme config comes from the uci cache populated by uci.load("aurora")
+      // above, so no separate theme-config RPC is needed.
+      const themeConfig = readThemeConfigFromUci();
+      const iconsData = {
+        icons: Array.isArray(initData?.icons) ? initData.icons : [],
+      };
+      if (Array.isArray(initData?.icons))
+        _iconsPromise = Promise.resolve(iconsData);
+
+      // Preserve the positional layout render() expects:
+      // [0]=uci [1]={theme} [2]=versions [3]=fonts [4]=icons [5]=preset
+      return [
+        uciData,
+        { theme: themeConfig },
+        initData?.versions || {},
+        { fonts: initData?.fonts || {} },
+        iconsData,
+        initData?.theme_preset || { result: -1, colors: {} },
+      ];
     });
   },
 
@@ -1716,7 +2096,7 @@ return view.extend({
       "_asset_table",
       " ",
     );
-    assetTableSo.load = () => L.resolveDefault(callListIcons(), { icons: [] });
+    assetTableSo.load = () => getIconsOnce();
     assetTableSo.cfgvalue = (section_id, data) => data?.icons || [];
     assetTableSo.render = function (option_index, section_id, in_table) {
       return this.load(section_id).then((data) => {
@@ -2019,25 +2399,7 @@ return view.extend({
     so = logoSubsection.option(form.ListValue, "logo_svg", _("Logo / Favicon"));
     so.default = "logo.svg";
     so.rmempty = false;
-    so.load = function (section_id) {
-      return L.resolveDefault(callListIcons(), { icons: [] }).then(
-        L.bind((response) => {
-          const icons = response?.icons || [];
-          this.keylist = [];
-          this.vallist = [];
-          if (icons.length > 0) {
-            icons.forEach(
-              L.bind((icon) => {
-                if (isImageFile(icon)) {
-                  this.value(icon, icon);
-                }
-              }, this),
-            );
-          }
-          return form.ListValue.prototype.load.apply(this, [section_id]);
-        }, this),
-      );
-    };
+    so.load = makeIconListLoader(isImageFile);
 
     so = logoSubsection.option(
       form.ListValue,
@@ -2048,22 +2410,9 @@ return view.extend({
       "Optional PNG favicon for browsers that do not support SVG favicons.",
     );
     so.rmempty = true;
-    so.load = function (section_id) {
-      return L.resolveDefault(callListIcons(), { icons: [] }).then(
-        L.bind(function (response) {
-          const icons = response?.icons || [];
-          this.keylist = [];
-          this.vallist = [];
-          this.value("", _("(None)"));
-          icons.forEach(
-            L.bind(function (icon) {
-              if (/\.png$/i.test(icon)) this.value(icon, icon);
-            }, this),
-          );
-          return form.ListValue.prototype.load.apply(this, [section_id]);
-        }, this),
-      );
-    };
+    so.load = makeIconListLoader((icon) => /\.png$/i.test(icon), {
+      prepend: [["", _("(None)")]],
+    });
 
     so = logoSubsection.option(
       form.ListValue,
@@ -2073,21 +2422,7 @@ return view.extend({
     so.description = _("ICO favicon served to legacy browsers as fallback.");
     so.default = "favicon.ico";
     so.rmempty = false;
-    so.load = function (section_id) {
-      return L.resolveDefault(callListIcons(), { icons: [] }).then(
-        L.bind(function (response) {
-          const icons = response?.icons || [];
-          this.keylist = [];
-          this.vallist = [];
-          icons.forEach(
-            L.bind(function (icon) {
-              if (/\.ico$/i.test(icon)) this.value(icon, icon);
-            }, this),
-          );
-          return form.ListValue.prototype.load.apply(this, [section_id]);
-        }, this),
-      );
-    };
+    so.load = makeIconListLoader((icon) => /\.ico$/i.test(icon));
 
     const pwaIconSlots = [
       ["pwa_apple_touch", _("Apple Touch Icon"), "apple-touch-icon.png"],
@@ -2099,23 +2434,9 @@ return view.extend({
       so = logoSubsection.option(form.ListValue, key, label);
       so.default = defaultVal;
       so.rmempty = false;
-      so.load = function (section_id) {
-        return L.resolveDefault(callListIcons(), { icons: [] }).then(
-          L.bind(function (response) {
-            const icons = response?.icons || [];
-            this.keylist = [];
-            this.vallist = [];
-            icons.forEach(
-              L.bind(function (icon) {
-                if (isImageFile(icon) && !/\.svg$/i.test(icon)) {
-                  this.value(icon, icon);
-                }
-              }, this),
-            );
-            return form.ListValue.prototype.load.apply(this, [section_id]);
-          }, this),
-        );
-      };
+      so.load = makeIconListLoader(
+        (icon) => isImageFile(icon) && !/\.svg$/i.test(icon),
+      );
     });
 
     so = logoSubsection.option(
@@ -2125,26 +2446,13 @@ return view.extend({
     );
     so.description = _("Full-screen background on the login page.");
     so.rmempty = true;
-    so.load = function (section_id) {
-      return L.resolveDefault(callListIcons(), { icons: [] }).then(
-        L.bind((response) => {
-          const icons = response?.icons || [];
-          this.keylist = [];
-          this.vallist = [];
-          this.value("", _("None"));
-          if (icons.length > 0) {
-            icons.forEach(
-              L.bind((icon) => {
-                if (isImageFile(icon) && !icon.endsWith(".svg")) {
-                  this.value(toLoginBgUrl(icon), icon);
-                }
-              }, this),
-            );
-          }
-          return form.ListValue.prototype.load.apply(this, [section_id]);
-        }, this),
-      );
-    };
+    so.load = makeIconListLoader(
+      (icon) => isImageFile(icon) && !icon.endsWith(".svg"),
+      {
+        prepend: [["", _("None")]],
+        valueForIcon: toLoginBgUrl,
+      },
+    );
     so.cfgvalue = function (section_id) {
       return uci.get("aurora", section_id, "struct_login_bg") || "";
     };
@@ -2252,26 +2560,15 @@ return view.extend({
 
     so = toolbarGrid.option(form.ListValue, "icon", _("Icon"));
     so.rmempty = false;
-    so.load = function (section_id) {
-      return L.resolveDefault(callListIcons(), { icons: [] }).then(
-        L.bind((response) => {
-          const icons = response?.icons || [];
-          this.keylist = [];
-          this.vallist = [];
-          if (icons.length > 0) {
-            icons.forEach(L.bind((icon) => this.value(icon, icon), this));
-          } else {
-            this.value("", _("(No icons uploaded)"));
-          }
-          return form.ListValue.prototype.load.apply(this, [section_id]);
-        }, this),
-      );
-    };
+    so.load = makeIconListLoader(() => true, {
+      empty: [["", _("(No icons uploaded)")]],
+    });
     so.validate = (section_id, value) =>
       !value?.trim() ? _("Please select an icon") : true;
 
     return m.render().then((mapNode) => {
       colorEditor.attach();
+      enhanceColorTokenGroups(mapNode);
 
       const updateVersionLabel = (label, hasUpdate) => {
         if (!label || !hasUpdate) return;

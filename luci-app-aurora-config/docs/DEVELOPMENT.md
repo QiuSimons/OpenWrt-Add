@@ -64,7 +64,7 @@ The entire palette is driven by **10 editable inputs**; every other color is
 | Kind | Count | Examples |
 | --- | --- | --- |
 | Inputs (user-editable) | 10 | `bg`, `surface`, `text`, `brand`, `on_brand`, `link`, `info`, `warning`, `success`, `danger` |
-| Derived (computed) | 17 | `text_muted`, `surface_sunken`, `brand_hover`, `brand_subtle`, `focus_ring`, `*_surface`, `scrim`, `mega_menu_bg`, … |
+| Derived (computed) | 20 | `text_muted`, `surface_sunken`, `brand_hover`, `brand_subtle`, `focus_ring`, `*_surface`, `scrim`, `mega_menu_bg`, … |
 
 The derivation rules (`mix` / `shade` / `set` / `alpha` / `const`) live in
 `utils/tokens.global.js` under `DERIVATIONS`. **This file is a browser mirror of
@@ -73,15 +73,18 @@ sync.
 
 ### 3.2 Why the config app computes derived tokens itself
 
-The theme bakes derived tokens into `_tokens.css` **at build time** as flat
-`oklch(...)` literals — they no longer reference `var()` / `color-mix()`. As a
-result, **overriding `--brand` alone does not cascade** into `--brand-hover`,
-`--focus-ring`, and friends.
+The theme authors derived tokens in `_tokens.css` **at build time** as flat
+color literals — they no longer reference `var()` / `color-mix()`. The compiled
+`main.css` is emitted as hex fallbacks plus `lab(...)` values for compatible
+browsers. As a result, **overriding `--brand` alone does not cascade** into
+`--brand-hover`, `--focus-ring`, and friends.
 
 So the config app's strategy is: the user edits the 10 inputs → the frontend
-expands them into all 27 values via `AuroraTokens.resolve()` → **all 27 are
-written to UCI** → the theme's template injects them, overriding the baked
-defaults wholesale.
+expands them into all 30 values via `AuroraTokens.resolve()` → **all 30 are
+written to UCI as hex/hex8 runtime colors** → the theme's template injects them,
+overriding the baked defaults wholesale. Advanced users may also override
+individual derived values; blank derived fields continue to follow the generated
+values.
 
 ### 3.3 End-to-end data flow
 
@@ -91,7 +94,7 @@ User edits input colors in the UI
         ▼
 theme.js: persistDerivedTokens()
   runs AuroraTokens.resolve(mode, <10 inputs>) for light + dark
-  writes 27 light_<key> / dark_<key> entries into UCI (aurora.theme)
+  writes 30 light_<key> / dark_<key> hex entries into UCI (aurora.theme)
         │  on save
         ▼
 /etc/config/aurora             ← UCI storage
@@ -203,12 +206,12 @@ the `case "$1" in "list")` block at the end of the script. Common methods:
 
 | Method | Purpose |
 | --- | --- |
-| `get_theme_config` | Read the entire `aurora.theme` section (initial UI state) |
-| `get_theme_preset` / `get_theme_presets` | Read a preset snapshot / list (UI placeholders & comparison) |
+| `get_init_data` | Read first-paint data in one RPC: installed versions, font presets, icons, and the active preset snapshot |
+| `get_theme_preset` | Read a preset snapshot for UI placeholders and comparison |
 | `apply_theme_preset` | Apply a preset (replaces all colors; keeps branding, fonts, layout, toolbar) |
 | `export_config` / `import_config` | Configuration import/export |
 | `list_icons` / `upload_icon` / `remove_icon` | Icon management |
-| `*_font` / `get_font_presets` | Font handling |
+| `prepare_font` / `get_font_presets` / `get_font_status` | Font handling |
 | `get_installed_versions` / `check_updates` / `download_package` / `install_package` | Versioning & one-click updates |
 
 ACLs live in `root/usr/share/rpcd/acl.d/luci-app-aurora.json`; the menu entry in
