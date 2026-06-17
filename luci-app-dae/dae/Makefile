@@ -92,7 +92,6 @@ endef
 define Build/Compile
 	( \
 		pushd $(PKG_BUILD_DIR) ; \
-		wget -qO - https://github.com/daeuniverse/dae/pull/1016.patch | patch -p1 -N || true ; \
 		go get -u=patch ; \
 		go mod tidy ; \
 		export \
