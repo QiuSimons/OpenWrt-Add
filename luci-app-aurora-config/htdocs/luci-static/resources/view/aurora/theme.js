@@ -108,62 +108,72 @@ const callWritePwaManifest = rpc.declare({
 const COLOR_TOKENS = [
   {
     key: "bg",
-    label: _("LuCI Shell Canvas"),
-    description: _("Global page canvas behind the OpenWrt LuCI header, navigation, content area, side panels, and login shell."),
+    label: _("Background"),
+    description: _(
+      "Page canvas behind the header, navigation, content, and login screen.",
+    ),
     group: "foundation",
   },
   {
     key: "surface",
-    label: _("Primary Panel Surface"),
-    description: _("Base surface for LuCI configuration panels, cards, form sections, tables, the login card, and neutral controls."),
+    label: _("Surface"),
+    description: _(
+      "Base surface for panels, cards, forms, tables, and neutral controls.",
+    ),
     group: "foundation",
   },
   {
     key: "text",
-    label: _("Primary Content Text"),
-    description: _("Default foreground for headings, body copy, icons, table cells, menu text, and form values across LuCI."),
+    label: _("Text"),
+    description: _(
+      "Default foreground for headings, body text, icons, and form values.",
+    ),
     group: "identity",
   },
   {
     key: "brand",
-    label: _("Primary Action Color"),
-    description: _("Core accent for primary buttons, active navigation, selected states, checked inputs, and branded UI markers."),
+    label: _("Brand"),
+    description: _(
+      "Accent for primary buttons, active navigation, and selected states.",
+    ),
     group: "identity",
   },
   {
     key: "on_brand",
-    label: _("On-Action Foreground"),
-    description: _("Text and icon color placed on filled primary/action backgrounds, including buttons, check indicators, and badges."),
+    label: _("On-Brand Text"),
+    description: _("Text and icons shown on filled brand backgrounds."),
     group: "identity",
   },
   {
     key: "link",
-    label: _("Hyperlink Color"),
-    description: _("Standalone anchors and command links inside OpenWrt pages, help text, package output, and status details."),
+    label: _("Link"),
+    description: _("Hyperlinks in page content, help text, and status output."),
     group: "identity",
   },
   {
     key: "info",
-    label: _("Information Accent"),
-    description: _("Foreground accent for informational LuCI alerts, labels, tooltips, and non-critical system feedback."),
+    label: _("Info"),
+    description: _("Accent for informational alerts, labels, and tooltips."),
     group: "status",
   },
   {
     key: "warning",
-    label: _("Warning Accent"),
-    description: _("Foreground accent for attention-needed states, notices, validation warnings, and configuration risk messages."),
+    label: _("Warning"),
+    description: _("Accent for warnings, notices, and validation messages."),
     group: "status",
   },
   {
     key: "success",
-    label: _("Success Accent"),
-    description: _("Foreground accent for successful operations, healthy service states, enabled options, and positive status labels."),
+    label: _("Success"),
+    description: _("Accent for successful operations and healthy status."),
     group: "status",
   },
   {
     key: "danger",
-    label: _("Danger Accent"),
-    description: _("Foreground accent for errors, failed operations, destructive controls, delete actions, and critical system states."),
+    label: _("Danger"),
+    description: _(
+      "Accent for errors, destructive controls, and critical states.",
+    ),
     group: "status",
   },
 ];
@@ -171,141 +181,161 @@ const COLOR_TOKENS = [
 const DERIVED_COLOR_TOKENS = [
   {
     key: "text_muted",
-    label: _("Secondary Text"),
-    description: _("Medium-emphasis foreground for breadcrumbs, helper copy, secondary metadata, and device summary lines. Generated from Primary Content Text and LuCI Shell Canvas."),
+    label: _("Muted Text"),
+    description: _(
+      "Medium-emphasis text for helper copy, metadata, and summaries.",
+    ),
     group: "hierarchy",
     derived: true,
   },
   {
     key: "text_subtle",
-    label: _("Tertiary Text"),
-    description: _("Low-emphasis foreground for small labels, table headers, navigation previews, placeholders, and disabled hints. Generated from Primary Content Text and LuCI Shell Canvas."),
+    label: _("Subtle Text"),
+    description: _(
+      "Low-emphasis text for small labels, placeholders, and disabled hints.",
+    ),
     group: "hierarchy",
     derived: true,
   },
   {
     key: "surface_sunken",
-    label: _("Recessed Surface"),
-    description: _("Inset layer for inputs, selects, code blocks, table headers, progress tracks, badges, and quiet secondary buttons. Generated from the surface stack."),
+    label: _("Sunken Surface"),
+    description: _(
+      "Inset layer for inputs, code blocks, table headers, and badges.",
+    ),
     group: "hierarchy",
     derived: true,
   },
   {
     key: "surface_overlay",
-    label: _("Elevated Overlay Surface"),
-    description: _("Raised layer for dropdown menus, modals, tooltips, floating shortcut controls, and elevated mobile cards. Generated from the surface stack."),
+    label: _("Overlay Surface"),
+    description: _("Raised layer for dropdowns, modals, and tooltips."),
     group: "hierarchy",
     derived: true,
   },
   {
     key: "hairline",
-    label: _("Hairline Border"),
-    description: _("Thin separators, section dividers, table outlines, card borders, input borders, and panel strokes. Generated from Primary Content Text with low opacity."),
+    label: _("Hairline"),
+    description: _("Separators, dividers, and input or card borders."),
     group: "hierarchy",
     derived: true,
   },
   {
     key: "hover_faint",
-    label: _("Neutral Hover Surface"),
-    description: _("Subtle hover fill for non-primary menu items, table rows, neutral buttons, secondary controls, and navigation links."),
+    label: _("Faint Hover"),
+    description: _(
+      "Hover fill for menu items, table rows, and neutral controls.",
+    ),
     group: "hierarchy",
     derived: true,
   },
   {
     key: "brand_hover",
-    label: _("Primary Action Hover"),
-    description: _("Hover state for filled primary LuCI buttons, apply actions, reload actions, and other high-emphasis controls."),
+    label: _("Brand Hover"),
+    description: _(
+      "Hover state for filled primary buttons and high-emphasis controls.",
+    ),
     group: "brand_interaction",
     derived: true,
   },
   {
     key: "brand_subtle",
-    label: _("Primary Selection Surface"),
-    description: _("Soft action-tinted surface for active navigation pills, selected pages, focused drag targets, login emblem blocks, and quiet emphasis."),
+    label: _("Subtle Brand"),
+    description: _(
+      "Brand-tinted surface for active navigation and selected states.",
+    ),
     group: "brand_interaction",
     derived: true,
   },
   {
     key: "brand_subtle_hover",
-    label: _("Primary Selection Hover"),
-    description: _("Hover fill for subtle primary buttons and selected-state surfaces that use Primary Selection Surface instead of a solid action fill."),
+    label: _("Subtle Brand Hover"),
+    description: _(
+      "Hover fill for subtle primary buttons and selected surfaces.",
+    ),
     group: "brand_interaction",
     derived: true,
   },
   {
     key: "focus_ring",
-    label: _("Keyboard Focus Ring"),
-    description: _("Accessible focus outline for inputs, selects, dropdowns, navigation category triggers, and keyboard-operated controls. Generated from Primary Action Color."),
+    label: _("Focus Ring"),
+    description: _(
+      "Focus outline for inputs, selects, and keyboard-operated controls.",
+    ),
     group: "brand_interaction",
     derived: true,
   },
   {
     key: "progress_start",
-    label: _("Progress Gradient Start"),
-    description: _("Leading color for LuCI progress meters such as package operations and status progress bars. Mixed from Primary Action Color and Recessed Surface."),
+    label: _("Progress Start"),
+    description: _("Leading color for progress meters."),
     group: "brand_interaction",
     derived: true,
   },
   {
     key: "progress_end",
-    label: _("Progress Gradient End"),
-    description: _("Trailing color for LuCI progress meters. Follows Primary Action Color by default."),
+    label: _("Progress End"),
+    description: _("Trailing color for progress meters."),
     group: "brand_interaction",
     derived: true,
   },
   {
     key: "info_surface",
-    label: _("Information Message Surface"),
-    description: _("Background for informational alerts, labels, badges, and tooltips. Generated from Information Accent."),
+    label: _("Info Surface"),
+    description: _(
+      "Background for informational alerts, labels, and tooltips.",
+    ),
     group: "status_surfaces",
     derived: true,
   },
   {
     key: "warning_surface",
-    label: _("Warning Message Surface"),
-    description: _("Background for warning alerts, notices, labels, badges, and tooltips. Generated from Warning Accent."),
+    label: _("Warning Surface"),
+    description: _("Background for warning alerts, notices, and labels."),
     group: "status_surfaces",
     derived: true,
   },
   {
     key: "success_surface",
-    label: _("Success Message Surface"),
-    description: _("Background for success alerts, healthy-state labels, badges, and tooltips. Generated from Success Accent."),
+    label: _("Success Surface"),
+    description: _("Background for success alerts and healthy-state labels."),
     group: "status_surfaces",
     derived: true,
   },
   {
     key: "danger_surface",
-    label: _("Danger Message Surface"),
-    description: _("Background for error alerts, destructive-action messages, delete controls, critical labels, and validation failures. Generated from Danger Accent."),
+    label: _("Danger Surface"),
+    description: _(
+      "Background for error alerts and destructive-action messages.",
+    ),
     group: "status_surfaces",
     derived: true,
   },
   {
     key: "danger_surface_hover",
-    label: _("Danger Action Hover Surface"),
-    description: _("Hover fill for quiet destructive buttons, remove actions, and delete controls. Generated from Danger Message Surface."),
+    label: _("Danger Surface Hover"),
+    description: _("Hover fill for quiet destructive and delete controls."),
     group: "status_surfaces",
     derived: true,
   },
   {
     key: "scrim",
-    label: _("Modal Scrim"),
-    description: _("Dimming backdrop behind LuCI modal dialogs and blocking confirmation panels."),
+    label: _("Scrim"),
+    description: _("Dimming backdrop behind modal dialogs."),
     group: "hierarchy",
     derived: true,
   },
   {
     key: "mega_menu_bg",
-    label: _("Mega Menu Panel Surface"),
-    description: _("Opaque surface for the expanded desktop mega menu panel and the header while the menu is open."),
+    label: _("Mega Menu Background"),
+    description: _("Opaque surface for the expanded mega menu and its header."),
     group: "hierarchy",
     derived: true,
   },
   {
     key: "mega_menu_scrim",
-    label: _("Mega Menu Backdrop Scrim"),
-    description: _("Dimming curtain behind the expanded desktop mega menu; lighter than the modal scrim so navigation still feels non-blocking."),
+    label: _("Mega Menu Scrim"),
+    description: _("Light backdrop behind the expanded mega menu."),
     group: "hierarchy",
     derived: true,
   },
@@ -315,43 +345,51 @@ const COLOR_GROUPS = [
   {
     key: "foundation",
     title: _("System Surfaces"),
-    description: _("Define the global canvas and panel surfaces that frame the full OpenWrt LuCI web interface."),
+    description: _("Canvas and panel surfaces that frame the interface."),
   },
   {
     key: "identity",
-    title: _("Text, Links & Actions"),
+    title: _("Text, Links & Brand"),
     description: _(
-      "Define readable foregrounds, hyperlinks, primary actions, and the contrast color used on filled action surfaces.",
+      "Foregrounds, hyperlinks, the brand color, and its contrast text.",
     ),
   },
   {
     key: "status",
     title: _("Operational Status Accents"),
-    description: _("Define source accents for LuCI notifications, validation states, status labels, and destructive system feedback."),
+    description: _(
+      "Accents for notifications, validation, and status feedback.",
+    ),
   },
 ];
 
 const DERIVED_COLOR_GROUPS = [
   {
     key: "brand_interaction",
-    title: _("Action Interaction Details"),
-    description: _("Generated from Primary Action Color for hover states, selected surfaces, focus rings, and progress meters."),
+    title: _("Brand Interaction Details"),
+    description: _(
+      "Derived from the brand color: hover states, subtle fills, focus rings, and progress meters.",
+    ),
   },
   {
     key: "hierarchy",
     title: _("Interface Hierarchy"),
-    description: _("Generated from the canvas, panel surface, and primary text to create secondary text, borders, overlays, and menu layers."),
+    description: _(
+      "Derived from the canvas, surface, and text colors: muted and subtle text, borders, overlays, and menu layers.",
+    ),
   },
   {
     key: "status_surfaces",
     title: _("Status Message Surfaces"),
-    description: _("Generated from the four operational status accents for alert, tooltip, label, badge, and destructive-action backgrounds."),
+    description: _(
+      "Derived from the status accents: alert, label, and badge backgrounds.",
+    ),
   },
 ];
 
 const ALL_COLOR_TOKENS = COLOR_TOKENS.concat(DERIVED_COLOR_TOKENS);
 const COLOR_FORMAT_HELP = _(
-  "Color fields accept #hex, rgb(), hsl(), lab(), and oklch(). The picker fills hex; advanced color-space values can be typed manually.",
+  "Fields accept #hex, rgb(), hsl(), lab(), and oklch(). The picker fills hex; other formats can be typed.",
 );
 
 const cssTokenName = (key) => key.replaceAll("_", "-");
@@ -459,41 +497,46 @@ const createColorResolver = () => {
   };
 
   const resolveMode = (mode, values, tokens = COLOR_TOKENS) => {
-    queue = queue.catch(() => {}).then(async () => {
-      const { root, probe } = await ensureFrame();
-      root.setAttribute("data-darkmode", mode === "dark" ? "true" : "false");
+    queue = queue
+      .catch(() => {})
+      .then(async () => {
+        const { root, probe } = await ensureFrame();
+        root.setAttribute("data-darkmode", mode === "dark" ? "true" : "false");
 
-      ALL_COLOR_TOKENS.forEach(({ key }) => {
-        root.style.removeProperty(`--${cssTokenName(key)}`);
-      });
-      ALL_COLOR_TOKENS.forEach(({ key }) => {
-        const value = values[key]?.trim();
-        if (value)
-          root.style.setProperty(`--${cssTokenName(key)}`, toRuntimeColor(value));
-      });
+        ALL_COLOR_TOKENS.forEach(({ key }) => {
+          root.style.removeProperty(`--${cssTokenName(key)}`);
+        });
+        ALL_COLOR_TOKENS.forEach(({ key }) => {
+          const value = values[key]?.trim();
+          if (value)
+            root.style.setProperty(
+              `--${cssTokenName(key)}`,
+              toRuntimeColor(value),
+            );
+        });
 
-      const results = new Map();
-      tokens.forEach(({ key }) => {
-        const name = cssTokenName(key);
-        probe.parentElement.style.color = "rgb(1 2 3)";
-        probe.style.color = `var(--${name}, rgb(1 2 3))`;
-        const first = getComputedStyle(probe).color;
-        probe.parentElement.style.color = "rgb(4 5 6)";
-        probe.style.color = `var(--${name}, rgb(4 5 6))`;
-        const second = getComputedStyle(probe).color;
+        const results = new Map();
+        tokens.forEach(({ key }) => {
+          const name = cssTokenName(key);
+          probe.parentElement.style.color = "rgb(1 2 3)";
+          probe.style.color = `var(--${name}, rgb(1 2 3))`;
+          const first = getComputedStyle(probe).color;
+          probe.parentElement.style.color = "rgb(4 5 6)";
+          probe.style.color = `var(--${name}, rgb(4 5 6))`;
+          const second = getComputedStyle(probe).color;
 
-        if (!first || !second || first !== second) {
-          results.set(key, {
-            valid: false,
-            error: _("Invalid, missing, or cyclic color expression."),
-          });
-        } else {
-          results.set(key, { valid: true, color: first });
-        }
+          if (!first || !second || first !== second) {
+            results.set(key, {
+              valid: false,
+              error: _("Invalid, missing, or cyclic color expression."),
+            });
+          } else {
+            results.set(key, { valid: true, color: first });
+          }
+        });
+        probe.parentElement.style.removeProperty("color");
+        return results;
       });
-      probe.parentElement.style.removeProperty("color");
-      return results;
-    });
 
     return queue;
   };
@@ -641,7 +684,10 @@ const createColorEditor = (themeConfig, presetColors) => {
       const value = valueFor(mode, key).trim();
       rememberPreview(property);
       if (value) {
-        document.documentElement.style.setProperty(property, toRuntimeColor(value));
+        document.documentElement.style.setProperty(
+          property,
+          toRuntimeColor(value),
+        );
       } else {
         restorePreviewProperty(property);
       }
@@ -698,9 +744,7 @@ const createColorEditor = (themeConfig, presetColors) => {
       field.swatch.title = `${_("Resolved color")}: ${runtimeColor}`;
       if (field.token.derived) {
         if (result.autoValue)
-          field.input.placeholder = _("Automatic: %s").format(
-            toRuntimeColor(result.autoValue),
-          );
+          field.input.placeholder = toRuntimeColor(result.autoValue);
         field.status.textContent = "";
       } else {
         field.status.textContent = "";
@@ -725,7 +769,8 @@ const createColorEditor = (themeConfig, presetColors) => {
 
         const validationTokens = COLOR_TOKENS.concat(
           DERIVED_COLOR_TOKENS.filter(
-            ({ key }) => isDerivedOverride(mode, key) && valueFor(mode, key).trim(),
+            ({ key }) =>
+              isDerivedOverride(mode, key) && valueFor(mode, key).trim(),
           ),
         );
 
@@ -741,20 +786,28 @@ const createColorEditor = (themeConfig, presetColors) => {
         DERIVED_COLOR_TOKENS.forEach(({ key }) => {
           if (isDerivedOverride(mode, key) && valueFor(mode, key).trim()) {
             const result = results.results.get(key);
-            updateField(mode, key, {
-              ...result,
-              autoValue: results.automatic?.[key] || "",
-            }, { validateKeys });
+            updateField(
+              mode,
+              key,
+              {
+                ...result,
+                autoValue: results.automatic?.[key] || "",
+              },
+              { validateKeys },
+            );
             return;
           }
 
           const autoValue = results.automatic?.[key];
-          updateField(mode, key, autoValue
-            ? { valid: true, color: autoValue, autoValue }
-            : {
-                valid: false,
-                error: _("Unable to generate the automatic derived value."),
-              },
+          updateField(
+            mode,
+            key,
+            autoValue
+              ? { valid: true, color: autoValue, autoValue }
+              : {
+                  valid: false,
+                  error: _("Unable to generate the automatic derived value."),
+                },
             { validateKeys },
           );
         });
@@ -762,10 +815,16 @@ const createColorEditor = (themeConfig, presetColors) => {
       })
       .catch((error) => {
         ALL_COLOR_TOKENS.forEach(({ key }) => {
-          updateField(mode, key, {
-            valid: false,
-            error: error?.message || _("Unable to resolve color expressions."),
-          }, { validateKeys });
+          updateField(
+            mode,
+            key,
+            {
+              valid: false,
+              error:
+                error?.message || _("Unable to resolve color expressions."),
+            },
+            { validateKeys },
+          );
         });
       })
       .finally(() => refreshTabErrors(mode));
@@ -814,7 +873,8 @@ const createColorEditor = (themeConfig, presetColors) => {
     });
     input.addEventListener("input", () => {
       themeConfig[colorOptionName(mode, token.key)] = input.value;
-      if (token.derived) setDerivedOverride(mode, token.key, Boolean(input.value.trim()));
+      if (token.derived)
+        setDerivedOverride(mode, token.key, Boolean(input.value.trim()));
       schedule(mode, token.key, { validate: true });
     });
     schedule(mode);
@@ -825,16 +885,16 @@ const createColorEditor = (themeConfig, presetColors) => {
     const state = stateFor(mode, key);
     if (state.pending)
       return state.valid || state.error == null ? true : state.error;
-    return state.valid
-      ? true
-      : state.error || _("Invalid color expression.");
+    return state.valid ? true : state.error || _("Invalid color expression.");
   };
 
   const attach = () => {
     schedule("light");
     schedule("dark");
     modeObserver = new MutationObserver((mutations) => {
-      if (mutations.some((mutation) => mutation.attributeName === "data-darkmode")) {
+      if (
+        mutations.some((mutation) => mutation.attributeName === "data-darkmode")
+      ) {
         cleanupPreview();
         applyPreview(currentMode());
       }
@@ -894,8 +954,8 @@ const renderColorField = function (optionIndex, sectionId, inTable) {
     element.dataset.auroraColorKind = token.derived ? "derived" : "base";
     element.dataset.auroraColorGroup = token.group || "";
     input.placeholder = token.derived
-      ? _("Automatic unless manually overridden")
-      : presetValue || _("Use the saved or preset token value");
+      ? _("Automatic")
+      : presetValue || _("Saved or preset value");
 
     const picker = E("input", {
       type: "color",
@@ -930,19 +990,11 @@ const renderColorField = function (optionIndex, sectionId, inTable) {
       }
     });
 
-    editor.register(
-      mode,
-      token,
-      element,
-      input,
-      this,
-      sectionId,
-      {
-        picker,
-        status,
-        swatch,
-      },
-    );
+    editor.register(mode, token, element, input, this, sectionId, {
+      picker,
+      status,
+      swatch,
+    });
     return element;
   });
 };
@@ -983,7 +1035,7 @@ const createColorSections = (section, mode, editor) => {
     "aurora",
     _("Source Color Tokens"),
     _(
-      "Edit the 10 source tokens that drive the OpenWrt LuCI web interface. Changes preview immediately in this browser page; router-wide theme values change only after Save or Save & Apply writes them to /etc/config/aurora.",
+      "The 10 source tokens that drive the theme. Changes preview here instantly; Save or Save & Apply persists them.",
     ) + ` ${COLOR_FORMAT_HELP}`,
   );
   addColorInputs(baseSection.subsection, mode, COLOR_TOKENS, editor);
@@ -997,7 +1049,7 @@ const createColorSections = (section, mode, editor) => {
     "aurora",
     _("Derived Color Tokens"),
     _(
-      "Derived tokens are computed from the source tokens for hover states, focus rings, status surfaces, progress meters, overlays, and menu layers. Leave fields empty to keep automatic generation; enter a value only when a specific UI detail needs a manual override. Live preview affects this browser page only; router-wide persistence happens after Save or Save & Apply.",
+      "Tokens computed from the source colors. Leave a field empty to keep its automatic value; enter a color only to override it. Changes preview here instantly; Save or Save & Apply persists them.",
     ) + ` ${COLOR_FORMAT_HELP}`,
   );
   addColorInputs(
@@ -1033,7 +1085,7 @@ const ensureColorGroupStyles = () => {
 }
 .aurora-token-group > summary {
   align-items: center;
-  cursor: pointer;
+  cursor: default;
   display: flex;
   gap: 1rem;
   justify-content: space-between;
@@ -1042,6 +1094,36 @@ const ensureColorGroupStyles = () => {
 }
 .aurora-token-group > summary::-webkit-details-marker {
   display: none;
+}
+/* Box + interaction reset; the chevron glyph itself is reused from the Aurora
+   theme's .navigation-group-toggle::after, so no SVG is duplicated here. */
+.aurora-token-group-toggle {
+  align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  flex-shrink: 0;
+  height: 1.75rem;
+  justify-content: center;
+  padding: 0;
+  width: 1.75rem;
+}
+.aurora-token-group-toggle:hover {
+  color: var(--text);
+}
+.aurora-token-group-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.aurora-token-group-toggle::after {
+  transition: rotate .25s ease;
+}
+.aurora-token-group[open] .aurora-token-group-toggle::after {
+  rotate: 90deg;
 }
 .aurora-token-group-title {
   display: block;
@@ -1055,15 +1137,6 @@ const ensureColorGroupStyles = () => {
   line-height: 1.45;
   margin-top: .25rem;
 }
-.aurora-token-group-count {
-  background: var(--surface-sunken);
-  border-radius: 999px;
-  color: var(--text-muted);
-  flex-shrink: 0;
-  font-size: .75rem;
-  font-weight: 700;
-  padding: .25rem .625rem;
-}
 .aurora-token-group-body {
   border-top: 1px solid var(--hairline);
   padding: 1rem 1.25rem;
@@ -1076,7 +1149,9 @@ const ensureColorGroupStyles = () => {
 const enhanceColorTokenGroups = (root) => {
   ensureColorGroupStyles();
   const rows = Array.from(root.querySelectorAll("[data-aurora-color-group]"));
-  const containers = new Set(rows.map((row) => row.parentElement).filter(Boolean));
+  const containers = new Set(
+    rows.map((row) => row.parentElement).filter(Boolean),
+  );
 
   containers.forEach((container) => {
     if (container.dataset.auroraTokenGroupsEnhanced === "true") return;
@@ -1105,28 +1180,55 @@ const enhanceColorTokenGroups = (root) => {
       if (!group) continue;
 
       const body = E("div", { class: "aurora-token-group-body" });
-      const details = E(
-        "details",
-        { class: "aurora-token-group", open: "" },
-        [
-          E("summary", {}, [
-            E("span", {}, [
-              E("span", { class: "aurora-token-group-title" }, group.title),
-              E(
-                "span",
-                { class: "aurora-token-group-description" },
-                group.description,
-              ),
-            ]),
-            E(
-              "span",
-              { class: "aurora-token-group-count" },
-              _("%d variables").format(groupRows.length),
-            ),
-          ]),
-          body,
-        ],
-      );
+      const toggle = E("button", {
+        type: "button",
+        // Reuse the Aurora theme's navigation chevron glyph; the local class
+        // only adds the button box reset and the open-state rotation.
+        class: "aurora-token-group-toggle navigation-group-toggle",
+        "aria-label": _("Expand or collapse this group"),
+        "aria-expanded": "true",
+      });
+      const summary = E("summary", {}, [
+        E("span", {}, [
+          E("span", { class: "aurora-token-group-title" }, group.title),
+          E(
+            "span",
+            { class: "aurora-token-group-description" },
+            group.description,
+          ),
+        ]),
+        toggle,
+      ]);
+
+      const details = E("details", { class: "aurora-token-group", open: "" }, [
+        summary,
+        body,
+      ]);
+
+      // A bare <summary> toggles on ANY click anywhere on the header strip, so a
+      // stray click -- notably the click that dismisses the native color picker
+      // landing on this large header -- would collapse the group. Restrict
+      // toggling to the chevron button: it drives the open state explicitly,
+      // every other summary click is cancelled, and the toggle listener reverts
+      // any collapse that still slips through to the expected state.
+      let expectedOpen = true;
+      const setGroupOpen = (open) => {
+        expectedOpen = open;
+        if (details.open !== open) details.open = open;
+        toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      };
+      toggle.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        setGroupOpen(!expectedOpen);
+      });
+      summary.addEventListener("click", (ev) => {
+        if (!ev.target.closest(".aurora-token-group-toggle"))
+          ev.preventDefault();
+      });
+      details.addEventListener("toggle", () => {
+        if (details.open !== expectedOpen) details.open = expectedOpen;
+      });
 
       container.insertBefore(details, first);
       groupRows.forEach((row) => body.appendChild(row));
@@ -1324,7 +1426,12 @@ const persistDerivedTokens = (editor) => {
     const resolved = editor.resolvedForMode(mode);
     if (!resolved) return;
     Object.keys(resolved).forEach((key) => {
-      uci.set("aurora", "theme", `${mode}_${key}`, toRuntimeColor(resolved[key]));
+      uci.set(
+        "aurora",
+        "theme",
+        `${mode}_${key}`,
+        toRuntimeColor(resolved[key]),
+      );
     });
   });
 };
@@ -1436,7 +1543,14 @@ return view.extend({
       mono: 'ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace',
     };
 
+    const fontOptionsCache = {};
     const buildFontOptions = (slot) => {
+      if (fontOptionsCache[slot]) return fontOptionsCache[slot];
+      fontOptionsCache[slot] = computeFontOptions(slot);
+      return fontOptionsCache[slot];
+    };
+
+    const computeFontOptions = (slot) => {
       const list = fontPresetsBySlot?.[slot];
       if (Array.isArray(list) && list.length > 0) {
         const options = list
@@ -1506,7 +1620,7 @@ return view.extend({
                 "p",
                 {},
                 _(
-                  "Apply the '%s' preset now? The preset is saved to /etc/config/aurora immediately and this page reloads after it is applied. In the current version, presets write the light and dark color sets; layout, typography, branding assets, login background, navigation, and shortcut toolbar settings use the default Aurora configuration.",
+                  "Apply the '%s' preset now? It is saved immediately and the page reloads. Presets set the light and dark colors only — layout, typography, branding, navigation, and toolbar are left unchanged.",
                 ).format(presetLabel),
               ),
               E("div", { class: "right" }, [
@@ -1646,7 +1760,7 @@ return view.extend({
                       "p",
                       {},
                       _(
-                        "Review the uploaded configuration below. Importing replaces /etc/config/aurora, applies all Aurora theme settings, and reloads this page. Uploaded image files in /www/luci-static/aurora/images/ stay on disk.",
+                        "Importing replaces /etc/config/aurora, applies all settings, and reloads the page. Uploaded images stay on disk.",
                       ),
                     ),
                     E("pre", {}, preview),
@@ -1733,7 +1847,7 @@ return view.extend({
                 "p",
                 {},
                 _(
-                  "Reset /etc/config/aurora to the packaged Default preset, including colors, layout, typography, branding selections, navigation, and shortcut toolbar entries. Uploaded image files stay on disk, but custom asset selections are cleared unless they are part of the Default preset.",
+                  "Reset /etc/config/aurora to the packaged Default preset — colors, layout, typography, branding, navigation, and toolbar. Uploaded images stay on disk; custom selections not in the Default preset are cleared.",
                 ),
               ),
               E("div", { class: "right" }, [
@@ -1884,7 +1998,7 @@ return view.extend({
       "aurora",
       _("Layout"),
       _(
-        "Tune the OpenWrt LuCI shell structure: navigation pattern, interface density, corner radius scale, and maximum content width. These structural settings take effect after Save & Apply.",
+        "Navigation, spacing, corner radius, and content width. Takes effect after Save & Apply.",
       ),
     );
     const structureSubsection = structureSection.subsection;
@@ -1894,9 +2008,7 @@ return view.extend({
       "nav_type",
       _("Navigation Style"),
     );
-    so.description = _(
-      "Selects the navigation mode for the OpenWrt LuCI web system.",
-    );
+    so.description = _("Layout pattern for the primary navigation menu.");
     so.value("mega-menu", _("Mega Menu"));
     so.value("dropdown", _("Dropdown"));
     so.value("sidebar", _("Sidebar"));
@@ -1906,10 +2018,10 @@ return view.extend({
     so = structureSubsection.option(
       form.Value,
       "struct_spacing",
-      _("Interface Density"),
+      _("Spacing Scale"),
     );
     so.description = _(
-      "Controls the global spacing scale for the OpenWrt LuCI web system.",
+      "Base spacing unit that scales padding and gaps across the interface.",
     );
     so.default = "0.25rem";
     so.placeholder = "0.25rem";
@@ -1919,10 +2031,10 @@ return view.extend({
     so = structureSubsection.option(
       form.Value,
       "struct_radius_base",
-      _("Corner Radius Scale"),
+      _("Corner Radius"),
     );
     so.description = _(
-      "Controls the global corner radius scale for the OpenWrt LuCI web system.",
+      "Base corner radius applied to buttons, inputs, cards, and surfaces.",
     );
     so.default = "0.5rem";
     so.placeholder = "0.5rem";
@@ -1932,11 +2044,9 @@ return view.extend({
     so = structureSubsection.option(
       form.Value,
       "struct_container_max_width",
-      _("Content Width Limit"),
+      _("Content Max Width"),
     );
-    so.description = _(
-      "Controls the maximum page container width for the OpenWrt LuCI web system.",
-    );
+    so.description = _("Maximum width of the centered content area.");
     so.default = "80rem";
     so.placeholder = "80rem";
     so.rmempty = false;
@@ -1951,7 +2061,7 @@ return view.extend({
       "aurora",
       _("Typography"),
       _(
-        "Choose the interface typeface and monospace typeface used across LuCI pages, forms, tables, code blocks, and terminal-style output. Save or Save & Apply prepares remote font presets, caches them locally, and applies the selected typography to the theme.",
+        "Sans-serif and monospace typefaces used across the theme. Save or Save & Apply downloads and caches the selected fonts.",
       ),
     );
     const fontSubsection = fontSection.subsection;
@@ -1975,8 +2085,14 @@ return view.extend({
       const presetOpt = ss.option(
         form.ListValue,
         stackKey,
-        slot === "sans" ? _("Interface Typeface") : _("Monospace Typeface"),
+        slot === "sans" ? _("Sans-Serif Typeface") : _("Monospace Typeface"),
       );
+      presetOpt.description =
+        slot === "sans"
+          ? _(
+              "Primary font for all interface text — headings, body, menus, forms, and tables.",
+            )
+          : _("Font for code, command output, and the system log viewer.");
       presetOpt.default = themeConfig[stackKey] || defaultFont?.stack || "";
       presetOpt.rmempty = false;
       options.forEach((font) => {
@@ -2105,7 +2221,8 @@ return view.extend({
             null,
             E(
               "p",
-              _("Typography preparation failed: ") + (err.message || String(err)),
+              _("Typography preparation failed: ") +
+                (err.message || String(err)),
             ),
             "warning",
           );
@@ -2124,7 +2241,7 @@ return view.extend({
       "aurora",
       _("Brand Asset Library"),
       _(
-        "Upload and manage image files used by browser tab icons, favicon fallbacks, PWA icons, shortcut icons, and the login background. Uploads are stored immediately in <code>/www/luci-static/aurora/images/</code>.",
+        "Upload and manage images for icons, favicons, PWA assets, and the login background. Files are stored in <code>/www/luci-static/aurora/images/</code>.",
       ),
     );
     const assetSubsection = assetSection.subsection;
@@ -2344,7 +2461,7 @@ return view.extend({
                     "p",
                     {},
                     _(
-                      "Delete '%s' from the Aurora asset library at /www/luci-static/aurora/images/? Any current theme setting that references this file may need to be changed.",
+                      "Delete '%s' from /www/luci-static/aurora/images/? Theme settings that reference it may need updating.",
                     ).format(icon),
                   ),
                   E("div", { class: "right" }, [
@@ -2435,13 +2552,13 @@ return view.extend({
       "aurora",
       _("Site Branding"),
       _(
-        "Choose uploaded assets for browser tab icons, favicon fallbacks, PWA metadata, and the login background. These selections are written when you Save or Save & Apply.",
+        "Assign uploaded images to icons, favicons, PWA metadata, and the login background. Saved on Save or Save & Apply.",
       ),
     );
     const logoSubsection = logoSection.subsection;
 
-    so = logoSubsection.option(form.ListValue, "logo_svg", _("Browser Tab & Login Icon"));
-    so.description = _("SVG icon used for the browser tab and the login page brand mark.");
+    so = logoSubsection.option(form.ListValue, "logo_svg", _("Logo (SVG)"));
+    so.description = _("SVG mark for the browser tab and login page.");
     so.default = "logo.svg";
     so.rmempty = false;
     so.load = makeIconListLoader(isImageFile);
@@ -2451,9 +2568,7 @@ return view.extend({
       "favicon_png",
       _("Favicon (PNG)"),
     );
-    so.description = _(
-      "PNG fallback for the browser tab icon when SVG favicons are not supported.",
-    );
+    so.description = _("PNG fallback when SVG favicons are unsupported.");
     so.rmempty = true;
     so.load = makeIconListLoader((icon) => /\.png$/i.test(icon), {
       prepend: [["", _("(None)")]],
@@ -2464,7 +2579,7 @@ return view.extend({
       "favicon_ico",
       _("Favicon (ICO / Legacy)"),
     );
-    so.description = _("ICO favicon used as a legacy browser fallback.");
+    so.description = _("Legacy ICO favicon fallback.");
     so.default = "favicon.ico";
     so.rmempty = false;
     so.load = makeIconListLoader((icon) => /\.ico$/i.test(icon));
@@ -2474,21 +2589,19 @@ return view.extend({
         "pwa_apple_touch",
         _("Apple Touch Icon"),
         "apple-touch-icon.png",
-        _(
-          "Icon used for iOS/iPadOS Home Screen web clips and standalone Safari web apps.",
-        ),
+        _("Home Screen icon for iOS and iPadOS."),
       ],
       [
         "pwa_icon_192",
         _("App Icon 192×192"),
         "app-icon-192x192.png",
-        _("192×192 icon written into app.webmanifest for installable web app metadata."),
+        _("192×192 icon for the installable web app manifest."),
       ],
       [
         "pwa_icon_512",
         _("App Icon 512×512"),
         "app-icon-512x512.png",
-        _("512×512 icon written into app.webmanifest for installable web app metadata."),
+        _("512×512 icon for the installable web app manifest."),
       ],
     ];
 
@@ -2507,7 +2620,7 @@ return view.extend({
       "struct_login_bg",
       _("Login Background"),
     );
-    so.description = _("Full-screen background for the OpenWrt login page. Use a wide image for best results.");
+    so.description = _("Full-screen login page background; use a wide image.");
     so.rmempty = true;
     so.load = makeIconListLoader(
       (icon) => isImageFile(icon) && !icon.endsWith(".svg"),
@@ -2575,7 +2688,9 @@ return view.extend({
       "theme",
       "aurora",
       _("Shortcut Toolbar"),
-      _("Configure the floating shortcut launcher shown along the right edge of the LuCI interface."),
+      _(
+        "Floating shortcut launcher shown along the right edge of the interface.",
+      ),
     );
     const toolbarSubsection = toolbarSection.subsection;
 
@@ -2584,9 +2699,7 @@ return view.extend({
       "toolbar_enabled",
       _("Show Shortcut Toolbar"),
     );
-    so.description = _(
-      "Show or hide the floating shortcut launcher on LuCI pages.",
-    );
+    so.description = _("Show the floating launcher on all pages.");
     so.default = "1";
     so.rmempty = false;
 
@@ -2596,7 +2709,7 @@ return view.extend({
       form.GridSection,
       "toolbar_item",
       _("Toolbar Shortcuts"),
-      _("Add LuCI shortcuts, choose uploaded icons, and drag rows to control the order shown in the floating toolbar."),
+      _("Add shortcuts, assign icons, and drag rows to reorder them."),
     );
     so.depends("toolbar_enabled", "1");
     const toolbarGrid = so.subsection;
