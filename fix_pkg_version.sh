@@ -5,7 +5,7 @@ DO_EDIT=true  # true=直接修改, false=预览模式
 # ----------------
 
 echo "开始执行【OpenWrt/Alpine 深度适配修复】..."
-echo "针对：PKG_VERSION 移除 ~ 后缀及相关 Makefile 逻辑"
+echo "针对：PKG_VERSION 移除 ~ 后缀及非法字母清理"
 echo "---------------------------------------------------"
 
 find . -type f -name "Makefile" | while read -r makefile; do
@@ -13,7 +13,7 @@ find . -type f -name "Makefile" | while read -r makefile; do
     file_changed=0
 
     # =======================================================
-    # 任务 1: 修复 PKG_VERSION (智能截断模式)
+    # 任务 1: 修复 PKG_VERSION (智能截断 + 强力纯数字模式)
     # =======================================================
     
     # 提取原始版本号字符串
@@ -26,11 +26,7 @@ find . -type f -name "Makefile" | while read -r makefile; do
         # --- 智能清洗逻辑 ---
         
         # 步骤 1: 处理 Makefile 条件逻辑 $(if ...,~...)
-        # 你的案例中有：$(if $(PKG_UPSTREAM_GITHASH),~$(call ...))
-        # 逻辑：如果这一行包含 "$(if" 且紧接着的逻辑里有 "~"，则认为这是一个追加版本号的逻辑块，直接删掉。
-        # 使用 sed -E (扩展正则) 匹配 $(if ... , ~ ... 
         if echo "$new_val" | grep -q "\$(if.*,.*~"; then
-             # 解释：匹配 $(if ... , (任意空格) ~ (后面所有内容) 并替换为空
              temp_val=$(echo "$new_val" | sed -E 's/\$\(if[^,]+,[[:space:]]*~.*//')
              if [ "$temp_val" != "$new_val" ]; then
                  new_val="$temp_val"
@@ -39,26 +35,28 @@ find . -type f -name "Makefile" | while read -r makefile; do
         fi
 
         # 步骤 2: 处理普通后缀 (截断 ~ 及其后所有内容)
-        # 你的案例中有：0.9.0~$(call ...) 或 1.2.17~git...
-        # 逻辑：只要还剩有 ~，就从 ~ 处一刀切，丢弃后面所有东西
         if [[ "$new_val" == *"~"* ]]; then
              new_val=$(echo "$new_val" | sed 's/~.*//')
              mode="${mode:+${mode}+}截断后缀"
         fi
 
-        # 步骤 3: 静态版本号常规清洗 (去v，非法字符转点)
-        # 只有当剩下的字符串里没有 $ (不是变量) 时才执行，防止把变量名给洗坏了
+        # 步骤 3: 静态版本号强力清洗 (纯数字规范化)
+        # 针对 apk 规范增强：将 1.0.5.r20241208 强洗为 1.0.5.20241208
         if [[ "$new_val" != *"\$"* ]]; then
-             # 掐头 (去掉非数字开头)
+             # 3.1 掐头：去掉最开头的所有非数字字符 (例如 v1.0 -> 1.0)
              s1=$(echo "$new_val" | sed 's/^[^0-9]*//')
-             # 清洗 (非字母数字点 -> .)
-             s2=$(echo "$s1" | sed 's/[^a-zA-Z0-9.]/./g')
-             # 整形 (合并点)
+             
+             # 3.2 强力降噪：将所有【非数字】且【非点号】的字符全替换为点号
+             # 这里的巧妙之处在于：.r2024 会变成 ..2024，-git5 会变成 ..5
+             s2=$(echo "$s1" | sed 's/[^0-9.]/./g')
+             
+             # 3.3 整形：合并连续的多个点号，并去掉行尾可能残留的点号
              final_static=$(echo "$s2" | sed 's/\.\{2,\}/./g' | sed 's/\.$//')
              
-             if [ "$new_val" != "$final_static" ]; then
+             # 安全校验：确保清洗后没有变成空值（防止原版本号全是字母的极端错误情况）
+             if [ -n "$final_static" ] && [ "$new_val" != "$final_static" ]; then
                  new_val="$final_static"
-                 mode="${mode:+${mode}+}格式化"
+                 mode="${mode:+${mode}+}纯数字格式化"
              fi
         fi
 
@@ -70,13 +68,8 @@ find . -type f -name "Makefile" | while read -r makefile; do
             echo "  操作: $mode"
             
             if [ "$DO_EDIT" = true ]; then
-                # 安全替换：使用 | 作为分隔符，且不对变量再次进行正则转义，直接字面匹配行首
-                # 先转义 new_val 中的特殊字符以防破坏 sed 语法 (主要是 & 和 /)
-                safe_raw=$(echo "$raw_val" | sed 's/\[/\\\[/g' | sed 's/\]/\\\]/g' | sed 's/\*/\\*/g' | sed 's/\./\\./g' | sed 's/\$/\\$/g')
-                
                 # 针对含有 $() 的复杂字符串，最稳妥的是直接匹配行首 PKG_VERSION:=
                 sed -i "s|^PKG_VERSION:=.*|PKG_VERSION:=$new_val|" "$makefile"
-                
                 echo "  -> 已修正"
                 file_changed=1
             else
