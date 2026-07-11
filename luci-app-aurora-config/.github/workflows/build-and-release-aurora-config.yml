@@ -42,4 +42,5 @@ jobs:
           artifact_paths: |
             bin/packages/$ARCH/base/luci-app-aurora-config*.[ai]pk
             bin/packages/$ARCH/base/luci-i18n-aurora-config*.[ai]pk
-          release_body_path: .github/docs/changelog/${{ github.ref_name }}.md
+          release_body_repo: eamonxg/assets
+          release_body_path: aurora/docs/config/changelog/${{ github.ref_name }}.md
