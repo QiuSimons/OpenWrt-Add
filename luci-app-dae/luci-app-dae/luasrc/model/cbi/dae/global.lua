@@ -1,31 +1,9 @@
-local fs = require "nixio.fs"
 local dae = require "luci.model.dae_tools"
 local m, s, o
 
 m = Map("dae", translate("Global Settings"), translate("Configure global settings for DAE."))
 
--- Check if config file exists, create if not
 local config_file = "/etc/dae/config.dae"
-if not fs.access(config_file) then
-    fs.writefile(config_file, [[# config.dae
-# load all dae files placed in ./config.d/
-include {
-    config.d/*.dae
-}
-global {
-    log_level:warn
-    check_interval:600s
-    check_tolerance:20ms
-    lan_interface:"br-lan"
-    wan_interface:auto
-    auto_config_kernel_parameter:true
-    sniffing_timeout:300ms
-    udp_check_dns: "dns.google:53,8.8.8.8,2001:4860:4860::8888"
-    tcp_check_url: "http://cp.cloudflare.com,1.1.1.1,2606:4700:4700::1111"
-    dial_mode: domain
-    allow_insecure: true
-}]])
-end
 
 s = dae.init_editor(m, "global")
 

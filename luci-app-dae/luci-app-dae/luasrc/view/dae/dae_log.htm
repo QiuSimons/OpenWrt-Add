@@ -17,7 +17,7 @@
 		function(x, data) {
 			if(x && x.status == 200) {
 				var log_textarea = document.getElementById('log_textarea');
-				log_textarea.innerHTML = x.responseText;
+				log_textarea.textContent = x.responseText;
 				if (!scrolled) {
 					log_textarea.scrollTop = log_textarea.scrollHeight;
 					scrolled = true;
