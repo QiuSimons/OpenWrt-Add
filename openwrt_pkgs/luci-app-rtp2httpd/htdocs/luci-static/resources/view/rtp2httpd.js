@@ -6,8 +6,133 @@
 "require uci";
 
 return view.extend({
+  normalizeListenValues: function (value) {
+    var input = Array.isArray(value) ? value : value ? [value] : [];
+    var values = [];
+
+    for (var i = 0; i < input.length; i++) {
+      var listen = String(input[i]).trim();
+      if (listen) {
+        values.push(listen);
+      }
+    }
+
+    return values;
+  },
+
+  getListenValues: function (section_id) {
+    return this.normalizeListenValues(
+      uci.get("rtp2httpd", section_id, "listen")
+    );
+  },
+
+  parseListenValue: function (value) {
+    var listen = String(value || "").trim();
+    var host = null;
+    var port = null;
+    var match;
+    var pos;
+
+    if (!listen) {
+      return null;
+    }
+
+    if (listen.charAt(0) === "/") {
+      if (/\s/.test(listen)) {
+        return null;
+      }
+      return {
+        host: null,
+        port: null,
+        socketPath: listen,
+      };
+    }
+
+    if (/^\d+$/.test(listen)) {
+      port = listen;
+    } else if (listen.charAt(0) === "[") {
+      match = listen.match(/^\[([^\]]+)\]:(\d+)$/);
+      if (!match) {
+        return null;
+      }
+      host = "[" + match[1] + "]";
+      port = match[2];
+    } else {
+      pos = listen.lastIndexOf(":");
+      if (pos <= 0 || pos !== listen.indexOf(":")) {
+        return null;
+      }
+      host = listen.substring(0, pos);
+      port = listen.substring(pos + 1);
+    }
+
+    if (!/^\d+$/.test(port)) {
+      return null;
+    }
+
+    var portNumber = Number(port);
+    if (portNumber < 1 || portNumber > 65535) {
+      return null;
+    }
+
+    if (host !== null) {
+      if (
+        host === "*" ||
+        host.indexOf("/") >= 0 ||
+        /\s/.test(host)
+      ) {
+        return null;
+      }
+    }
+
+    return {
+      host: host,
+      port: port,
+      socketPath: null,
+    };
+  },
+
+  validateListenValue: function (value) {
+    var listen = String(value || "").trim();
+
+    if (!listen) {
+      return true;
+    }
+
+    if (/^\*:/.test(listen)) {
+      return _(
+        "Use a bare port such as 5140 to listen on all addresses; *:5140 is not supported here."
+      );
+    }
+
+    if (!this.parseListenValue(listen)) {
+      return _(
+        "Use port, address:port, hostname:port, [IPv6]:port, or an absolute Unix socket path, for example 5140, 192.168.1.1:8081, or /var/run/rtp2httpd.sock."
+      );
+    }
+
+    return true;
+  },
+
+  getPrimaryListenTarget: function (section_id) {
+    var values = this.getListenValues(section_id);
+    var target = null;
+    var port;
+
+    for (var i = 0; i < values.length; i++) {
+      target = this.parseListenValue(values[i]);
+      if (target && target.port) {
+        return target;
+      }
+    }
+
+    port = uci.get("rtp2httpd", section_id, "port") || "5140";
+    return this.parseListenValue(port) || { host: null, port: "5140" };
+  },
+
   // Helper function to open a page (status or player)
   openPage: function (section_id, pageType) {
+    var self = this;
     var pathConfigKey =
       pageType === "status" ? "status-page-path" : "player-page-path";
     var uciPathKey =
@@ -23,7 +148,9 @@ return view.extend({
       var port = "5140"; // default port
       var token = null;
       var pagePath = defaultPath;
+      var appPathPrefix = "";
       var hostname = null;
+      var listenTarget = null;
       var use_config_file = uci.get("rtp2httpd", section_id, "use_config_file");
 
       if (use_config_file === "1") {
@@ -58,24 +185,53 @@ return view.extend({
         if (pagePathMatch && pagePathMatch[1]) {
           pagePath = pagePathMatch[1];
         }
+        var appPathPrefixMatch = configContent.match(
+          /^\s*app-path-prefix\s*=?\s*(.+?)\s*$/m
+        );
+        if (appPathPrefixMatch && appPathPrefixMatch[1]) {
+          appPathPrefix = appPathPrefixMatch[1];
+        }
       } else {
-        // Get port, token, hostname and page path from UCI config
-        port = uci.get("rtp2httpd", section_id, "port") || "5140";
+        // Get listen address, token, hostname and page path from UCI config
+        listenTarget = self.getPrimaryListenTarget(section_id);
+        port = listenTarget.port;
         token = uci.get("rtp2httpd", section_id, "r2h_token");
         hostname = uci.get("rtp2httpd", section_id, "hostname");
         pagePath = uci.get("rtp2httpd", section_id, uciPathKey) || defaultPath;
+        appPathPrefix = uci.get("rtp2httpd", section_id, "app_path_prefix") || "";
       }
 
       // Ensure pagePath starts with /
       if (pagePath && !pagePath.startsWith("/")) {
         pagePath = "/" + pagePath;
       }
+      appPathPrefix = (appPathPrefix || "").replace(/^\/+/, "").replace(/\/+$/, "");
+      if (appPathPrefix) {
+        appPathPrefix = "/" + appPathPrefix;
+      }
 
       // Use configured hostname or fallback to window.location.hostname
-      var targetHostname = hostname || window.location.hostname;
+      var targetHostname =
+        hostname ||
+        (listenTarget && listenTarget.host) ||
+        window.location.hostname;
 
       // If hostname doesn't have protocol, prepend http:// for URL parsing
       var hasProtocol = /^https?:\/\//i.test(targetHostname);
+
+      // Bracket bare IPv6 literals (multiple colons, no brackets) so URL
+      // parsing and final URL construction are valid; also handle hosts
+      // written with an explicit scheme (e.g. "http://::1")
+      var schemeMatch = targetHostname.match(/^https?:\/\//i);
+      var scheme = schemeMatch ? schemeMatch[0] : "";
+      var authority = targetHostname.slice(scheme.length);
+      if (
+        authority.indexOf("[") === -1 &&
+        authority.indexOf("/") === -1 &&
+        authority.indexOf(":") !== authority.lastIndexOf(":")
+      ) {
+        targetHostname = scheme + "[" + authority + "]";
+      }
       var urlToParse = hasProtocol
         ? targetHostname
         : "http://" + targetHostname;
@@ -99,6 +255,10 @@ return view.extend({
       var finalProtocol = url.protocol.replace(":", "");
       var finalHost = url.hostname;
       var finalPort = "";
+
+      if (finalHost.indexOf(":") >= 0 && finalHost.charAt(0) !== "[") {
+        finalHost = "[" + finalHost + "]";
+      }
 
       if (!hasProtocol) {
         // No protocol in original hostname: use configured port if URL port is empty
@@ -125,9 +285,10 @@ return view.extend({
         pageUrl = finalProtocol + "://" + finalHost + ":" + finalPort;
       }
 
-      // Add base path from hostname if present
+      // Add base path from hostname if present. rtp2httpd ignores hostname path
+      // when app-path-prefix is configured, so the preview should do the same.
       var basePath = url.pathname;
-      if (basePath && basePath !== "/") {
+      if (!appPathPrefix && basePath && basePath !== "/") {
         // Ensure base path ends with '/'
         if (!basePath.endsWith("/")) {
           pageUrl += basePath + "/";
@@ -137,6 +298,18 @@ return view.extend({
         // Remove leading slash from pagePath to avoid double slash
         if (pagePath.startsWith("/")) {
           pagePath = pagePath.substring(1);
+        }
+      }
+
+      if (appPathPrefix) {
+        pageUrl += pageUrl.endsWith("/")
+          ? appPathPrefix.substring(1)
+          : appPathPrefix;
+        if (pagePath.startsWith("/")) {
+          pagePath = pagePath.substring(1);
+        }
+        if (!pageUrl.endsWith("/")) {
+          pageUrl += "/";
         }
       }
 
@@ -234,10 +407,58 @@ return view.extend({
       });
     };
 
-    o = s.taboption("basic", form.Value, "port", _("Port"));
-    o.datatype = "port";
+    o = s.taboption(
+      "basic",
+      form.DynamicList,
+      "listen",
+      _("Listen Addresses"),
+      _(
+        "HTTP listen addresses. Use a bare port for all addresses (e.g., 5140), address:port for IPv4/hostnames, [IPv6]:port, or an absolute Unix socket path."
+      )
+    );
     o.placeholder = "5140";
+    o.rmempty = true;
     o.depends("use_config_file", "0");
+    o.cfgvalue = function (section_id) {
+      var values = self.getListenValues(section_id);
+      var port;
+
+      if (values.length > 0) {
+        return values;
+      }
+
+      port = uci.get("rtp2httpd", section_id, "port");
+      return port ? [port] : [];
+    };
+    o.formvalue = function (section_id) {
+      var elem = this.getUIElement(section_id);
+
+      return self.normalizeListenValues(elem ? elem.getValue() : null);
+    };
+    o.write = function (section_id, value) {
+      var values = self.normalizeListenValues(value);
+      var config = this.uciconfig || this.section.uciconfig || this.map.config;
+      var sid = this.ucisection || section_id;
+      var option = this.ucioption || this.option;
+
+      if (values.length > 0) {
+        this.map.data.set(config, sid, option, values);
+      } else {
+        this.map.data.unset(config, sid, option);
+      }
+
+      this.map.data.unset(config, sid, "port");
+    };
+    o.remove = function (section_id) {
+      var config = this.uciconfig || this.section.uciconfig || this.map.config;
+      var sid = this.ucisection || section_id;
+
+      this.map.data.unset(config, sid, this.ucioption || this.option);
+      this.map.data.unset(config, sid, "port");
+    };
+    o.validate = function (section_id, value) {
+      return self.validateListenValue(value);
+    };
 
     o = s.taboption("basic", form.ListValue, "verbose", _("Logging level"));
     o.value("0", "Fatal");
@@ -525,6 +746,28 @@ return view.extend({
     o = s.taboption(
       "advanced",
       form.Value,
+      "app_path_prefix",
+      _("App Path Prefix"),
+      _("Public mount path prefix for all rtp2httpd HTTP resources, for example /app/rtp2httpd.")
+    );
+    o.placeholder = "/app/rtp2httpd";
+    o.depends("use_config_file", "0");
+
+    o = s.taboption(
+      "advanced",
+      form.Flag,
+      "use_relative_path_in_m3u",
+      _("Use Relative Paths in M3U"),
+      _(
+        "When enabled, generated and rewritten M3U playlists omit the http://host prefix and use root-relative paths."
+      )
+    );
+    o.default = "0";
+    o.depends("use_config_file", "0");
+
+    o = s.taboption(
+      "advanced",
+      form.Value,
       "hostname",
       _("Hostname"),
       _(
@@ -546,6 +789,17 @@ return view.extend({
 
     o = s.taboption(
       "advanced",
+      form.Value,
+      "cors_allow_origin",
+      _("CORS Allow Origin"),
+      _(
+        "Set Access-Control-Allow-Origin header to enable CORS. Use * to allow all origins, or specify a domain (e.g., https://example.com). Leave empty to disable CORS."
+      )
+    );
+    o.depends("use_config_file", "0");
+
+    o = s.taboption(
+      "advanced",
       form.Flag,
       "xff",
       _("X-Forwarded-For"),
@@ -554,6 +808,50 @@ return view.extend({
       )
     );
     o.default = "0";
+    o.depends("use_config_file", "0");
+
+    o = s.taboption(
+      "advanced",
+      form.Value,
+      "access_log",
+      _("Access Log Path"),
+      _("Write one access log line for each media request. Leave empty to disable access logging.")
+    );
+    o.placeholder = "/tmp/rtp2httpd-access.log";
+    o.depends("use_config_file", "0");
+
+    o = s.taboption(
+      "advanced",
+      form.Value,
+      "log_format",
+      _("Access Log Format"),
+      _(
+        "Nginx-style access log format. Empty uses the default format. Supported variables include $client_addr, $time_iso8601, $service_url, $service_type and $upstream_url."
+      )
+    );
+    o.placeholder = '$client_addr [$time_iso8601] "$service_url" $service_type "$upstream_url"';
+    o.depends("use_config_file", "0");
+
+    o = s.taboption(
+      "advanced",
+      form.Value,
+      "http_proxy_user_agent",
+      _("HTTP Proxy User-Agent"),
+      _(
+        "Override the User-Agent header sent to upstream HTTP proxy requests. Leave empty to forward the client User-Agent as-is."
+      )
+    );
+    o.depends("use_config_file", "0");
+
+    o = s.taboption(
+      "advanced",
+      form.Value,
+      "rtsp_user_agent",
+      _("RTSP User-Agent"),
+      _(
+        "User-Agent header used for upstream RTSP requests. Leave empty to use the default rtp2httpd/{version}."
+      )
+    );
     o.depends("use_config_file", "0");
 
     o = s.taboption(

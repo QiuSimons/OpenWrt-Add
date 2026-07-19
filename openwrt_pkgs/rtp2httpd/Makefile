@@ -2,19 +2,18 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=rtp2httpd
 
-PKG_VERSION:=3.9.1
+PKG_VERSION:=3.14.2
 PKG_RELEASE:=1
 PKG_MAINTAINER:=Stackie Jia <jsq2627@gmail.com>
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_LICENSE_FILES:=LICENSE
 
-PKG_FIXUP:=autoreconf
-
 PKG_SOURCE:=rtp2httpd-v$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/stackia/rtp2httpd/tar.gz/v$(PKG_VERSION)?
-PKG_HASH:=f2d42db1944b8199e3956baca1c45477a9acc9e1496f06d5347d73b72337fd2d
+PKG_HASH:=93b1ecdf1a7736204eec39eb5ce4bdb391c70f41090a1c7a42295d374f64fefb
 
 include $(INCLUDE_DIR)/package.mk
+include $(INCLUDE_DIR)/cmake.mk
 
 define Package/rtp2httpd
 	SECTION:=net
@@ -31,6 +30,9 @@ define Package/rtp2httpd/description
 	incoming RTP data to HTTP stream.
 endef
 
+CMAKE_OPTIONS += \
+	-DENABLE_AGGRESSIVE_OPT=ON
+
 define Package/rtp2httpd/conffiles
 /etc/config/rtp2httpd
 /etc/rtp2httpd.conf
@@ -43,7 +45,7 @@ define Package/rtp2httpd/install
 	$(INSTALL_CONF) ./files/rtp2httpd.conf $(1)/etc/config/rtp2httpd
 	$(INSTALL_CONF) $(PKG_BUILD_DIR)/rtp2httpd.conf $(1)/etc
 	$(INSTALL_BIN) ./files/rtp2httpd.init $(1)/etc/init.d/rtp2httpd
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/src/rtp2httpd $(1)/usr/bin
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/rtp2httpd $(1)/usr/bin
 endef
 
 $(eval $(call BuildPackage,rtp2httpd))
