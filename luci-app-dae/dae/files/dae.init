@@ -43,35 +43,11 @@ update_cron() {
 }
 
 cleanup_netns() {
-	if ps w | grep -q "[/]usr/bin/daed run"; then
-		logger -t dae "skip dae runtime cleanup while daed is running"
-		return 0
-	fi
-
-	if ip link show "$DAE_HOST_IFACE" >/dev/null 2>&1; then
-		tc qdisc del dev "$DAE_HOST_IFACE" clsact 2>/dev/null || true
-		ip link del "$DAE_HOST_IFACE" 2>/dev/null || true
-	fi
-
-	if ip link show "$DAE_PEER_IFACE" >/dev/null 2>&1; then
-		ip link del "$DAE_PEER_IFACE" 2>/dev/null || true
-	fi
-
-	if [ -e "$DAENETNS" ]; then
-		ip netns del "$DAE_NETNS_NAME" 2>/dev/null || true
-		rm -f "$DAENETNS" 2>/dev/null || true
-	fi
-}
-
-wait_dae_exit() {
-	local i
-
-	for i in 1 2 3 4 5 6 7 8 9 10; do
-		ps w | grep -q "[/]usr/bin/dae run" || return 0
-		sleep 1
-	done
-
-	return 1
+	tc qdisc del dev "$DAE_HOST_IFACE" clsact 2>/dev/null || true
+	ip link del "$DAE_HOST_IFACE" 2>/dev/null || true
+	ip link del "$DAE_PEER_IFACE" 2>/dev/null || true
+	ip netns del "$DAE_NETNS_NAME" 2>/dev/null || true
+	rm -f "$DAENETNS" 2>/dev/null || true
 }
 
 hijack_resolv_conf() {
@@ -146,14 +122,12 @@ start_service() {
 stop_service() {
     update_cron "remove"
     restore_resolv_conf
+    cleanup_netns
 }
 
-service_stopped() {
-	if wait_dae_exit; then
-		cleanup_netns
-	else
-		logger -t dae "skip dae runtime cleanup because dae is still running"
-	fi
+reload_service() {
+    stop
+    start
 }
 
 service_triggers() {
