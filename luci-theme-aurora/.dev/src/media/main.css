@@ -3,17 +3,15 @@
  * Licensed under the Apache License, Version 2.0.
  */
 
-@import "tailwindcss";
+/* Every shipped utility is referenced through @apply in these CSS sources.
+   Disabling automatic repository scanning prevents class-like words in docs,
+   scripts and fixtures from leaking into the OpenWrt payload. */
+@import "tailwindcss" source(none);
 
 @custom-variant dark (&:where([data-darkmode=true], [data-darkmode=true] *));
 
-@plugin "tailwind-scrollbar" {
-  nocompatible: true;
-}
-
-@import "tw-animate-css";
-
 @import "./_tokens.css";
+@import "./_icons.css";
 
 @import "./_base.css";
 @import "./_elements.css";
