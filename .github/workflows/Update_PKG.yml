@@ -53,7 +53,6 @@ jobs:
           cp -rf ./autocore ./autocore-arm/files/x86/
           sed -i 's/png/svg/g' ./autocore-arm/files/generic/29_ports.js
           git clone --depth 1 https://github.com/sbwml/openwrt-qBittorrent
-          git clone --depth 1 https://github.com/sbwml/luci-app-filemanager
           git clone -b kix --depth 1 https://github.com/QiuSimons/luci-app-daed
           git clone -b kix --depth 1 https://github.com/QiuSimons/luci-app-dae
           git clone --depth 1 https://github.com/QiuSimons/openwrt-natflow
