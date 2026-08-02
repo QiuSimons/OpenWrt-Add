@@ -103,8 +103,8 @@ This will be compiled to standard CSS that works in all browsers.
 
 The theme has two independent Tailwind CSS v4 entry points, both sourced from `.dev/src/media/`:
 
-- **`main.css`** — the LuCI admin UI. It is an import manifest that disables Tailwind's automatic source scan (`source(none)`) and pulls in (in order) `_tokens.css` (OKLCH theme tokens, mapped via `@theme inline`), shared `_icons.css`, `_base.css`, `_elements.css`, `_layout.css`, every file in `components/` (one partial per UI component — buttons, cards, modals, tables, etc.), and `_utilities.css`.
-- **`login.css`** — the standalone login page (`sysauth.ut`). Self-contained: imports Tailwind theme/utilities with `source(none)`, omits full Preflight in favor of a tiny local reset, and imports `_tokens.css` directly. At build time the `login-css-prune` plugin (`vite.config.ts`) strips every custom property the page's var() chains never reach, so the admin-sized token sheet ships login-sized.
+- **`main.css`** — the LuCI admin UI. It is an import manifest that disables Tailwind's automatic source scan (`source(none)`) and pulls in (in order) `@eamonxg/luci-theme-tokens/dist/aurora/tokens.css` (OKLCH theme tokens, mapped via `@theme inline`), shared `_icons.css`, `_base.css`, `_elements.css`, `_layout.css`, every file in `components/` (one partial per UI component — buttons, cards, modals, tables, etc.), and `_utilities.css`.
+- **`login.css`** — the standalone login page (`sysauth.ut`). Self-contained: imports Tailwind theme/utilities with `source(none)`, omits full Preflight in favor of a tiny local reset, and imports `@eamonxg/luci-theme-tokens/dist/aurora/tokens.css` directly. At build time the `login-css-prune` plugin (`vite.config.ts`) strips every custom property the page's var() chains never reach, so the admin-sized token sheet ships login-sized.
 
 Third-party compatibility patches are **not** bundled into `main.css` — they are split into per-page files under `media/patches/` and loaded on demand (see [On-Demand Third-Party Patches](#on-demand-third-party-patches) below).
 
@@ -196,31 +196,33 @@ Two rules of thumb that follow from prefix matching:
 Style a third-party app's page — write or adjust its `patches/*.css`, or check a `main.css`/component change against it — **without having the app (or a device) installed**. Save the page's rendered HTML once, then develop against it with the theme live and hot-reloading.
 
 - **Where snapshots live:** `.dev/mocks/*.html` (git-ignored — snapshots are large, device/fork-specific and go stale, so they stay local). The directory need not exist in a fresh clone; it's created on first capture.
-- **Capture one:** with the dev server proxying a device that has the page, open the page through the proxy and press <kbd>Alt/Option+Shift+S</kbd> (or call `__auroraMockCapture()` in the console). The injected `scripts/mock-capture.client.js` helper POSTs the live DOM to `/mocks/__save`, which writes `.dev/mocks/<data-page>.html` — named after the page's `data-page`, doctype included, dev-only script tags stripped. (The endpoint only accepts requests carrying the helper's custom header, which cross-origin pages can't send without a CORS preflight this server never approves.) Manual capture still works: run `copy(document.documentElement.outerHTML)` in the DevTools console and save the paste as `.dev/mocks/<name>.html` — the filename is free; the page's real identity is the `data-page` attribute already in its `<body>`, which patch selectors match.
+- **The mock bar:** every HTML page this dev server hands out — proxied device pages and served snapshots alike — gets `scripts/mock-bar.client.js` (served at `/mocks/__bar.js`), a floating bar in the bottom-left corner. It lives in a Shadow DOM, so theme and patch CSS can neither restyle it nor be polluted by it, and the theme's own floating toolbar keeps the bottom-right corner. On a device page it lists what `.dev/mocks/` holds, so the workflow is reachable without typing the `/mocks/` URL: `◆` appears when this page's `data-page` matches a snapshot and opens it in one click, `⊕` captures the open page, and an empty `.dev/mocks/` shrinks the bar to a lone `⊕`. Inside a snapshot it names the open one, steps through the rest, and `↩` goes back to the same page on the device. `✕` collapses it to a dot, remembered in `localStorage['aurora.mockbar.collapsed']`. The snapshot list is injected inline next to the script; both tags carry `data-aurora-mock`, which is how a capture strips them back out — a snapshot must never bake in a list that is re-injected, current, on every serve.
+- **Capture one:** with the dev server proxying a device that has the page, open the page through the proxy and hit `⊕` on the mock bar — or press <kbd>Alt/Option+Shift+S</kbd>, or call `__auroraMockCapture()` in the console. It POSTs the live DOM to `/mocks/__save`, which writes `.dev/mocks/<data-page>.html` — named after the page's `data-page`, doctype included, dev-only script tags stripped. (The endpoint only accepts requests carrying the helper's custom header, which cross-origin pages can't send without a CORS preflight this server never approves.) Manual capture still works: run `copy(document.documentElement.outerHTML)` in the DevTools console and save the paste as `.dev/mocks/<name>.html` — the filename is free; the page's real identity is the `data-page` attribute already in its `<body>`, which patch selectors match.
 - **Capture it from a device running _this_ theme — snapshots are not portable between themes.** A snapshot is a verbatim copy of a rendered page, so it hard-codes the theme that rendered it in three places: the stylesheet links (`/luci-static/aurora/main.css` plus that page's patch), the device's stored UCI token overrides in an inline `<style>`, and the theme's own header/nav markup. Drop a snapshot captured under `luci-theme-shadcn` in here (or vice versa) and the page renders **completely unstyled**, because a dev server only serves its own `/luci-static/<theme>/` prefix. The giveaway is a terminal line naming the other theme's stylesheet:
   ```
   [Mocks] miss /luci-static/shadcn/main.css → 404 (mirror it at .dev/mocks/static/… to serve it)
   ```
   Mirroring, which that generic hint suggests, is the wrong fix here — re-capture the page from a device running this theme. If you must reuse a foreign snapshot anyway, only the app's own content region means anything: point its stylesheet links at this theme, and delete the inline `<style>` block, or the captured device's colors override this checkout's tokens.
 - **View:** `pnpm dev`, then open <http://localhost:5173/mocks/> — an auto-generated index lists every snapshot with its `data-page` and age. The `mock-pages-plugin` (in `vite.config.ts`) serves each page with the Vite HMR client injected, so editing any theme source (`main.css`, a component, a `patches/*.css`, or served JS) triggers the usual full reload (see [Live Reload Behavior](#live-reload-behavior)). The snapshot keeps its absolute `/luci-static/…` links; theme CSS/JS, fonts and images resolve locally and compile on the fly. Serving prepends the `<!doctype html>` that `outerHTML` captures drop, so mocks render in standards mode exactly like the real page.
-- **Navigate between snapshots in place:** `scripts/mock-nav.client.js` (injected into every mock) resolves clicks on the snapshot's own LuCI links (`/cgi-bin/luci/…`) against the captured snapshots by `data-page` (exact match) and jumps straight to the matching mock — an app's tab bar or the sidebar works just like on the device. Uncaptured targets are blocked with a hint naming the missing snapshot instead of falling through to the proxy. A floating switcher (bottom-left) lists every snapshot, cycles with <kbd>[</kbd>/<kbd>]</kbd> (or its ‹/› buttons), and links back to the index.
+- **Navigate between snapshots in place:** inside a mock the bar also takes over clicks on the snapshot's own LuCI links (`/cgi-bin/luci/…`), resolving them against the captured snapshots by `data-page` (exact match) and jumping straight to the matching mock — an app's tab bar or the sidebar works just like on the device. Uncaptured targets are blocked with a hint naming the missing snapshot instead of falling through to the proxy. The bar lists every snapshot, cycles with <kbd>[</kbd>/<kbd>]</kbd> (or its ‹/› buttons) and links back to the index. `↩` leaves for the real page: its target is the `requestpath` from LuCI's own inline bootstrap, but only when that agrees with the snapshot's `data-page` (a hand-assembled mock can carry the segments of the page it was built from); otherwise it falls back to splitting `data-page`, which is lossy whenever a path segment contains a dash of its own (`admin-status-disks-info`), then to the last device page visited in this tab.
 - **Third-party assets:** an app's own css/js the snapshot references (e.g. `qmodem-next.css`, or a device-only custom logo) isn't in this repo. To serve it, mirror its URL under `.dev/mocks/static/` (e.g. `.dev/mocks/static/luci-static/resources/qmodem/qmodem-next.css`); files there are served as-is (no HMR). Misses requested by a mock page 404 immediately — never proxied to the router, so mocks stay fully offline-capable — and each miss prints a one-time terminal hint with the exact mirror path. (CSS-initiated requests, e.g. nav icons, carry the stylesheet's URL as referer and can't be attributed to the mock page; any `/luci-static` request that falls through to the proxy is therefore bounded to 5s and answers 504 when the router is unreachable.) The theme still applies without them.
 - **No auth, no runtime:** a snapshot is static DOM, so `mock-pages-plugin` strips LuCI's runtime scripts (`luci.js`/`cbi.js`/`xhr.js` and `/cgi-bin/` endpoints) and injects a no-op `L`/`LuCI`/`XHR` stub before serving. Without this, LuCI boots, polls the backend, gets 403 (no session) and pops the "Session expired" modal. The trade-off: framework-dependent theme JS (e.g. `menu-aurora`) no-ops in mocks — the captured DOM is already rendered, so it still looks right. The theme's own inline scripts (dark mode, toolbar state) and any `src/media/` JS still run.
 
 ### Design Tokens
 
-`src/media/_tokens.css` is **generated** — its header says "DO NOT EDIT". The source of truth is the standalone [`@eamonxg/aurora-tokens`](https://github.com/eamonxg/aurora-tokens) npm package, consumed here as a devDependency:
+There is no local `_tokens.css` and no generation step: `main.css`/`login.css` `@import "@eamonxg/luci-theme-tokens/dist/aurora/tokens.css"` directly, resolved straight out of `node_modules` at build time. The source of truth lives in the standalone [`@eamonxg/luci-theme-tokens`](https://github.com/eamonxg/luci-theme-tokens) npm package, consumed here as a devDependency:
 
-- **`defaults.js`** — the 10 editable input colors (`bg`, `surface`, `text`, `brand`, `on_brand`, `link`, `info`, `warning`, `success`, `danger`) for light and dark mode, as OKLCH strings.
-- **`spec.js`** — `DERIVATIONS` (how every other token — `text_muted`, `surface_sunken`, `hairline`, `brand_hover`, `brand_subtle`, `focus_ring`, `progress_start`/`progress_end`, `*_surface`, `scrim`, `mega_menu_bg`, …) is computed from the inputs via `mix`/`shade`/`set`/`alpha`/`const` operators, and `FIXED` (mode-specific literals such as shadows that bypass derivation).
+- **`aurora/defaults.js`** — the 10 editable input colors (`bg`, `surface`, `text`, `brand`, `on_brand`, `link`, `info`, `warning`, `success`, `danger`) for light and dark mode, as OKLCH strings.
+- **`aurora/spec.js`** — `DERIVATIONS` (how every other token — `text_muted`, `surface_sunken`, `hairline`, `brand_hover`, `brand_subtle`, `focus_ring`, `progress_start`/`progress_end`, `*_surface`, `scrim`, `mega_menu_bg`, …) is computed from the inputs via `mix`/`shade`/`set`/`alpha`/`const` operators, and `FIXED` (mode-specific literals such as shadows that bypass derivation).
 - **`engine.js`** — the OKLCH/OKLAB color math behind those operators, via [colorjs.io](https://colorjs.io/).
-- **`resolve.js`** — `resolveMode(mode)` walks `DERIVATIONS` and returns a flat `{token: oklchString}` map with no `color-mix()`/`var()` left in it. `.dev/scripts/gen-tokens.js` imports `resolveMode`/`FIXED` straight from the package root.
+- **`resolve.js`** — `createResolver` walks a `DERIVATIONS` spec and returns a flat `{token: oklchString}` map with no `color-mix()`/`var()` left in it; `aurora/index.js` pre-binds this to Aurora's own spec as `resolveMode(mode)`, exported from the package's `/aurora` entry point.
+- **`dist/aurora/tokens.css`** — built by the package's own `build.mjs` (its `prepublishOnly`) and shipped in the published tarball; nothing in this repo regenerates it.
 
 **Changing a color:**
 
-1. Edit `spec.js`/`defaults.js` in the [`aurora-tokens`](https://github.com/eamonxg/aurora-tokens) repo (derivation rules, fixed literals, base input colors), tag a release so CI publishes the package, then bump the `@eamonxg/aurora-tokens` devDependency version here and run `npm install`. For unreleased iteration against a local checkout, run `npm link ../../aurora-tokens` from `.dev` instead of bumping/publishing.
-2. Run `pnpm gen:tokens` (also runs automatically as part of `pnpm build`) to rewrite `src/media/_tokens.css` — it emits `:root` (light) and `[data-darkmode="true"]` (dark) blocks plus the `@theme inline` mapping, in that order.
-3. Run `pnpm test` to check the color-math operators and derived-token invariants (`tests/engine.test.js`, `tests/resolve.test.js`, `tests/surfaces.test.js`) — e.g. hue families, lightness ordering between `bg`/`surface_sunken`/`surface`, and translucency of menu backgrounds.
+1. Edit `aurora/spec.js`/`aurora/defaults.js` in the [`luci-theme-tokens`](https://github.com/eamonxg/luci-theme-tokens) repo (derivation rules, fixed literals, base input colors), tag a release so CI tests, builds `dist/`, and publishes the package, then bump the `@eamonxg/luci-theme-tokens` devDependency version here and run `pnpm install`. For unreleased iteration against a local checkout, run `pnpm link ../../luci-theme-tokens` from `.dev` instead of bumping/publishing.
+2. Run `pnpm build` — Vite resolves `@eamonxg/luci-theme-tokens/dist/aurora/tokens.css` straight from `node_modules`, so a version bump (or `pnpm link`) is all a color change needs on this side.
+3. Run `pnpm test` to check the color-math and derived-token invariants (`tests/resolve.test.js`, `tests/surfaces.test.js`, both importing `resolveMode` from `@eamonxg/luci-theme-tokens/aurora`) — e.g. hue families, lightness ordering between `bg`/`surface_sunken`/`surface`, and translucency of menu backgrounds.
 
 **Runtime overrides from UCI:** `header.ut` reads `uci get_all aurora.theme` on each render and re-emits stored tokens as CSS custom-property overrides in an inline `<style>` after `main.css`. Keys are namespaced by prefix — `light_*` and `struct_*` land in `:root`, `dark_*` in `[data-darkmode="true"]` — with the prefix stripped and `_` mapped to `-` (e.g. `light_surface_sunken` → `--surface-sunken`). The template flattens all keys in a single pass into two pre-joined declaration strings (rather than per-key template loops), which halves the iteration work and keeps the emitted `<style>` compact. This is the hook `luci-app-aurora-config` writes through.
 
@@ -278,10 +280,9 @@ htdocs/luci-static/
 
 **Build Process:**
 
-1. `pnpm gen:tokens` regenerates `src/media/_tokens.css` from `@eamonxg/aurora-tokens` (see [Design Tokens](#design-tokens))
-2. Vite builds the CSS entry points (`src/media/main.css` and `src/media/login.css`), keeping Tailwind's native `@layer` structure
-3. Custom Vite plugin (`luci-js-compress`) minifies JS files via Terser
-4. Static assets copied from `.dev/public/aurora/`
+1. Vite builds the CSS entry points (`src/media/main.css` and `src/media/login.css`), resolving `@eamonxg/luci-theme-tokens/dist/aurora/tokens.css` straight from `node_modules` (see [Design Tokens](#design-tokens)) and keeping Tailwind's native `@layer` structure
+2. Custom Vite plugin (`luci-js-compress`) minifies JS files via Terser
+3. Static assets copied from `.dev/public/aurora/`
 
 ## Package Compilation
 
@@ -324,16 +325,13 @@ luci-theme-aurora/
 │   │   └── images/                 # Theme images + PWA icons
 │   ├── scripts/                    # Build scripts + dev-server client helpers
 │   │   ├── clean.js                # Build cleanup utility
-│   │   ├── gen-tokens.js           # Regenerates src/media/_tokens.css from @eamonxg/aurora-tokens
-│   │   ├── mock-capture.client.js  # Injected into proxied device pages — hotkey capture to /mocks/__save
-│   │   ├── mock-nav.client.js      # Injected into /mocks/ pages — link takeover + floating switcher
+│   │   ├── mock-bar.client.js      # Injected into device pages and /mocks/ — snapshot bar, capture, link takeover
 │   │   └── setup.js                # pnpm setup:router — .env wizard + passwordless SSH to the router
 │   ├── src/                        # Source code
 │   │   ├── assets/icons/           # SVG icons
 │   │   ├── media/                  # CSS source (Tailwind CSS v4)
-│   │   │   ├── main.css            # Admin UI entry point (import manifest)
+│   │   │   ├── main.css            # Admin UI entry point (import manifest; tokens via @eamonxg/luci-theme-tokens)
 │   │   │   ├── login.css           # Login page entry point
-│   │   │   ├── _tokens.css         # OKLCH theme tokens -- GENERATED, see @eamonxg/aurora-tokens
 │   │   │   ├── _base.css           # Document foundation (html/body viewport bg)
 │   │   │   ├── _elements.css       # Base element styles (headings, links, …)
 │   │   │   ├── _layout.css         # Page layout/structure
@@ -343,8 +341,7 @@ luci-theme-aurora/
 │   │   └── resource/               # JavaScript resources
 │   │       └── menu-aurora.js      # Menu logic
 │   ├── tests/                      # All test suites (pnpm test)
-│   │   ├── engine.test.js          # Color-math operators
-│   │   ├── resolve.test.js         # Resolved token invariants
+│   │   ├── resolve.test.js         # Resolved token invariants (against @eamonxg/luci-theme-tokens/aurora)
 │   │   ├── surfaces.test.js        # Surface/hue layering invariants
 │   │   ├── overlay.test.js         # Overlay/layout CSS assertions
 │   │   └── navigation-*.test.js    # Navigation model/rendering/styles
@@ -386,7 +383,7 @@ luci-theme-aurora/
 - **[Vite](https://vitejs.dev/)** - Build tool and development server
 - **[pnpm](https://pnpm.io/)** - Fast, disk space efficient package manager
 - **[lightningcss](https://lightningcss.dev/)** - CSS minifier
-- **[colorjs.io](https://colorjs.io/)** - OKLCH/OKLAB color math for design token generation (used by [`@eamonxg/aurora-tokens`](https://github.com/eamonxg/aurora-tokens))
+- **[colorjs.io](https://colorjs.io/)** - OKLCH/OKLAB color math for design token generation (used by [`@eamonxg/luci-theme-tokens`](https://github.com/eamonxg/luci-theme-tokens))
 - **[Terser](https://terser.org/)** - JavaScript minifier
 - **[Prettier](https://prettier.io/)** - Code formatter
 - **[prettier-plugin-tailwindcss](https://github.com/tailwindlabs/prettier-plugin-tailwindcss)** - Tailwind class sorting
