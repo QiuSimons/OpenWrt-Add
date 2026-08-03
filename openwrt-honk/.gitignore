@@ -1,0 +1,16 @@
+.cache/
+archives/
+build/
+downloads/
+evidence/
+node_modules/
+sdk/
+target/
+tmp/
+tmpfs-secrets/
+honk/files/bin/
+*.apk
+*.ipk
+*.tar
+*.tar.gz
+*.tar.xz

@@ -1,0 +1,175 @@
+name: Build packages
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - Build Honk binaries
+    types:
+      - completed
+    branches:
+      - master
+  push:
+    branches:
+      - master
+    paths:
+      - honk/files/**
+      - luci-app-honk/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packages-${{ github.event.workflow_run.head_sha || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: Prepare version
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    outputs:
+      binary_release_tag: ${{ steps.meta.outputs.binary_release_tag }}
+      checkout_ref: ${{ steps.meta.outputs.checkout_ref }}
+      release_name: ${{ steps.meta.outputs.release_name }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Generate version metadata
+        id: meta
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          pkg_version=$(sed -n 's/^PKG_VERSION:=//p' honk/Makefile | head -n 1)
+          pkg_release=$(sed -n 's/^PKG_RELEASE:=//p' honk/Makefile | head -n 1)
+          source_revision=$(sed -n 's/^PKG_SOURCE_VERSION:=//p' honk/source.mk | head -n 1)
+          short_revision=${source_revision:0:7}
+          version="${pkg_version}-r${pkg_release}_${short_revision}"
+          {
+            echo "binary_release_tag=honk_binaries_${version}"
+            echo "checkout_ref=$CHECKOUT_REF"
+            echo "release_name=honk_${version}"
+            echo "release_tag=honk_${version}"
+            echo "version=$version"
+          } >>"$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.arch }} / ${{ matrix.sdk }}
+    needs: prepare
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            binary_arch: x86_64
+            sdk: openwrt-24.10
+            package_ext: ipk
+          - arch: aarch64_generic
+            binary_arch: aarch64
+            sdk: openwrt-24.10
+            package_ext: ipk
+          - arch: x86_64
+            binary_arch: x86_64
+            sdk: openwrt-25.12
+            package_ext: apk
+          - arch: aarch64_generic
+            binary_arch: aarch64
+            sdk: openwrt-25.12
+            package_ext: apk
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - name: Download prebuilt Honk binaries
+        shell: bash
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          HONK_BINARY_RELEASE_TAG: ${{ needs.prepare.outputs.binary_release_tag }}
+          HONK_BINARY_VERSION: ${{ needs.prepare.outputs.version }}
+          PACKAGE_ARCH: ${{ matrix.binary_arch }}
+        run: bash .github/scripts/download-honk-binaries.sh
+
+      - name: Build packages in OpenWrt SDK
+        shell: bash
+        env:
+          SDK_IMAGE: ghcr.io/openwrt/sdk:${{ matrix.arch }}-${{ matrix.sdk }}
+        run: |
+          set -euo pipefail
+          mkdir -p .build-output
+          sudo chown 1000:1000 .build-output
+          docker run --rm \
+            --user buildbot \
+            --volume "$GITHUB_WORKSPACE:/feed:ro" \
+            --volume "$GITHUB_WORKSPACE/.build-output:/artifacts" \
+            "$SDK_IMAGE" \
+            bash /feed/.github/scripts/build-packages-in-sdk.sh
+          sudo chown -R "$(id -u):$(id -g)" .build-output
+
+      - name: Prepare artifacts
+        shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+          PACKAGE_EXT: ${{ matrix.package_ext }}
+          SDK: ${{ matrix.sdk }}
+        run: |
+          set -euo pipefail
+          package_dir=".build-output/bin/packages/${ARCH}/honk_ci"
+          mkdir -p dist
+          shopt -s nullglob
+          packages=(
+            "$package_dir"/honk[-_]*."$PACKAGE_EXT"
+            "$package_dir"/luci-app-honk[-_]*."$PACKAGE_EXT"
+          )
+          if [ "${#packages[@]}" -ne 2 ]; then
+            echo "Expected honk and luci-app-honk packages in $package_dir" >&2
+            find .build-output/bin/packages -type f -print || true
+            exit 1
+          fi
+          for package in "${packages[@]}"; do
+            base=$(basename "$package" ".$PACKAGE_EXT")
+            cp "$package" "dist/${base}-${ARCH}-${SDK}.${PACKAGE_EXT}"
+          done
+          ls -lah dist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: honk-${{ matrix.arch }}-${{ matrix.sdk }}-${{ matrix.package_ext }}
+          path: dist/*.${{ matrix.package_ext }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish release
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create or update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          name: ${{ needs.prepare.outputs.release_name }}
+          target_commitish: ${{ needs.prepare.outputs.checkout_ref }}
+          generate_release_notes: true
+          files: release-assets/*
