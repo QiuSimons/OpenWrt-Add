@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=honk
-PKG_VERSION:=0.0.1_beta35
-PKG_RELEASE:=1
+PKG_VERSION:=0.0.1_beta37
+PKG_RELEASE:=2
 PKG_LICENSE:=GPL-3.0-only
 PKG_LICENSE_FILES:=LICENSE
 PKG_MAINTAINER:=Honk OpenWrt feed
@@ -15,12 +15,12 @@ PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_SOURCE_SUBDIR)
 PKG_BUILD_PARALLEL:=1
 PKG_USE_MIPS16:=0
 
-HONK_PREBUILT_DIR?=$(CURDIR)/files/bin
-HONK_USE_PREBUILT:=$(if $(and $(wildcard $(HONK_PREBUILT_DIR)/honk-core),$(wildcard $(HONK_PREBUILT_DIR)/honk-tool)),1)
+GEO_CACHE_DIR?=$(CURDIR)/../.cache/dl
+GEO_LOCK?=$(CURDIR)/../locks/geo.lock.json
+GEO_SITE_CACHE:=$(GEO_CACHE_DIR)/loyalsoldier-geosite-202607312254.dat
+GEO_IP_CACHE:=$(GEO_CACHE_DIR)/v2fly-geoip-202607171233.dat
 
-ifneq ($(HONK_USE_PREBUILT),1)
 PKG_BUILD_DEPENDS:=rust/host
-endif
 
 include $(INCLUDE_DIR)/package.mk
 include $(TOPDIR)/feeds/packages/lang/rust/rust-package.mk
@@ -30,9 +30,8 @@ define Package/honk
 	CATEGORY:=Network
 	TITLE:=Honk eBPF transparent proxy
 	DEPENDS:=@(x86_64||aarch64)
-	DEPENDS+=+ca-bundle +ip-full +tc-full +nsenter +libstdcpp
+	DEPENDS+=+ca-bundle +ip-full +tc-full +nsenter +libstdcpp +jq
 	DEPENDS+=+kmod-sched-core +kmod-sched-bpf +kmod-veth
-	DEPENDS+=+v2ray-geoip +v2ray-geosite
 	URL:=https://github.com/Glassyiris/honk
 endef
 
@@ -47,24 +46,21 @@ define Package/honk/conffiles
 endef
 
 RUST_TARGET:=$(RUSTC_TARGET_ARCH)
-BPF_RUST_TOOLCHAIN?=nightly
+BPF_RUST_TOOLCHAIN?=nightly-2026-07-27
 BPF_CARGO?=rustup run $(BPF_RUST_TOOLCHAIN) cargo
 BPF_RUSTC?=$(shell rustup which --toolchain $(BPF_RUST_TOOLCHAIN) rustc 2>/dev/null)
-HONK_CORE_BINARY:=$(if $(filter 1,$(HONK_USE_PREBUILT)),$(HONK_PREBUILT_DIR)/honk-core,$(PKG_BUILD_DIR)/target/$(RUST_TARGET)/release/honk-core)
-HONK_TOOL_BINARY:=$(if $(filter 1,$(HONK_USE_PREBUILT)),$(HONK_PREBUILT_DIR)/honk-tool,$(PKG_BUILD_DIR)/target/$(RUST_TARGET)/release/honk-tool)
+HONK_CORE_BINARY:=$(PKG_BUILD_DIR)/target/$(RUST_TARGET)/release/honk-core
+HONK_TOOL_BINARY:=$(PKG_BUILD_DIR)/target/$(RUST_TARGET)/release/honk-tool
 
 define Build/Prepare
 	$(call Build/Prepare/Default)
 	$(if $(filter x86_64 aarch64,$(ARCH)),,$(error honk supports only x86_64 and aarch64))
 	@test -f $(PKG_BUILD_DIR)/Cargo.toml
+	@test -f $(GEO_LOCK)
+	@test -f $(GEO_SITE_CACHE) && sha256sum $(GEO_SITE_CACHE) | cut -d ' ' -f 1 | grep -qx 1f3a743e8e30152a870a1674792af3976361436dcb1f510a43c499d430f6b13f
+	@test -f $(GEO_IP_CACHE) && sha256sum $(GEO_IP_CACHE) | cut -d ' ' -f 1 | grep -qx b71d1999439dde2de2d2b6844a2befa50c50211ff739785c005ca7c230a17d6a
 endef
 
-ifeq ($(HONK_USE_PREBUILT),1)
-define Build/Compile
-	@test -x $(HONK_CORE_BINARY)
-	@test -x $(HONK_TOOL_BINARY)
-endef
-else
 define Build/Compile
 	$(if $(filter x86_64 aarch64,$(ARCH)),,$(error honk supports only x86_64 and aarch64))
 	+cd $(PKG_BUILD_DIR)/crates/honk-ebpf && \
@@ -82,16 +78,23 @@ define Build/Compile
 		cargo build --locked --release --target $(RUST_TARGET) \
 			-p honk-core -p honk-tool --features honk-core/ebpf
 endef
-endif
 
 define Package/honk/install
-	$(INSTALL_DIR) $(1)/usr/bin $(1)/usr/libexec/honk $(1)/etc/init.d $(1)/etc/config $(1)/etc/honk/config.d
+	$(INSTALL_DIR) $(1)/usr/bin $(1)/usr/libexec/honk $(1)/usr/lib/honk $(1)/usr/share/honk $(1)/etc/init.d $(1)/etc/config $(1)/etc/honk/config.d
 	$(INSTALL_BIN) $(HONK_CORE_BINARY) $(1)/usr/bin/honk-core
 	$(INSTALL_BIN) $(HONK_TOOL_BINARY) $(1)/usr/bin/honk-tool
+	$(INSTALL_DATA) $(GEO_SITE_CACHE) $(1)/usr/lib/honk/geosite.dat
+	$(INSTALL_DATA) $(GEO_IP_CACHE) $(1)/usr/lib/honk/geoip.dat
+	ln -s /usr/lib/honk/geosite.dat $(1)/usr/share/honk/geosite.dat
+	ln -s /usr/lib/honk/geoip.dat $(1)/usr/share/honk/geoip.dat
+	$(INSTALL_DATA) $(GEO_LOCK) $(1)/usr/share/honk/geo.lock.json
 	$(INSTALL_BIN) $(CURDIR)/files/honk.init $(1)/etc/init.d/honk
 	$(INSTALL_BIN) $(CURDIR)/files/honk-launcher $(1)/usr/libexec/honk/honk-launcher
+	$(INSTALL_BIN) $(CURDIR)/files/quick-transaction-worker $(1)/usr/libexec/honk/quick-transaction-worker
+	$(INSTALL_BIN) $(CURDIR)/files/interface-discovery $(1)/usr/libexec/honk/interface-discovery
 	$(INSTALL_CONF) $(CURDIR)/files/honk.config $(1)/etc/config/honk
 	$(INSTALL_CONF) $(CURDIR)/files/config.dae $(1)/etc/honk/config.dae
+	$(INSTALL_DATA) $(CURDIR)/files/config.dae.default $(1)/etc/honk/config.dae.default
 endef
 
 $(eval $(call BuildPackage,honk))
