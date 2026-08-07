@@ -13,6 +13,7 @@
           "get_font_status",
           "export_config",
           "get_hub_status",
+          "hub_local_state",
           "hub_me"
         ],
         "file": ["read", "list", "stat"]
@@ -42,8 +43,8 @@
           "remove_font",
           "hub_apply",
           "hub_restore_backup",
-          "hub_share",
-          "hub_update",
+          "hub_share_begin",
+          "hub_share_commit",
           "hub_delete",
           "hub_export_key",
           "hub_import_key",
