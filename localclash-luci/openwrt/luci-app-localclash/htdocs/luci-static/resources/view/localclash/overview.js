@@ -2,6 +2,7 @@
 'require view';
 'require rpc';
 'require ui';
+'require localclash.takeover-issue-report as takeoverIssueReport';
 
 var callStatus = rpc.declare({
 	object: 'localclash',
@@ -12,6 +13,12 @@ var callStatus = rpc.declare({
 var callTakeoverStatus = rpc.declare({
 	object: 'localclash',
 	method: 'takeover_status',
+	expect: { '': {} }
+});
+
+var callTakeoverLogs = rpc.declare({
+	object: 'localclash',
+	method: 'takeover_logs',
 	expect: { '': {} }
 });
 
@@ -184,19 +191,37 @@ function section(title, body, extraClass) {
 
 function showResult(title, result, options) {
 	var shouldAutoClose = result && result.ok === true && !(options && options.keepOpen);
+	var resultText = JSON.stringify(result, null, 2);
+	var actions = [];
+
+	if (options && options.copyResult) {
+		actions.push(E('button', {
+			'type': 'button',
+			'class': 'btn cbi-button',
+			'click': function(ev) {
+				var button = ev.currentTarget;
+				if (options.privacyConfirm && !window.confirm(_('接管诊断可能包含接口名、主机名或网络地址。确认复制？')))
+					return;
+				copyText(resultText).then(function() {
+					button.textContent = _('已复制');
+				}).catch(function() {
+					button.textContent = _('复制失败');
+				});
+			}
+		}, [ _('复制接管诊断') ]));
+	}
+	actions.push(E('button', {
+		'type': 'button',
+		'class': 'btn',
+		'click': function() {
+			ui.hideModal();
+			window.location.reload();
+		}
+	}, [ _('关闭') ]));
 
 	ui.showModal(title, [
-		E('pre', { 'class': 'localclash-result' }, [ JSON.stringify(result, null, 2) ]),
-		E('div', { 'class': 'right' }, [
-			E('button', {
-				'type': 'button',
-				'class': 'btn',
-				'click': function() {
-					ui.hideModal();
-					window.location.reload();
-				}
-			}, [ _('关闭') ])
-		])
+		E('pre', { 'class': 'localclash-result' }, [ resultText ]),
+		E('div', { 'class': 'right' }, actions)
 	]);
 
 	if (shouldAutoClose)
@@ -283,7 +308,7 @@ function taskLogClipboardText(title, statusLine, logOutput, resultOutput) {
 	].join('\n');
 }
 
-function showTaskModal(title, cancellable) {
+function showTaskModal(title, cancellable, options) {
 	var logOutput = E('pre', { 'class': 'localclash-task-log' }, [ _('等待任务输出…') ]);
 	var statusLine = E('p', { 'class': 'localclash-task-status' }, [ _('正在启动任务…') ]);
 	var resultOutput = E('pre', { 'class': 'localclash-result localclash-task-result' }, []);
@@ -292,6 +317,8 @@ function showTaskModal(title, cancellable) {
 		'class': 'btn cbi-button',
 		'click': function() {
 			var originalLabel = _('复制日志');
+			if (options && options.privacyConfirm && !window.confirm(_('接管诊断可能包含接口名、主机名或网络地址。确认复制？')))
+				return;
 			copyText(taskLogClipboardText(title, statusLine, logOutput, resultOutput)).then(function() {
 				copyButton.textContent = _('已复制');
 				window.setTimeout(function() {
@@ -352,7 +379,7 @@ function showTaskModal(title, cancellable) {
 function trackTask(title, startPromise, options) {
 	options = options || {};
 	var startedAt = options.startedAt ? options.startedAt * 1000 : Date.now();
-	var modal = showTaskModal(title, options.cancellable !== false);
+	var modal = showTaskModal(title, options.cancellable !== false, options);
 	var timer;
 
 	function updateLogs() {
@@ -483,7 +510,7 @@ function commandButton(label, handler, extraClass, options) {
 				return null;
 
 			function openProgressModal() {
-				modal = showTaskModal(label);
+				modal = showTaskModal(label, false, options);
 				modal.logOutput.textContent = _('命令已发送，正在等待路由器返回结果…');
 				progressTimer = window.setInterval(function() {
 					var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
@@ -777,6 +804,16 @@ function runtimeRunning(status) {
 	return componentInstalled(runtime, [ 'runtime', 'mihomo' ]);
 }
 
+function takeoverFailureText(failure) {
+	var code = failure && failure.code ? String(failure.code) : '';
+	var message = failure && failure.message ? String(failure.message) : String(failure || '');
+
+	if (/timeout|timed out|router_takeover_status_timeout/i.test(code + ' ' + message))
+		return _('状态查询超时（实际接管状态未知，请重试）');
+
+	return formatText(_('状态查询失败（实际接管状态未知）：%s'), message || code || _('未知错误'));
+}
+
 function takeoverState(takeover) {
 	if (takeover && takeover.pending === true)
 		return _('检查中…');
@@ -784,6 +821,8 @@ function takeoverState(takeover) {
 	var state = stringState(takeover);
 
 	if (takeover && typeof takeover === 'object') {
+		if (takeover.ok === false)
+			return takeoverFailureText(takeover);
 		if (takeover.status && typeof takeover.status === 'object') {
 			if (takeover.status.effective === true)
 				return _('已生效');
@@ -798,8 +837,6 @@ function takeoverState(takeover) {
 			return _('已生效');
 		if (takeover.active === false || takeover.running === false || takeover.enabled === false)
 			return _('未生效');
-		if (takeover.ok === false)
-			return takeover.code || _('不可用');
 	}
 
 	if (/active|enabled|running/.test(state))
@@ -829,7 +866,7 @@ function refreshTakeoverStatus() {
 		if (hero)
 			hero.textContent = text;
 	}).catch(function(err) {
-		var text = err.message || String(err);
+		var text = takeoverFailureText(err);
 		var cell = document.getElementById('localclash-overview-takeover-status');
 		var hero = document.getElementById('localclash-overview-takeover-hero');
 
@@ -870,8 +907,9 @@ function refreshOverviewStatus() {
 		updateBootstrapStartButton();
 		lastOverviewStatusData = data.ok === false && data.error ? null : data;
 		replaceContent('localclash-overview-summary-body', data.ok === false && data.error ? summaryErrorTable(data.error) : summaryTable(data, takeover, task, state));
-		refreshOneClickUpdateCheck(lastOverviewStatusData);
-		return refreshTakeoverStatus();
+		return refreshTakeoverStatus().then(function() {
+			return refreshOneClickUpdateCheck(lastOverviewStatusData);
+		});
 	});
 }
 
@@ -1203,7 +1241,9 @@ function summaryTable(data, takeover, task, state) {
 			E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
 				E('td', { 'class': 'td', 'data-title': _('项目') }, [ _('网络接管') ]),
 				E('td', { 'class': 'td', 'data-title': _('目前状态'), 'id': 'localclash-overview-takeover-status' }, [ takeoverState(takeover) ]),
-				tableActionCell([])
+				tableActionCell([
+					commandButton(_('查看接管日志'), callTakeoverLogs, null, { keepOpen: true, copyResult: true, privacyConfirm: true })
+				])
 			]),
 			summaryActionRow(_('Dashboard'), defaultDashboardURL(), [
 				dashboardButton('cbi-button-action')
@@ -1258,12 +1298,169 @@ function copyText(text) {
 		return navigator.clipboard.writeText(text);
 
 	var textarea = document.createElement('textarea');
+	var copied = false;
 	textarea.value = text;
 	document.body.appendChild(textarea);
 	textarea.select();
-	document.execCommand('copy');
-	document.body.removeChild(textarea);
+	try {
+		copied = document.execCommand('copy');
+	}
+	finally {
+		document.body.removeChild(textarea);
+	}
+	if (!copied)
+		return Promise.reject(new Error(_('浏览器未允许复制到剪贴板。')));
 	return Promise.resolve();
+}
+
+function takeoverIssueLogs() {
+	return callTakeoverLogs().then(function(logs) {
+		if (!logs || logs.ok === false)
+			throw new Error(logs && (logs.message || logs.code) || _('无法读取网络接管诊断。'));
+		return logs;
+	});
+}
+
+function takeoverIssueButtonBusy(button, busy, label) {
+	button.disabled = busy;
+	button.textContent = busy ? _('正在准备诊断…') : label;
+	if (busy) {
+		button.setAttribute('aria-busy', 'true');
+		button.classList.add('localclash-busy');
+	}
+	else {
+		button.removeAttribute('aria-busy');
+		button.classList.remove('localclash-busy');
+	}
+}
+
+function takeoverIssueCopyButton() {
+	var label = _('复制 Takeover Log');
+
+	return E('button', {
+		'type': 'button',
+		'class': 'btn cbi-button localclash-button',
+		'click': function(ev) {
+			ev.preventDefault();
+			var button = ev.currentTarget;
+			if (button.disabled)
+				return null;
+			if (!window.confirm(_('接管诊断可能包含接口名、主机名或网络地址。确认复制？')))
+				return null;
+
+			takeoverIssueButtonBusy(button, true, label);
+			return takeoverIssueLogs().then(function(logs) {
+				return copyText(takeoverIssueReport.buildFullReport(logs));
+			}).then(function() {
+				ui.addNotification(null, E('p', {}, [ _('完整 Takeover Issue 报告已复制。') ]), 'info');
+			}).catch(showError).finally(function() {
+				takeoverIssueButtonBusy(button, false, label);
+			});
+		}
+	}, [ label ]);
+}
+
+function takeoverGitHubIssueButton() {
+	var label = _('到 GitHub 回报 Issue');
+	var button = E('button', {
+		'type': 'button',
+		'class': 'btn cbi-button cbi-button-action localclash-button',
+		'click': function(ev) {
+			ev.preventDefault();
+			var button = ev.currentTarget;
+			var loginCheckbox = document.getElementById('localclash-github-login-confirmed');
+			var issueWindow;
+			if (button.disabled || !loginCheckbox || loginCheckbox.checked !== true)
+				return null;
+			if (!window.confirm(_('你已确认登入 GitHub。LuCI 将把经过遮罩的接管诊断预填到 GitHub，并把完整报告复制到剪贴板。提交前仍请检查隐私信息。继续？')))
+				return null;
+
+			issueWindow = window.open('about:blank', '_blank');
+			if (issueWindow) {
+				try {
+					issueWindow.opener = null;
+					issueWindow.document.title = 'Preparing localClash takeover issue';
+					issueWindow.document.body.textContent = 'Preparing takeover diagnostics…';
+				}
+				catch (e) {}
+			}
+
+			loginCheckbox.disabled = true;
+			takeoverIssueButtonBusy(button, true, label);
+			return takeoverIssueLogs().then(function(logs) {
+				var issue = takeoverIssueReport.buildGitHubIssue(logs);
+				if (issue.url_length > issue.url_limit)
+					throw new Error(_('生成的 GitHub Issue URL 超出安全长度限制。'));
+
+				return copyText(issue.full_report).then(function() {
+					return true;
+				}).catch(function() {
+					return false;
+				}).then(function(copied) {
+					if (issueWindow && !issueWindow.closed) {
+						try {
+							issueWindow.location.replace(issue.url);
+						}
+						catch (e) {
+							window.location.href = issue.url;
+						}
+					}
+					else {
+						window.location.href = issue.url;
+					}
+
+					if (copied)
+						ui.addNotification(null, E('p', {}, [ _('GitHub 已预填最新接管诊断；完整报告也已复制。') ]), 'info');
+					else
+						ui.addNotification(null, E('p', {}, [ _('GitHub 已预填最新接管诊断，但浏览器未允许复制完整报告。') ]), 'warning');
+				});
+			}).catch(function(err) {
+				if (issueWindow && !issueWindow.closed)
+					issueWindow.close();
+				showError(err);
+			}).finally(function() {
+				takeoverIssueButtonBusy(button, false, label);
+				loginCheckbox.disabled = false;
+				button.disabled = loginCheckbox.checked !== true;
+				button.setAttribute('aria-disabled', button.disabled ? 'true' : 'false');
+			});
+		}
+	}, [ label ]);
+	button.disabled = true;
+	button.setAttribute('aria-disabled', 'true');
+	return button;
+}
+
+function takeoverGitHubLoginConfirmation(button) {
+	return E('label', { 'class': 'localclash-inline-check localclash-github-login-confirmation' }, [
+		E('input', {
+			'id': 'localclash-github-login-confirmed',
+			'type': 'checkbox',
+			'change': function(ev) {
+				button.disabled = ev.target.checked !== true;
+				button.setAttribute('aria-disabled', button.disabled ? 'true' : 'false');
+			}
+		}),
+		E('span', { 'class': 'localclash-inline-check-title' }, [ _('我已登入 GitHub') ]),
+		E('span', { 'class': 'localclash-inline-check-help' }, [
+			_('GitHub 要求登入后才能建立 Issue；勾选后才会启用回报按钮。')
+		])
+	]);
+}
+
+function takeoverIssueReportSection() {
+	var githubButton = takeoverGitHubIssueButton();
+
+	return section(_('Takeover Issue 回报'), E('div', { 'class': 'localclash-takeover-issue-report' }, [
+		E('p', { 'class': 'localclash-muted' }, [
+			_('如果网络接管再次失效，可复制完整报告，或直接打开 localclash-luci 的 GitHub New Issue。使用 GitHub 回报前必须先登入 GitHub；按钮会预填问题模板和最近的有界诊断，请检查内容后再按 Submit new issue。')
+		]),
+		takeoverGitHubLoginConfirmation(githubButton),
+		actionRow([
+			takeoverIssueCopyButton(),
+			githubButton
+		])
+	]), 'localclash-takeover-issue');
 }
 
 function mcpGuidanceBody(help) {
@@ -1343,6 +1540,7 @@ return view.extend({
 				'.localclash-view .localclash-inline-check input{grid-area:box;margin:0}',
 				'.localclash-view .localclash-inline-check-title{grid-area:title;font-weight:600}',
 				'.localclash-view .localclash-inline-check-help{grid-area:help;color:#667085;font-size:.92em}',
+				'.localclash-view .localclash-github-login-confirmation{padding-left:1em}',
 				'.localclash-view .localclash-muted{color:#667085;line-height:1.55}',
 				'.localclash-view .localclash-copybox{box-sizing:border-box;width:calc(100% - 2rem);min-height:16rem;margin:1rem;padding:1rem;font-family:monospace;line-height:1.45;resize:vertical}',
 				'.localclash-view table.table th,.localclash-view table.table td{text-align:left;height:70px;vertical-align:middle;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}',
@@ -1383,7 +1581,8 @@ return view.extend({
 			E('div', { 'id': 'localclash-overview-actions' }, [
 				primaryActions(state)
 			]),
-			mcpGuidance({ loading: true })
+			mcpGuidance({ loading: true }),
+			takeoverIssueReportSection()
 		]);
 	}
 });
