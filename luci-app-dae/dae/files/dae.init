@@ -47,7 +47,8 @@ cleanup_netns() {
 	ip link del "$DAE_HOST_IFACE" 2>/dev/null || true
 	ip link del "$DAE_PEER_IFACE" 2>/dev/null || true
 	ip netns del "$DAE_NETNS_NAME" 2>/dev/null || true
-	rm -f "$DAENETNS" 2>/dev/null || true
+    umount "$DAENETNS" 2>/dev/null || true
+    rm -f "$DAENETNS" 2>/dev/null || true
 }
 
 hijack_resolv_conf() {
@@ -119,7 +120,7 @@ start_service() {
     procd_close_instance
 }
 
-stop_service() {
+service_stopped() {
     update_cron "remove"
     restore_resolv_conf
     cleanup_netns
