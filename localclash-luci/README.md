@@ -156,7 +156,7 @@ localClash 现在提供 `一键更新`：更新 LuCI 界面、localClash 核心�
 
 在 `概览` 页点击 `一键更新`。更新准备阶段会尽量保持当前运行时继续工作；只有最后切换 Mihomo 运行时并恢复接管时，可能会短暂断网。
 
-一键更新采用两阶段交接：LuCI 安装包发生更新时，旧 helper 会先保存任务快照，再以同一个任务 PID 重新执行磁盘上的新版 helper；新版 helper 校验任务锁、状态版本和执行阶段后，才继续更新 localClash 核心。LuCI Release 信息、checksum 和安装包下载／校验遇到临时失败时，每个阶段最多尝试 3 次（首次尝试加 2 次自动重试）；套件安装和服务操作失败仍会明确停止，不会盲目重跑。localClash 核心完成原子替换后，流程立即执行 `/etc/init.d/localclash-mcp restart`，再更新基础资源，并在限定次数内同时确认 procd 的 `mcp` instance 正在运行和 MCP 健康检查通过。这里不会用 PID、进程名称或运行中二进制的 sha256 来猜测是否需要重启；服务脚本写入、重启或 readiness 检查失败时，任务都会明确失败并停止后续步骤。
+一键更新采用两阶段交接：LuCI 安装包发生更新时，旧 helper 会先保存任务快照，再以同一个任务 PID 重新执行磁盘上的新版 helper；新版 helper 校验任务锁、状态版本和执行阶段后，才继续更新 localClash 核心。LuCI Release 信息、checksum 和安装包下载／校验遇到临时失败时，每个阶段最多尝试 3 次（首次尝试加 2 次自动重试）；下载器只有在退出码为 0、输出文件存在且非空、临时文件原子提交成功时才算完成，watchdog 主动终止的下载会明确记录为超时并进入既有重试／镜像候选流程。checksum 文件还必须包含完整的 64 位十六进制 sha256。套件安装和服务操作失败仍会明确停止，不会盲目重跑。localClash 核心完成原子替换后，流程立即执行 `/etc/init.d/localclash-mcp restart`，再更新基础资源，并在限定次数内同时确认 procd 的 `mcp` instance 正在运行和 MCP 健康检查通过。这里不会用 PID、进程名称或运行中二进制的 sha256 来猜测是否需要重启；服务脚本写入、重启或 readiness 检查失败时，任务都会明确失败并停止后续步骤。
 
 独立执行 LuCI 更新时，package `postinst` 不负责 localClash 进程生命周期；更新任务会主动调用磁盘上的新版 helper 重启 `localclash-mcp`。一键更新则由交接后的新版 helper 在核心替换后执行唯一一次权威重启，避免 package 安装阶段先重启旧核心。
 
@@ -181,20 +181,35 @@ localClash 现在提供 `一键更新`：更新 LuCI 界面、localClash 核心�
 
 进阶页会显示当前有效 DNS 来源，并提供独立的最佳化流程：
 
-- 默认对 `geosite:cn` 优先使用可确认来源并能完成基本 DNS 交换的 WAN DNS。
-- 无法确认 WAN DNS 来源，或列出的 WAN DNS 都不可用时，才明确回退到
-  AliDNS；页面会显示回退原因。
+- Core 默认不采用 WAN 下发的 DNS，也不会把多组 resolver 注入
+  `nameserver-policy`。普通解析使用 AliDNS DoH；主查询失败、没有 IP，或结果
+  命中明确的 bogon/reserved CIDR 时，才按 lazy fallback 使用经代理的
+  Google DoH。
 - `dnsqualify` 是由 LuCI Release 提供和校验安装的独立二进制，不属于
   localClash Core，也不会定时或自动运行。
 - LuCI CI 只从 `release/dnsqualify-source.json` 固定的
   [`qoli/dnsqualify`](https://github.com/qoli/dnsqualify) commit 构建该二进制，
   不使用浮动分支或仓库内嵌源码。
-- 只有用户按下 `运行 dnsqualify` 时，LuCI 才会启动它；它自行比较 WAN 与公共
-  DNS 的网站连通性和知名服务 CDN 速度，并只输出 `dnsqualify.json`。
-- Core 不理解测试报告或候选评分，只在 `dnsqualify.json` 存在时严格验证并
-  使用其中的单一 DNS endpoint。
-- CDN 速度只用于最佳化排序，不是 WAN DNS 的默认准入门槛。
-- `删除 dnsqualify 配置` 会回到 WAN DNS → AliDNS 回退的 Core 默认行为。
+- 只有用户按下 `运行 dnsqualify` 时，LuCI 才会取得 WAN L3 device 并启动测试。
+  独立程序按固定顺序尝试绑定该 device 的中国大陆 Bilibili STUN、
+  `api.ipapi.is` HTTPS JSON；任一成功即停止，JSON
+  路径严格要求 `country code == CN`。需要 Token 或文字解析的端点不纳入。
+  `network.interface.wan` 的接口地址与海外 STUN 不作为公网身份。程序再测试
+  Google DoH + WAN ECS 的 DNS 答案、网站连通性和知名服务 CDN 速度，输出
+  v2 `dnsqualify.json` nameserver-policy overlay，并另存完整测试与选择报告。
+- Core 不理解测试报告、候选评分、STUN、HTTP provider、WAN 或 country code；
+  它只检查 overlay 版本与过期时间、拒绝覆盖既有 policy，并把完整生成结果交给
+  `mihomo -t`。LuCI 只从独立报告显示候选和公网观测 provenance。
+- 证据正常到期时，LuCI 会明确显示最佳化已停用，Core 继续生成加密 DNS 基线；
+  overlay 格式损坏或 policy 冲突仍然阻塞渲染；report 缺失只影响 LuCI 的诊断
+  详情，不会让 LuCI 代替 dnsqualify 重新判断 qualification。
+- dnsqualify 会在测量前后重复同一个已选公网观测方法；地址或 endpoint IP
+  变化会拒绝输出。LuCI 也会再次确认 WAN device；变化时恢复旧配置。证据 30
+  分钟后过期。
+- 当前 LuCI 流程明确要求 WAN IPv4，并生成 `/24` ECS；没有 IPv4 时直接失败，
+  不会静默改用 IPv6。dnsqualify CLI 已能验证 IPv6 并生成 `/56`，但 LuCI 的
+  IPv6 来源选择仍需独立设计和测试。
+- `删除 dnsqualify 配置` 会回到 Core 加密 DNS 基线。
 - 节点域名解析不会被这项最佳化修改；生效前仍需由用户明确重启 Mihomo。
 - LuCI 一键更新会按路由器架构更新 `dnsqualify`；如果程序尚未安装，首次按下
   `运行 dnsqualify` 也会从同一 LuCI Release 安装并验证 SHA-256。

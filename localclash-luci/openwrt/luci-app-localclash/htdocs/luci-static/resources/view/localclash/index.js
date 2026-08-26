@@ -516,21 +516,31 @@ function refreshStatus() {
 function dnsOptimizationBody(data) {
 	var status = (data && data.status) || {};
 	var resolver = status.resolver || {};
+	var ecs = status.ecs || {};
 
 	return E('div', {}, [
 		E('table', { 'class': 'table cbi-section-table localclash-status-table' }, [
 			E('tbody', {}, [
-				statusRow(_('当前模式'), status.enabled === true ? _('dnsqualify 配置') : _('Core 默认选择（WAN → AliDNS）')),
-				statusRow(_('作用范围'), status.scope || 'geosite:cn'),
+				statusRow(_('当前模式'), status.enabled === true ? _('已验证 ECS 最佳化') : _('Core 加密 DNS 基线')),
+				statusRow(_('作用范围'), status.scope || 'default'),
 				statusRow(_('独立程序'), data && data.binary_installed === true ? formatText(_('已安装（%s）'), data.binary_version || _('版本未知')) : _('未安装（运行时将从 LuCI Release 安装）')),
 				statusRow(_('配置 DNS'), status.enabled === true ? formatText(_('%s（%s / %s）'), resolver.endpoint || '-', resolver.source || '-', resolver.transport || '-') : '-'),
 				statusRow(_('候选 ID'), resolver.candidate_id || '-'),
-				statusRow(_('配置生成时间'), status.generated_at || '-')
+				statusRow(_('ECS 前缀'), ecs.prefix || '-'),
+				statusRow(_('公网地址观测'), ecs.source || '-'),
+				statusRow(_('公网观测端点'), ecs.server ? formatText(_('%s（%s）'), ecs.server, ecs.server_ip || '-') : '-'),
+				statusRow(_('国家代码'), ecs.country_code || '-'),
+				statusRow(_('WAN 接口'), ecs.interface || '-'),
+				statusRow(_('配置生成时间'), status.generated_at || '-'),
+				statusRow(_('证据过期时间'), status.expires_at || '-')
 			])
 		]),
 		E('p', { 'class': 'localclash-muted' }, [
-			_('dnsqualify 由 LuCI 发布和安装，但不是 Core 的主动行为。只有用户按下按钮时，LuCI 才会启动独立程序；程序自行完成测试并只输出 dnsqualify.json。Core 不包含测试或评分能力，只在配置存在时严格读取并套用；不会改变节点域名解析。')
+			_('dnsqualify 由 LuCI 按需运行。它依次尝试绑定 WAN 设备的中国大陆 STUN 和 ipapi.is JSON；JSON 结果必须明确返回国家代码 CN。Google ECS 查询通过 Mihomo 的 DNSProxy 专用本地入口测量，与实际配置使用相同出口；该入口不可用时任务会明确失败，不会改为直连。结果截断为 /24，并只应用于通过测试的窄域名集合。')
 		]),
+		status.disabled_reason === 'expired' ? E('p', { 'class': 'alert-message warning' }, [
+			formatText(_('dnsqualify 证据已于 %s 过期；最佳化已明确停用，Core 将继续生成加密 DNS 基线。'), status.expired_at || '-')
+		]) : null,
 		actionRow([
 			liveTaskButton(status.enabled === true ? _('重新运行 dnsqualify') : _('运行 dnsqualify'), callDNSOptimizationRunAsync, 'cbi-button-apply'),
 			liveTaskButton(_('删除 dnsqualify 配置'), callDNSOptimizationResetAsync, 'cbi-button-reset')
