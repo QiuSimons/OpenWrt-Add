@@ -93,6 +93,9 @@ case "$expr" in
 	@.status.running)
 		json_bool running
 		;;
+	@.status.runtime_running)
+		json_bool runtime_running
+		;;
 	@.status.effective)
 		json_bool effective
 		;;
@@ -111,6 +114,21 @@ case "$expr" in
 	@.status.runtime_profile.core)
 		printf '%s\n' "$content" | sed -n 's/.*"runtime_profile"[[:space:]]*:[[:space:]]*{[^}]*"core"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
 		;;
+	@.after.runtime_running)
+		printf '%s\n' "$content" | grep -q '"after"[[:space:]]*:[[:space:]]*{[^}]*"runtime_running"[[:space:]]*:[[:space:]]*true' && printf 'true\n' || printf 'false\n'
+		;;
+	@.after.takeover_effective)
+		printf '%s\n' "$content" | grep -q '"after"[[:space:]]*:[[:space:]]*{[^}]*"takeover_effective"[[:space:]]*:[[:space:]]*true' && printf 'true\n' || printf 'false\n'
+		;;
+	@.ok)
+		json_bool ok
+		;;
+	@.code)
+		printf '%s\n' "$content" | sed -n 's/.*"code"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+		;;
+	@.message)
+		printf '%s\n' "$content" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+		;;
 	*) exit 1 ;;
 esac
 EOF
@@ -124,6 +142,11 @@ LOG="${tmp_dir}/helper.log"
 LOCK_DIR="${tmp_dir}/helper.lock"
 STATE_DIR="${tmp_dir}/state"
 TASK_INPUT="${tmp_dir}/task-input.json"
+TAKEOVER_LOG="${tmp_dir}/takeover-events.jsonl"
+TAKEOVER_LOG_LOCK_DIR="${tmp_dir}/takeover-events.lock"
+TAKEOVER_REPAIR_TICKET="${tmp_dir}/takeover/repair-ticket"
+TAKEOVER_STATE_STATUS="${tmp_dir}/takeover/status"
+TASK_STEP_TIMEOUT=0
 mkdir -p "$STATE_DIR"
 
 trace() {
@@ -295,6 +318,16 @@ call_core() {
 	esac
 }
 
+call_takeover() {
+	trace "call_takeover $*"
+	case "$*" in
+		"status --json") printf '{"status":{"effective":true,"runtime_running":true,"profile_mode":"router"}}\n' ;;
+		"apply --json") takeover_apply ;;
+		"stop --json") printf '{"ok":true,"changed":true,"summary":"stopped"}\n' ;;
+		*) return 1 ;;
+	esac
+}
+
 : > "${tmp_dir}/trace"
 result="$(one_click_update_preferences)"
 assert_json "$result"
@@ -320,7 +353,7 @@ one_click_update_luci_changed "$result" || fail_test "LuCI changed marker was no
 expected="${tmp_dir}/expected-trace"
 cat > "$expected" <<EOF
 call_core runtime status --json
-call_core takeover status --json
+call_takeover status --json
 luci_update
 one_click_update_reexec
 bootstrap_core
@@ -332,9 +365,11 @@ call_core subscription status --json
 call_core subscription refresh --json
 call_core config render --json
 call_core mihomo config-test --json
+call_takeover status --json
 call_core runtime restart --strategy process_restart --json
+call_core runtime status --json
 takeover_apply
-call_core takeover status --json
+call_takeover status --json
 service_status
 EOF
 
@@ -444,7 +479,7 @@ printf '%s\n' "$result" | grep -q '"fallback_reason"' || fail_test "fallback rea
 
 cat > "$expected" <<EOF
 call_core runtime status --json
-call_core takeover status --json
+call_takeover status --json
 luci_update
 one_click_update_reexec
 bootstrap_core
@@ -456,9 +491,11 @@ call_core subscription status --json
 call_core subscription refresh --json
 call_core config render --json
 call_core mihomo config-test --json
+call_takeover status --json
 call_core runtime restart --strategy process_restart --json
+call_core runtime status --json
 takeover_apply
-call_core takeover status --json
+call_takeover status --json
 service_status
 EOF
 
@@ -481,7 +518,7 @@ grep -q '"core":[[:space:]]*"smart"' "${tmp_dir}/template-sync-input.json" || fa
 sed -E 's#--input /tmp/localclash-one-click-update[.][^ ]+/template-sync[.]json#--input <template-sync>#' "${tmp_dir}/trace" > "${tmp_dir}/trace.normalized"
 cat > "$expected" <<EOF
 call_core runtime status --json
-call_core takeover status --json
+call_takeover status --json
 luci_update
 one_click_update_reexec
 bootstrap_core
@@ -495,9 +532,11 @@ call_core subscription status --json
 call_core subscription refresh --json
 call_core config render --json
 call_core mihomo config-test --json
+call_takeover status --json
 call_core runtime restart --strategy process_restart --json
+call_core runtime status --json
 takeover_apply
-call_core takeover status --json
+call_takeover status --json
 service_status
 EOF
 

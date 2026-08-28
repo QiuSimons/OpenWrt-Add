@@ -235,7 +235,7 @@ function takeoverFailureText(failure) {
 	var code = failure && failure.code ? String(failure.code) : '';
 	var message = failure && failure.message ? String(failure.message) : String(failure || '');
 
-	if (/timeout|timed out|router_takeover_status_timeout/i.test(code + ' ' + message))
+	if (/timeout|timed out|takeover_status_timeout/i.test(code + ' ' + message))
 		return _('状态查询超时（实际接管状态未知，请重试）');
 
 	return formatText(_('状态查询失败（实际接管状态未知）：%s'), message || code || _('未知错误'));
@@ -531,16 +531,12 @@ function dnsOptimizationBody(data) {
 				statusRow(_('公网观测端点'), ecs.server ? formatText(_('%s（%s）'), ecs.server, ecs.server_ip || '-') : '-'),
 				statusRow(_('国家代码'), ecs.country_code || '-'),
 				statusRow(_('WAN 接口'), ecs.interface || '-'),
-				statusRow(_('配置生成时间'), status.generated_at || '-'),
-				statusRow(_('证据过期时间'), status.expires_at || '-')
+				statusRow(_('配置生成时间'), status.generated_at || '-')
 			])
 		]),
 		E('p', { 'class': 'localclash-muted' }, [
 			_('dnsqualify 由 LuCI 按需运行。它依次尝试绑定 WAN 设备的中国大陆 STUN 和 ipapi.is JSON；JSON 结果必须明确返回国家代码 CN。Google ECS 查询通过 Mihomo 的 DNSProxy 专用本地入口测量，与实际配置使用相同出口；该入口不可用时任务会明确失败，不会改为直连。结果截断为 /24，并只应用于通过测试的窄域名集合。')
 		]),
-		status.disabled_reason === 'expired' ? E('p', { 'class': 'alert-message warning' }, [
-			formatText(_('dnsqualify 证据已于 %s 过期；最佳化已明确停用，Core 将继续生成加密 DNS 基线。'), status.expired_at || '-')
-		]) : null,
 		actionRow([
 			liveTaskButton(status.enabled === true ? _('重新运行 dnsqualify') : _('运行 dnsqualify'), callDNSOptimizationRunAsync, 'cbi-button-apply'),
 			liveTaskButton(_('删除 dnsqualify 配置'), callDNSOptimizationResetAsync, 'cbi-button-reset')
@@ -1050,7 +1046,7 @@ return view.extend({
 				'.localclash-view .localclash-button.localclash-busy{cursor:wait;opacity:.72}',
 				'.localclash-view .localclash-danger{border-color:#c44;background:#d94b4b;color:#fff}',
 				'.localclash-view + .cbi-page-actions,.localclash-view ~ .cbi-page-actions,.cbi-page-actions{display:none!important}',
-				'.localclash-view .localclash-muted{color:#667085;line-height:1.55}',
+				'.localclash-view .localclash-muted{color:inherit;line-height:1.55}',
 				'.localclash-view .localclash-status-table{width:100%;max-width:100%}',
 				'.localclash-view table.table th,.localclash-view table.table td{text-align:left;height:70px;vertical-align:middle;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}',
 				'.localclash-view table.table tr.cbi-rowstyle-1,.localclash-view table.table tr.cbi-rowstyle-1 > th,.localclash-view table.table tr.cbi-rowstyle-1 > td{background-color:rgba(255,255,255,.03)}',

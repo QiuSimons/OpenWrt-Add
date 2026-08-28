@@ -1,6 +1,7 @@
 #!/bin/sh
 
 CORE="${LOCALCLASH_CORE:-/usr/local/bin/localclash}"
+TAKEOVER_MANAGER="${LOCALCLASH_TAKEOVER_MANAGER:-/usr/libexec/localclash/takeover}"
 DNSQUALIFY="${LOCALCLASH_DNSQUALIFY:-/usr/local/bin/dnsqualify}"
 DNSQUALIFY_ECS_DOH_PROXY="${LOCALCLASH_DNSQUALIFY_ECS_DOH_PROXY:-http://127.0.0.1:7894}"
 STATE_DIR="${LOCALCLASH_STATE_DIR:-/root/localclash}"
@@ -203,15 +204,6 @@ takeover_runtime_state_enabled() {
 
 takeover_restore_requested() {
 	takeover_repair_ticket_enabled || takeover_runtime_state_enabled
-}
-
-takeover_repair_ticket_enable() {
-	mkdir -p "$(dirname "$TAKEOVER_REPAIR_TICKET")" 2>/dev/null || true
-	printf 'applied\n' > "$TAKEOVER_REPAIR_TICKET" 2>/dev/null || true
-}
-
-takeover_repair_ticket_disable() {
-	rm -f "$TAKEOVER_REPAIR_TICKET" "$TAKEOVER_STATE_STATUS" 2>/dev/null || true
 }
 
 boot_auto_restore_enabled() {
@@ -1595,18 +1587,35 @@ call_core() {
 	(cd / && LOCALCLASH_WORKDIR="$workdir" "$CORE" "$@") 2>>"$LOG"
 }
 
+call_takeover() {
+	local workdir
+	if [ ! -x "$TAKEOVER_MANAGER" ]; then
+		fail_with_details "takeover_manager_missing" "OpenWrt 网络接管管理器尚未安装。" '"path":"'"$(json_escape "$TAKEOVER_MANAGER")"'"'
+		return 1
+	fi
+	workdir="$(resolve_state_dir)" || return 1
+	(cd / && LOCALCLASH_CORE="$CORE" LOCALCLASH_WORKDIR="$workdir" "$TAKEOVER_MANAGER" "$@") 2>>"$LOG"
+}
+
 runtime_stop() {
-	local tmp rc
+	local tmp takeover_tmp rc
 	tmp="/tmp/localclash-runtime-stop.$$.json"
+	takeover_tmp="/tmp/localclash-takeover-stop-before-runtime.$$.json"
+	call_takeover stop --json > "$takeover_tmp"
+	rc=$?
+	if [ "$rc" -ne 0 ]; then
+		cat "$takeover_tmp" 2>/dev/null || true
+		rm -f "$takeover_tmp" "$tmp"
+		return "$rc"
+	fi
 	if call_core runtime stop --json > "$tmp"; then
-		takeover_repair_ticket_disable
 		cat "$tmp"
-		rm -f "$tmp"
+		rm -f "$takeover_tmp" "$tmp"
 		return 0
 	fi
 	rc=$?
 	cat "$tmp" 2>/dev/null || true
-	rm -f "$tmp"
+	rm -f "$takeover_tmp" "$tmp"
 	return "$rc"
 }
 
@@ -1614,8 +1623,235 @@ runtime_start() {
 	call_core runtime start --json
 }
 
+runtime_continuity_fail() {
+	local code message phase partial changed details
+	code="$1"
+	message="$2"
+	phase="$3"
+	partial="$4"
+	changed="$5"
+	details="$6"
+	printf '{"ok":false,"changed":%s,"outcome":"attention_required","partial":%s,"phase":"%s","code":"%s","message":"%s","details":{%s},"next_actions":[]}\n' \
+		"$changed" \
+		"$partial" \
+		"$(json_escape "$phase")" \
+		"$(json_escape "$code")" \
+		"$(json_escape "$message")" \
+		"$details"
+}
+
+runtime_continuity_core_error_details() {
+	local path fields core_code core_message
+	path="$1"
+	fields="$(takeover_error_log_fields "$path")"
+	core_code="$(printf '%s\n' "$fields" | sed -n '1p')"
+	core_message="$(printf '%s\n' "$fields" | sed -n '2p')"
+	printf '"core_code":"%s","core_message":"%s"' "$(json_escape "$core_code")" "$(json_escape "$core_message")"
+}
+
+runtime_restart_continuity_run() {
+	local strategy expected_effective expected_profile source tmpdir before_effective before_runtime before_profile restart_ok runtime_after apply_ok post_effective post_runtime post_profile summary transition rc details
+	strategy="$1"
+	expected_effective="$2"
+	expected_profile="$3"
+	source="$4"
+
+	case "$strategy" in
+		hot_reload|process_restart) ;;
+		*)
+			runtime_continuity_fail "runtime_restart_strategy_invalid" "运行时重启策略无效。" "preflight" false false '"strategy":"'"$(json_escape "$strategy")"'"'
+			return 1
+			;;
+	esac
+	case "$expected_effective" in
+		observe|true|false) ;;
+		*)
+			runtime_continuity_fail "runtime_restart_snapshot_invalid" "网络接管快照无效。" "preflight" false false '"takeover_effective":"'"$(json_escape "$expected_effective")"'"'
+			return 1
+			;;
+	esac
+
+	tmpdir="$(mktemp -d /tmp/localclash-runtime-restart.XXXXXX)" || {
+		runtime_continuity_fail "runtime_restart_tmpdir_failed" "无法创建运行时重启临时目录。" "preflight" false false '"path":"/tmp/localclash-runtime-restart.XXXXXX"'
+		return 1
+	}
+	takeover_event_scope
+	takeover_log_event_safe "$source" "runtime_restart_started" "strategy" "$strategy" >/dev/null 2>&1 || true
+
+	if call_takeover status --json > "$tmpdir/before.json"; then
+		rc=0
+	else
+		rc=$?
+	fi
+	if [ "$rc" -ne 0 ]; then
+		details="$(runtime_continuity_core_error_details "$tmpdir/before.json")"
+		takeover_log_event_safe "$source" "runtime_restart_finished" "result" "failure" "stage" "preflight_status" "exit_code" "$rc" >/dev/null 2>&1 || true
+		runtime_continuity_fail "runtime_restart_preflight_status_failed" "重启前无法读取网络接管状态，未执行重启。" "preflight_status" false false "$details"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	before_effective="$(jsonfilter -i "$tmpdir/before.json" -e '@.status.effective' 2>/dev/null || true)"
+	before_runtime="$(jsonfilter -i "$tmpdir/before.json" -e '@.status.runtime_running' 2>/dev/null || true)"
+	before_profile="$(jsonfilter -i "$tmpdir/before.json" -e '@.status.profile_mode' 2>/dev/null || true)"
+	case "$before_effective" in true|false) ;; *)
+		runtime_continuity_fail "runtime_restart_preflight_status_invalid" "重启前网络接管状态缺少有效的 effective 字段，未执行重启。" "preflight_status" false false '"effective":"'"$(json_escape "$before_effective")"'"'
+		rm -rf "$tmpdir"
+		return 1
+	;; esac
+	case "$before_runtime" in true|false) ;; *)
+		runtime_continuity_fail "runtime_restart_preflight_status_invalid" "重启前网络接管状态缺少有效的 runtime_running 字段，未执行重启。" "preflight_status" false false '"runtime_running":"'"$(json_escape "$before_runtime")"'"'
+		rm -rf "$tmpdir"
+		return 1
+	;; esac
+	case "$before_profile" in normal|router) ;; *)
+		runtime_continuity_fail "runtime_restart_preflight_status_invalid" "重启前网络接管状态缺少有效的 profile_mode 字段，未执行重启。" "preflight_status" false false '"profile_mode":"'"$(json_escape "$before_profile")"'"'
+		rm -rf "$tmpdir"
+		return 1
+	;; esac
+	if [ "$before_runtime" != "true" ]; then
+		runtime_continuity_fail "runtime_restart_precondition_failed" "运行时当前未运行，拒绝执行重启。" "preflight_status" false false '"runtime_running":false'
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	if [ "$expected_effective" != "observe" ] && [ "$before_effective" != "$expected_effective" ]; then
+		runtime_continuity_fail "runtime_restart_snapshot_drift" "网络接管状态与操作快照不一致，未执行重启。" "preflight_status" false false '"expected_effective":'"$expected_effective"',"observed_effective":'"$before_effective"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	if [ "$expected_effective" = "observe" ]; then
+		expected_effective="$before_effective"
+		expected_profile="$before_profile"
+	fi
+	if [ "$expected_effective" = "true" ] && { [ "$expected_profile" != "router" ] || [ "$before_profile" != "router" ]; }; then
+		runtime_continuity_fail "runtime_restart_snapshot_inconsistent" "网络接管有效时 runtime profile 必须是 router，未执行重启。" "preflight_status" false false '"expected_profile":"'"$(json_escape "$expected_profile")"'","observed_profile":"'"$(json_escape "$before_profile")"'"'
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	if call_core runtime restart --strategy "$strategy" --json > "$tmpdir/runtime.json"; then
+		rc=0
+	else
+		rc=$?
+	fi
+	if [ "$rc" -ne 0 ]; then
+		details="$(runtime_continuity_core_error_details "$tmpdir/runtime.json")"
+		takeover_log_event_safe "$source" "runtime_restart_finished" "result" "failure" "stage" "runtime_restart" "exit_code" "$rc" >/dev/null 2>&1 || true
+		runtime_continuity_fail "runtime_restart_failed" "运行时重启失败；网络接管恢复未执行。" "runtime_restart" true true "$details"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	restart_ok="$(jsonfilter -i "$tmpdir/runtime.json" -e '@.ok' 2>/dev/null || true)"
+	if [ "$restart_ok" != "true" ]; then
+		runtime_continuity_fail "runtime_restart_result_invalid" "运行时重启结果无效；网络接管恢复未执行。" "runtime_restart" true true '"ok":"'"$(json_escape "$restart_ok")"'"'
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	if call_core runtime status --json > "$tmpdir/runtime-after.json"; then
+		rc=0
+	else
+		rc=$?
+	fi
+	if [ "$rc" -ne 0 ]; then
+		details="$(runtime_continuity_core_error_details "$tmpdir/runtime-after.json")"
+		runtime_continuity_fail "runtime_restart_postflight_runtime_failed" "运行时已执行重启，但无法读取重启后的运行状态。" "runtime_verify" true true "$details"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	runtime_after="$(jsonfilter -i "$tmpdir/runtime-after.json" -e '@.status.running' 2>/dev/null || true)"
+	if [ "$runtime_after" != "true" ]; then
+		runtime_continuity_fail "runtime_not_running_after_restart" "运行时重启命令已完成，但进程没有保持运行。" "runtime_verify" true true '"runtime_running":"'"$(json_escape "$runtime_after")"'"'
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	transition="preserved_inactive"
+	printf 'null\n' > "$tmpdir/takeover-apply.json"
+	if [ "$expected_effective" = "true" ]; then
+		if takeover_apply "$source" > "$tmpdir/takeover-apply.json"; then
+			rc=0
+		else
+			rc=$?
+		fi
+		if [ "$rc" -ne 0 ]; then
+			details="$(runtime_continuity_core_error_details "$tmpdir/takeover-apply.json")"
+			takeover_log_event_safe "$source" "runtime_restart_finished" "result" "failure" "stage" "takeover_restore" "exit_code" "$rc" >/dev/null 2>&1 || true
+			runtime_continuity_fail "takeover_restore_failed" "运行时已重启，但网络接管恢复失败。" "takeover_restore" true true "$details"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		apply_ok="$(jsonfilter -i "$tmpdir/takeover-apply.json" -e '@.ok' 2>/dev/null || true)"
+		if [ "$apply_ok" != "true" ]; then
+			runtime_continuity_fail "takeover_restore_result_invalid" "运行时已重启，但网络接管恢复结果无效。" "takeover_restore" true true '"ok":"'"$(json_escape "$apply_ok")"'"'
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		transition="restored"
+	fi
+
+	if call_takeover status --json > "$tmpdir/after.json"; then
+		rc=0
+	else
+		rc=$?
+	fi
+	if [ "$rc" -ne 0 ]; then
+		details="$(runtime_continuity_core_error_details "$tmpdir/after.json")"
+		runtime_continuity_fail "runtime_restart_postflight_status_failed" "运行时已重启，但无法验证最终网络接管状态。" "takeover_verify" true true "$details"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	post_effective="$(jsonfilter -i "$tmpdir/after.json" -e '@.status.effective' 2>/dev/null || true)"
+	post_runtime="$(jsonfilter -i "$tmpdir/after.json" -e '@.status.runtime_running' 2>/dev/null || true)"
+	post_profile="$(jsonfilter -i "$tmpdir/after.json" -e '@.status.profile_mode' 2>/dev/null || true)"
+	case "$post_effective" in true|false) ;; *)
+		runtime_continuity_fail "runtime_restart_postflight_status_invalid" "运行时已重启，但最终网络接管 effective 状态无效。" "takeover_verify" true true '"effective":"'"$(json_escape "$post_effective")"'"'
+		rm -rf "$tmpdir"
+		return 1
+	;; esac
+	case "$post_runtime" in true|false) ;; *)
+		runtime_continuity_fail "runtime_restart_postflight_status_invalid" "运行时已重启，但最终 runtime_running 状态无效。" "takeover_verify" true true '"runtime_running":"'"$(json_escape "$post_runtime")"'"'
+		rm -rf "$tmpdir"
+		return 1
+	;; esac
+	case "$post_profile" in normal|router) ;; *)
+		runtime_continuity_fail "runtime_restart_postflight_status_invalid" "运行时已重启，但最终 profile_mode 状态无效。" "takeover_verify" true true '"profile_mode":"'"$(json_escape "$post_profile")"'"'
+		rm -rf "$tmpdir"
+		return 1
+	;; esac
+	if [ "$post_runtime" != "true" ] || [ "$post_effective" != "$expected_effective" ]; then
+		runtime_continuity_fail "runtime_restart_postcondition_failed" "运行时已重启，但最终网络接管状态与重启前不一致。" "takeover_verify" true true '"expected_effective":'"$expected_effective"',"observed_effective":'"$post_effective"',"runtime_running":'"$post_runtime"
+		rm -rf "$tmpdir"
+		return 1
+	fi
+	if [ "$expected_effective" = "true" ] && [ "$post_profile" != "router" ]; then
+		runtime_continuity_fail "runtime_restart_postcondition_failed" "运行时已重启，但最终 runtime profile 不再是 router。" "takeover_verify" true true '"profile_mode":"'"$(json_escape "$post_profile")"'"'
+		rm -rf "$tmpdir"
+		return 1
+	fi
+
+	if [ "$expected_effective" = "true" ]; then
+		summary="运行时已重启，网络接管已恢复并验证生效。"
+	else
+		summary="运行时已重启，网络接管保持未启用。"
+	fi
+	takeover_log_event_safe "$source" "runtime_restart_finished" "result" "success" "strategy" "$strategy" "takeover_transition" "$transition" >/dev/null 2>&1 || true
+	printf '{"ok":true,"changed":true,"outcome":"ready","summary":"%s","strategy":"%s","before":{"runtime_running":%s,"takeover_effective":%s,"profile_mode":"%s"},"runtime":%s,"takeover_restore":%s,"after":{"runtime_running":%s,"takeover_effective":%s,"profile_mode":"%s"},"takeover_transition":"%s"}\n' \
+		"$(json_escape "$summary")" \
+		"$(json_escape "$strategy")" \
+		"$before_runtime" \
+		"$before_effective" \
+		"$(json_escape "$before_profile")" \
+		"$(cat "$tmpdir/runtime.json")" \
+		"$(cat "$tmpdir/takeover-apply.json")" \
+		"$post_runtime" \
+		"$post_effective" \
+		"$(json_escape "$post_profile")" \
+		"$(json_escape "$transition")"
+	rm -rf "$tmpdir"
+}
+
 runtime_restart() {
-	call_core runtime restart --json
+	runtime_restart_continuity_run process_restart observe "" luci_runtime_restart
 }
 
 base_assets_installed() {
@@ -2345,7 +2581,7 @@ one_click_update_run() {
 			}
 
 			log_line "一键更新：记录更新前网络接管状态"
-			if ! call_core takeover status --json > "$tmpdir/takeover-before.json"; then
+			if ! call_takeover status --json > "$tmpdir/takeover-before.json"; then
 				log_line "一键更新：网络接管状态读取失败"
 				cat "$tmpdir/takeover-before.json" 2>/dev/null || true
 				rm -rf "$tmpdir"
@@ -2572,42 +2808,27 @@ JSON
 			restart_strategy="process_restart"
 		fi
 		log_line "一键更新：进入最短断网切换窗口，策略 ${restart_strategy}"
-		if ! run_with_heartbeat "一键更新：正在切换运行时" "$tmpdir/runtime-restart.json" call_core runtime restart --strategy "$restart_strategy" --json; then
+		if ! run_with_heartbeat "一键更新：正在切换运行时并恢复网络接管" "$tmpdir/runtime-restart.json" runtime_restart_continuity_run "$restart_strategy" "$takeover_was_effective" "$profile_mode" one_click_update; then
 			log_line "一键更新：运行时切换失败"
 			cat "$tmpdir/runtime-restart.json"
 			rm -rf "$tmpdir"
 			return 1
 		fi
-		runtime_recovered=true
+		runtime_recovered="$(json_bool_required "$tmpdir/runtime-restart.json" '@.after.runtime_running' "runtime_restart_result_invalid" "无法读取更新后运行时状态。")" || {
+			printf '%s\n' "$runtime_recovered"
+			rm -rf "$tmpdir"
+			return 1
+		}
+		takeover_recovered="$(json_bool_required "$tmpdir/runtime-restart.json" '@.after.takeover_effective' "runtime_restart_result_invalid" "无法读取更新后网络接管状态。")" || {
+			printf '%s\n' "$takeover_recovered"
+			rm -rf "$tmpdir"
+			return 1
+		}
 	else
 		log_line "一键更新：更新前运行时未运行，跳过运行时切换"
 	fi
 
 	if [ "$takeover_was_effective" = "true" ]; then
-		if [ "$profile_mode" != "router" ]; then
-			log_line "一键更新：更新前接管有效但 profile 不是 router，拒绝猜测恢复路径"
-			fail_with_details "takeover_snapshot_inconsistent" "更新前网络接管有效，但 runtime profile 不是 router，已停止在接管恢复前。" '"profile_mode":"'"$(json_escape "$profile_mode")"'"'
-			rm -rf "$tmpdir"
-			return 1
-		fi
-		log_line "一键更新：恢复网络接管"
-		if ! run_with_heartbeat "一键更新：正在恢复网络接管" "$tmpdir/takeover-apply.json" takeover_apply one_click_update; then
-			log_line "一键更新：网络接管恢复失败"
-			cat "$tmpdir/takeover-apply.json"
-			rm -rf "$tmpdir"
-			return 1
-		fi
-		if ! call_core takeover status --json > "$tmpdir/takeover-after.json"; then
-			log_line "一键更新：接管恢复后状态读取失败"
-			cat "$tmpdir/takeover-after.json" 2>/dev/null || true
-			rm -rf "$tmpdir"
-			return 1
-		fi
-		takeover_recovered="$(json_bool_required "$tmpdir/takeover-after.json" '@.status.effective' "takeover_status_invalid" "无法读取更新后网络接管状态。")" || {
-			printf '%s\n' "$takeover_recovered"
-			rm -rf "$tmpdir"
-			return 1
-		}
 		if [ "$takeover_recovered" != "true" ]; then
 			log_line "一键更新：接管恢复后仍未生效"
 			fail "takeover_restore_failed" "更新已完成，但网络接管恢复后仍未生效。"
@@ -2615,7 +2836,13 @@ JSON
 			return 1
 		fi
 	else
-		log_line "一键更新：更新前网络接管未生效，跳过接管恢复"
+		if [ "$runtime_was_running" = "true" ] && [ "$takeover_recovered" != "false" ]; then
+			log_line "一键更新：更新前网络接管未生效，但切换后状态发生变化"
+			fail "takeover_state_changed_unexpectedly" "更新前网络接管未生效，但运行时切换后网络接管状态发生变化。"
+			rm -rf "$tmpdir"
+			return 1
+		fi
+		log_line "一键更新：网络接管保持未启用"
 	fi
 
 	if ! service_status > "$tmpdir/mcp-service-final.json"; then
@@ -3059,55 +3286,6 @@ dnsqualify_installed_version() {
 	"$DNSQUALIFY" --version 2>/dev/null | sed -n 's/^dnsqualify \(v[^ ]*\)$/\1/p' | head -n 1
 }
 
-dnsqualify_timestamp_epoch() {
-	local value base suffix epoch sign hours minutes offset platform
-	value="$1"
-	base="$(printf '%.19s' "$value")"
-	[ "${#base}" -eq 19 ] || return 1
-	suffix="${value#"$base"}"
-	suffix="$(printf '%s' "$suffix" | sed 's/^\.[0-9][0-9]*//')"
-	case "$suffix" in
-		Z)
-			offset=0
-			;;
-		[+-][0-9][0-9]:[0-9][0-9])
-			sign="${suffix%${suffix#?}}"
-			hours="${suffix#?}"
-			hours="${hours%%:*}"
-			minutes="${suffix##*:}"
-			hours="${hours#0}"
-			minutes="${minutes#0}"
-			[ -n "$hours" ] || hours=0
-			[ -n "$minutes" ] || minutes=0
-			[ "$hours" -le 23 ] && [ "$minutes" -le 59 ] || return 1
-			offset=$((hours * 3600 + minutes * 60))
-			[ "$sign" = "+" ] || offset=$((-offset))
-			;;
-		*) return 1 ;;
-	esac
-	platform="$(uname -s 2>/dev/null)" || return 1
-	case "$platform" in
-		Darwin)
-			epoch="$(date -j -u -f '%Y-%m-%dT%H:%M:%S' "$base" +%s 2>/dev/null)" || return 1
-			;;
-		Linux)
-			if date --version 2>/dev/null | grep -q 'GNU coreutils'; then
-				epoch="$(date -u -d "$base" +%s 2>/dev/null)" || return 1
-			else
-				epoch="$(date -u -D '%Y-%m-%dT%H:%M:%S' -d "$base" +%s 2>/dev/null)" || return 1
-			fi
-			;;
-		*)
-			return 1
-			;;
-	esac
-	printf '%s\n' $((epoch - offset))
-}
-
-dnsqualify_now_epoch() {
-	date +%s
-}
-
 dnsqualify_install() {
 	local arch tmpdir manifest binary manifest_schema asset_os asset_url asset_sha asset_version current_sha reported_version install_dir tmp_binary
 	if ! command -v jsonfilter >/dev/null 2>&1; then
@@ -3236,7 +3414,7 @@ dnsqualify_ensure() {
 }
 
 dnsqualify_status() {
-	local config report version scope_id candidate source transport endpoint ecs_prefix ecs_source ecs_interface ecs_server ecs_server_ip ecs_country_code ecs_country_json generated expires expires_epoch now_epoch installed binary_version
+	local config report version scope_id candidate source transport endpoint ecs_prefix ecs_source ecs_interface ecs_server ecs_server_ip ecs_country_code ecs_country_json generated installed binary_version
 	config="$(dnsqualify_config_path)" || return 1
 	report="$(dnsqualify_report_path)" || return 1
 	installed=false
@@ -3250,19 +3428,9 @@ dnsqualify_status() {
 		return 0
 	fi
 	version="$(jsonfilter -i "$config" -e '@.version' 2>/dev/null || true)"
-	expires="$(jsonfilter -i "$config" -e '@.expires_at' 2>/dev/null || true)"
-	if [ "$version" != "2" ] || [ -z "$expires" ]; then
+	if [ "$version" != "2" ]; then
 		fail "dnsqualify_config_invalid" "dnsqualify overlay 存在但契约不完整；Core 渲染也会明确拒绝。"
 		return 1
-	fi
-	expires_epoch="$(dnsqualify_timestamp_epoch "$expires" 2>/dev/null || true)"
-	now_epoch="$(dnsqualify_now_epoch 2>/dev/null || true)"
-	case "$expires_epoch:$now_epoch" in
-		*[!0-9:]*|:*|*:) fail "dnsqualify_expiry_invalid" "无法验证 dnsqualify overlay 过期时间；Core 也不会启用该最佳化。"; return 1 ;;
-	esac
-	if [ "$expires_epoch" -le "$now_epoch" ]; then
-		ok '"status":{"enabled":false,"mode":"secure_baseline","scope":"default","disabled_reason":"expired","expired_at":"'"$(json_escape "$expires")"'","retained_config":true},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
-		return 0
 	fi
 	scope_id=""
 	candidate=""
@@ -3294,7 +3462,7 @@ dnsqualify_status() {
 	fi
 	ecs_country_json=""
 	[ -z "$ecs_country_code" ] || ecs_country_json=',"country_code":"'"$(json_escape "$ecs_country_code")"'"'
-	ok '"status":{"enabled":true,"mode":"qualified_ecs","scope":"'"$(json_escape "$scope_id")"'","resolver":{"candidate_id":"'"$(json_escape "$candidate")"'","source":"'"$(json_escape "$source")"'","transport":"'"$(json_escape "$transport")"'","endpoint":"'"$(json_escape "$endpoint")"'"},"ecs":{"prefix":"'"$(json_escape "$ecs_prefix")"'","source":"'"$(json_escape "$ecs_source")"'","interface":"'"$(json_escape "$ecs_interface")"'","server":"'"$(json_escape "$ecs_server")"'","server_ip":"'"$(json_escape "$ecs_server_ip")"'"'"$ecs_country_json"'},"generated_at":"'"$(json_escape "$generated")"'","expires_at":"'"$(json_escape "$expires")"'"},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
+	ok '"status":{"enabled":true,"mode":"qualified_ecs","scope":"'"$(json_escape "$scope_id")"'","resolver":{"candidate_id":"'"$(json_escape "$candidate")"'","source":"'"$(json_escape "$source")"'","transport":"'"$(json_escape "$transport")"'","endpoint":"'"$(json_escape "$endpoint")"'"},"ecs":{"prefix":"'"$(json_escape "$ecs_prefix")"'","source":"'"$(json_escape "$ecs_source")"'","interface":"'"$(json_escape "$ecs_interface")"'","server":"'"$(json_escape "$ecs_server")"'","server_ip":"'"$(json_escape "$ecs_server_ip")"'"'"$ecs_country_json"'},"generated_at":"'"$(json_escape "$generated")"'"},"binary_installed":'"$installed"',"binary_version":"'"$(json_escape "$binary_version")"'"'
 }
 
 dnsqualify_run() {
@@ -3456,10 +3624,20 @@ dnsqualify_task_run() {
 }
 
 reset() {
+	local takeover_tmp rc
 	if runtime_running; then
 		fail "runtime_running" "Mihomo 运行时正在运行，请先停止运行时再执行完整重置。"
 		return 1
 	fi
+	takeover_tmp="/tmp/localclash-takeover-stop-before-reset.$$.json"
+	call_takeover stop --json > "$takeover_tmp"
+	rc=$?
+	if [ "$rc" -ne 0 ]; then
+		cat "$takeover_tmp" 2>/dev/null || true
+		rm -f "$takeover_tmp"
+		return "$rc"
+	fi
+	rm -f "$takeover_tmp"
 	call_core reset --full --json
 }
 
@@ -3852,7 +4030,7 @@ runtime_start_takeover_run() {
 	fi
 
 	log_line "运行时接管：正在应用网络接管"
-	run_with_heartbeat "运行时接管：正在应用网络接管" "$tmpdir/takeover.json" call_core takeover apply --json
+	run_with_heartbeat "运行时接管：正在应用网络接管" "$tmpdir/takeover.json" call_takeover apply --json
 	rc=$?
 	if [ "$rc" -ne 0 ]; then
 		log_line "运行时接管：网络接管应用失败"
@@ -3861,7 +4039,7 @@ runtime_start_takeover_run() {
 		error_message="$(printf '%s\n' "$error_fields" | sed -n '2p')"
 		takeover_log_event_safe "$source" "runtime_takeover_finished" "result" "failure" "stage" "takeover_apply" "exit_code" "$rc" "core_code" "$error_code" "message" "$error_message"
 		log_line "运行时接管：正在撤销可能残留的网络接管"
-		if call_core takeover stop --json > "$tmpdir/takeover-stop.json"; then
+		if call_takeover stop --json > "$tmpdir/takeover-stop.json"; then
 			log_line "运行时接管：网络接管撤销完成"
 		else
 			log_line "运行时接管：网络接管撤销也失败"
@@ -3874,7 +4052,6 @@ runtime_start_takeover_run() {
 	fi
 
 	log_line "运行时接管：已完成"
-	takeover_repair_ticket_enable
 	takeover_log_event_safe "$source" "runtime_takeover_finished" "result" "success" "exit_code" "$rc"
 	printf '{"ok":true,"changed":true,"summary":"运行时已启动，网络接管已应用。","runtime":%s,"takeover":%s}\n' "$(cat "$tmpdir/runtime.json")" "$(cat "$tmpdir/takeover.json")"
 	rm -rf "$tmpdir"
@@ -3892,10 +4069,9 @@ takeover_apply() {
 	fi
 
 	tmp="/tmp/localclash-takeover-apply.$$.json"
-	call_core takeover apply --json > "$tmp"
+	call_takeover apply --json > "$tmp"
 	rc=$?
 	if [ "$rc" -eq 0 ]; then
-		takeover_repair_ticket_enable
 		fields="$(takeover_status_log_fields "$tmp")"
 		effective="$(printf '%s\n' "$fields" | sed -n '1p')"
 		runtime_running="$(printf '%s\n' "$fields" | sed -n '2p')"
@@ -3920,10 +4096,9 @@ takeover_stop() {
 	takeover_event_scope
 	takeover_log_event_safe "$source" "stop_started"
 	tmp="/tmp/localclash-takeover-stop.$$.json"
-	call_core takeover stop --json > "$tmp"
+	call_takeover stop --json > "$tmp"
 	rc=$?
 	if [ "$rc" -eq 0 ]; then
-		takeover_repair_ticket_disable
 		takeover_log_event_safe "$source" "stop_finished" "result" "success" "exit_code" "$rc"
 		cat "$tmp"
 		rm -f "$tmp"
@@ -3962,7 +4137,7 @@ takeover_restore_run() {
 	}
 
 	log_line "网络接管恢复：检查当前状态"
-	if call_core takeover status --json > "$tmpdir/status.json"; then
+	if call_takeover status --json > "$tmpdir/status.json"; then
 		rc=0
 	else
 		rc=$?
@@ -3983,9 +4158,16 @@ takeover_restore_run() {
 
 	if [ "$effective" = "true" ]; then
 		log_line "网络接管恢复：当前已生效"
-		takeover_repair_ticket_enable
+		call_takeover reconcile --desired enabled --json > "$tmpdir/reconcile.json"
+		rc=$?
+		if [ "$rc" -ne 0 ]; then
+			log_line "网络接管恢复：当前规则有效，但修复状态协调失败"
+			cat "$tmpdir/reconcile.json" 2>/dev/null || true
+			rm -rf "$tmpdir"
+			return "$rc"
+		fi
 		takeover_log_event_safe "$source" "restore_finished" "result" "already_effective"
-		printf '{"ok":true,"changed":false,"summary":"网络接管当前已生效。","status":%s}\n' "$(cat "$tmpdir/status.json")"
+		cat "$tmpdir/reconcile.json"
 		rm -rf "$tmpdir"
 		return 0
 	fi
@@ -4001,7 +4183,7 @@ takeover_restore_run() {
 	if [ "$runtime_running" = "true" ]; then
 		log_line "网络接管恢复：运行时已运行，重新应用接管"
 		takeover_log_event_safe "$source" "repair_apply_started"
-		if call_core takeover apply --json > "$tmpdir/apply.json"; then
+		if call_takeover apply --json > "$tmpdir/apply.json"; then
 			rc=0
 		else
 			rc=$?
@@ -4015,7 +4197,6 @@ takeover_restore_run() {
 			return "$rc"
 		fi
 		log_line "网络接管恢复：重新应用接管已验证生效"
-		takeover_repair_ticket_enable
 		takeover_log_event_safe "$source" "repair_apply_finished" "result" "success" "exit_code" "$rc"
 		printf '{"ok":true,"changed":true,"summary":"网络接管已重新应用。","status":%s,"takeover":%s}\n' "$(cat "$tmpdir/status.json")" "$(cat "$tmpdir/apply.json")"
 		rm -rf "$tmpdir"
@@ -4254,7 +4435,7 @@ takeover_logs() {
 		: > "$tmpdir/system-events.log" 2>/dev/null || true
 	fi
 
-	if call_core takeover status --json > "$tmpdir/current-status.json"; then
+	if call_takeover status --json > "$tmpdir/current-status.json"; then
 		status_rc=0
 	else
 		status_rc=$?
@@ -4390,18 +4571,18 @@ JSON
 	runtime_start) runtime_start ;;
 	runtime_start_takeover) start_runtime_takeover ;;
 	runtime_start_takeover_run) with_lock runtime_start_takeover_run ;;
-	runtime_restart) runtime_restart ;;
-	runtime_stop) runtime_stop ;;
+	runtime_restart) with_lock runtime_restart ;;
+	runtime_stop) with_lock runtime_stop ;;
 	boot_restore_status) boot_restore_status ;;
 	boot_restore_enable) with_lock boot_restore_enable ;;
 	boot_restore_disable) with_lock boot_restore_disable ;;
 	boot_restore_startup_run) with_lock boot_restore_startup_run ;;
 	boot_restore_run) with_lock boot_restore_run ;;
-	takeover_status) call_core takeover status --json ;;
+	takeover_status) call_takeover status --json ;;
 	takeover_logs) takeover_logs ;;
-	takeover_apply) takeover_apply ;;
+	takeover_apply) with_lock takeover_apply ;;
 	takeover_restore) with_lock takeover_restore_run ;;
-	takeover_stop) takeover_stop ;;
+	takeover_stop) with_lock takeover_stop ;;
 	takeover_trace) shift 2; takeover_trace "$@" ;;
 	reset) with_lock reset ;;
 	service_status) service_status ;;
