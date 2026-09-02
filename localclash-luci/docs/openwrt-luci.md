@@ -970,11 +970,18 @@ Method contracts:
 - `bootstrap_default`: optional input `{ "uris": ["https://...", "vless://..."], "core":
   "meta|smart", "template": "localclash-default|minimal" }`. It installs or
   updates the localClash core, base assets, Mihomo, and dashboard; when URIs are
-  present, it saves and refreshes them before applying `router` runtime profile
-  with the selected core/template. If a subscription is available after this
-  step, it renders config, starts Mihomo, and applies router takeover before the
-  background task is marked complete. The helper must not log or return full
-  URLs.
+  present, it saves their sources without refreshing yet. It first applies the
+  `router` runtime profile and selected template with `refresh_subscription:false`,
+  then refreshes saved subscriptions and the template's required capabilities
+  through Core before rendering. Retries read Core's `status.configured` for
+  saved sources, independently of `merged.exists`; missing or invalid status
+  fails explicitly. Neither a merged subscription, the first pack-selection
+  artifact, nor capability snapshots are prerequisites for importing the
+  template. A refresh failure is fatal and
+  prevents render/start; LuCI never manufactures capability snapshots. If a
+  subscription is available, it renders config, starts Mihomo, and applies router
+  takeover before the background task is marked complete. The helper must not
+  log or return full URLs.
 - `component_update`: input `{ "component": "localclash|mihomo|dashboard" }`.
   `localclash` uses the bootstrap helper to install or update from the latest
   release manifest; other values call
@@ -1420,6 +1427,13 @@ The LuCI package and the localClash core release are separate channels. Updating
 the UI package should not require rebuilding router-specific Go binaries.
 
 ### CI 和 iStore 离线 Bundle
+
+发布功能验收统一遵循 Core 的
+[iStoreOS QEMU Release 测试 SOP](https://github.com/qoli/localClash/blob/main/docs/istoreos-release-test-sop.md)
+（相邻仓库路径：`../localClash/docs/istoreos-release-test-sop.md`）。iStoreOS QEMU
+是唯一功能发布门槛；下面的 CI 源码、构建与资产检查不替代该验收。Docker 测试
+材料已退役，IPK/APK 的 Docker 构建与部署工具保留。ARM 真机不是强制门槛，
+x86 QEMU 通过不代表 ARM runtime 已验证。
 
 仓库验证和 Release 发布由 GitHub Actions 负责：
 
