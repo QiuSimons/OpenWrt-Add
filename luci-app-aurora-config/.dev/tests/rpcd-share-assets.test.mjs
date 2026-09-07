@@ -68,6 +68,12 @@ function runSh(script, env = {}) {
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]);
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0]);
 const ICO = Buffer.from([0x00, 0x00, 0x01, 0x00, 1, 0, 0, 0]);
+// WebP 的格式名在偏移 8，前面隔着 RIFF 自己的长度字段 —— 只读 8 字节是看不
+// 见它的。
+const WEBP = Buffer.concat([
+  Buffer.from("RIFF"), Buffer.from([0x1a, 0, 0, 0]),
+  Buffer.from("WEBP"), Buffer.from("VP8L"),
+]);
 
 function sniff(bytes) {
   const dir = mkdtempSync(join(tmpdir(), "aurora-sniff-"));
@@ -80,16 +86,21 @@ function sniff(bytes) {
   return out;
 }
 
-test("sniff_image_ext: 按魔数认出四种格式，认不出就失败", () => {
+test("sniff_image_ext: 按魔数认出五种格式，认不出就失败", () => {
   assert.equal(sniff(PNG), "png");
   assert.equal(sniff(JPEG), "jpg");
   assert.equal(sniff(ICO), "ico");
+  assert.equal(sniff(WEBP), "webp");
   assert.equal(sniff('<svg xmlns="http://www.w3.org/2000/svg"></svg>'), "svg");
   assert.equal(sniff('<?xml version="1.0"?><svg></svg>'), "svg");
   // BOM + 前导空白都不该挡住 SVG —— 和 hub 的 isSvg 一样的姿态。
   assert.equal(sniff("\uFEFF\n  <svg></svg>"), "svg");
   assert.equal(sniff("not an image at all"), "NONE");
-  assert.equal(sniff(Buffer.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0])), "NONE");
+  // RIFF 但不是 WEBP —— 一个 wav 不该被当成背景图。
+  assert.equal(
+    sniff(Buffer.concat([Buffer.from("RIFF"), Buffer.from([0x1a, 0, 0, 0]), Buffer.from("WAVE")])),
+    "NONE",
+  );
 });
 
 test("hub_asset_ext_ok: 每种 kind 只收它该收的格式", () => {
@@ -104,7 +115,8 @@ test("hub_asset_ext_ok: 每种 kind 只收它该收的格式", () => {
     "favicon_png:png", "favicon_png:svg",
     "favicon_ico:ico", "favicon_ico:png",
     "pwa_icon_192:png", "pwa_icon_192:jpg",
-    "login_bg:png", "login_bg:jpg", "login_bg:svg",
+    "login_bg:png", "login_bg:jpg", "login_bg:webp", "login_bg:svg",
+    "main_bg:webp",
     "toolbar_icon_0:png", "toolbar_icon_11:svg", "toolbar_icon_0:ico",
     "font_sans:png",
   ];
@@ -117,8 +129,9 @@ test("hub_asset_ext_ok: 每种 kind 只收它该收的格式", () => {
     "favicon_png:png": "OK", "favicon_png:svg": "NO",
     "favicon_ico:ico": "OK", "favicon_ico:png": "NO",
     "pwa_icon_192:png": "OK", "pwa_icon_192:jpg": "NO",
-    // 审核台把 login_bg 一律重编码成 PNG，但 JPEG 在 schema 里，两个都收。
-    "login_bg:png": "OK", "login_bg:jpg": "OK", "login_bg:svg": "NO",
+    // 背景原样存，传什么格式就是什么格式，三种都收。
+    "login_bg:png": "OK", "login_bg:jpg": "OK", "login_bg:webp": "OK",
+    "login_bg:svg": "NO", "main_bg:webp": "OK",
     "toolbar_icon_0:png": "OK", "toolbar_icon_11:svg": "OK", "toolbar_icon_0:ico": "NO",
     // 字体不走这条路，问到它就是调用方分流错了。
     "font_sans:png": "NO",

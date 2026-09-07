@@ -126,8 +126,8 @@ test("gallery view: a finished online apply reloads the page, not just the banne
 test("gallery view: the publish notice keeps its two dimensions apart", async () => {
   const src = await readFile(SRC, "utf8");
   assert.ok(
-    src.includes("Published. Its images are queued for review"),
-    "a publish that uploaded images must say they are queued",
+    src.includes("Published. Its assets are queued for review"),
+    "a publish that uploaded assets must say they are queued",
   );
   assert.ok(
     !/Published\. Your creator identity/.test(src),
@@ -150,7 +150,11 @@ test("gallery view: my-shares explains a review state, and stays silent otherwis
   );
   assert.ok(
     src.includes('status === "rejected"'),
-    "a rejected share must say its images were turned down",
+    "a rejected share must say its assets were turned down",
+  );
+  assert.ok(
+    !/_\("[^"]*\bimages are approved/.test(src) && !/_\("Images not approved/.test(src),
+    "review copy must say assets, not images -- fonts go through the same queue",
   );
   // 正常态不出声:helper 必须有一条 return null 的路径,而不是给每种状态都
   // 造一行字。
@@ -160,8 +164,14 @@ test("gallery view: my-shares explains a review state, and stays silent otherwis
     "none/approved must render no note at all",
   );
   assert.ok(
-    src.includes("reviewNoteFor(item.assets_status)"),
+    src.includes("reviewNoteFor(item)"),
     "buildMyShareRow must consult the helper",
+  );
+  // 驳回时审核员写的那句话必须真的显示出来 —— 没有它,作者只知道被驳了,
+  // 不知道为什么,只能换张图碰运气。
+  assert.ok(
+    src.includes("item.assets_reject_reason"),
+    "a rejection must carry the reviewer's own words through to the author",
   );
 });
 

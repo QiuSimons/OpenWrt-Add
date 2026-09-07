@@ -23,7 +23,10 @@ test("upload_font and upload_icon route through receive_upload", async () => {
 
 test("image allowlist covers favicon .ico and every advertised format", async () => {
   const src = await readFile(SRC, "utf8");
-  assert.match(src, /jpg\|jpeg\|png\|webp\|avif\|svg\|gif\|ico/);
+  // The gate and the picker offer the same set, and it is the set the hub
+  // will take: no format you can put on the router is one you cannot share.
+  assert.match(src, /jpg\|jpeg\|png\|webp\|svg\|ico/);
+  assert.ok(!/\bavif\b/.test(src), "avif is not a format any asset slot can use");
 });
 
 test("list endpoints expose byte sizes", async () => {

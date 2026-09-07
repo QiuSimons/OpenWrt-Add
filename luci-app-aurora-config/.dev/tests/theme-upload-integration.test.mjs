@@ -39,10 +39,12 @@ test("theme.js owns zero raw upload plumbing after icon adoption", async () => {
   const src = await readFile(SRC, "utf8");
   assert.ok(!src.includes("new XMLHttpRequest"), "XHR must live in the module");
   assert.ok(!src.includes("cgi-bin/cgi-upload"), "upload URL must live in the module");
-  assert.match(src, /GIF · ICO/);
+  // AVIF and GIF are deliberately absent: no asset slot can use them, so
+  // offering them only built themes that could never be shared.
+  assert.match(src, /WebP · SVG · ICO · up to 8 MB each/);
   assert.match(
     src,
-    /const ICON_EXTS = \["jpg", "jpeg", "png", "webp", "avif", "svg", "gif", "ico"\];/,
+    /const ICON_EXTS = \["jpg", "jpeg", "png", "webp", "svg", "ico"\];/,
   );
   assert.match(src, /exts: ICON_EXTS/);
   assert.match(src, /Failed to delete: %s/); // msgid regressed once; lock it

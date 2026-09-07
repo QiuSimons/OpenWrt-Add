@@ -3193,7 +3193,9 @@ return view.extend({
     );
     assetTableSo.load = () => getIconsOnce();
     assetTableSo.cfgvalue = (section_id, data) => data?.icons || [];
-    const ICON_EXTS = ["jpg", "jpeg", "png", "webp", "avif", "svg", "gif", "ico"];
+    // AVIF and GIF are gone: no asset slot can use them, so accepting them
+    // only bought a theme you could build locally and never share.
+    const ICON_EXTS = ["jpg", "jpeg", "png", "webp", "svg", "ico"];
 
     // render (not renderWidget): full-width mount, no cbi-value label row --
     // this section holds only the asset table. The font manager in the
@@ -3279,8 +3281,8 @@ return view.extend({
           })),
           bar: {
             hint: _("Drop image asset here, or click to browse"),
-            sub: _("JPG · PNG · WebP · AVIF · SVG · GIF · ICO"),
-            accept: "image/*,.svg,.ico",
+            sub: _("JPG · PNG · WebP · SVG · ICO · up to 8 MB each"),
+            accept: ".jpg,.jpeg,.png,.webp,.svg,.ico",
           },
           checkFile: (file) =>
             assetUpload.checkFile(file, {
@@ -3540,6 +3542,16 @@ return view.extend({
             select.addEventListener("click", (e) => e.stopPropagation());
           const preview = buildBgPreview(previewKind);
           field.appendChild(preview.el);
+          if (withUpload) {
+            // 规矩写在挑图的地方,而不是等传上配置广场被退回来才知道。
+            field.appendChild(
+              E(
+                "div",
+                { style: "color:var(--text-muted);font-size:0.85em;margin-top:0.4em;" },
+                _("PNG · JPG · WebP · up to 8 MB"),
+              ),
+            );
+          }
 
           // 就地上传(withUpload 的实例才有):按钮 + 直接把图拖进预览框,
           // 复用资产库同一条上传管线;成功后带着 pending 归属键整页刷新,
@@ -3549,7 +3561,7 @@ return view.extend({
           if (withUpload) {
             const uploadBg = (file) => {
               const check = assetUpload.checkFile(file, {
-                exts: ["jpg", "jpeg", "png", "webp", "avif", "gif"],
+                exts: ["jpg", "jpeg", "png", "webp"],
               });
               if (!check.ok) {
                 ui.addNotification(null, E("p", check.err), "error");

@@ -1062,10 +1062,14 @@ const SHARE_ERROR_COPY = {
   // 「路由器没网」显示同一句话,是发布失败长期看起来像商店挂了的一半原因。
   quota_exceeded: _("You've published as much as one router may publish today. Try again tomorrow."),
   hub_rejected: _("The theme store refused this configuration. Nothing was published."),
+  // 上限就写在挑图的地方,所以这里只要指回那儿,不必再报一遍数字。
+  // 不写死数字:图片和字体是 8 MB,工具栏图标是 256 KB,一句话说不准三个。
+  // 确切的上限就写在挑文件的地方,那才是他能照着改的位置。
+  asset_too_large: _("One of your assets is too large to share. Replace it, then share again."),
   // 浏览器直传独有的两种失败。第二条特意说"这台电脑"而不是"网络":路由器
   // 能上网、你的电脑不能,是这条链路改到浏览器之后才可能出现的新情况。
-  asset_unreadable: _("Couldn't read one of the images from this router. Try reloading the page."),
-  asset_upload_failed: _("Uploading the images failed. Check this computer's internet connection and try again."),
+  asset_unreadable: _("Couldn't read one of the assets from this router. Try reloading the page."),
+  asset_upload_failed: _("Uploading the assets failed. Check this computer's internet connection and try again."),
   not_owner: _("This share belongs to another identity."),
 };
 
@@ -2214,16 +2218,24 @@ return view.extend({
     // 只在需要作者做点什么、或者需要解释一个反常结果时才出声。none 和
     // approved 是正常态 —— 给正常态也配一行字,列表就变成一片噪音,真正
     // 要紧的那两行反而沉进去了。
-    const reviewNoteFor = (status) => {
+    const reviewNoteFor = (item) => {
+      const status = item.assets_status;
       if (status === "pending")
         return {
-          text: _("In review — appears in the store once its images are approved."),
+          text: _("In review — appears in the store once its assets are approved."),
           color: "var(--text-muted)",
         };
       if (status === "rejected")
         return {
-          text: _("Images not approved — colours and layout still work. Swap the image, then update."),
+          // 只报状态,不替审核员说话。说「素材」不说「图片」:字体也在
+          // 待审之列,一份被驳回的中文字体配上「图片未通过」,作者会去
+          // 翻他根本没问题的那几张图。
+          text: _("Assets not approved"),
           color: "var(--warning)",
+          // 审核员写的原话,只有英文一种。它不进翻译表:那句话是人现写的,
+          // 具体到「哪张图、哪里不对」,没有哪个语种的译文能提前准备好。
+          // 老 hub 不带这个字段,那时就只剩上面那个状态标签。
+          detail: item.assets_reject_reason || "",
         };
       return null;
     };
@@ -2292,7 +2304,7 @@ return view.extend({
           ),
         );
       } else {
-        const note = reviewNoteFor(item.assets_status);
+        const note = reviewNoteFor(item);
         if (note) {
           nameCell.appendChild(
             E(
@@ -2301,6 +2313,21 @@ return view.extend({
               note.text,
             ),
           );
+          // 引号里是审核员的原话。E() 走 textContent,不是 innerHTML ——
+          // 这段文本来自服务端,不该有第二种渲染方式。
+          if (note.detail) {
+            nameCell.appendChild(
+              E(
+                "div",
+                {
+                  style:
+                    "margin-top:2px;font-size:0.84em;color:var(--text-muted);" +
+                    "border-left:2px solid var(--hairline);padding-left:0.6em;",
+                },
+                note.detail,
+              ),
+            );
+          }
         }
       }
 
@@ -3119,7 +3146,7 @@ return view.extend({
               // 刚刚获得了一件丢得掉的东西。
               const notice = [
                 res.assets
-                  ? _("Published. Its images are queued for review — it appears in the store once they are approved.")
+                  ? _("Published. Its assets are queued for review — it appears in the store once they are approved.")
                   : _("Published."),
               ];
               if (!keySaved)
