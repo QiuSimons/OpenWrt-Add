@@ -74,6 +74,7 @@ jobs:
           node scripts/test-subscription-ui.js
           node scripts/test-one-click-update-ui.js
           node scripts/test-runtime-restart-ui.js
+          node scripts/test-status-error-ui.js
           sh -n openwrt/luci-app-localclash/root/usr/libexec/rpcd/localclash
           sh -n packaging/istore/install.sh
           python3 -m py_compile scripts/generate-release-notes.py
@@ -88,10 +89,11 @@ jobs:
           go test ./...
           go vet ./...
 
-      - name: Test rpcd helpers
+      - name: Run host-only rpcd contract checks
         shell: bash
         run: |
           set -euo pipefail
+          scripts/test-dns-guard-deadman.sh
           for test_script in scripts/test-rpcd-*.sh scripts/test-hotplug-takeover-restore.sh; do
             bash -n "$test_script"
             bash "$test_script"

@@ -379,7 +379,7 @@ function takeoverDetails(takeover) {
 		status.tun_device ? 'tun=' + status.tun_device : null,
 		status.dns_port ? 'dns=' + status.dns_port : null,
 		status.dns && status.dns.path ? 'dns-path=' + status.dns.path : null,
-		status.dns && status.dns.failure_policy ? 'dns-failure=' + status.dns.failure_policy : null,
+		status.dns && status.dns.fallback ? 'dns-fallback=' + status.dns.fallback : null,
 		status.redir_port ? 'redir=' + status.redir_port : null
 	];
 }
@@ -499,6 +499,22 @@ function advancedStatusErrorTable(message) {
 	]);
 }
 
+function statusFailureMessage(data) {
+	var message = (data && (data.error || data.message || data.code)) || _('未知错误');
+	var core = data && data.details && data.details.core;
+	var details = [];
+
+	if (!core)
+		return message;
+	if (core.state)
+		details.push('state=' + core.state);
+	if (core.exit_code !== null && core.exit_code !== undefined)
+		details.push('exit=' + core.exit_code);
+	if (core.error_excerpt)
+		details.push(core.error_excerpt);
+	return details.length ? message + ' · ' + details.join(' · ') : message;
+}
+
 function refreshStatus() {
 	return Promise.all([
 		callStatus().catch(function(err) {
@@ -514,7 +530,7 @@ function refreshStatus() {
 		return callLuciUpdateCheck().catch(function(err) {
 			return { ok: false, message: err.message || String(err) };
 		}).then(function(updateCheck) {
-			replaceContent('localclash-advanced-status-body', data.ok === false && data.error ? advancedStatusErrorTable(data.error) : advancedStatusTable(data, takeover, updateCheck || {}));
+			replaceContent('localclash-advanced-status-body', data.ok === false ? advancedStatusErrorTable(statusFailureMessage(data)) : advancedStatusTable(data, takeover, updateCheck || {}));
 		});
 	});
 }
