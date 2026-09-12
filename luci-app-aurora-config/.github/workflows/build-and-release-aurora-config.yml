@@ -11,39 +11,33 @@ permissions:
 
 jobs:
   build:
-    name: build luci-app-aurora-config ${{ matrix.pkg_type }}
+    name: build luci-app-aurora-config ${{ matrix.sdk }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        pkg_type: [ipk, apk]
+        sdk: ["24.10.4", "25.12.5"]
     steps:
-      - uses: eamonxg/build-luci-package@master
+      - uses: actions/checkout@v6
         with:
-          package: luci-app-aurora-config
-          pkg_type: ${{ matrix.pkg_type }}
-          prep_script: |
-            ./scripts/feeds update -f base luci
-            ./scripts/feeds install luci-base luci-i18n-base-zh-cn luci-i18n-base-zh-tw luci-i18n-base-de luci-i18n-base-es luci-i18n-base-fr luci-i18n-base-id luci-i18n-base-it luci-i18n-base-ja luci-i18n-base-ko luci-i18n-base-nl luci-i18n-base-pl luci-i18n-base-ru luci-i18n-base-tr luci-i18n-base-uk luci-i18n-base-vi
-            echo "CONFIG_LUCI_LANG_zh_Hans=y" >> .config
-            echo "CONFIG_LUCI_LANG_zh_Hant=y" >> .config
-            echo "CONFIG_LUCI_LANG_de=y" >> .config
-            echo "CONFIG_LUCI_LANG_es=y" >> .config
-            echo "CONFIG_LUCI_LANG_fr=y" >> .config
-            echo "CONFIG_LUCI_LANG_id=y" >> .config
-            echo "CONFIG_LUCI_LANG_it=y" >> .config
-            echo "CONFIG_LUCI_LANG_ja=y" >> .config
-            echo "CONFIG_LUCI_LANG_ko=y" >> .config
-            echo "CONFIG_LUCI_LANG_nl=y" >> .config
-            echo "CONFIG_LUCI_LANG_pl=y" >> .config
-            echo "CONFIG_LUCI_LANG_ru=y" >> .config
-            echo "CONFIG_LUCI_LANG_tr=y" >> .config
-            echo "CONFIG_LUCI_LANG_uk=y" >> .config
-            echo "CONFIG_LUCI_LANG_vi=y" >> .config
-          artifact_paths: |
-            bin/packages/$ARCH/base/luci-app-aurora-config*.[ai]pk
-            bin/packages/$ARCH/base/luci-i18n-aurora-config*.[ai]pk
-          release_body_repo: eamonxg/assets
-          release_body_path: aurora/docs/config/changelog/${{ github.ref_name }}.md
+          fetch-depth: 0
+      - id: slug
+        run: echo "ref=${GITHUB_REF_NAME//\//-}" >> "$GITHUB_OUTPUT"
+      - id: build
+        uses: eamonxg/build-luci-package@v2
+        with:
+          sdk: ${{ matrix.sdk }}
+          packages: '[{"pkg":"luci-app-aurora-config","path":".","langs":["zh-cn","zh-tw","de","es","fr","id","it","ja","ko","nl","pl","ru","tr","uk","vi"]}]'
+      - uses: actions/upload-artifact@v6
+        with:
+          name: luci-app-aurora-config-${{ steps.slug.outputs.ref }}-${{ steps.build.outputs.pkg_type }}
+          path: out/*.[ai]pk
+      - uses: eamonxg/build-luci-package/release@v2
+        with:
+          name: luci-app-aurora-config
+          files: out/*.[ai]pk
+          body_repo: eamonxg/assets
+          body_path: aurora/docs/config/changelog/${{ github.ref_name }}.md
 
   notify-feed:
     name: notify openwrt-cloud
@@ -57,7 +51,7 @@ jobs:
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "::error::FEED_DISPATCH_TOKEN is not set, so openwrt-cloud was never told about this release."
-            echo "The feed's releases channel only rebuilds on this dispatch — without it the tag" >&2
+            echo "The feed only rebuilds ahead of its daily schedule on this dispatch — without it the tag" >&2
             echo "ships to GitHub Releases but never reaches the feed. Create a fine-grained PAT" >&2
             echo "scoped to eamonxg/openwrt-cloud with Contents: read and write, then store it as" >&2
             echo "the FEED_DISPATCH_TOKEN secret in this repository." >&2
