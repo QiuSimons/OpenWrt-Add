@@ -912,14 +912,8 @@ static int handle_set_app_filter_adv(struct ubus_context *ctx, struct ubus_objec
         af_uci_set_value(uci_ctx, "appfilter.global.lan_ifname", json_object_get_string(lan_ifname_obj));
     if (disable_hnat_obj)
         af_uci_set_int_value(uci_ctx, "appfilter.global.disable_hnat", json_object_get_int(disable_hnat_obj));
-    if (auto_load_engine_obj){
+    if (auto_load_engine_obj)
         af_uci_set_int_value(uci_ctx, "appfilter.global.auto_load_engine", json_object_get_int(auto_load_engine_obj));
-        if (json_object_get_int(auto_load_engine_obj) == 0){
-            system("rm /etc/modules.d/oaf");
-        }
-    }
-
-
     af_uci_commit(uci_ctx, "appfilter");
     g_oaf_config_change = 1;
     reload_oaf_rule();

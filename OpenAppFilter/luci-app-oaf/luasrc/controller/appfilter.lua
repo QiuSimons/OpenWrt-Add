@@ -306,21 +306,52 @@ function set_app_filter_base()
 end
 
 function get_app_filter_adv()
-	local json = require "luci.jsonc"
+	local uci = require "luci.model.uci".cursor()
 	luci.http.prepare_content("application/json")
-	local resp_obj=utl.ubus("appfilter", "get_app_filter_adv", {});
-	luci.http.write_json(resp_obj);
+	local data = {}
+	data.lan_ifname = uci:get("appfilter", "global", "lan_ifname") or "br-lan"
+	data.disable_hnat = tonumber(uci:get("appfilter", "global", "disable_hnat")) or 1
+	data.auto_load_engine = tonumber(uci:get("appfilter", "global", "auto_load_engine")) or 0
+	data.tcp_rst = tonumber(uci:get("appfilter", "global", "tcp_rst")) or 1
+	luci.http.write_json({data = data})
 end
 function set_app_filter_adv()
-	local json = require "luci.jsonc"
-	llog("set appfilter base");
+	local uci = require "luci.model.uci".cursor()
 	luci.http.prepare_content("application/json")
-	local req_obj = {}
-	req_obj.lan_ifname = luci.http.formvalue("lan_ifname")
-	req_obj.disable_hnat = luci.http.formvalue("disable_hnat")
-	req_obj.auto_load_engine = luci.http.formvalue("auto_load_engine")
-	local resp_obj=utl.ubus("appfilter", "set_app_filter_adv", req_obj);
-	luci.http.write_json(resp_obj);
+
+	local lan_ifname = luci.http.formvalue("lan_ifname")
+	local disable_hnat = luci.http.formvalue("disable_hnat")
+	local auto_load_engine = luci.http.formvalue("auto_load_engine")
+
+	local old_auto_load = uci:get("appfilter", "global", "auto_load_engine") or "0"
+
+	if lan_ifname then
+		uci:set("appfilter", "global", "lan_ifname", lan_ifname)
+	end
+	if disable_hnat then
+		uci:set("appfilter", "global", "disable_hnat", disable_hnat)
+	end
+	if auto_load_engine then
+		uci:set("appfilter", "global", "auto_load_engine", auto_load_engine)
+	end
+	uci:commit("appfilter")
+
+	if auto_load_engine and auto_load_engine ~= old_auto_load then
+		if auto_load_engine == "1" then
+			luci.sys.call("/etc/init.d/appfilter start &")
+		else
+			luci.sys.call("rm -f /etc/modules.d/oaf")
+			luci.sys.call("/etc/init.d/appfilter stop &")
+		end
+	else
+		-- Notify running oafd to reload config (silently fails if not running)
+		utl.ubus("appfilter", "set_app_filter_adv", {
+			lan_ifname = lan_ifname,
+			disable_hnat = disable_hnat and tonumber(disable_hnat)
+		})
+	end
+
+	luci.http.write_json({result = "ok"})
 end
 
 -- data: {"mode":1,"weekday_list":[1,2,3,4,5,6,0],"start_time":"22:22","end_time":"12:00","allow_time":30,"deny_time":5}

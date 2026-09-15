@@ -35,6 +35,11 @@ stop_service(){
 }
 
 start_service(){
+	local auto_load_engine
+	auto_load_engine=$(uci -q get appfilter.global.auto_load_engine)
+	if [ "$auto_load_engine" != "1" ]; then
+		return 0
+	fi
 	test -f $FEATURE_FILE &&{
 		rm $FEATURE_FILE
 	}

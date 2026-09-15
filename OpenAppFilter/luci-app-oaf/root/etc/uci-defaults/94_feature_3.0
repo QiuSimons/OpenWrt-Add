@@ -8,7 +8,6 @@ uci -q batch <<-EOF >/dev/null
         set appfilter.global.disable_hnat='1'
         set appfilter.global.tcp_rst='1'
         set appfilter.global.lan_ifname='br-lan'
-        set appfilter.global.auto_load_engine='1'
         del_list appfilter.time.time='00:00-23:59'
         add_list appfilter.time.time='00:00-23:59'
         commit appfilter
