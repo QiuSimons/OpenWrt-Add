@@ -1,0 +1,129 @@
+diff --git OpenAppFilter/luci-app-oaf/luasrc/controller/appfilter.lua OpenAppFilter/luci-app-oaf/luasrc/controller/appfilter.lua
+index 4ece5d72..1290fdf8 100755
+--- OpenAppFilter/luci-app-oaf/luasrc/controller/appfilter.lua
++++ OpenAppFilter/luci-app-oaf/luasrc/controller/appfilter.lua
+@@ -306,21 +306,52 @@ function set_app_filter_base()
+ end
+ 
+ function get_app_filter_adv()
+-	local json = require "luci.jsonc"
++	local uci = require "luci.model.uci".cursor()
+ 	luci.http.prepare_content("application/json")
+-	local resp_obj=utl.ubus("appfilter", "get_app_filter_adv", {});
+-	luci.http.write_json(resp_obj);
++	local data = {}
++	data.lan_ifname = uci:get("appfilter", "global", "lan_ifname") or "br-lan"
++	data.disable_hnat = tonumber(uci:get("appfilter", "global", "disable_hnat")) or 1
++	data.auto_load_engine = tonumber(uci:get("appfilter", "global", "auto_load_engine")) or 0
++	data.tcp_rst = tonumber(uci:get("appfilter", "global", "tcp_rst")) or 1
++	luci.http.write_json({data = data})
+ end
+ function set_app_filter_adv()
+-	local json = require "luci.jsonc"
+-	llog("set appfilter base");
++	local uci = require "luci.model.uci".cursor()
+ 	luci.http.prepare_content("application/json")
+-	local req_obj = {}
+-	req_obj.lan_ifname = luci.http.formvalue("lan_ifname")
+-	req_obj.disable_hnat = luci.http.formvalue("disable_hnat")
+-	req_obj.auto_load_engine = luci.http.formvalue("auto_load_engine")
+-	local resp_obj=utl.ubus("appfilter", "set_app_filter_adv", req_obj);
+-	luci.http.write_json(resp_obj);
++
++	local lan_ifname = luci.http.formvalue("lan_ifname")
++	local disable_hnat = luci.http.formvalue("disable_hnat")
++	local auto_load_engine = luci.http.formvalue("auto_load_engine")
++
++	local old_auto_load = uci:get("appfilter", "global", "auto_load_engine") or "0"
++
++	if lan_ifname then
++		uci:set("appfilter", "global", "lan_ifname", lan_ifname)
++	end
++	if disable_hnat then
++		uci:set("appfilter", "global", "disable_hnat", disable_hnat)
++	end
++	if auto_load_engine then
++		uci:set("appfilter", "global", "auto_load_engine", auto_load_engine)
++	end
++	uci:commit("appfilter")
++
++	if auto_load_engine and auto_load_engine ~= old_auto_load then
++		if auto_load_engine == "1" then
++			luci.sys.call("/etc/init.d/appfilter start &")
++		else
++			luci.sys.call("rm -f /etc/modules.d/oaf")
++			luci.sys.call("/etc/init.d/appfilter stop &")
++		end
++	else
++		-- Notify running oafd to reload config (silently fails if not running)
++		utl.ubus("appfilter", "set_app_filter_adv", {
++			lan_ifname = lan_ifname,
++			disable_hnat = disable_hnat and tonumber(disable_hnat)
++		})
++	end
++
++	luci.http.write_json({result = "ok"})
+ end
+ 
+ -- data: {"mode":1,"weekday_list":[1,2,3,4,5,6,0],"start_time":"22:22","end_time":"12:00","allow_time":30,"deny_time":5}
+diff --git OpenAppFilter/luci-app-oaf/root/etc/uci-defaults/94_feature_3.0 OpenAppFilter/luci-app-oaf/root/etc/uci-defaults/94_feature_3.0
+index 641243b7..f0d429d0 100755
+--- OpenAppFilter/luci-app-oaf/root/etc/uci-defaults/94_feature_3.0
++++ OpenAppFilter/luci-app-oaf/root/etc/uci-defaults/94_feature_3.0
+@@ -8,7 +8,6 @@ uci -q batch <<-EOF >/dev/null
+         set appfilter.global.disable_hnat='1'
+         set appfilter.global.tcp_rst='1'
+         set appfilter.global.lan_ifname='br-lan'
+-        set appfilter.global.auto_load_engine='1'
+         del_list appfilter.time.time='00:00-23:59'
+         add_list appfilter.time.time='00:00-23:59'
+         commit appfilter
+diff --git OpenAppFilter/open-app-filter/files/appfilter.config OpenAppFilter/open-app-filter/files/appfilter.config
+index efbca3aa..108412ae 100755
+--- OpenAppFilter/open-app-filter/files/appfilter.config
++++ OpenAppFilter/open-app-filter/files/appfilter.config
+@@ -5,7 +5,7 @@ config global global
+ 	option disable_hnat '1'
+ 	option tcp_rst '1'
+ 	option lan_ifname 'br-lan'
+-	option auto_load_engine '1'
++	option auto_load_engine '0'
+ 	
+ config appfilter appfilter
+ 
+diff --git OpenAppFilter/open-app-filter/files/appfilter.init OpenAppFilter/open-app-filter/files/appfilter.init
+index 0402eb4d..13b33d6c 100755
+--- OpenAppFilter/open-app-filter/files/appfilter.init
++++ OpenAppFilter/open-app-filter/files/appfilter.init
+@@ -35,6 +35,11 @@ stop_service(){
+ }
+ 
+ start_service(){
++	local auto_load_engine
++	auto_load_engine=$(uci -q get appfilter.global.auto_load_engine)
++	if [ "$auto_load_engine" != "1" ]; then
++		return 0
++	fi
+ 	test -f $FEATURE_FILE &&{
+ 		rm $FEATURE_FILE
+ 	}
+diff --git OpenAppFilter/open-app-filter/src/appfilter_ubus.c OpenAppFilter/open-app-filter/src/appfilter_ubus.c
+index 3a2122e3..d013fb2c 100755
+--- OpenAppFilter/open-app-filter/src/appfilter_ubus.c
++++ OpenAppFilter/open-app-filter/src/appfilter_ubus.c
+@@ -912,14 +912,8 @@ static int handle_set_app_filter_adv(struct ubus_context *ctx, struct ubus_objec
+         af_uci_set_value(uci_ctx, "appfilter.global.lan_ifname", json_object_get_string(lan_ifname_obj));
+     if (disable_hnat_obj)
+         af_uci_set_int_value(uci_ctx, "appfilter.global.disable_hnat", json_object_get_int(disable_hnat_obj));
+-    if (auto_load_engine_obj){
++    if (auto_load_engine_obj)
+         af_uci_set_int_value(uci_ctx, "appfilter.global.auto_load_engine", json_object_get_int(auto_load_engine_obj));
+-        if (json_object_get_int(auto_load_engine_obj) == 0){
+-            system("rm /etc/modules.d/oaf");
+-        }
+-    }
+-
+-
+     af_uci_commit(uci_ctx, "appfilter");
+     g_oaf_config_change = 1;
+     reload_oaf_rule();
