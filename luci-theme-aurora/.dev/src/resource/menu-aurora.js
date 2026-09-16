@@ -6,7 +6,15 @@ const PALETTE_RECENTS_KEY = "aurora.paletteRecents";
 
 return baseclass.extend({
   __init__() {
-    ui.menu.load().then((tree) => this.render(tree));
+    ui.menu
+      .load()
+      .then((tree) => this.render(tree))
+      .finally(() => {
+        // header.ut's replay stays inert until the live nav has replaced it
+        // or failed to; either way it must not stay a dead copy.
+        for (const el of document.querySelectorAll("[data-restored]"))
+          el.inert = false;
+      });
     this.initNavigationControls();
     this.initUciIndicator();
   },
@@ -32,7 +40,6 @@ return baseclass.extend({
     const mobileList = overlay.querySelector("#mobile-nav-list");
     const desktop = window.matchMedia("(min-width: 768px)");
     const SIDEBAR_COLLAPSED_KEY = "aurora.sidebarCollapsed";
-    let sidebarAnimTimer;
 
     const isDesktopSidebar = () =>
       desktop.matches && document.body.dataset.navType === "sidebar";
@@ -85,23 +92,9 @@ return baseclass.extend({
         closeMobileNavigation();
 
         const collapsed = !expanded;
-        const body = document.body;
 
-        // Coupled slide (_layout.css): the class must land in the same
-        // frame as the column snap. Open/close carry distinct
-        // animation-names, so alternating toggles restart the run without
-        // a forced reflow; the timer (not animationend — three elements
-        // animate) clears the class once the 250ms run is over.
-        body.classList.remove("sidebar-anim-open", "sidebar-anim-close");
-        body.classList.add(
-          collapsed ? "sidebar-anim-close" : "sidebar-anim-open",
-        );
-        clearTimeout(sidebarAnimTimer);
-        sidebarAnimTimer = setTimeout(() => {
-          body.classList.remove("sidebar-anim-open", "sidebar-anim-close");
-        }, 300);
-
-        body.classList.toggle("sidebar-collapsed", collapsed);
+        // The column and the panel transition together (_layout.css).
+        document.body.classList.toggle("sidebar-collapsed", collapsed);
         localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed);
         updateToggleState(expanded);
         return;
@@ -203,6 +196,25 @@ return baseclass.extend({
     this.tree = tree;
     this.renderModeMenu(tree);
     this.renderTabs(tree);
+    this.cacheNav();
+  },
+
+  // Snapshot for header.ut's pre-paint replay, under the stamp it renders on
+  // body; it recomputes the active marks, so one copy serves every page.
+  cacheNav() {
+    const html = {};
+    for (const el of document.querySelectorAll(
+      "#topmenu, #sidebar-list, #sidebar-footer",
+    ))
+      if (el.firstChild) html[el.id] = el.innerHTML;
+    try {
+      sessionStorage.setItem(
+        "aurora.nav",
+        JSON.stringify([document.body.dataset.navStamp, html]),
+      );
+    } catch {
+      // No storage: the next load renders after the module, as before.
+    }
   },
 
   renderTabs(tree) {
@@ -258,7 +270,8 @@ return baseclass.extend({
       this.expandActiveNavigationGroup(surface);
     }
 
-    this.renderCrumb();
+    // header.ut's, shared with its pre-paint replay (sidebar mode only).
+    window.auroraCrumb?.();
 
     const tabs = document.querySelector("#tabmenu");
     if (tabs) {
@@ -324,6 +337,8 @@ return baseclass.extend({
         return ul || E([]);
       }
 
+      // Drops header.ut's replayed copy, which carries no listeners.
+      if (ul) ul.innerHTML = "";
       if (!ul || !children.length) return E([]);
 
       if (navType === "mega-menu") {
@@ -561,30 +576,7 @@ return baseclass.extend({
     });
 
     this.bindNavigationAccordion(list);
-    this.renderCrumb();
-  },
-
-  renderCrumb() {
-    const crumbEl = document.querySelector("#header-crumb");
-    const list = document.querySelector("#sidebar-list");
-    if (!crumbEl || !list) return;
-
-    const crumb = [];
-    const group = list.querySelector(".is-active-group");
-    const page = list.querySelector(".is-active-page");
-    if (group)
-      crumb.push(group.querySelector(".nav-category-label")?.textContent);
-    // Same-named group/page pairs ("System › System") collapse to one
-    // level — the duplicate adds no information.
-    if (page && page.textContent !== crumb[0]) crumb.push(page.textContent);
-
-    crumbEl.innerHTML = "";
-    crumb.forEach((title, i) => {
-      if (i) crumbEl.appendChild(E("li", { class: "crumb-sep" }, ["/"]));
-      crumbEl.appendChild(
-        E("li", { class: i === crumb.length - 1 ? "current" : "" }, [title]),
-      );
-    });
+    window.auroraCrumb?.();
   },
 
   // Command palette (all nav types): a Spotlight-style panel on ⌘K / Ctrl+K
@@ -592,11 +584,12 @@ return baseclass.extend({
   // is the navigation model the menus already render from — no extra
   // requests, no DOM scraping — and the panel DOM is built lazily on first
   // open, so pages where it is never used pay nothing beyond this flat array.
-  initPalette(items) {
+  initPalette(items, root) {
     const toggle = document.querySelector("#cmdk-trigger");
     if (!toggle || this.paletteIndex) return;
 
     this.paletteIndex = [];
+    this.paletteAliases = {};
     let logout = null;
     items.forEach((item) => {
       if (item.isLogout) {
@@ -612,17 +605,44 @@ return baseclass.extend({
         });
         return;
       }
-      item.pages.forEach((page) =>
-        this.paletteIndex.push({
-          title: page.title,
-          // Section-qualified: "status/overview" keeps English dispatch
-          // segments matchable under any UI language, and the "/" is what
-          // arms the scorer's segment-start bonus.
-          name: `${item.name}/${page.name}`,
-          group: item.title,
-          href: page.href,
-        }),
-      );
+      item.pages.forEach((page) => {
+        // Dispatch paths keep English segments matchable under any UI
+        // language.
+        const name = `${item.name}/${page.name}`;
+        // The raw node: getChildren() hands out alias nodes carrying their
+        // target's children, which would hide an alias parent's tabs.
+        const node = root?.children?.[item.name]?.children?.[page.name] ?? {};
+        const tabs = ui.menu.getChildren(node);
+        const type = node.action?.type;
+        const target =
+          type === "alias"
+            ? node.action.path.replace(`${root.name}/${name}/`, "")
+            : type === "firstchild" &&
+              tabs.find((tab) => !tab.firstchild_ineligible)?.name;
+
+        // A parent that only redirects to one of its tabs is that tab; its
+        // row gives way to the tabs, and its name (stored by older recents)
+        // resolves to where it redirects.
+        if (tabs.some((tab) => tab.name === target))
+          this.paletteAliases[name] = `${name}/${target}`;
+        else
+          this.paletteIndex.push({
+            title: page.title,
+            name,
+            group: item.title,
+            href: page.href,
+          });
+
+        tabs.forEach((tab) =>
+          this.paletteIndex.push({
+            title: _(tab.title),
+            parent: page.title,
+            name: `${name}/${tab.name}`,
+            group: item.title,
+            href: L.url(root.name, item.name, page.name, tab.name),
+          }),
+        );
+      });
     });
 
     // The only non-navigation commands: theme modes. They ride the same
@@ -895,17 +915,20 @@ return baseclass.extend({
     return best;
   },
 
-  // Empty query matches everything at score 0 (the browse list); title hits
-  // outrank name/path and group hits and are the only ones highlighted.
   // localStorage can be unavailable (privacy modes) or hold anything after
   // a downgrade — both read as "no history". No size cap: dedupe bounds the
   // list by the pages actually visited, i.e. the menu's own scale.
   readPaletteRecents() {
     try {
       const list = JSON.parse(localStorage.getItem(PALETTE_RECENTS_KEY));
-      return Array.isArray(list)
-        ? list.filter((name) => typeof name === "string")
-        : [];
+      if (!Array.isArray(list)) return [];
+      return [
+        ...new Set(
+          list
+            .filter((name) => typeof name === "string")
+            .map((name) => this.paletteAliases?.[name] ?? name),
+        ),
+      ];
     } catch {
       return [];
     }
@@ -937,16 +960,64 @@ return baseclass.extend({
     );
   },
 
+  // Empty query matches everything at score 0 (the browse list). Title hits
+  // rank first, then parent hits, which score the parent alone so its tabs
+  // tie and keep menu order; "parent title" pairs split on a space. Then the
+  // path, then the group.
   matchPaletteEntry(q, page) {
     if (!q) return { score: 0, ranges: null };
 
     const title = this.fuzzyMatch(q, page.title);
     if (title) return { score: title.score + 12, ranges: title.ranges };
 
+    if (page.parent) {
+      const parent = this.fuzzyMatch(q, page.parent);
+      if (parent)
+        return {
+          score: parent.score + 8,
+          ranges: null,
+          parentRanges: parent.ranges,
+        };
+
+      const words = q.split(/\s+/);
+      for (let i = 1; i < words.length; i++) {
+        const head = this.fuzzyMatch(words.slice(0, i).join(" "), page.parent);
+        const tail =
+          head && this.fuzzyMatch(words.slice(i).join(" "), page.title);
+        if (tail)
+          return {
+            score: head.score + tail.score + 8,
+            ranges: tail.ranges,
+            parentRanges: head.ranges,
+          };
+      }
+    }
+
     const rest =
-      this.fuzzyMatch(q, page.name) ||
+      this.matchPalettePath(q, page.name) ||
       (page.group ? this.fuzzyMatch(q, page.group) : null);
     return rest && { score: rest.score, ranges: null };
+  },
+
+  // Each query word (split on spaces or "/") lands inside one segment, in
+  // path order: "network wireless" reaches network/wireless, while a lone
+  // word can't scatter across segments ("ssh" in services/passwall2/other).
+  matchPalettePath(q, name) {
+    const words = q.split(/[\s/]+/).filter(Boolean);
+    const segments = name.split("/");
+    let at = 0;
+    let score = 0;
+
+    for (const word of words) {
+      let hit = null;
+      for (; at < segments.length; at++) {
+        hit = this.fuzzyMatch(word, segments[at]);
+        if (hit) break;
+      }
+      if (!hit) return null;
+      score += hit.score;
+    }
+    return words.length ? { score } : null;
   },
 
   collectPaletteMatches(value) {
@@ -971,6 +1042,7 @@ return baseclass.extend({
         page,
         score: at < 0 ? m.score : recents.length - at,
         ranges: m.ranges,
+        parentRanges: m.parentRanges,
       });
     }
     if (q || recents.length) matches.sort((a, b) => b.score - a.score);
@@ -991,7 +1063,7 @@ return baseclass.extend({
       return;
     }
 
-    matches.forEach(({ page, ranges }, i) => {
+    matches.forEach(({ page, ranges, parentRanges }, i) => {
       const current = page.mode && page.mode === theme;
       const attributes = {
         class: "cmdk-row",
@@ -1009,7 +1081,21 @@ return baseclass.extend({
           E(
             "span",
             { class: "cmdk-title" },
-            this.highlightPaletteMatch(page.title, ranges),
+            // A tab named after its parent is the page the parent opens.
+            page.parent && page.parent !== page.title
+              ? [
+                  E(
+                    "span",
+                    { class: "cmdk-parent" },
+                    this.highlightPaletteMatch(page.parent, parentRanges),
+                  ),
+                  E(
+                    "span",
+                    { class: "cmdk-label" },
+                    this.highlightPaletteMatch(page.title, ranges),
+                  ),
+                ]
+              : this.highlightPaletteMatch(page.title, ranges),
           ),
           current
             ? // The ✓ is decorative (aria-current carries the state); mark
@@ -1496,7 +1582,7 @@ return baseclass.extend({
       );
       this.renderMainMenu(activeChild, activeChild.name, 0, navigationItems);
       this.renderMobileMenu(navigationItems);
-      this.initPalette(navigationItems);
+      this.initPalette(navigationItems, activeChild);
     }
 
     if (ul?.children.length > 1) {
