@@ -108,3 +108,4 @@ test("pickPackageManagerPath yields null when there is no software page", async 
     null,
   );
 });
+
