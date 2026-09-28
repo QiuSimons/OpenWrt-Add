@@ -36,19 +36,18 @@ derive_version() {
     stage_num=""
     patch_num=""
 
-    # 1. 提取主版本号
+    # 提取主版本号
     prefix="$(printf '%s' "$v" | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/')"
     [ -n "$prefix" ] || prefix="0.0.0"
 
-    # 2. 剥离已提取部分及连接符
+    # 提取剩余修饰后缀
     rest="${v#"$prefix"}"
     rest="$(printf '%s' "$rest" | sed -E 's/^[-_.]+//')"
 
     if [ -n "$rest" ]; then
-        # 统一小写
         rest="$(printf '%s' "$rest" | tr '[:upper:]' '[:lower:]')"
 
-        # 3. 提取阶段性标签 (alpha/beta/rc 等)
+        # 提取阶段标签 (alpha/beta/rc)
         if printf '%s' "$rest" | grep -qE '^(alpha|beta|pre|rc|cvs|git|hg|svn)'; then
             stage="$(printf '%s' "$rest" | sed -E -n 's/^(alpha|beta|pre|rc|cvs|git|hg|svn).*/\1/p')"
             rest="$(printf '%s' "$rest" | sed -E 's/^(alpha|beta|pre|rc|cvs|git|hg|svn)//' | sed -E 's/^[-_.]+//')"
@@ -60,7 +59,7 @@ derive_version() {
             fi
         fi
 
-        # 4. 提取补丁标签 (抹除所有分隔符，将 fix.fix 压扁为 fixfix)
+        # 提取补丁标签 (如 fix/patch)
         if [ -n "$rest" ]; then
             rest="$(printf '%s' "$rest" | sed -E 's/[-_.]//g')"
             if printf '%s' "$rest" | grep -qE '^(fix)+$'; then
@@ -75,7 +74,7 @@ derive_version() {
         fi
     fi
 
-    # 5. 组装合规版本号
+    # 组装版本号
     local result="$prefix"
     [ -z "$stage" ] || result="${result}_${stage}${stage_num}"
     [ -z "$patch_num" ] || result="${result}_p${patch_num}"
@@ -158,7 +157,6 @@ main() {
 
     if ! assert_apk_version "$version"; then
         echo "WARNING: Parsed version '${version}' is invalid for apk-tools!" >&2
-        # Fallback：仅提取纯数字基准版本号 (剥离不可靠后缀)
         version="$(printf '%s' "${tag#[vV]}" | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/')"
         [ -n "$version" ] || version="0.0.0"
         echo "INFO: Falling back to strict safe PKG_VERSION='${version}'" >&2
@@ -171,7 +169,6 @@ main() {
     hash_x86_64="$(resolve_hash HONK_HASH_X86_64 "x86_64-unknown-linux-musl" "$suffix" "$tag")"
     hash_aarch64="$(resolve_hash HONK_HASH_AARCH64 "aarch64-unknown-linux-musl" "$suffix" "$tag")"
 
-    # Stream substitution compatible across Linux and macOS/BSD
     sed -E \
         -e "s/^PKG_VERSION:=.*/PKG_VERSION:=${version}/" \
         -e "s/^HONK_RELEASE_TAG:=.*/HONK_RELEASE_TAG:=${tag}/" \
