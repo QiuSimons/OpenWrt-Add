@@ -137,7 +137,7 @@ return view.extend({
 			'	width: 100%;',
 			'	height: calc(100vh - 210px);',
 			'	min-height: 650px;',
-			'	border: 1px solid var(--hairline, var(--border-color-medium, #ccc));',
+			'	border: 1px solid var(--border, var(--hairline, var(--border-color-medium, #ccc)));',
 			'	border-radius: var(--radius-base, 4px);',
 			'	display: block;',
 			'}',
@@ -154,7 +154,7 @@ return view.extend({
 			'.dash-toolbar-actions > * { white-space: nowrap !important; flex-shrink: 0; }',
 			'@media (max-width: 768px) {',
 			'	#dash_iframe { border-right: none; border-radius: var(--radius-base,4px) 0 0 var(--radius-base,4px); }',
-			'	#dash_scroll_handle { display: flex; align-items: center; justify-content: center; width: 14px; flex-shrink: 0; touch-action: none; user-select: none; border: 1px solid var(--hairline,var(--border-color-medium,#ccc)); border-radius: 0 var(--radius-base,4px) var(--radius-base,4px) 0; }',
+			'	#dash_scroll_handle { display: flex; align-items: center; justify-content: center; width: 14px; flex-shrink: 0; touch-action: none; user-select: none; border: 1px solid var(--border, var(--hairline, var(--border-color-medium, #ccc))); border-radius: 0 var(--radius-base,4px) var(--radius-base,4px) 0; }',
 			'	.dash-toolbar-actions { width: 100%; display: flex; flex-wrap: wrap; gap: 6px; }',
 			'	.dash-toolbar-actions select { flex: 1 1 auto; min-width: 90px; margin-right: 0 !important; }',
 			'	.dash-toolbar-actions .btn, .dash-toolbar-actions .cbi-button { padding: 4px 8px !important; font-size: 12px !important; white-space: nowrap !important; flex: 0 0 auto; }',
@@ -162,8 +162,8 @@ return view.extend({
 			'.dash-log-box {',
 			'	max-height: 150px; overflow-y: auto; font-family: var(--font-mono, monospace);',
 			'	font-size: 12px; line-height: 1.4; padding: 8px; margin: 8px 0;',
-			'	background: var(--surface-sunken, var(--background-color-low, transparent));',
-			'	border: 1px solid var(--hairline, var(--border-color-medium, #ccc));',
+			'	background: var(--surface-raised, var(--surface-sunken, var(--background-color-low, transparent)));',
+			'	border: 1px solid var(--border, var(--hairline, var(--border-color-medium, #ccc)));',
 			'	border-radius: var(--radius-base, 3px); white-space: pre-wrap; word-break: break-all;',
 			'}'
 		].join('\n'));

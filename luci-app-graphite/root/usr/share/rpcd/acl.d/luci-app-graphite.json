@@ -1,0 +1,7 @@
+{
+	"luci-app-graphite": {
+		"description": "Grant access to the Graphite theme appearance settings",
+		"read": { "uci": [ "graphite" ] },
+		"write": { "uci": [ "graphite" ] }
+	}
+}

@@ -1,0 +1,7 @@
+# Empty by default, and that is the point: with nothing set here the theme is
+# the achromatic palette its design language argues for. A palette or a tint
+# is something an administrator decides, not something they have to undo.
+config appearance 'appearance'
+	option palette ''
+	option tint_hue ''
+	option tint_chroma ''

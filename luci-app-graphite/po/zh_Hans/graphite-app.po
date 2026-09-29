@@ -1,0 +1,175 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: luci-graphite\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-09-01 22:47+1000\n"
+"Language: zh_Hans\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:65
+msgid "Appearance"
+msgstr "外观"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:66
+msgid ""
+"Settings for the Graphite theme. They apply to every browser that opens this "
+"device; a reader can still override light and dark for their own browser "
+"from the bar at the top of the page."
+msgstr ""
+"Graphite 主题的设置，对访问本设备的所有浏览器生效；每位使用者仍可在页面顶栏为"
+"自己的浏览器单独选择浅色或深色。"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:71
+msgid "Palette"
+msgstr "配色"
+
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:76
+msgid "Graphite"
+msgstr "Graphite"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:90
+msgid "Brand name"
+msgstr "品牌名"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:91
+msgid ""
+"What appears beside the mark in the sidebar and on the login page. With the "
+"theme name shown, the hostname moves to the nameplate under the login form."
+msgstr "侧边栏和登录页上，标记旁边显示什么。显示主题名时，主机名移到登录表单下方的铭牌里。"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:92
+msgid "Theme name (Graphite)"
+msgstr "主题名（Graphite）"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:93
+msgid "Device hostname"
+msgstr "设备主机名"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:96
+msgid "Grey tint hue"
+msgstr "灰阶偏色色相"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:97
+msgid ""
+"Biases every grey surface towards one hue. A colour code or a hue angle. "
+"Leave empty for neutral grey."
+msgstr "让所有灰色表面偏向某一色相。可填颜色代码或色相角度。留空则为中性灰。"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:109
+msgid "A hue angle runs from 0 to 360."
+msgstr "色相角度的取值范围是 0 到 360。"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:112
+msgid "Enter a hue angle from 0 to 360, or a colour code such as #3b82f6."
+msgstr "请填写 0 到 360 的色相角度，或形如 #3b82f6 的颜色代码。"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:114
+msgid ""
+"That colour is a grey, so it has no hue to take. Leave the field empty for "
+"neutral grey."
+msgstr "这个颜色是灰色，没有色相可取。需要中性灰请留空。"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:117
+msgid "Grey tint strength"
+msgstr "灰阶偏色强度"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:118
+msgid ""
+"How far the greys move towards that hue. 0 is neutral. Above 0.01 they stop "
+"reading as grey and start competing with the status colours, so that is the "
+"ceiling."
+msgstr ""
+"灰色向该色相偏移的程度。0 为中性；超过 0.01 就不再像灰色，并会与状态色争夺注"
+"意力，因此以此为上限。"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:175
+msgid "Appearance saved. Reloading to apply it…"
+msgstr "外观设置已保存，正在重新载入以应用…"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:88
+msgid "Accent colour"
+msgstr "强调色"
+
+
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:91
+msgid "Blue"
+msgstr "蓝色"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:92
+msgid "Green"
+msgstr "绿色"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:93
+msgid "Purple"
+msgstr "紫色"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:91
+msgid "Teal"
+msgstr "青色"
+
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:94
+msgid "Red"
+msgstr "红色"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:101
+msgid "Custom accent colour"
+msgstr "自定义强调色"
+
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:110
+msgid "Six hex digits, for example #2f6feb."
+msgstr "请填六位十六进制色号，例如 #2f6feb。"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:95
+msgid "Pink"
+msgstr "粉色"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:88
+msgid "None (default)"
+msgstr "无（默认）"
+
+
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:88
+msgid "Mauve"
+msgstr "木槿紫"
+
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:88
+msgid "Peach"
+msgstr "桃橙"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:88
+msgid "Yellow"
+msgstr "黄色"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:86
+msgid ""
+"The colour of the primary button, the focus ring, the active badge and the "
+"sidebar mark. Every palette answers the same eight names in its own values, "
+"so the accent belongs to the set around it."
+msgstr ""
+"主按钮、焦点环、活动徽标与侧栏标记的颜色。八个名字在每套配色下都由那套自己的"
+"取值来回答，因此强调色始终属于它周围那一套。"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:98
+msgid ""
+"A colour code such as #2f6feb. It wins over the choice above, under any "
+"palette. Leave empty to use that choice. Only six hex digits are accepted."
+msgstr ""
+"十六进制色号，例如 #2f6feb。在任何配色下都优先于上面的选择。留空则使用上面的"
+"选择。只接受六位十六进制。"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:71
+msgid ""
+"Which surface colours the interface uses. Ports are named for their dark "
+"flavour; the light side is Latte for Catppuccin and Day for Tokyo Night."
+msgstr ""
+"界面用哪一套表面色。移植的几套按深色风味命名，浅色一侧 Catppuccin 用 Latte，"
+"Tokyo Night 用 Day。"

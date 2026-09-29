@@ -140,6 +140,7 @@ function ensureEditorStyles() {
 	var style = document.createElement('style');
 	style.id = 'honk-editor-custom-style';
 	style.textContent = [
+		'.cbi-value.hidden { display: none !important; }',
 		'.honk-status-field { display: inline-flex !important; align-items: center !important; justify-content: flex-start !important; gap: 16px !important; flex-wrap: wrap !important; min-height: 32px !important; }',
 		'.honk-editor-toolbar { margin-bottom: 6px !important; margin-top: 0 !important; display: flex !important; align-items: center !important; justify-content: flex-start !important; }',
 		'.cm-format-btn { margin: 0 !important; cursor: pointer !important; }',
@@ -147,31 +148,22 @@ function ensureEditorStyles() {
 		'.cbi-value:has(.CodeMirror) > .cbi-value-title { padding-top: 5px !important; }',
 		'.cbi-value:has(.CodeMirror) .cbi-value-field { flex: 1 1 0% !important; min-width: 0 !important; width: auto !important; }',
 		'.CodeMirror {',
-		'	border: 1px solid var(--hairline, var(--border-color-medium, #ccc)) !important;',
+		'	border: 1px solid var(--border, var(--hairline, var(--border-color-medium, #ccc))) !important;',
 		'	border-radius: var(--radius-base, 4px);',
 		'	height: auto;',
 		'	min-height: 480px;',
 		'	font-family: var(--font-mono, monospace);',
 		'	font-size: 13px;',
-		'	background: var(--control-bg, var(--surface, #ffffff)) !important;',
-		'	color: var(--text, inherit) !important;',
+		'	background: var(--background, var(--control-bg, var(--background-color-high, #ffffff))) !important;',
+		'	color: var(--foreground, var(--text, var(--text-color-highest, inherit))) !important;',
 		'	box-shadow: none;',
 		'}',
 		'.CodeMirror-gutters {',
-		'	border-right: 1px solid var(--hairline, var(--border-color-medium, #ccc)) !important;',
-		'	background: var(--surface-sunken, var(--background-color-low, #f7f7f7)) !important;',
+		'	border-right: 1px solid var(--border, var(--hairline, var(--border-color-medium, #ccc))) !important;',
+		'	background: var(--surface-raised, var(--surface-sunken, var(--background-color-low, #f7f7f7))) !important;',
 		'}',
-		'.CodeMirror-linenumber { color: var(--text-muted, var(--text-color-low, #888888)) !important; }',
-		'.CodeMirror-cursor { border-left: 1px solid var(--text, currentColor) !important; }',
-		'[data-darkmode="true"] .CodeMirror, [data-theme="dark"] .CodeMirror, .dark .CodeMirror {',
-		'	background: var(--control-bg, var(--surface, #141822)) !important;',
-		'	color: var(--text, #f9fafb) !important;',
-		'	border-color: var(--hairline, var(--border-color-medium, #334155)) !important;',
-		'}',
-		'[data-darkmode="true"] .CodeMirror-gutters, [data-theme="dark"] .CodeMirror-gutters, .dark .CodeMirror-gutters {',
-		'	background: var(--surface-sunken, var(--background-color-low, #0a0e17)) !important;',
-		'	border-right-color: var(--hairline, var(--border-color-medium, #334155)) !important;',
-		'}'
+		'.CodeMirror-linenumber { color: var(--muted-foreground, var(--text-muted, var(--text-color-low, #888888))) !important; }',
+		'.CodeMirror-cursor { border-left: 1px solid var(--foreground, var(--text, currentColor)) !important; }'
 	].join('\n');
 	document.head.appendChild(style);
 }
@@ -315,6 +307,7 @@ function formatEditor(ed) {
 function bindCodeMirrorToMap(m, onSaveCallback) {
 	if (!m || m._cmHooked) return;
 	m._cmHooked = true;
+	ensureEditorStyles();
 
 	var origRenderContents = m.renderContents;
 	m.renderContents = function() {
@@ -573,7 +566,6 @@ function renderStatusHeader() {
 
 	return section;
 }
-
 
 return baseclass.extend({
 	applyTabVisibility: applyTabVisibility,

@@ -1,0 +1,103 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: PACKAGE VERSION\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-09-01 22:47+1000\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:65
+msgid "Appearance"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:66
+msgid ""
+"Settings for the Graphite theme. They apply to every browser that opens this "
+"device; a reader can still override light and dark for their own browser "
+"from the bar at the top of the page."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:71
+msgid "Palette"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:72
+msgid ""
+"Which set of surface colours the interface uses. Graphite is achromatic: "
+"grey carries hierarchy and hue is reserved for status. The others are ports "
+"of published palettes, named for the flavour they use in dark mode; each "
+"pairs with that project’s own light flavour — Latte for Catppuccin, Day for "
+"Tokyo Night."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:76
+msgid "Graphite (grey)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:90
+msgid "Brand name"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:91
+msgid ""
+"What appears beside the mark in the sidebar and on the login page. With the "
+"theme name shown, the hostname moves to the nameplate under the login form."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:92
+msgid "Theme name (Graphite)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:93
+msgid "Device hostname"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:96
+msgid "Grey tint hue"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:97
+msgid ""
+"Biases every grey surface towards one hue. A colour code or a hue angle. "
+"Leave empty for neutral grey."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:109
+msgid "A hue angle runs from 0 to 360."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:112
+msgid "Enter a hue angle from 0 to 360, or a colour code such as #3b82f6."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:114
+msgid ""
+"That colour is a grey, so it has no hue to take. Leave the field empty for "
+"neutral grey."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:117
+msgid "Grey tint strength"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:118
+msgid ""
+"How far the greys move towards that hue. 0 is neutral. Above 0.01 they stop "
+"reading as grey and start competing with the status colours, so that is the "
+"ceiling."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/graphite/appearance.js:175
+msgid "Appearance saved. Reloading to apply it…"
+msgstr ""
