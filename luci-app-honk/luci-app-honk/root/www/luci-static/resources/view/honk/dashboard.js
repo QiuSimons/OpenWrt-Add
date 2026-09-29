@@ -17,9 +17,8 @@ return view.extend({
 	},
 
 	render: function() {
-		var applyTabs = (honk && (honk.applyTabVisibility || honk.applyAdvancedTabVisibility));
-		if (applyTabs) {
-			applyTabs();
+		if (honk && honk.applyTabVisibility) {
+			honk.applyTabVisibility();
 		}
 		var sec = (uci.sections('honk', 'honk')[0] || {});
 		var sid = sec['.name'] || 'config';
@@ -644,9 +643,11 @@ return view.extend({
 					httpsAlert.style.display = 'none';
 				}
 
+				var normalizedSrc = (iframe.src || '').replace(/\/$/, '');
+				var normalizedFullUrl = (fullUrl || '').replace(/\/$/, '');
 				if (forceReload) {
 					reloadIframe(true);
-				} else if (!iframeLoaded || iframe.src !== fullUrl) {
+				} else if (!iframeLoaded || normalizedSrc !== normalizedFullUrl) {
 					iframe.src = fullUrl;
 					iframeLoaded = true;
 				}
@@ -660,6 +661,9 @@ return view.extend({
 		loadInfo();
 
 		poll.add(function() {
+			if (document.hidden) {
+				return Promise.resolve();
+			}
 			if (currentInfo && currentInfo.configured && currentInfo.has_ui) {
 				return honk.callHonkStatus().then(function(res) {
 					var isRunning = (res && res.running);
