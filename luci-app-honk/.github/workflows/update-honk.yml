@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: '17 0 * * *'
   workflow_dispatch:
+    inputs:
+      aggressive:
+        description: 'Aggressive mode (use Glassyiris/honk test releases)'
+        type: boolean
+        default: true
+
+env:
+  # 激进模式开关：设为 true 使用 Glassyiris/honk 开发者测试源码及最新二进制（含 prerelease），设为 false 切回官方 daeuniverse/honk
+  AGGRESSIVE_MODE: true
 
 permissions:
   contents: write
@@ -21,7 +30,14 @@ jobs:
           persist-credentials: false
 
       - name: Update honk version
-        run: bash scripts/update_honk_version.sh
+        env:
+          INPUT_AGGRESSIVE: ${{ github.event.inputs.aggressive }}
+        run: |
+          if [ -n "$INPUT_AGGRESSIVE" ]; then
+            AGGRESSIVE_MODE="$INPUT_AGGRESSIVE" bash scripts/update_honk_version.sh
+          else
+            bash scripts/update_honk_version.sh
+          fi
 
       - name: Update doona dashboard
         run: bash scripts/update_doona.sh
@@ -40,7 +56,8 @@ jobs:
             echo "No version change."
           else
             TAG="$(grep '^HONK_RELEASE_TAG:=' honk/Makefile | cut -d= -f2 || true)"
-            git commit -m "auto: update honk ${TAG} and doona dashboard"
+            VER="$(grep '^PKG_VERSION:=' honk/Makefile | cut -d= -f2 || true)"
+            git commit -m "auto: update honk ${TAG} (${VER}) and doona dashboard"
 
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
