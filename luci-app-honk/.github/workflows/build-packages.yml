@@ -53,10 +53,28 @@ jobs:
           - arch: aarch64_generic
             sdk: openwrt-24.10
             pkg_ext: ipk
+          - arch: aarch64_cortex-a53
+            sdk: openwrt-24.10
+            pkg_ext: ipk
+          - arch: aarch64_cortex-a72
+            sdk: openwrt-24.10
+            pkg_ext: ipk
+          - arch: aarch64_cortex-a76
+            sdk: openwrt-24.10
+            pkg_ext: ipk
           - arch: x86_64
             sdk: openwrt-24.10
             pkg_ext: ipk
           - arch: aarch64_generic
+            sdk: openwrt-25.12
+            pkg_ext: apk
+          - arch: aarch64_cortex-a53
+            sdk: openwrt-25.12
+            pkg_ext: apk
+          - arch: aarch64_cortex-a72
+            sdk: openwrt-25.12
+            pkg_ext: apk
+          - arch: aarch64_cortex-a76
             sdk: openwrt-25.12
             pkg_ext: apk
           - arch: x86_64

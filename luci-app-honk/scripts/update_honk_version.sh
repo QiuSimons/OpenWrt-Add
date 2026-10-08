@@ -290,7 +290,10 @@ main() {
     if ! assert_apk_version "$version"; then
         echo "WARNING: Parsed version '${version}' is invalid for apk-tools!" >&2
         version="$(printf '%s' "${tag#[vV]}" | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/')"
-        [ -n "$version" ] || version="0.0.0"
+        if [ -z "$version" ] || ! assert_apk_version "$version"; then
+            echo "error: refusing to commit an unusable PKG_VERSION (tag '${tag}' yields '${version}')" >&2
+            exit 1
+        fi
         echo "INFO: Falling back to strict safe PKG_VERSION='${version}'" >&2
     else
         echo "INFO: Validated PKG_VERSION='${version}'" >&2

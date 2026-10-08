@@ -23,7 +23,7 @@ jobs:
   build:
     name: Build ${{ matrix.package_format }} packages
     needs: checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -37,7 +37,7 @@ jobs:
 
     steps:
       - name: Checkout theme
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -92,9 +92,14 @@ jobs:
           SDK_BASE_URL: ${{ matrix.sdk_base_url }}
           SDK_PATTERN: ${{ matrix.sdk_pattern }}
         run: |
+          checksums="$(mktemp)"
+          trap 'rm -f "${checksums}"' EXIT
+          curl --http1.1 -fsSL --retry 5 --retry-all-errors \
+            --connect-timeout 30 --max-time 120 \
+            "${SDK_BASE_URL}/sha256sums" -o "${checksums}"
+
           sdk_line="$(
-            curl -fsSL "${SDK_BASE_URL}/sha256sums" |
-              grep -E "[[:space:]]+\\*?${SDK_PATTERN}$" |
+            grep -E "[[:space:]]+\\*?${SDK_PATTERN}$" "${checksums}" |
               head -n 1
           )"
 
@@ -112,7 +117,7 @@ jobs:
 
       - name: Cache OpenWrt SDK archive
         id: cache-sdk
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/openwrt-sdk/${{ steps.sdk.outputs.sdk_file }}
           key: ${{ steps.sdk.outputs.sdk_cache_key }}
@@ -124,20 +129,32 @@ jobs:
           SDK_SHA256: ${{ steps.sdk.outputs.sdk_sha256 }}
         run: |
           mkdir -p .cache/openwrt-sdk
+          sdk_archive=".cache/openwrt-sdk/${SDK_FILE}"
+          sdk_partial="${sdk_archive}.part"
+          trap 'rm -f "${sdk_partial}"' EXIT
 
-          if [ ! -f ".cache/openwrt-sdk/${SDK_FILE}" ]; then
-            curl -fL "${SDK_BASE_URL}/${SDK_FILE}" -o ".cache/openwrt-sdk/${SDK_FILE}"
+          if [ -f "${sdk_archive}" ] && ! printf '%s  %s\n' "${SDK_SHA256}" "${sdk_archive}" | sha256sum -c -; then
+            echo "::warning::Cached SDK checksum mismatch; downloading it again."
+            rm -f "${sdk_archive}"
           fi
 
-          printf '%s  %s\n' "${SDK_SHA256}" ".cache/openwrt-sdk/${SDK_FILE}" | sha256sum -c -
+          if [ ! -f "${sdk_archive}" ]; then
+            # Avoid HTTP/2 stream failures and retry interrupted downloads.
+            # Only a checksum-verified archive may enter the SDK cache.
+            curl --http1.1 -fL --retry 5 --retry-all-errors \
+              --connect-timeout 30 --max-time 1800 \
+              "${SDK_BASE_URL}/${SDK_FILE}" -o "${sdk_partial}"
+            printf '%s  %s\n' "${SDK_SHA256}" "${sdk_partial}" | sha256sum -c -
+            mv "${sdk_partial}" "${sdk_archive}"
+          fi
 
           mkdir -p sdk
           case "${SDK_FILE}" in
             *.tar.zst)
-              tar --zstd -xf ".cache/openwrt-sdk/${SDK_FILE}" -C sdk --strip-components=1
+              tar --zstd -xf "${sdk_archive}" -C sdk --strip-components=1
               ;;
             *.tar.xz)
-              tar -xJf ".cache/openwrt-sdk/${SDK_FILE}" -C sdk --strip-components=1
+              tar -xJf "${sdk_archive}" -C sdk --strip-components=1
               ;;
             *)
               echo "::error::Unsupported SDK archive: ${SDK_FILE}"
@@ -192,13 +209,43 @@ jobs:
           CONFIG_ALL_KMODS=n
           CONFIG_ALL=n
           CONFIG_AUTOREMOVE=n
-          CONFIG_LUCI_LANG_zh_Hans=y
           CONFIG_PACKAGE_luci-theme-argon=m
           CONFIG_PACKAGE_luci-app-argon-config=m
           EOF
 
           sed -i 's/^[[:space:]]*//' .config
+
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          luci_mk = Path('feeds/luci/luci.mk').read_text()
+          supported = set(re.findall(r'^LUCI_LANG\.([A-Za-z0-9_]+)=', luci_mk, re.M))
+          aliases = dict(re.findall(r'^LUCI_LC_ALIAS\.([A-Za-z0-9_]+)=(\S+)', luci_mk, re.M))
+          languages = sorted({po.parent.name for po in Path('package/luci-app-argon-config/po').glob('*/*.po')})
+
+          if not languages:
+              raise SystemExit('::error::No Argon configuration translations found.')
+          unsupported = set(languages) - supported
+          if unsupported:
+              raise SystemExit(f'::error::Unsupported translation directories: {", ".join(sorted(unsupported))}')
+
+          with Path('.config').open('a') as config, Path('../argon-config-i18n-packages.txt').open('w') as manifest:
+              for language in languages:
+                  package = f'luci-i18n-argon-config-{aliases.get(language, language)}'
+                  config.write(f'CONFIG_LUCI_LANG_{language}=y\nCONFIG_PACKAGE_{package}=m\n')
+                  manifest.write(f'{package}\n')
+                  print(f'Enable translation: {language} -> {package}')
+          PY
+
           make defconfig
+
+          while IFS= read -r package; do
+            if ! grep -Fxq "CONFIG_PACKAGE_${package}=m" .config; then
+              echo "::error::Translation package was not enabled by defconfig: ${package}"
+              exit 1
+            fi
+          done < ../argon-config-i18n-packages.txt
 
       - name: Compile packages
         working-directory: sdk
@@ -221,27 +268,45 @@ jobs:
               -exec cp -v {} "artifacts/${PACKAGE_FORMAT}/" \;
 
             theme_count="$(find "artifacts/${PACKAGE_FORMAT}" -maxdepth 1 -type f -name "luci-theme-argon-*.apk" | wc -l)"
-            config_count="$(find "artifacts/${PACKAGE_FORMAT}" -maxdepth 1 -type f \( -name "luci-app-argon-config-*.apk" -o -name "luci-i18n-argon-config-*.apk" \) | wc -l)"
+            config_count="$(find "artifacts/${PACKAGE_FORMAT}" -maxdepth 1 -type f -name "luci-app-argon-config-*.apk" | wc -l)"
           else
             find sdk/bin/packages -type f \
               \( -name "luci-theme-argon_*.ipk" \
               -o -name "luci-app-argon-config_*.ipk" \
-              -o -name "luci-i18n-argon-config_*.ipk" \) \
+              -o -name "luci-i18n-argon-config-*.ipk" \) \
               -exec cp -v {} "artifacts/${PACKAGE_FORMAT}/" \;
 
             theme_count="$(find "artifacts/${PACKAGE_FORMAT}" -maxdepth 1 -type f -name "luci-theme-argon_*.ipk" | wc -l)"
-            config_count="$(find "artifacts/${PACKAGE_FORMAT}" -maxdepth 1 -type f \( -name "luci-app-argon-config_*.ipk" -o -name "luci-i18n-argon-config_*.ipk" \) | wc -l)"
+            config_count="$(find "artifacts/${PACKAGE_FORMAT}" -maxdepth 1 -type f -name "luci-app-argon-config_*.ipk" | wc -l)"
           fi
 
+          missing_packages=0
           if [ "${theme_count}" -lt 1 ] || [ "${config_count}" -lt 1 ]; then
-            echo "::error::Missing expected packages for ${PACKAGE_FORMAT}."
+            echo "::error::Missing expected packages for ${PACKAGE_FORMAT} (theme=${theme_count}, config=${config_count})."
+            missing_packages=1
+          fi
+
+          while IFS= read -r package; do
+            if [ "${PACKAGE_FORMAT}" = "apk" ]; then
+              pattern="${package}-*.apk"
+            else
+              pattern="${package}_*.ipk"
+            fi
+
+            if ! find "artifacts/${PACKAGE_FORMAT}" -maxdepth 1 -type f -name "${pattern}" -print -quit | grep -q .; then
+              echo "::error::Missing translation package for ${PACKAGE_FORMAT}: ${package}"
+              missing_packages=1
+            fi
+          done < argon-config-i18n-packages.txt
+
+          if [ "${missing_packages}" -ne 0 ]; then
             find sdk/bin/packages -maxdepth 3 -type f | sort
             find "artifacts/${PACKAGE_FORMAT}" -maxdepth 1 -type f -print
             exit 1
           fi
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: packages-${{ matrix.package_format }}
           path: artifacts/${{ matrix.package_format }}/*
@@ -249,32 +314,36 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     steps:
+      - name: Checkout release installation notes
+        uses: actions/checkout@v7
+
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-assets
           pattern: packages-*
           merge-multiple: true
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
+          body_path: .github/release-installation.md
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: release-assets/*
 
   sync-docs:
     name: Sync release docs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: release
     steps:
       - name: Checkout default branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: master
           fetch-depth: 0

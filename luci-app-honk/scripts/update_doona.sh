@@ -5,6 +5,24 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET_DIR="${1:-$REPO_DIR/luci-app-honk/root/etc/honk/doona}"
 UPSTREAM_REPO="Zakkaus/doona"
 
+REPO_REAL="$(cd "$REPO_DIR" && pwd -P)"
+CANON_PARENT="$(cd "$(dirname "$TARGET_DIR")" 2>/dev/null && pwd -P)" || {
+    echo "Error: cannot resolve the parent of ${TARGET_DIR}" >&2
+    exit 1
+}
+TARGET_DIR="$CANON_PARENT/$(basename "$TARGET_DIR")"
+if [ -L "$TARGET_DIR" ]; then
+    echo "Error: refusing a symlinked target: ${TARGET_DIR}" >&2
+    exit 1
+fi
+case "$TARGET_DIR" in
+    "$REPO_REAL"/*) ;;
+    *)
+        echo "Error: refusing to deploy outside the repository: ${TARGET_DIR}" >&2
+        exit 1
+        ;;
+esac
+
 echo "==> Updating embedded Doona dashboard..."
 echo "Target directory: $TARGET_DIR"
 
