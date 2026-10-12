@@ -24,6 +24,7 @@ jobs:
           git clone --depth 1 https://git.cooluc.com/sbwml/shortcut-fe
           sed -i '/AUTOLOAD/d' ./shortcut-fe/shortcut-fe/Makefile
           cp -rf ./shortcut-fe.bak ./shortcut-fe/shortcut-fe/files/etc/init.d/shortcut-fe
+          rm -rf ./shortcut-fe
           git clone --depth 1 https://github.com/sbwml/luci-app-airconnect
           sed -i 's,respawn,respawn 3600 5 0,g' ./luci-app-airconnect/airconnect/files/airconnect.init
           sed -i '/^PKG_HASH/d; /PKG_SOURCE_URL/a PKG_HASH:=skip' ./luci-app-airconnect/airconnect/Makefile
