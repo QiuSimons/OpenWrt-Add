@@ -34,6 +34,12 @@ msgstr "Shortcut-FE 流量分载"
 msgid "Shortcut-FE based offloading for routing/NAT"
 msgstr "基于 Shortcut-FE 的 路由/NAT 分载"
 
+msgid "Shortcut-FE v2 flow offloading"
+msgstr "Shortcut-FE v2 流量分载"
+
+msgid "Shortcut-FE v2 based offloading for routing/NAT"
+msgstr "基于 Shortcut-FE v2 的 路由/NAT 分载"
+
 msgid "Connection Manager"
 msgstr "连接管理器"
 
