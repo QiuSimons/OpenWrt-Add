@@ -117,6 +117,8 @@ if [ -f /etc/init.d/einat ]; then
     fi
 fi
 ) >/dev/null 2>&1 &
+uci set einat.config.enabled="0"
+uci commit einat
 
 #SFE
 sed -i '/shortcutfe/d' /usr/share/rpcd/ucode/luci
