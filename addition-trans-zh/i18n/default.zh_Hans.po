@@ -73,6 +73,15 @@ msgstr "启用 FullCone-NAT"
 msgid "BCM FullCone NAT scheme"
 msgstr "博通全锥型 NAT 方案"
 
+msgid "BRCM Full Cone NAT"
+msgstr "博通全锥型 NAT"
+
+msgid "Enable IPv4"
+msgstr "IPv4"
+
+msgid "Enable IPv4 and IPv6"
+msgstr "IPv4 和 IPv6"
+
 msgid "Use the Broadcom FullCone NAT scheme if enabled, and use the NFT FullCone scheme if the option is disabled."
 msgstr "启用该选项时使用 Broadcom FullCone NAT 方案，禁用该选项时则使用 nft-fullcone 方案"
 
