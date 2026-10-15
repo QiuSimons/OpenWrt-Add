@@ -100,7 +100,7 @@ if [ -f /etc/init.d/einat ]; then
 
     if [ -n "$wanif" ]; then
         uci set einat.config.ifname="$wanif"
-        uci set einat.config.enabled="1"
+        uci set einat.config.enabled="0"
         uci commit einat
 
         max_retry=10
@@ -117,8 +117,6 @@ if [ -f /etc/init.d/einat ]; then
     fi
 fi
 ) >/dev/null 2>&1 &
-uci set einat.config.enabled="0"
-uci commit einat
 
 #SFE
 sed -i '/shortcutfe/d' /usr/share/rpcd/ucode/luci
