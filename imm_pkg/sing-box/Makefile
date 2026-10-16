@@ -50,7 +50,7 @@ GO_PKG_LDFLAGS_X:= \
 	runtime.godebugDefault=multipathtcp=0,tlssha1=1
 
 include $(INCLUDE_DIR)/package.mk
-include ../../lang/golang/golang-package.mk
+include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
 define Package/sing-box/Default
   SECTION:=net
@@ -80,7 +80,7 @@ define Package/sing-box/config
   depends on $(subst @,,$(GO_ARCH_DEPENDS))
 
   config SING_BOX_BUILD_NAIVE_OUTBOUND
-  def_bool n
+  def_bool y
   depends on !(arc||armeb||loongarch64||mips||mips64||powerpc||TARGET_gemini)
 endef
 
