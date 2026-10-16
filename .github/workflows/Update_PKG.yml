@@ -157,7 +157,6 @@ jobs:
           cp -rf ./packages/libs/toml11 ./imm_pkg/toml11
           cp -rf ./packages/libs/libcronet ./imm_pkg/libcronet
           cp -rf ./packages/net/sing-box ./imm_pkg/sing-box
-          sed -i '/config SING_BOX_BUILD_NAIVE_OUTBOUND/{n;s/def_bool y/def_bool n/}' ./imm_pkg/sing-box/Makefile
           cp -rf ./packages/net/frp ./imm_pkg/frp
           sed -i '/etc/d' imm_pkg/frp/Makefile
           sed -i '/defaults/{N;d;}' imm_pkg/frp/Makefile
