@@ -155,6 +155,7 @@ jobs:
           cp -rf ./packages/libs/libcron ./imm_pkg/libcron
           cp -rf ./packages/libs/quickjspp ./imm_pkg/quickjspp
           cp -rf ./packages/libs/toml11 ./imm_pkg/toml11
+          cp -rf ./packages/libcronet ./imm_pkg/libcronet
           cp -rf ./packages/net/sing-box ./imm_pkg/sing-box
           cp -rf ./packages/net/frp ./imm_pkg/frp
           sed -i '/etc/d' imm_pkg/frp/Makefile
