@@ -208,10 +208,11 @@ function get_cache_var(key)
 	return val
 end
 
-function get_new_port(p)
-	if not p then p = "auto" end
-	local cmd_format = ". /usr/share/passwall2/utils.sh ; echo -n $(get_new_port %s tcp,udp)"
-	return tonumber(sys.exec(string.format(cmd_format, p)))
+function get_new_port(start_port, protocol)
+	start_port = tonumber(start_port) or "auto"
+	if protocol ~= "tcp" and protocol ~= "udp" then protocol = "tcp,udp" end
+	local cmd_format = ". /usr/share/passwall2/utils.sh ; echo -n $(get_new_port %s %s)"
+	return tonumber(sys.exec(string.format(cmd_format, util.shellquote(tostring(start_port)), util.shellquote(protocol))))
 end
 
 function exec_call(cmd)
@@ -448,9 +449,10 @@ function repeat_exist(table, value)
 end
 
 function remove(...)
-	for index, value in ipairs({...}) do
-		if value and #value > 0 and value ~= "/" then
-			sys.call(string.format("rm -rf %s", value))
+	for i = 1, select("#", ...) do
+		local value = select(i, ...)
+		if type(value) == "string" and #value > 0 and value ~= "/" then
+			sys.call(string.format("rm -rf -- %s", value))
 		end
 	end
 end
