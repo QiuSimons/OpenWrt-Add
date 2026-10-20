@@ -8,11 +8,11 @@ on:
       aggressive:
         description: 'Aggressive mode (use Glassyiris/honk test releases)'
         type: boolean
-        default: true
+        default: false
 
 env:
   # 激进模式开关：设为 true 使用 Glassyiris/honk 开发者测试源码及最新二进制（含 prerelease），设为 false 切回官方 daeuniverse/honk
-  AGGRESSIVE_MODE: true
+  AGGRESSIVE_MODE: false
 
 permissions:
   contents: write
