@@ -1,0 +1,17 @@
+{
+	"luci-app-flowcone": {
+		"description": "Grant access to LuCI app flowcone",
+		"read": {
+			"ubus": {
+				"luci.flowcone": [ "*" ]
+			},
+			"uci": [ "flowcone" ]
+		},
+		"write": {
+			"ubus": {
+				"luci.flowcone": [ "*" ]
+			},
+			"uci": [ "flowcone" ]
+		}
+	}
+}

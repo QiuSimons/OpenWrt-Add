@@ -1,0 +1,86 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8\n"
+
+msgid "FlowCone"
+msgstr "FlowCone"
+
+msgid "RFC 4787 Full-Cone NAT based on eBPF and TCX."
+msgstr "基于 eBPF 和 TCX 的 RFC 4787 全锥型 NAT。"
+
+msgid "Status"
+msgstr "状态"
+
+msgid "Running Status"
+msgstr "运行状态"
+
+msgid "Collecting data..."
+msgstr "正在收集数据..."
+
+msgid "Reload Service"
+msgstr "重载服务"
+
+msgid "Reloading..."
+msgstr "正在重载..."
+
+msgid "FlowCone service reloaded successfully."
+msgstr "FlowCone 服务重载成功。"
+
+msgid "Failed to reload FlowCone:"
+msgstr "重载 FlowCone 失败："
+
+msgid "FlowCone Running"
+msgstr "FlowCone 运行中"
+
+msgid "FlowCone Not Running"
+msgstr "FlowCone 未运行"
+
+msgid "Memory: %s"
+msgstr "内存占用: %s"
+
+msgid "Settings"
+msgstr "设置"
+
+msgid "IPv4 Full-Cone"
+msgstr "IPv4 全锥型 NAT"
+
+msgid "IPv6 Full-Cone"
+msgstr "IPv6 全锥型 NAT"
+
+msgid "NAT66 for ULA prefixes, direct wire-speed for GUA."
+msgstr "ULA 私网执行 NAT66，原生公网 GUA 端到端直通。"
+
+msgid "WAN Interface"
+msgstr "WAN 接口"
+
+msgid "WAN interface device to attach TCX programs to. Leave empty for automatic WAN detection."
+msgstr "附加 TCX 程序的 WAN 外部网络设备。留空则自动探测主 WAN 接口。"
+
+msgid "Advanced Settings"
+msgstr "高级设置"
+
+msgid "Show advanced port range, timeout, and firewall integration options."
+msgstr "展开端口范围、超时时间及防火墙集成等高级选项。"
+
+msgid "Min Port"
+msgstr "起始端口"
+
+msgid "Max Port"
+msgstr "结束端口"
+
+msgid "Timeout (seconds)"
+msgstr "超时时间 (秒)"
+
+msgid "GC Interval (seconds)"
+msgstr "清理周期 (秒)"
+
+msgid "Firewall (fw4) Integration"
+msgstr "防火墙 (fw4) 集成"
+
+msgid "Automatically insert masquerade bypass and forward rules."
+msgstr "自动插入伪装豁免与入站放行规则。"
+
+msgid "Bypass Fwmark"
+msgstr "豁免 fwmark"
+
+msgid "Optional fwmark for custom policy routing."
+msgstr "可选的策略路由自定义豁免 fwmark 标记。"

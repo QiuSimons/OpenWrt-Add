@@ -1,0 +1,13 @@
+{
+	"admin/network/flowcone": {
+		"title": "FlowCone",
+		"order": 65,
+		"action": {
+			"type": "view",
+			"path": "flowcone"
+		},
+		"depends": {
+			"acl": [ "luci-app-flowcone" ]
+		}
+	}
+}

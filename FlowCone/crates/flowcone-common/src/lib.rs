@@ -1,0 +1,312 @@
+#![no_std]
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EndpointKey4 {
+    pub ip: u32,
+    pub port: u16,
+    pub _pad: u16,
+}
+
+#[cfg(not(target_arch = "bpf"))]
+unsafe impl aya::Pod for EndpointKey4 {}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BindingValue4 {
+    pub ip: u32,
+    pub port: u16,
+    pub _pad: u16,
+    pub last_seen: u64, // CLOCK_MONOTONIC_COARSE in nanoseconds
+}
+
+#[cfg(not(target_arch = "bpf"))]
+unsafe impl aya::Pod for BindingValue4 {}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EndpointKey6 {
+    pub ip: [u8; 16],
+    pub port: u16,
+    pub _pad: [u16; 3], // 24-byte alignment
+}
+
+#[cfg(not(target_arch = "bpf"))]
+unsafe impl aya::Pod for EndpointKey6 {}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BindingValue6 {
+    pub ip: [u8; 16],
+    pub port: u16,
+    pub _pad: [u16; 3],
+    pub last_seen: u64,
+}
+
+#[cfg(not(target_arch = "bpf"))]
+unsafe impl aya::Pod for BindingValue6 {}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct GlobalConfig {
+    pub wan_ip4: u32,
+    pub bypass_mark_mask: u32,
+    pub bypass_mark_val: u32,
+    pub l2_len: u32, // 14 for Ethernet, 0 for PPP/NONE/TUN/RAWIP
+    pub wan_ip6: [u8; 16],
+    pub min_port4: u16,
+    pub max_port4: u16,
+    pub min_port6: u16,
+    pub max_port6: u16,
+    pub enabled_v4: u32,
+    pub enabled_v6: u32,
+}
+
+#[cfg(not(target_arch = "bpf"))]
+unsafe impl aya::Pod for GlobalConfig {}
+
+/// Check if IPv4 address belongs to standard private/CGNAT subnets
+/// Expects ip in raw packet byte representation
+#[inline(always)]
+pub fn is_private_ipv4(raw_ip: u32) -> bool {
+    let bytes = raw_ip.to_ne_bytes();
+    let b0 = bytes[0];
+    let b1 = bytes[1];
+
+    // 10.0.0.0/8
+    if b0 == 10 {
+        return true;
+    }
+    // 172.16.0.0/12 (172.16.0.0 - 172.31.255.255)
+    if b0 == 172 && (16..=31).contains(&b1) {
+        return true;
+    }
+    // 192.168.0.0/16
+    if b0 == 192 && b1 == 168 {
+        return true;
+    }
+    // 100.64.0.0/10 (CGNAT: 100.64.0.0 - 100.127.255.255)
+    if b0 == 100 && (64..=127).contains(&b1) {
+        return true;
+    }
+
+    false
+}
+
+/// Check if IPv6 address belongs to Unique Local Address (ULA fc00::/7)
+#[inline(always)]
+pub fn is_ula_ipv6(addr: &[u8; 16]) -> bool {
+    (addr[0] & 0xfe) == 0xfc
+}
+
+/// Check if IPv6 address is a valid routable internal unicast address (excluding link-local, multicast, loopback)
+#[inline(always)]
+pub fn is_routable_internal_ipv6(addr: &[u8; 16], allow_all_internal: bool) -> bool {
+    // Multicast: ff00::/8
+    if addr[0] == 0xff {
+        return false;
+    }
+    // Link-Local: fe80::/10 (fe80..febf)
+    if addr[0] == 0xfe && (addr[1] & 0xc0) == 0x80 {
+        return false;
+    }
+    // Loopback / Unspecified: ::1 or ::
+    let hi = u64::from_ne_bytes([
+        addr[0], addr[1], addr[2], addr[3], addr[4], addr[5], addr[6], addr[7],
+    ]);
+    let mid = u32::from_ne_bytes([addr[8], addr[9], addr[10], addr[11]]);
+    let lo_hi = u16::from_ne_bytes([addr[12], addr[13]]);
+    if hi == 0 && mid == 0 && lo_hi == 0 && addr[14] == 0 && (addr[15] == 0 || addr[15] == 1) {
+        return false;
+    }
+
+    if is_ula_ipv6(addr) {
+        return true;
+    }
+
+    allow_all_internal
+}
+
+pub const PORT_MAP_ENTRIES: u32 = 65536;
+pub const MAX_BINDINGS: u32 = 65536;
+
+/// Packet mark set on DNAT-translated inbound packets (bit 30).
+pub const FLOWCONE_MARK: u32 = 0x40000000;
+
+/// RFC 4787 port allocation:
+/// - Port preservation (REQ-3)
+/// - Parity preservation (REQ-4)
+/// - Parity relaxation fallback
+#[inline(always)]
+pub fn select_rfc4787_port<F: FnMut(u16) -> bool>(
+    preferred: u16,
+    min_port: u16,
+    max_port: u16,
+    seed: u32,
+    mut is_free: F,
+) -> Option<u16> {
+    if min_port > max_port {
+        return None;
+    }
+
+    // 1. Port preservation
+    if preferred >= min_port && preferred <= max_port && is_free(preferred) {
+        return Some(preferred);
+    }
+
+    // 2. Parity preservation
+    let parity = (preferred & 1) as u32;
+    let minp = min_port as u32;
+    let maxp = max_port as u32;
+
+    let first = minp + ((parity ^ (minp & 1)) != 0) as u32;
+    if first <= maxp {
+        let cnt = (maxp - first) / 2 + 1;
+        if cnt > 0 {
+            let mut port = first + 2 * ((seed as u32) % cnt);
+            let mut i: usize = 0;
+            while i < 8 && (i as u32) < cnt {
+                if port != preferred as u32 && is_free(port as u16) {
+                    return Some(port as u16);
+                }
+                port += 2;
+                if port > maxp {
+                    port = first;
+                }
+                i += 1;
+            }
+        }
+    }
+
+    // 3. Parity relaxation fallback
+    let total_ports = maxp - minp + 1;
+    if total_ports > 0 {
+        let mut port = minp + (seed.wrapping_add(1) % total_ports);
+        let mut k: usize = 0;
+        while k < 4 && (k as u32) < total_ports {
+            if port != preferred as u32 && is_free(port as u16) {
+                return Some(port as u16);
+            }
+            port += 1;
+            if port > maxp {
+                port = minp;
+            }
+            k += 1;
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_private_ipv4() {
+        // 192.168.1.100 in native u32
+        let ip_192 = u32::from_ne_bytes([192, 168, 1, 100]);
+        assert!(is_private_ipv4(ip_192));
+
+        // 10.1.2.3
+        let ip_10 = u32::from_ne_bytes([10, 1, 2, 3]);
+        assert!(is_private_ipv4(ip_10));
+
+        // 172.20.5.6 (within 172.16.0.0/12)
+        let ip_172 = u32::from_ne_bytes([172, 20, 5, 6]);
+        assert!(is_private_ipv4(ip_172));
+
+        // 100.64.1.2 (CGNAT RFC 6598)
+        let ip_cgnat = u32::from_ne_bytes([100, 64, 1, 2]);
+        assert!(is_private_ipv4(ip_cgnat));
+
+        // 8.8.8.8 (Public)
+        let ip_pub = u32::from_ne_bytes([8, 8, 8, 8]);
+        assert!(!is_private_ipv4(ip_pub));
+    }
+
+    #[test]
+    fn test_routable_internal_ipv6() {
+        // ULA fd00::1
+        let mut ula = [0u8; 16];
+        ula[0] = 0xfd;
+        ula[15] = 1;
+        assert!(is_routable_internal_ipv6(&ula, false));
+        assert!(is_routable_internal_ipv6(&ula, true));
+
+        // Link-Local fe80::1 (Must be blocked)
+        let mut ll = [0u8; 16];
+        ll[0] = 0xfe;
+        ll[1] = 0x80;
+        ll[15] = 1;
+        assert!(!is_routable_internal_ipv6(&ll, false));
+        assert!(!is_routable_internal_ipv6(&ll, true));
+
+        // Multicast ff02::1 (Must be blocked)
+        let mut mc = [0u8; 16];
+        mc[0] = 0xff;
+        mc[1] = 0x02;
+        mc[15] = 1;
+        assert!(!is_routable_internal_ipv6(&mc, false));
+        assert!(!is_routable_internal_ipv6(&mc, true));
+
+        // Loopback ::1 (Must be blocked)
+        let mut loopback = [0u8; 16];
+        loopback[15] = 1;
+        assert!(!is_routable_internal_ipv6(&loopback, false));
+        assert!(!is_routable_internal_ipv6(&loopback, true));
+
+        // GUA 240e:1234::1
+        let mut gua = [0u8; 16];
+        gua[0] = 0x24;
+        gua[1] = 0x0e;
+        gua[15] = 1;
+        // False if allow_all_internal is false (ULA only mode)
+        assert!(!is_routable_internal_ipv6(&gua, false));
+        // True if allow_all_internal is true (GUA+ULA mode)
+        assert!(is_routable_internal_ipv6(&gua, true));
+    }
+
+    #[test]
+    fn test_rfc4787_port_preservation() {
+        // Preferred port is free -> must allocate preferred port (REQ-3)
+        let port = select_rfc4787_port(5000, 1024, 65535, 12345, |p| p == 5000);
+        assert_eq!(port, Some(5000));
+    }
+
+    #[test]
+    fn test_rfc4787_parity_preservation() {
+        // Preferred even port 5000 is occupied. Must allocate an even port (REQ-4)
+        let even_alloc = select_rfc4787_port(5000, 1024, 65535, 99999, |p| p != 5000);
+        assert!(even_alloc.is_some());
+        let p_even = even_alloc.unwrap();
+        assert_eq!(p_even % 2, 0, "Expected even port for preferred even port");
+
+        // Preferred odd port 5001 is occupied. Must allocate an odd port (REQ-4)
+        let odd_alloc = select_rfc4787_port(5001, 1024, 65535, 88888, |p| p != 5001);
+        assert!(odd_alloc.is_some());
+        let p_odd = odd_alloc.unwrap();
+        assert_eq!(p_odd % 2, 1, "Expected odd port for preferred odd port");
+    }
+
+    #[test]
+    fn test_rfc4787_parity_relaxation_fallback() {
+        // Preferred even port 5000 is occupied, and ALL even ports are occupied.
+        // Must fallback to an available odd port (REQ-4 Fallback)
+        let fallback_alloc = select_rfc4787_port(5000, 1024, 1030, 42, |p| p % 2 != 0);
+        assert!(fallback_alloc.is_some());
+        let p = fallback_alloc.unwrap();
+        assert_eq!(
+            p % 2,
+            1,
+            "Expected fallback to odd port when even ports exhausted"
+        );
+    }
+
+    #[test]
+    fn test_rfc4787_full_exhaustion() {
+        // No ports free -> returns None
+        let none_alloc = select_rfc4787_port(5000, 1024, 1030, 42, |_| false);
+        assert_eq!(none_alloc, None);
+    }
+}

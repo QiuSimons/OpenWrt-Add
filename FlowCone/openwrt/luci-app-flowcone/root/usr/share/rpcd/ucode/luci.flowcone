@@ -1,0 +1,49 @@
+#!/usr/bin/ucode
+
+'use strict';
+
+import { popen, readfile } from 'fs';
+
+function get_flowcone_pid() {
+	let p = popen('pidof flowcone 2>/dev/null');
+	let pid_str = p ? trim(p.read('all')) : '';
+	if (p) p.close();
+	let pids = split(pid_str, /\s+/);
+	return (length(pids) && pids[0] != '') ? +pids[0] : null;
+}
+
+function get_process_memory(pid) {
+	if (!pid) return null;
+	let status = readfile('/proc/' + pid + '/status');
+	if (!status) return null;
+	let m = match(status, /VmRSS:\s+([0-9]+)\s+kB/);
+	return m ? sprintf('%.1f MB', +m[1] / 1024) : null;
+}
+
+const methods = {
+	status: {
+		call: function(req) {
+			let pid = get_flowcone_pid();
+			let running = !!pid;
+			return {
+				running: running,
+				pid: pid,
+				memory: running ? get_process_memory(pid) : null
+			};
+		}
+	},
+
+	action: {
+		args: { action: 'string' },
+		call: function(req) {
+			let act = req.args ? req.args.action : 'restart';
+			if (act != 'start' && act != 'stop' && act != 'restart' && act != 'reload') {
+				return { success: false, error: 'Invalid action' };
+			}
+			system('/etc/init.d/flowcone ' + act + ' >/dev/null 2>&1 &');
+			return { success: true };
+		}
+	}
+};
+
+return { 'luci.flowcone': methods };

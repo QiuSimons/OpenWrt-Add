@@ -1,0 +1,75 @@
+name: Build and commit eBPF
+
+on:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - 'crates/flowcone-daemon/ebpf/flowcone-ebpf.bin'
+      - '.github/workflows/build.yml'
+      - 'README.md'
+      - 'LICENSE'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  ebpf:
+    name: Build eBPF and commit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install bpf-linker
+        shell: bash
+        run: |
+          curl -sSfL https://github.com/aya-rs/bpf-linker/releases/latest/download/bpf-linker-x86_64-unknown-linux-musl.tar.zst | sudo tar --zstd -xf - -C /usr/local/bin
+          bpf-linker --version
+
+      - name: Build flowcone-ebpf
+        shell: bash
+        run: |
+          cargo +nightly build --manifest-path crates/flowcone-ebpf/Cargo.toml --release --target=bpfel-unknown-none -Z build-std=core
+          mkdir -p crates/flowcone-daemon/ebpf
+          cp crates/flowcone-ebpf/target/bpfel-unknown-none/release/flowcone-ebpf crates/flowcone-daemon/ebpf/flowcone-ebpf.bin
+
+      - name: Commit changes
+        id: commit
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add crates/flowcone-daemon/ebpf/flowcone-ebpf.bin
+
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No change in flowcone-ebpf.bin."
+          else
+            git commit -m "auto: update flowcone-ebpf.bin [skip ci]"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push changes
+        if: steps.commit.outputs.changed == 'true'
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: master
+
+      - name: Trigger build packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run "Build packages" --ref master

@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/flowcone-common",
+    "crates/flowcone-daemon",
+]
+exclude = [
+    "crates/flowcone-ebpf",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+authors = ["QiuSimons <45143996+QiuSimons@users.noreply.github.com>"]
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

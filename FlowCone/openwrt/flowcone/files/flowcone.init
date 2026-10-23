@@ -1,0 +1,93 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+START=95
+STOP=10
+
+PROG=/usr/bin/flowcone
+
+start_service() {
+	config_load flowcone
+
+	local enable_v4 enable_v6 interface min_port max_port timeout interval bypass_mark manage_nft
+	config_get_bool enable_v4 config enable_v4 1
+	config_get_bool enable_v6 config enable_v6 0
+	config_get_bool manage_nft config manage_nft 1
+
+	[ "$enable_v4" -eq 1 ] || [ "$enable_v6" -eq 1 ] || return 0
+
+	config_get interface config interface ""
+	config_get min_port config min_port "1024"
+	config_get max_port config max_port "65535"
+	config_get timeout config timeout "120"
+	config_get interval config interval "5"
+	config_get bypass_mark config bypass_mark ""
+
+	local dev
+	if [ -n "$interface" ] && [ -e "/sys/class/net/$interface" ]; then
+		dev="$interface"
+	elif [ -e "/lib/functions/network.sh" ]; then
+		. /lib/functions/network.sh
+		if [ -z "$interface" ] || [ "$interface" = "auto" ]; then
+			local wan_iface
+			network_find_wan wan_iface 2>/dev/null
+			[ -n "$wan_iface" ] && network_get_device dev "$wan_iface"
+		else
+			network_get_device dev "$interface"
+		fi
+	fi
+	if [ -z "$dev" ] || [ "$dev" = "auto" ]; then
+		dev=$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')
+	fi
+	[ -z "$dev" ] && dev="wan"
+
+	procd_open_instance
+	procd_set_param command "$PROG" \
+		-i "$dev" \
+		--enable-v4 "$enable_v4" \
+		--enable-v6 "$enable_v6" \
+		--min-port "$min_port" \
+		--max-port "$max_port" \
+		--timeout "$timeout" \
+		--interval "$interval" \
+		--manage-nft "$manage_nft" \
+		${bypass_mark:+--bypass-mark "$bypass_mark"}
+	procd_set_param respawn
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+service_triggers() {
+	procd_add_reload_trigger "flowcone"
+	procd_add_reload_trigger "firewall"
+
+	config_load flowcone
+	local interface enable_v6
+	config_get interface config interface ""
+	config_get_bool enable_v6 config enable_v6 0
+
+	local wan_iface="" wan6_iface=""
+	if [ -e "/lib/functions/network.sh" ]; then
+		. /lib/functions/network.sh
+		local logical_iface=""
+		if [ -n "$interface" ] && [ "$interface" != "auto" ] && [ -x "/bin/ubus" ] && [ -x "/usr/bin/jsonfilter" ]; then
+			logical_iface=$(/bin/ubus call network.interface dump 2>/dev/null | /usr/bin/jsonfilter -e "@.interface[@.device='$interface' || @.l3_device='$interface'].interface" 2>/dev/null | head -n1)
+		fi
+
+		if [ -n "$logical_iface" ]; then
+			wan_iface="$logical_iface"
+		elif [ -z "$interface" ] || [ "$interface" = "auto" ]; then
+			network_find_wan wan_iface 2>/dev/null
+			[ "$enable_v6" -eq 1 ] && network_find_wan6 wan6_iface 2>/dev/null
+		else
+			wan_iface="$interface"
+		fi
+	fi
+
+	[ -z "$wan_iface" ] && wan_iface="wan"
+	procd_add_interface_trigger "interface.*" "$wan_iface" /etc/init.d/flowcone restart
+	if [ -n "$wan6_iface" ] && [ "$wan6_iface" != "$wan_iface" ]; then
+		procd_add_interface_trigger "interface.*" "$wan6_iface" /etc/init.d/flowcone restart
+	fi
+}

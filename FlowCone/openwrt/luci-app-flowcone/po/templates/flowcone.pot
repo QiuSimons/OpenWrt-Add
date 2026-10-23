@@ -1,0 +1,86 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8\n"
+
+msgid "FlowCone"
+msgstr ""
+
+msgid "RFC 4787 Full-Cone NAT based on eBPF and TCX."
+msgstr ""
+
+msgid "Status"
+msgstr ""
+
+msgid "Running Status"
+msgstr ""
+
+msgid "Collecting data..."
+msgstr ""
+
+msgid "Reload Service"
+msgstr ""
+
+msgid "Reloading..."
+msgstr ""
+
+msgid "FlowCone service reloaded successfully."
+msgstr ""
+
+msgid "Failed to reload FlowCone:"
+msgstr ""
+
+msgid "FlowCone Running"
+msgstr ""
+
+msgid "FlowCone Not Running"
+msgstr ""
+
+msgid "Memory: %s"
+msgstr ""
+
+msgid "Settings"
+msgstr ""
+
+msgid "IPv4 Full-Cone"
+msgstr ""
+
+msgid "IPv6 Full-Cone"
+msgstr ""
+
+msgid "NAT66 for ULA prefixes, direct wire-speed for GUA."
+msgstr ""
+
+msgid "WAN Interface"
+msgstr ""
+
+msgid "WAN interface device to attach TCX programs to. Leave empty for automatic WAN detection."
+msgstr ""
+
+msgid "Advanced Settings"
+msgstr ""
+
+msgid "Show advanced port range, timeout, and firewall integration options."
+msgstr ""
+
+msgid "Min Port"
+msgstr ""
+
+msgid "Max Port"
+msgstr ""
+
+msgid "Timeout (seconds)"
+msgstr ""
+
+msgid "GC Interval (seconds)"
+msgstr ""
+
+msgid "Firewall (fw4) Integration"
+msgstr ""
+
+msgid "Automatically insert masquerade bypass and forward rules."
+msgstr ""
+
+msgid "Bypass Fwmark"
+msgstr ""
+
+msgid "Optional fwmark for custom policy routing."
+msgstr ""

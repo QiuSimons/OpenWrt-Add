@@ -1,0 +1,7 @@
+target/
+target-build/
+*.lmo
+*.swp
+*.bak
+*~
+.DS_Store
