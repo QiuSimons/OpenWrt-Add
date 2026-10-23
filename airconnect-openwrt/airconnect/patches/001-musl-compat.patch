@@ -1,0 +1,89 @@
+--- a/airupnp/src/airupnp.c
++++ b/airupnp/src/airupnp.c
+@@ -18,7 +18,11 @@
+ #include "ixmlextra.h"
+ #include "airupnp.h"
+ #include "mdnssvc.h"
++#if defined(UPNP_HAVE_DEBUG) && UPNP_HAVE_DEBUG
+ #include "upnpdebug.h"
++#else
++#define UpnpSetLogLevel(x) do {} while (0)
++#endif
+ 
+ #include "cross_ssl.h"
+ #include "cross_net.h"
+--- a/common/libcodecs/addons/encoder.c
++++ b/common/libcodecs/addons/encoder.c
+@@ -13,8 +13,15 @@
+ #include <stdbool.h>
+ 
+ #include "FLAC/stream_encoder.h"
++#if __has_include(<shine/layer3.h>)
++#include <shine/layer3.h>
++#else
+ #include "layer3.h"
++#endif
++
++#ifdef HAVE_FAAC
+ #include "faac.h"
++#endif
+ 
+ #include "encoder.h"
+ 
+@@ -150,6 +157,7 @@
+ }
+ 
+ /*---------------------------------------------------------------------------*/
++#ifdef HAVE_FAAC
+ static bool aac_open(struct encoder_s* encoder) {
+ 	encoder->codec = (void*)faacEncOpen(encoder->sample_rate, 2, &encoder->aac.in_samples, &encoder->aac.out_max_bytes);
+ 	if (!encoder->codec) return false;
+@@ -168,6 +176,11 @@
+ 
+ 	return true;
+ }
++#else
++static bool aac_open(struct encoder_s* encoder) {
++	return false;
++}
++#endif
+ 
+ /*---------------------------------------------------------------------------*/
+ static bool wav_open(struct encoder_s* encoder) {
+@@ -186,10 +199,15 @@
+ }
+ 
+ /*---------------------------------------------------------------------------*/
++#ifdef HAVE_FAAC
+ static void aac_close(struct encoder_s* encoder) {
+ 	faacEncEncode(encoder->codec, NULL, 0, encoder->data, encoder->aac.out_max_bytes);
+ 	faacEncClose(encoder->codec);
+ }
++#else
++static void aac_close(struct encoder_s* encoder) {
++}
++#endif
+ 
+ /*---------------------------------------------------------------------------*/
+ static void flac_close(struct encoder_s* encoder) {
+@@ -230,6 +248,7 @@
+ }
+ 
+ /*---------------------------------------------------------------------------*/
++#ifdef HAVE_FAAC
+ static uint8_t* aac_encode(struct encoder_s* encoder, int16_t* pcm, size_t frames, size_t* bytes) {
+ 	memcpy(encoder->buffer + encoder->count * 2, pcm, frames * 4);
+ 	encoder->count += frames;
+@@ -246,6 +265,12 @@
+ 
+ 	return encoder->data;
+ }
++#else
++static uint8_t* aac_encode(struct encoder_s* encoder, int16_t* pcm, size_t frames, size_t* bytes) {
++	*bytes = 0;
++	return NULL;
++}
++#endif
+ 
+ /*---------------------------------------------------------------------------*/
+ static uint8_t* pcm_encode(struct encoder_s* encoder, int16_t* pcm, size_t frames, size_t* bytes) {
