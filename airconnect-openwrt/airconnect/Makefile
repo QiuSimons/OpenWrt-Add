@@ -15,7 +15,7 @@ PKG_SOURCE_URL:=https://github.com/philippe44/AirConnect.git
 PKG_SOURCE_VERSION:=1.12.4
 PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_VERSION)
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION)-$(PKG_SOURCE_VERSION).tar.xz
-PKG_MIRROR_HASH:=skip
+PKG_MIRROR_HASH = $(if $(wildcard $(DL_DIR)/$(PKG_SOURCE)),$(shell $(MKHASH) sha256 $(DL_DIR)/$(PKG_SOURCE) 2>/dev/null || sha256sum $(DL_DIR)/$(PKG_SOURCE) 2>/dev/null | cut -d" " -f1),skip)
 PKG_SOURCE_SUBMODULES:=common/crosstools common/dmap-parser common/libmdns common/libraop common/libpupnp common/libcodecs aircast/nanopb
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)

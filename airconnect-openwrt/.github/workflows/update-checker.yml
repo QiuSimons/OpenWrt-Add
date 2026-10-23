@@ -1,0 +1,257 @@
+name: Update Checker
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: 'Upstream tag to check/update (leave empty to auto-detect latest release)'
+        required: false
+        default: ''
+        type: string
+      trigger_build:
+        description: 'Trigger package build workflow after updating'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: update-checker
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  UPSTREAM_REPO: https://github.com/philippe44/AirConnect.git
+
+jobs:
+  check_update:
+    name: Check Upstream
+    runs-on: ubuntu-latest
+
+    outputs:
+      updated: ${{ steps.check.outputs.updated }}
+      latest_version: ${{ steps.check.outputs.latest_version }}
+      latest_commit: ${{ steps.check.outputs.latest_commit }}
+      latest_date: ${{ steps.check.outputs.latest_date }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check latest tag
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target_tag="${{ inputs.upstream_tag }}"
+          if [ -z "$target_tag" ]; then
+            echo "Fetching latest release tag from GitHub API..."
+            target_tag=$(curl -sL --max-time 10 "https://api.github.com/repos/philippe44/AirConnect/releases/latest" | jq -r '.tag_name // empty' || true)
+          fi
+
+          if [ -z "$target_tag" ] || [ "$target_tag" = "null" ]; then
+            echo "Falling back to git ls-remote to find latest version tag..."
+            target_tag=$(git ls-remote --tags --refs "$UPSTREAM_REPO" | awk -F'/' '{print $3}' | grep -E '^[0-9]+(\.[0-9]+)+$' | sort -V | tail -n 1 || true)
+          fi
+
+          if [ -z "$target_tag" ]; then
+            echo "ERROR: failed to resolve upstream tag."
+            exit 1
+          fi
+
+          echo "Target tag: $target_tag"
+
+          tag_info="$(
+            git ls-remote \
+              "$UPSTREAM_REPO" \
+              "refs/tags/${target_tag}" \
+              "refs/tags/${target_tag}^{}"
+          )"
+
+          latest_commit="$(
+            echo "$tag_info" |
+            awk '$2 == "refs/tags/'"${target_tag}"'^{}" {print $1}'
+          )"
+
+          if [ -z "$latest_commit" ]; then
+            latest_commit="$(
+              echo "$tag_info" |
+              awk '$2 == "refs/tags/'"${target_tag}"'" {print $1}'
+            )"
+          fi
+
+          current_version="$(
+            sed -n 's/^PKG_VERSION:=//p' ./airconnect/Makefile | tr -d ' \r\n'
+          )"
+
+          if [ -z "$current_version" ]; then
+            echo "ERROR: PKG_VERSION not found in ./airconnect/Makefile."
+            exit 1
+          fi
+
+          echo "Current version: $current_version"
+          echo "Latest version : $target_tag"
+          [ -n "$latest_commit" ] && echo "Latest commit  : $latest_commit"
+
+          if [ "$current_version" = "$target_tag" ]; then
+            echo "Already up-to-date."
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          latest_date=""
+          if [ -n "$latest_commit" ]; then
+            git fetch \
+              --depth=1 \
+              "$UPSTREAM_REPO" \
+              "$latest_commit" || true
+
+            latest_date="$(
+              git show \
+                -s \
+                --format='%cs' \
+                "$latest_commit" 2>/dev/null || true
+            )"
+            latest_date="${latest_date//-/.}"
+          fi
+
+          echo "Latest date    : $latest_date"
+
+          {
+            echo "updated=true"
+            echo "latest_version=$target_tag"
+            echo "latest_commit=$latest_commit"
+            echo "latest_date=$latest_date"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Update and Push
+    needs: check_update
+    if: needs.check_update.outputs.updated == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y \
+            dos2unix
+
+      - name: Update Makefile
+        env:
+          LATEST_VERSION: ${{ needs.check_update.outputs.latest_version }}
+        run: |
+          set -euo pipefail
+
+          [ -f ./airconnect/files/airconnect.init ] && chmod 755 ./airconnect/files/airconnect.init
+          find airconnect luci-app-airconnect -type f -exec dos2unix {} \; 2>/dev/null || true
+
+          sed -i \
+            "s/^PKG_VERSION:=.*/PKG_VERSION:=${LATEST_VERSION}/" \
+            ./airconnect/Makefile
+
+          sed -i \
+            "s/^PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=${LATEST_VERSION}/" \
+            ./airconnect/Makefile
+
+          sed -i \
+            "s/^PKG_RELEASE:=.*/PKG_RELEASE:=1/" \
+            ./airconnect/Makefile
+
+          grep -E '^PKG_(VERSION|SOURCE_VERSION|RELEASE):=' ./airconnect/Makefile
+
+      - name: Commit changes
+        run: |
+          set -euo pipefail
+
+          git config user.name "SimonsQiu"
+          git config user.email "simonsqiu@foxmail.com"
+
+          git add airconnect/Makefile
+          [ -f airconnect/files/airconnect.init ] && git add airconnect/files/airconnect.init
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit \
+            -m "Update airconnect to ${{ needs.check_update.outputs.latest_version }}"
+
+      - name: Push changes
+        env:
+          GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          git remote set-url origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          git push origin HEAD:${GITHUB_REF_NAME:-master}
+
+      - name: Trigger build workflow
+        if: inputs.trigger_build == true
+        env:
+          GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Triggering Build packages workflow..."
+          gh workflow run "Build packages" || echo "Failed to trigger build workflow, continuing..."
+
+      - name: Cleanup old workflow runs
+        env:
+          GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          gh run list \
+            --limit 100 \
+            --json databaseId,createdAt \
+            --jq '
+              sort_by(.createdAt)
+              | reverse
+              | .[3:]
+              | .[].databaseId
+            ' |
+          while read -r run_id; do
+            [ -z "$run_id" ] || gh run delete "$run_id"
+          done
+        continue-on-error: true
+
+      - name: Cleanup old releases
+        env:
+          GH_TOKEN: ${{ secrets.ACTIONS_DEPLOY_KEY || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          gh release list \
+            --limit 100 \
+            --json tagName,createdAt \
+            --jq '
+              sort_by(.createdAt)
+              | reverse
+              | .[3:]
+              | .[].tagName
+            ' |
+          while read -r tag; do
+            [ -z "$tag" ] || \
+              gh release delete "$tag" \
+                --yes \
+                --cleanup-tag
+          done
+        continue-on-error: true
