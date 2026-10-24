@@ -8,9 +8,11 @@ use std::process::{Command, Stdio};
 pub(crate) const FW4_USER_PATH: &str = "/etc/firewall4.user";
 pub(crate) const FW4_NFTABLES_D_DIR: &str = "/usr/share/nftables.d";
 pub(crate) const FW4_CHAIN_PRE_SRCNAT_DIR: &str = "/usr/share/nftables.d/chain-pre/srcnat";
-pub(crate) const FW4_CHAIN_PRE_SRCNAT_FILE: &str = "/usr/share/nftables.d/chain-pre/srcnat/10-flowcone.nft";
+pub(crate) const FW4_CHAIN_PRE_SRCNAT_FILE: &str =
+    "/usr/share/nftables.d/chain-pre/srcnat/10-flowcone.nft";
 pub(crate) const FW4_CHAIN_PRE_FORWARD_DIR: &str = "/usr/share/nftables.d/chain-pre/forward";
-pub(crate) const FW4_CHAIN_PRE_FORWARD_FILE: &str = "/usr/share/nftables.d/chain-pre/forward/10-flowcone.nft";
+pub(crate) const FW4_CHAIN_PRE_FORWARD_FILE: &str =
+    "/usr/share/nftables.d/chain-pre/forward/10-flowcone.nft";
 
 pub(crate) const FLOWCONE_TAG_START: &str = "# --- flowcone start ---";
 pub(crate) const FLOWCONE_TAG_END: &str = "# --- flowcone end ---";
@@ -19,20 +21,18 @@ pub(crate) const FLOWCONE_TAG_END: &str = "# --- flowcone end ---";
 /// Hardware Flow Offloading (PPE/DSA/ASIC) bypasses the CPU and TC egress entirely,
 /// causing private IP leakage and broken NAT.
 pub(crate) fn check_hardware_offload_warning() {
-    if let Ok(out) = Command::new("nft")
-        .args(["list", "flowtables"])
-        .output()
-    {
-        if out.status.success() {
-            let text = String::from_utf8_lossy(&out.stdout);
-            if text.contains("flags offload") {
-                eprintln!(
-                    "flowcone: WARNING: Hardware Flow Offloading (`flags offload`) is detected!\n\
+    let Ok(out) = Command::new("nft").args(["list", "flowtables"]).output() else {
+        return;
+    };
+    if out.status.success() {
+        let text = String::from_utf8_lossy(&out.stdout);
+        if text.contains("flags offload") {
+            eprintln!(
+                "flowcone: WARNING: Hardware Flow Offloading (`flags offload`) is detected!\n\
                      Hardware offloading directs packets through the switch ASIC/PPE, bypassing CPU TC egress.\n\
                      This will cause private IP leakage and broken NAT.\n\
                      Please disable Hardware Offloading in OpenWrt ('uci set firewall.@defaults[0].flow_offloading_hw=0 && uci commit firewall && fw4 reload')."
-                );
-            }
+            );
         }
     }
 }
@@ -67,9 +67,7 @@ pub(crate) fn generate_fw4_srcnat_rule_v6(iface: &str, is_masq: bool) -> String 
 
 /// Generate forward rules to accept inbound packets marked with FLOWCONE_MARK.
 pub(crate) fn generate_fw4_forward_rules() -> Vec<String> {
-    vec![
-        "meta mark & 0x40000000 == 0x40000000 counter accept comment \"flowcone\"".to_string(),
-    ]
+    vec!["meta mark & 0x40000000 == 0x40000000 counter accept comment \"flowcone\"".to_string()]
 }
 
 pub(crate) fn generate_fw4_user_block(
@@ -313,7 +311,9 @@ mod tests {
         let srcnat_v4 = generate_fw4_srcnat_rule_v4("eth1");
         assert_eq!(
             srcnat_v4,
-            format!("oifname \"eth1\" meta nfproto ipv4 meta l4proto udp ip saddr {{ {set} }} counter return comment \"flowcone\"")
+            format!(
+                "oifname \"eth1\" meta nfproto ipv4 meta l4proto udp ip saddr {{ {set} }} counter return comment \"flowcone\""
+            )
         );
         let srcnat_v6_ula = generate_fw4_srcnat_rule_v6("eth1", false);
         assert_eq!(

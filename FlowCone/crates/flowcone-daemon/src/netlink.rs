@@ -7,7 +7,6 @@ use rustix::net::{
 use rustix::time::Timespec;
 use std::time::Duration;
 
-
 #[inline(always)]
 fn read_u16_ne(buf: &[u8], off: usize) -> u16 {
     u16::from_ne_bytes([buf[off], buf[off + 1]])
@@ -20,10 +19,10 @@ fn read_u32_ne(buf: &[u8], off: usize) -> u32 {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetlinkError {
-    SocketError,
-    SendError,
-    RecvError,
-    ProtocolError,
+    Socket,
+    Send,
+    Recv,
+    Protocol,
 }
 
 /// One local address of an interface, as reported by RTM_GETADDR.
@@ -55,7 +54,7 @@ fn dump_iface_addrs(ifindex: u32, family: u8) -> Result<Vec<IfaceAddr>, NetlinkE
         SocketFlags::CLOEXEC,
         None,
     )
-    .map_err(|_| NetlinkError::SocketError)?;
+    .map_err(|_| NetlinkError::Socket)?;
 
     let _ = rustix::net::sockopt::set_socket_timeout(
         &sock,
@@ -73,14 +72,14 @@ fn dump_iface_addrs(ifindex: u32, family: u8) -> Result<Vec<IfaceAddr>, NetlinkE
     req_bytes[20..24].copy_from_slice(&ifindex.to_ne_bytes());
 
     if send(&sock, &req_bytes, rustix::net::SendFlags::empty()).is_err() {
-        return Err(NetlinkError::SendError);
+        return Err(NetlinkError::Send);
     }
 
     let mut addrs = Vec::new();
     let mut buf = [0u8; 32768];
     loop {
         let (n, _) = recv(&sock, &mut buf, rustix::net::RecvFlags::empty())
-            .map_err(|_| NetlinkError::RecvError)?;
+            .map_err(|_| NetlinkError::Recv)?;
         if n == 0 {
             break;
         }
@@ -91,7 +90,7 @@ fn dump_iface_addrs(ifindex: u32, family: u8) -> Result<Vec<IfaceAddr>, NetlinkE
             let nlmsg_type = read_u16_ne(&buf, offset + 4);
 
             if nlmsg_type == 2 {
-                return Err(NetlinkError::ProtocolError);
+                return Err(NetlinkError::Protocol);
             }
             if nlmsg_type == 3 {
                 return Ok(addrs);
@@ -197,16 +196,13 @@ pub fn get_iface_addrs(ifindex: u32) -> Result<IfaceAddrs, NetlinkError> {
 /// Returns 14 for Ethernet (ARPHRD_ETHER = 1), 0 for PPP (512), NONE (65534), RAWIP (519), etc.
 pub fn get_iface_l2_len(ifname: &str) -> u32 {
     let type_path = format!("/sys/class/net/{}/type", ifname);
-    if let Ok(content) = std::fs::read_to_string(type_path) {
-        if let Ok(dev_type) = content.trim().parse::<u16>() {
-            if dev_type == 1 {
-                return 14;
-            } else {
-                return 0;
-            }
-        }
-    }
-    14
+    let Ok(content) = std::fs::read_to_string(type_path) else {
+        return 14;
+    };
+    let Ok(dev_type) = content.trim().parse::<u16>() else {
+        return 14;
+    };
+    if dev_type == 1 { 14 } else { 0 }
 }
 
 /// rtnetlink multicast groups: link state and IPv4/IPv6 address changes.
@@ -227,13 +223,12 @@ impl EventMonitor {
             SocketFlags::CLOEXEC,
             None,
         )
-        .map_err(|_| NetlinkError::SocketError)?;
+        .map_err(|_| NetlinkError::Socket)?;
 
         let groups = (1u32 << (RTNLGRP_LINK - 1))
             | (1u32 << (RTNLGRP_IPV4_IFADDR - 1))
             | (1u32 << (RTNLGRP_IPV6_IFADDR - 1));
-        bind(&sock, &SocketAddrNetlink::new(0, groups))
-            .map_err(|_| NetlinkError::SocketError)?;
+        bind(&sock, &SocketAddrNetlink::new(0, groups)).map_err(|_| NetlinkError::Socket)?;
 
         Ok(Self { sock })
     }
@@ -254,7 +249,8 @@ impl EventMonitor {
                 if fds[0].revents().contains(PollFlags::IN) {
                     // Drain the socket, otherwise the next poll returns at once.
                     let mut buf = [0u8; 4096];
-                    while let Ok((n, _)) = recv(&self.sock, &mut buf, rustix::net::RecvFlags::DONTWAIT)
+                    while let Ok((n, _)) =
+                        recv(&self.sock, &mut buf, rustix::net::RecvFlags::DONTWAIT)
                     {
                         if n == 0 {
                             break;
@@ -296,7 +292,10 @@ mod tests {
     fn test_pick_gua_v6_skips_non_global() {
         // ULA is outside 2000::/3 and link-local is link scope.
         assert_eq!(pick_gua_v6(&[addr(2, 10, 0, 0)]), None);
-        let addrs = [addr(10, 0xfd, IFA_F_PERMANENT, 0), addr(10, 0xfe, IFA_F_PERMANENT, 0x20)];
+        let addrs = [
+            addr(10, 0xfd, IFA_F_PERMANENT, 0),
+            addr(10, 0xfe, IFA_F_PERMANENT, 0x20),
+        ];
         assert_eq!(pick_gua_v6(&addrs), None);
     }
 
@@ -320,7 +319,11 @@ mod tests {
     #[test]
     fn test_pick_global_v4() {
         // The first non-secondary global address wins.
-        let addrs = [addr(2, 10, IFA_F_SECONDARY, 0), addr(2, 10, 0, 0), addr(2, 100, 0, 0)];
+        let addrs = [
+            addr(2, 10, IFA_F_SECONDARY, 0),
+            addr(2, 10, 0, 0),
+            addr(2, 100, 0, 0),
+        ];
         let picked = pick_global_v4(&addrs).expect("an IPv4 address");
         assert_eq!(picked, [10, 0, 0, 0]);
         assert_eq!(pick_global_v4(&[addr(2, 10, 0, 0x20)]), None);

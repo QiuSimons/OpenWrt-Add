@@ -37,10 +37,10 @@ fn main() {
 
     let mut chosen: Option<(PathBuf, SystemTime)> = None;
     for candidate in &candidates {
-        if let Ok(mtime) = fs::metadata(candidate).and_then(|m| m.modified()) {
-            if chosen.as_ref().map_or(true, |(_, newest)| mtime > *newest) {
-                chosen = Some((candidate.clone(), mtime));
-            }
+        if let Ok(mtime) = fs::metadata(candidate).and_then(|m| m.modified())
+            && chosen.as_ref().is_none_or(|(_, newest)| mtime > *newest)
+        {
+            chosen = Some((candidate.clone(), mtime));
         }
     }
 
@@ -64,7 +64,9 @@ fn main() {
 
     let ebpf_dir = manifest_path.join("../flowcone-ebpf");
     if ebpf_dir.join("Cargo.toml").exists() {
-        println!("cargo:warning=flowcone-ebpf binary not found, attempting automatic compilation...");
+        println!(
+            "cargo:warning=flowcone-ebpf binary not found, attempting automatic compilation..."
+        );
         let mut cmd = Command::new("cargo");
         cmd.args([
             "+nightly",

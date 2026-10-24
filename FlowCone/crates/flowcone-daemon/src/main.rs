@@ -4,12 +4,12 @@ mod firewall;
 mod netlink;
 mod session;
 
-use aya::{EbpfLoader, VerifierLogLevel};
 use aya::maps::{Array, HashMap};
 use aya::programs::links::LinkOrder;
 use aya::programs::tc::{
     SchedClassifier, SchedClassifierLinkId, TcAttachOptions, TcAttachType, qdisc_add_clsact,
 };
+use aya::{EbpfLoader, VerifierLogLevel};
 use flowcone_common::GlobalConfig;
 use session::SessionManager;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -86,10 +86,7 @@ fn get_monotonic_coarse_ns() -> u64 {
     (ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64)
 }
 
-fn load_classifier(
-    bpf: &mut aya::Ebpf,
-    prog_name: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn load_classifier(bpf: &mut aya::Ebpf, prog_name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let prog: &mut SchedClassifier = bpf
         .program_mut(prog_name)
         .ok_or_else(|| format!("program {} not found", prog_name))?
@@ -118,12 +115,14 @@ fn attach_classifier(
         _ => "custom",
     };
 
-    // bpf_link_update() is a no-op for a live link and fails with -ENOLINK
-    // once the net_device is gone, so a healthy link is never detached.
-    // force_new is set when the interface instance itself changed.
-    if !force_new
-        && let Some(link_id) = previous.take()
-        && let Ok(link) = prog.take_link(link_id)
+    // bpf_link_update() is a no-op for a live link and fails with -ENOLINK once
+    // the net_device is gone, so the old link is taken either way and only
+    // updated while force_new is off (then the interface instance did not change).
+    let old_link = previous
+        .take()
+        .and_then(|link_id| prog.take_link(link_id).ok());
+    if let Some(link) = old_link
+        && !force_new
         && let Ok(new_id) = prog.attach_to_link(link)
     {
         *previous = Some(new_id);

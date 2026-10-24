@@ -17,9 +17,7 @@ pub(crate) fn generate_srcnat_rule_ip(iface: &str) -> String {
 /// Generate IPv6 srcnat exemption rule for 'ip6' family table (e.g. iptables-nft 'table ip6 nat').
 pub(crate) fn generate_srcnat_rule_ip6(iface: &str, is_masq: bool) -> String {
     if is_masq {
-        format!(
-            "oifname \"{iface}\" meta l4proto udp counter return comment \"flowcone\""
-        )
+        format!("oifname \"{iface}\" meta l4proto udp counter return comment \"flowcone\"")
     } else {
         format!(
             "oifname \"{iface}\" meta l4proto udp ip6 saddr fc00::/7 counter return comment \"flowcone\""
@@ -114,9 +112,7 @@ pub(crate) fn parse_nft_base_chains(output: &str) -> Vec<NftBaseChain> {
                 });
             }
         } else if trimmed == "}" {
-            if !current_chain.is_empty() {
-                current_chain.clear();
-            }
+            current_chain.clear();
         }
     }
 
@@ -124,11 +120,11 @@ pub(crate) fn parse_nft_base_chains(output: &str) -> Vec<NftBaseChain> {
 }
 
 pub(crate) fn get_existing_base_chains() -> Vec<NftBaseChain> {
-    if let Ok(out) = Command::new("nft").args(["list", "chains"]).output() {
-        if out.status.success() {
-            let text = String::from_utf8_lossy(&out.stdout);
-            return parse_nft_base_chains(&text);
-        }
+    let Ok(out) = Command::new("nft").args(["list", "chains"]).output() else {
+        return Vec::new();
+    };
+    if out.status.success() {
+        return parse_nft_base_chains(&String::from_utf8_lossy(&out.stdout));
     }
     Vec::new()
 }
@@ -167,21 +163,21 @@ pub(crate) fn find_all_flowcone_rules(ruleset_output: &str) -> Vec<RuleToDelete>
         } else if trimmed.contains("comment \"flowcone\"") {
             if let Some(idx) = trimmed.rfind("# handle ") {
                 let handle_str = &trimmed[idx + "# handle ".len()..];
-                if let Ok(h) = handle_str.trim().parse::<u64>() {
-                    if !current_family.is_empty() && !current_table.is_empty() && !current_chain.is_empty() {
-                        rules.push(RuleToDelete {
-                            family: current_family.clone(),
-                            table: current_table.clone(),
-                            chain: current_chain.clone(),
-                            handle: h,
-                        });
-                    }
+                if let Ok(h) = handle_str.trim().parse::<u64>()
+                    && !current_family.is_empty()
+                    && !current_table.is_empty()
+                    && !current_chain.is_empty()
+                {
+                    rules.push(RuleToDelete {
+                        family: current_family.clone(),
+                        table: current_table.clone(),
+                        chain: current_chain.clone(),
+                        handle: h,
+                    });
                 }
             }
         } else if trimmed == "}" {
-            if !current_chain.is_empty() {
-                current_chain.clear();
-            }
+            current_chain.clear();
         }
     }
     rules
@@ -316,26 +312,18 @@ pub(crate) fn build_primary_insert_script(
                     ));
                 }
             }
-            "ip" => {
-                if enable_v4 {
-                    script.push_str(&format!(
-                        "insert rule ip {} {} {}\n",
-                        c.table,
-                        c.name,
-                        generate_srcnat_rule_ip(iface)
-                    ));
-                }
-            }
-            "ip6" => {
-                if enable_v6 {
-                    script.push_str(&format!(
-                        "insert rule ip6 {} {} {}\n",
-                        c.table,
-                        c.name,
-                        generate_srcnat_rule_ip6(iface, is_v6_masq)
-                    ));
-                }
-            }
+            "ip" if enable_v4 => script.push_str(&format!(
+                "insert rule ip {} {} {}\n",
+                c.table,
+                c.name,
+                generate_srcnat_rule_ip(iface)
+            )),
+            "ip6" if enable_v6 => script.push_str(&format!(
+                "insert rule ip6 {} {} {}\n",
+                c.table,
+                c.name,
+                generate_srcnat_rule_ip6(iface, is_v6_masq)
+            )),
             _ => {}
         }
     }
@@ -352,7 +340,11 @@ mod tests {
         assert!(script.contains("table inet flowcone"));
         assert!(script.contains("priority filter - 1"));
         assert!(script.contains("priority srcnat - 1"));
-        assert!(script.contains("meta mark & 0x40000000 == 0x40000000 counter accept comment \"flowcone\""));
+        assert!(
+            script.contains(
+                "meta mark & 0x40000000 == 0x40000000 counter accept comment \"flowcone\""
+            )
+        );
         assert!(script.contains(&format!(
             "oifname \"eth1\" meta l4proto udp ip saddr {{ {} }}",
             flowcone_common::INTERNAL_V4_PREFIXES.join(", ")
@@ -366,7 +358,9 @@ mod tests {
         let r_ip = generate_srcnat_rule_ip("eth0");
         assert_eq!(
             r_ip,
-            format!("oifname \"eth0\" meta l4proto udp ip saddr {{ {set} }} counter return comment \"flowcone\"")
+            format!(
+                "oifname \"eth0\" meta l4proto udp ip saddr {{ {set} }} counter return comment \"flowcone\""
+            )
         );
         let r_ip6_ula = generate_srcnat_rule_ip6("eth0", false);
         assert_eq!(

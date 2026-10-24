@@ -196,7 +196,7 @@ pub fn select_rfc4787_port<F: FnMut(u16) -> bool>(
     if first <= maxp {
         let cnt = (maxp - first) / 2 + 1;
         if cnt > 0 {
-            let mut port = first + 2 * ((seed as u32) % cnt);
+            let mut port = first + 2 * (seed % cnt);
             let mut i: usize = 0;
             while i < 8 && (i as u32) < cnt {
                 if port != preferred as u32 && is_free(port as u16) {
