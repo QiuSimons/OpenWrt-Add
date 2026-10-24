@@ -94,7 +94,6 @@ version = "0.1.0"
 dependencies = [
  "aya",
  "flowcone-common",
- "libc",
  "rustix",
  "signal-hook-registry",
 ]

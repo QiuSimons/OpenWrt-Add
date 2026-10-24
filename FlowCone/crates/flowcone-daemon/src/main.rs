@@ -13,9 +13,9 @@ use aya::programs::tc::{
 use flowcone_common::GlobalConfig;
 use session::SessionManager;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::os::fd::{AsFd, AsRawFd};
+use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -26,9 +26,6 @@ const REATTACH_INTERVAL: Duration = Duration::from_secs(30);
 static EBPF_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flowcone-ebpf.bin"));
 static RUNNING: AtomicBool = AtomicBool::new(true);
 static RESYNC_REQUESTED: AtomicBool = AtomicBool::new(false);
-static SIGNAL_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
-static WAKE_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
-
 struct ShutdownNotifier {
     running: Mutex<bool>,
     condvar: Condvar,
@@ -58,33 +55,30 @@ impl ShutdownNotifier {
     }
 }
 
-/// Async-signal-safe wakeup: a single byte on one of the self-pipes.
-fn wake(fd: i32) {
-    if fd >= 0 {
-        let byte = [1u8];
-        unsafe {
-            let _ = rustix::io::write(std::os::fd::BorrowedFd::borrow_raw(fd), &byte);
-        }
+/// Install the signal handlers. They own their pipe ends, so a handler only
+/// touches an atomic and write(2); both are async-signal-safe.
+fn setup_signals(sig_write: OwnedFd, wake_write: OwnedFd) {
+    let sig_write = Arc::new(sig_write);
+    let wake_write = Arc::new(wake_write);
+
+    // SIGINT = 2, SIGTERM = 15
+    for sig in [2, 15] {
+        let sig_write = Arc::clone(&sig_write);
+        let wake_write = Arc::clone(&wake_write);
+        let handler = move || {
+            RUNNING.store(false, Ordering::SeqCst);
+            let _ = rustix::io::write(&*sig_write, &[1u8]);
+            let _ = rustix::io::write(&*wake_write, &[1u8]);
+        };
+        let _ = unsafe { signal_hook_registry::register(sig, handler) };
     }
-}
 
-fn signal_handler() {
-    RUNNING.store(false, Ordering::SeqCst);
-    wake(SIGNAL_WRITE_FD.load(Ordering::Relaxed));
-    wake(WAKE_WRITE_FD.load(Ordering::Relaxed));
-}
-
-/// SIGHUP: resync state/rules without dropping the mappings.
-fn resync_handler() {
-    RESYNC_REQUESTED.store(true, Ordering::Relaxed);
-    wake(WAKE_WRITE_FD.load(Ordering::Relaxed));
-}
-
-fn setup_signals() {
-    // SIGINT = 2, SIGTERM = 15, SIGHUP = 1
-    let _ = unsafe { signal_hook_registry::register(2, signal_handler) };
-    let _ = unsafe { signal_hook_registry::register(15, signal_handler) };
-    let _ = unsafe { signal_hook_registry::register(1, resync_handler) };
+    // SIGHUP = 1: resync state/rules without dropping the mappings.
+    let handler = move || {
+        RESYNC_REQUESTED.store(true, Ordering::Relaxed);
+        let _ = rustix::io::write(&*wake_write, &[1u8]);
+    };
+    let _ = unsafe { signal_hook_registry::register(1, handler) };
 }
 
 fn get_monotonic_coarse_ns() -> u64 {
@@ -249,13 +243,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Self-pipe for async-signal-safe shutdown notification
     let (sig_read_end, sig_write_end) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)?;
-    SIGNAL_WRITE_FD.store(sig_write_end.as_raw_fd(), Ordering::SeqCst);
 
     // Second self-pipe: wakes the address/watch thread on SIGHUP and shutdown.
     let (wake_read_end, wake_write_end) = rustix::pipe::pipe_with(
         rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
     )?;
-    WAKE_WRITE_FD.store(wake_write_end.as_raw_fd(), Ordering::SeqCst);
 
     // React to netlink link/address events instead of polling.
     let monitor = match netlink::EventMonitor::new() {
@@ -268,7 +260,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
         }
     };
-    setup_signals();
+    setup_signals(sig_write_end, wake_write_end);
     let notifier = Arc::new(ShutdownNotifier::new());
 
     let iface_path = format!("/sys/class/net/{}", config.iface);
@@ -629,8 +621,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("flowcone: stopping");
-    SIGNAL_WRITE_FD.store(-1, Ordering::SeqCst);
-    WAKE_WRITE_FD.store(-1, Ordering::SeqCst);
     notifier.notify_shutdown();
 
     if config.manage_nft {

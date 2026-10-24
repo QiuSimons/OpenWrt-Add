@@ -1,6 +1,9 @@
 use rustix::event::{PollFd, PollFlags, poll};
-use rustix::fd::{AsRawFd, BorrowedFd, OwnedFd};
-use rustix::net::{AddressFamily, SocketFlags, SocketType, recv, send, socket_with};
+use rustix::fd::{BorrowedFd, OwnedFd};
+use rustix::net::{
+    AddressFamily, SocketFlags, SocketType, bind, netlink::SocketAddrNetlink, recv, send,
+    socket_with,
+};
 use rustix::time::Timespec;
 use std::time::Duration;
 
@@ -229,20 +232,8 @@ impl EventMonitor {
         let groups = (1u32 << (RTNLGRP_LINK - 1))
             | (1u32 << (RTNLGRP_IPV4_IFADDR - 1))
             | (1u32 << (RTNLGRP_IPV6_IFADDR - 1));
-        // rustix does not expose sockaddr_nl, so bind(2) is called directly.
-        unsafe {
-            let mut addr: libc::sockaddr_nl = core::mem::zeroed();
-            addr.nl_family = libc::AF_NETLINK as libc::sa_family_t;
-            addr.nl_groups = groups;
-            let ret = libc::bind(
-                sock.as_raw_fd(),
-                &addr as *const libc::sockaddr_nl as *const libc::sockaddr,
-                core::mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t,
-            );
-            if ret < 0 {
-                return Err(NetlinkError::SocketError);
-            }
-        }
+        bind(&sock, &SocketAddrNetlink::new(0, groups))
+            .map_err(|_| NetlinkError::SocketError)?;
 
         Ok(Self { sock })
     }

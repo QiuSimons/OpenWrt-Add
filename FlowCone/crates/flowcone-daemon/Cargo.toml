@@ -13,5 +13,4 @@ path = "src/main.rs"
 flowcone-common = { path = "../flowcone-common" }
 aya = "0.14.0"
 rustix = { version = "1.1.4", default-features = false, features = ["std", "net", "time", "pipe", "event"] }
-libc = "0.2"
 signal-hook-registry = "1.4"
