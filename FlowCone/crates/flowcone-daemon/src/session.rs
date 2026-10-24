@@ -88,17 +88,20 @@ fn sweep_family<V: ConeBinding>(
     now_ns: u64,
     timeout_ns: u64,
 ) -> usize {
-    // Find expired outbound bindings
+    // Find expired outbound bindings. The inbound lookup is only needed for
+    // an outbound entry that already looks expired.
     expired_buf.clear();
     for (key, val) in ob_map.iter().flatten() {
+        if now_ns.saturating_sub(val.last_seen()) <= timeout_ns {
+            continue;
+        }
         let port_be = val.port_be();
         let port_host = u16::from_be(port_be);
         let ib_last = ib_map
             .get(&port_host, 0)
             .map(|iv| iv.last_seen())
             .unwrap_or(0);
-        let most_recent = val.last_seen().max(ib_last);
-        if now_ns.saturating_sub(most_recent) > timeout_ns {
+        if now_ns.saturating_sub(ib_last) > timeout_ns {
             expired_buf.push((key, port_be));
         }
     }
@@ -126,12 +129,15 @@ fn sweep_family<V: ConeBinding>(
     // Sweep orphaned inbound bindings (with 2s grace period)
     orphan_buf.clear();
     for (port_host, in_val) in ib_map.iter().flatten() {
+        if now_ns.saturating_sub(in_val.last_seen()) <= 2_000_000_000 {
+            continue;
+        }
         let ep_key = in_val.make_key();
         let is_orphan = match ob_map.get(&ep_key, 0) {
             Ok(ob) => u16::from_be(ob.port_be()) != port_host,
             Err(_) => true,
         };
-        if is_orphan && now_ns.saturating_sub(in_val.last_seen()) > 2_000_000_000 {
+        if is_orphan {
             orphan_buf.push(port_host);
         }
     }

@@ -65,32 +65,65 @@ pub struct GlobalConfig {
 #[cfg(not(target_arch = "bpf"))]
 unsafe impl aya::Pod for GlobalConfig {}
 
-/// Check if IPv4 address belongs to standard private/CGNAT subnets
-/// Expects ip in raw packet byte representation
+/// Non-routable IPv4 source ranges, as CIDR strings.
+///
+/// Must match is_private_ipv4(): the nftables srcnat exemption set is
+/// generated from this list, so the eBPF SNAT gate and the firewall can never
+/// drift apart. A range that is exempted from masquerade but not SNATed by the
+/// eBPF program would leak the private source address.
+#[cfg(not(target_arch = "bpf"))]
+pub const INTERNAL_V4_PREFIXES: &[&str] = &[
+    "0.0.0.0/8",
+    "10.0.0.0/8",
+    "100.64.0.0/10",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.0.0.0/24",
+    "192.0.2.0/24",
+    "192.88.99.0/24",
+    "192.168.0.0/16",
+    "198.18.0.0/15",
+    "198.51.100.0/24",
+    "203.0.113.0/24",
+    "224.0.0.0/4",
+    "240.0.0.0/4",
+];
+
+/// Check if an IPv4 source must not leave the WAN untranslated.
+///
+/// Covers the private/CGNAT subnets and the IANA special-purpose ranges
+/// (RFC 6890). Expects the ip in raw packet byte representation.
 #[inline(always)]
 pub fn is_private_ipv4(raw_ip: u32) -> bool {
-    let bytes = raw_ip.to_ne_bytes();
-    let b0 = bytes[0];
-    let b1 = bytes[1];
+    let b = raw_ip.to_ne_bytes();
 
-    // 10.0.0.0/8
-    if b0 == 10 {
-        return true;
+    match b[0] {
+        // 0.0.0.0/8 ("this network"), 10.0.0.0/8, 127.0.0.0/8 (loopback)
+        0 | 10 | 127 => true,
+        // 100.64.0.0/10 (CGNAT, RFC 6598)
+        100 => (64..=127).contains(&b[1]),
+        // 169.254.0.0/16 (link-local)
+        169 => b[1] == 254,
+        // 172.16.0.0/12
+        172 => (16..=31).contains(&b[1]),
+        192 => match b[1] {
+            // 192.0.0.0/24 (IETF protocol assignments), 192.0.2.0/24 (TEST-NET-1)
+            0 => b[2] == 0 || b[2] == 2,
+            // 192.88.99.0/24 (deprecated 6to4 relay anycast)
+            88 => b[2] == 99,
+            // 192.168.0.0/16
+            168 => true,
+            _ => false,
+        },
+        // 198.18.0.0/15 (benchmarking), 198.51.100.0/24 (TEST-NET-2)
+        198 => (18..=19).contains(&b[1]) || (b[1] == 51 && b[2] == 100),
+        // 203.0.113.0/24 (TEST-NET-3)
+        203 => b[1] == 0 && b[2] == 113,
+        // 224.0.0.0/4 (multicast), 240.0.0.0/4 (reserved) incl. 255.255.255.255
+        224..=255 => true,
+        _ => false,
     }
-    // 172.16.0.0/12 (172.16.0.0 - 172.31.255.255)
-    if b0 == 172 && (16..=31).contains(&b1) {
-        return true;
-    }
-    // 192.168.0.0/16
-    if b0 == 192 && b1 == 168 {
-        return true;
-    }
-    // 100.64.0.0/10 (CGNAT: 100.64.0.0 - 100.127.255.255)
-    if b0 == 100 && (64..=127).contains(&b1) {
-        return true;
-    }
-
-    false
 }
 
 /// Check if IPv6 address belongs to Unique Local Address (ULA fc00::/7)
@@ -223,6 +256,51 @@ mod tests {
         // 8.8.8.8 (Public)
         let ip_pub = u32::from_ne_bytes([8, 8, 8, 8]);
         assert!(!is_private_ipv4(ip_pub));
+
+        // IANA special-purpose source ranges must not reach the WAN untranslated.
+        for octets in [
+            [0, 0, 0, 0],
+            [127, 0, 0, 1],
+            [169, 254, 1, 1],
+            [192, 0, 0, 9],
+            [192, 0, 2, 1],
+            [192, 88, 99, 1],
+            [198, 18, 0, 1],
+            [198, 19, 255, 254],
+            [198, 51, 100, 7],
+            [203, 0, 113, 9],
+            [224, 0, 0, 1],
+            [239, 255, 255, 254],
+            [240, 0, 0, 1],
+            [255, 255, 255, 255],
+        ] {
+            assert!(
+                is_private_ipv4(u32::from_ne_bytes(octets)),
+                "expected {octets:?} to be treated as internal"
+            );
+        }
+
+        // Neighbouring public space must stay untouched.
+        for octets in [
+            [1, 1, 1, 1],
+            [8, 8, 4, 4],
+            [100, 63, 255, 255],
+            [100, 128, 0, 1],
+            [169, 253, 255, 255],
+            [172, 15, 255, 255],
+            [172, 32, 0, 1],
+            [192, 1, 0, 1],
+            [192, 169, 0, 1],
+            [198, 17, 255, 255],
+            [198, 20, 0, 1],
+            [203, 0, 114, 1],
+            [223, 255, 255, 254],
+        ] {
+            assert!(
+                !is_private_ipv4(u32::from_ne_bytes(octets)),
+                "expected {octets:?} to stay public"
+            );
+        }
     }
 
     #[test]
@@ -308,5 +386,21 @@ mod tests {
         // No ports free -> returns None
         let none_alloc = select_rfc4787_port(5000, 1024, 1030, 42, |_| false);
         assert_eq!(none_alloc, None);
+    }
+
+    #[test]
+    fn test_internal_v4_prefixes_match_matcher() {
+        for pfx in INTERNAL_V4_PREFIXES {
+            let (base, len) = pfx.split_once('/').unwrap();
+            let mut octets = [0u8; 4];
+            for (i, part) in base.split('.').enumerate() {
+                octets[i] = part.parse().unwrap();
+            }
+            let base = u32::from_ne_bytes(octets);
+            let host_bits = 32 - len.parse::<u32>().unwrap();
+            let last = base | ((1u32 << host_bits) - 1);
+            assert!(is_private_ipv4(base), "{pfx}: first address not internal");
+            assert!(is_private_ipv4(last), "{pfx}: last address not internal");
+        }
     }
 }

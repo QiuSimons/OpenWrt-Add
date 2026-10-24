@@ -4,23 +4,30 @@ mod firewall;
 mod netlink;
 mod session;
 
-use aya::EbpfLoader;
+use aya::{EbpfLoader, VerifierLogLevel};
 use aya::maps::{Array, HashMap};
 use aya::programs::links::LinkOrder;
-use aya::programs::tc::{SchedClassifier, TcAttachOptions, TcAttachType, qdisc_add_clsact};
+use aya::programs::tc::{
+    SchedClassifier, SchedClassifierLinkId, TcAttachOptions, TcAttachType, qdisc_add_clsact,
+};
 use flowcone_common::GlobalConfig;
 use session::SessionManager;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// Safety net for link loss the ifindex cannot reveal (index reuse, ...).
+const REATTACH_INTERVAL: Duration = Duration::from_secs(30);
 
 static EBPF_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flowcone-ebpf.bin"));
 static RUNNING: AtomicBool = AtomicBool::new(true);
+static RESYNC_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SIGNAL_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
+static WAKE_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
 
 struct ShutdownNotifier {
     running: Mutex<bool>,
@@ -51,9 +58,8 @@ impl ShutdownNotifier {
     }
 }
 
-fn signal_handler() {
-    RUNNING.store(false, Ordering::SeqCst);
-    let fd = SIGNAL_WRITE_FD.load(Ordering::Relaxed);
+/// Async-signal-safe wakeup: a single byte on one of the self-pipes.
+fn wake(fd: i32) {
     if fd >= 0 {
         let byte = [1u8];
         unsafe {
@@ -62,10 +68,23 @@ fn signal_handler() {
     }
 }
 
+fn signal_handler() {
+    RUNNING.store(false, Ordering::SeqCst);
+    wake(SIGNAL_WRITE_FD.load(Ordering::Relaxed));
+    wake(WAKE_WRITE_FD.load(Ordering::Relaxed));
+}
+
+/// SIGHUP: resync state/rules without dropping the mappings.
+fn resync_handler() {
+    RESYNC_REQUESTED.store(true, Ordering::Relaxed);
+    wake(WAKE_WRITE_FD.load(Ordering::Relaxed));
+}
+
 fn setup_signals() {
-    // SIGINT = 2, SIGTERM = 15
+    // SIGINT = 2, SIGTERM = 15, SIGHUP = 1
     let _ = unsafe { signal_hook_registry::register(2, signal_handler) };
     let _ = unsafe { signal_hook_registry::register(15, signal_handler) };
+    let _ = unsafe { signal_hook_registry::register(1, resync_handler) };
 }
 
 fn get_monotonic_coarse_ns() -> u64 {
@@ -73,17 +92,31 @@ fn get_monotonic_coarse_ns() -> u64 {
     (ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64)
 }
 
-fn attach_tc_classifier(
+fn load_classifier(
     bpf: &mut aya::Ebpf,
     prog_name: &str,
-    iface: &str,
-    attach_type: TcAttachType,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let prog: &mut SchedClassifier = bpf
         .program_mut(prog_name)
         .ok_or_else(|| format!("program {} not found", prog_name))?
         .try_into()?;
     prog.load()?;
+    Ok(())
+}
+
+fn attach_classifier(
+    bpf: &mut aya::Ebpf,
+    prog_name: &str,
+    iface: &str,
+    attach_type: TcAttachType,
+    previous: &mut Option<SchedClassifierLinkId>,
+    force_new: bool,
+    log_success: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let prog: &mut SchedClassifier = bpf
+        .program_mut(prog_name)
+        .ok_or_else(|| format!("program {} not found", prog_name))?
+        .try_into()?;
 
     let type_name = match attach_type {
         TcAttachType::Ingress => "ingress",
@@ -91,20 +124,89 @@ fn attach_tc_classifier(
         _ => "custom",
     };
 
-    match prog.attach_with_options(
+    // bpf_link_update() is a no-op for a live link and fails with -ENOLINK
+    // once the net_device is gone, so a healthy link is never detached.
+    // force_new is set when the interface instance itself changed.
+    if !force_new
+        && let Some(link_id) = previous.take()
+        && let Ok(link) = prog.take_link(link_id)
+        && let Ok(new_id) = prog.attach_to_link(link)
+    {
+        *previous = Some(new_id);
+        return Ok(());
+    }
+
+    let link_id = match prog.attach_with_options(
         iface,
         attach_type,
         TcAttachOptions::TcxOrder(LinkOrder::last()),
     ) {
-        Ok(_) => {
-            println!("flowcone: {} attached via TCX (last)", type_name);
+        Ok(id) => {
+            if log_success {
+                println!("flowcone: {} attached via TCX (last)", type_name);
+            }
+            id
         }
         Err(e) => {
             eprintln!("flowcone: TCX {} fallback to netlink: {:?}", type_name, e);
-            prog.attach(iface, attach_type)?;
+            prog.attach(iface, attach_type)?
         }
-    }
+    };
+
+    *previous = Some(link_id);
     Ok(())
+}
+
+/// Loaded eBPF object plus the currently attached link ids.
+struct DataPlane {
+    bpf: aya::Ebpf,
+    iface: String,
+    ingress: Option<SchedClassifierLinkId>,
+    egress: Option<SchedClassifierLinkId>,
+}
+
+impl DataPlane {
+    fn start(bpf: aya::Ebpf, iface: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut data_plane = Self {
+            bpf,
+            iface: iface.to_string(),
+            ingress: None,
+            egress: None,
+        };
+        load_classifier(&mut data_plane.bpf, "flowcone_tcx_ingress")?;
+        load_classifier(&mut data_plane.bpf, "flowcone_tcx_egress")?;
+        data_plane.attach(true, true)?;
+        Ok(data_plane)
+    }
+
+    /// (Re-)attach both classifiers without loading them again.
+    fn attach(
+        &mut self,
+        force_new: bool,
+        log_success: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let iface = self.iface.clone();
+        let _ = qdisc_add_clsact(&iface);
+        attach_classifier(
+            &mut self.bpf,
+            "flowcone_tcx_ingress",
+            &iface,
+            TcAttachType::Ingress,
+            &mut self.ingress,
+            force_new,
+            log_success,
+        )?;
+        attach_classifier(
+            &mut self.bpf,
+            "flowcone_tcx_egress",
+            &iface,
+            TcAttachType::Egress,
+            &mut self.egress,
+            force_new,
+            log_success,
+        )?;
+        Ok(())
+    }
 }
 
 pub fn resolve_effective_v6(enable_v6: bool, wan_ip6: [u8; 16], has_masq: bool) -> u32 {
@@ -115,6 +217,19 @@ pub fn resolve_effective_v6(enable_v6: bool, wan_ip6: [u8; 16], has_masq: bool) 
     } else {
         1
     }
+}
+
+/// What the data plane and the firewall were last configured with.
+struct AppliedState {
+    l2_len: u32,
+    ip4: u32,
+    ip6: [u8; 16],
+    effective_v6: u32,
+    v4_enabled: bool,
+    /// u32::MAX forces the first rule sync; then holds the IPv6 mode (0/1/2).
+    v6_mode: u32,
+    ifindex: u32,
+    present: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -135,6 +250,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Self-pipe for async-signal-safe shutdown notification
     let (sig_read_end, sig_write_end) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)?;
     SIGNAL_WRITE_FD.store(sig_write_end.as_raw_fd(), Ordering::SeqCst);
+
+    // Second self-pipe: wakes the address/watch thread on SIGHUP and shutdown.
+    let (wake_read_end, wake_write_end) = rustix::pipe::pipe_with(
+        rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
+    )?;
+    WAKE_WRITE_FD.store(wake_write_end.as_raw_fd(), Ordering::SeqCst);
+
+    // React to netlink link/address events instead of polling.
+    let monitor = match netlink::EventMonitor::new() {
+        Ok(monitor) => Some(monitor),
+        Err(e) => {
+            eprintln!(
+                "flowcone: rtnetlink monitor unavailable ({:?}), falling back to polling",
+                e
+            );
+            None
+        }
+    };
     setup_signals();
     let notifier = Arc::new(ShutdownNotifier::new());
 
@@ -159,11 +292,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let btf = btf::find_btf(config.btf_path.as_deref());
-    let mut loader = EbpfLoader::new();
-    if let Some(ref b) = btf {
-        loader.btf(Some(b));
-    }
-    let mut bpf = loader.load(EBPF_BYTES)?;
+
+    // Without the verifier log first: it does not fit aya's buffer (E2BIG).
+    // On failure retry with the log so the verifier reason is reported.
+    let mut bpf = {
+        let mut loader = EbpfLoader::new();
+        if let Some(ref b) = btf {
+            loader.btf(Some(b));
+        }
+        loader.verifier_log_level(VerifierLogLevel::DISABLE);
+        match loader.load(EBPF_BYTES) {
+            Ok(bpf) => bpf,
+            Err(first) => {
+                eprintln!(
+                    "flowcone: eBPF load without verifier log failed ({}), retrying with log",
+                    first
+                );
+                let mut loader = EbpfLoader::new();
+                if let Some(ref b) = btf {
+                    loader.btf(Some(b));
+                }
+                loader.verifier_log_level(VerifierLogLevel::VERBOSE);
+                loader.load(EBPF_BYTES)?
+            }
+        }
+    };
 
     let session_mgr = Arc::new(Mutex::new(SessionManager::new(
         Array::try_from(bpf.take_map("CONFIG").ok_or("map CONFIG not found")?)?,
@@ -201,98 +354,133 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let _ = qdisc_add_clsact(&config.iface);
-    attach_tc_classifier(
-        &mut bpf,
-        "flowcone_tcx_ingress",
-        &config.iface,
-        TcAttachType::Ingress,
-    )?;
-    attach_tc_classifier(
-        &mut bpf,
-        "flowcone_tcx_egress",
-        &config.iface,
-        TcAttachType::Egress,
-    )?;
+    let data_plane = Arc::new(Mutex::new(DataPlane::start(bpf, &config.iface)?));
+    let start_ifindex = netlink::get_ifindex(&config.iface).unwrap_or(0);
 
     let ip_session = Arc::clone(&session_mgr);
+    let ip_dp = Arc::clone(&data_plane);
     let ip_cfg = config.clone();
     let ip_notifier = Arc::clone(&notifier);
     let ip_thread = thread::spawn(move || {
-        let mut last_ip4: u32 = 0;
-        let mut last_ip6 = [0u8; 16];
-        let mut last_effective_v6: u32 = 0;
-        let mut applied_v4 = false;
-        let mut applied_v6 = false;
+        let mut applied = AppliedState {
+            l2_len,
+            ip4: 0,
+            ip6: [0u8; 16],
+            effective_v6: 0,
+            v4_enabled: false,
+            v6_mode: u32::MAX,
+            ifindex: start_ifindex,
+            present: start_ifindex != 0,
+        };
+        let mut attach_timer = Instant::now();
 
         loop {
             let mut config_dirty = false;
-            let mut resolved_ip4 = last_ip4;
-            let mut resolved_ip6 = last_ip6;
+            let mut reattach = false;
+            let mut force_new_attach = false;
+            let mut notable = false;
+            let mut resolved_ip4 = applied.ip4;
+            let mut resolved_ip6 = applied.ip6;
+
+            // A re-created interface (PPPoE/WireGuard reconnect) lost its
+            // links; the periodic check below covers what the ifindex cannot.
+            let cur_ifindex = netlink::get_ifindex(&ip_cfg.iface).unwrap_or(0);
+            let present = cur_ifindex != 0;
+            if present && (!applied.present || cur_ifindex != applied.ifindex) {
+                println!(
+                    "flowcone: interface {} re-created (ifindex {} -> {}), re-attaching",
+                    ip_cfg.iface, applied.ifindex, cur_ifindex
+                );
+                applied.l2_len = netlink::get_iface_l2_len(&ip_cfg.iface);
+                reattach = true;
+                force_new_attach = true;
+                notable = true;
+                config_dirty = true;
+                attach_timer = Instant::now();
+            } else if present && attach_timer.elapsed() >= REATTACH_INTERVAL {
+                attach_timer = Instant::now();
+                reattach = true;
+            }
+            applied.present = present;
+
+            // Explicit resync request (SIGHUP from the init script).
+            let resync = RESYNC_REQUESTED.swap(false, Ordering::Relaxed);
+            if resync {
+                config_dirty = true;
+            }
+
+            // A failed query is transient, not "the interface lost its address".
+            let iface_addrs = netlink::get_iface_addrs(cur_ifindex);
 
             if ip_cfg.enable_v4 {
-                match netlink::get_iface_ipv4(&ip_cfg.iface) {
+                match iface_addrs.as_ref().map(|a| a.v4) {
                     Ok(Some(ip4_bytes)) => {
                         let ip4 = u32::from_ne_bytes(ip4_bytes);
-                        if ip4 != last_ip4 {
+                        if ip4 != applied.ip4 {
                             println!(
                                 "flowcone: WAN IPv4 updated to {}",
                                 Ipv4Addr::from(ip4_bytes)
                             );
-                            if last_ip4 != 0 {
+                            if applied.ip4 != 0 {
                                 println!("flowcone: flushing stale v4 mappings");
                                 if let Ok(mut mgr) = ip_session.lock() {
                                     mgr.clear_v4_mappings();
                                 }
                             }
-                            last_ip4 = ip4;
+                            applied.ip4 = ip4;
                             resolved_ip4 = ip4;
                             config_dirty = true;
                         }
                     }
                     Ok(None) => {
-                        if last_ip4 != 0 {
+                        if applied.ip4 != 0 {
                             println!("flowcone: WAN interface lost IPv4");
-                            last_ip4 = 0;
+                            applied.ip4 = 0;
                             resolved_ip4 = 0;
                             config_dirty = true;
                         }
                     }
                     Err(e) => {
                         if ip_cfg.verbose {
-                            eprintln!("flowcone: warning: transient netlink IPv4 query error: {:?}", e);
+                            eprintln!(
+                                "flowcone: warning: transient netlink address query error: {:?}",
+                                e
+                            );
                         }
                     }
                 }
             }
 
             if ip_cfg.enable_v6 {
-                match netlink::get_iface_ipv6(&ip_cfg.iface) {
+                match iface_addrs.as_ref().map(|a| a.v6) {
                     Ok(Some(ip6)) => {
-                        if ip6 != last_ip6 {
+                        if ip6 != applied.ip6 {
                             println!("flowcone: WAN IPv6 updated to {}", Ipv6Addr::from(ip6));
-                            if last_ip6 != [0u8; 16] {
+                            if applied.ip6 != [0u8; 16] {
                                 println!("flowcone: flushing stale v6 mappings");
                                 if let Ok(mut mgr) = ip_session.lock() {
                                     mgr.clear_v6_mappings();
                                 }
                             }
-                            last_ip6 = ip6;
+                            applied.ip6 = ip6;
                             resolved_ip6 = ip6;
                             config_dirty = true;
                         }
                     }
                     Ok(None) => {
-                        if last_ip6 != [0u8; 16] {
+                        if applied.ip6 != [0u8; 16] {
                             println!("flowcone: WAN interface lost IPv6");
-                            last_ip6 = [0u8; 16];
+                            applied.ip6 = [0u8; 16];
                             resolved_ip6 = [0u8; 16];
                             config_dirty = true;
                         }
                     }
                     Err(e) => {
                         if ip_cfg.verbose {
-                            eprintln!("flowcone: warning: transient IPv6 query error: {:?}", e);
+                            eprintln!(
+                                "flowcone: warning: transient netlink address query error: {:?}",
+                                e
+                            );
                         }
                     }
                 }
@@ -305,7 +493,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     firewall::is_ipv6_masq_enabled(),
                 );
 
-                if effective_v6 != last_effective_v6 {
+                if effective_v6 != applied.effective_v6 {
                     let desc = match effective_v6 {
                         0 => "disabled (no WAN IPv6 address)",
                         1 => "auto-adaptive (ULA NAT66 + Native GUA wire-speed routing)",
@@ -313,7 +501,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         _ => "custom",
                     };
                     println!("flowcone: IPv6 operational mode: {}", desc);
-                    last_effective_v6 = effective_v6;
+                    applied.effective_v6 = effective_v6;
                 }
 
                 if let Ok(mut mgr) = ip_session.lock() {
@@ -321,7 +509,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         wan_ip4: resolved_ip4,
                         bypass_mark_mask: ip_cfg.bypass_mark_mask,
                         bypass_mark_val: ip_cfg.bypass_mark_val,
-                        l2_len,
+                        l2_len: applied.l2_len,
                         wan_ip6: resolved_ip6,
                         min_port4: ip_cfg.min_port,
                         max_port4: ip_cfg.max_port,
@@ -339,24 +527,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if ip_cfg.manage_nft {
                     let active_v4 = ip_cfg.enable_v4 && resolved_ip4 != 0;
-                    let active_v6 = effective_v6 != 0;
-                    if active_v4 != applied_v4 || active_v6 != applied_v6 {
+                    // The mode (not just presence) changes the generated rule;
+                    // a resync or a re-created interface forces a rewrite.
+                    if resync
+                        || notable
+                        || active_v4 != applied.v4_enabled
+                        || effective_v6 != applied.v6_mode
+                    {
                         firewall::sync_fw4_rules(
                             &ip_cfg.iface,
                             ip_cfg.min_port,
                             ip_cfg.max_port,
                             active_v4,
-                            active_v6,
+                            effective_v6 != 0,
                             ip_cfg.verbose,
                         );
-                        applied_v4 = active_v4;
-                        applied_v6 = active_v6;
+                        applied.v4_enabled = active_v4;
+                        applied.v6_mode = effective_v6;
+                    }
+                }
+            }
+
+            if reattach {
+                let mut attached = false;
+                if let Ok(mut dp) = ip_dp.lock() {
+                    match dp.attach(force_new_attach, false) {
+                        Ok(()) => attached = true,
+                        Err(e) => eprintln!(
+                            "flowcone: re-attach on {} failed: {} (will retry)",
+                            ip_cfg.iface, e
+                        ),
+                    }
+                }
+                if attached {
+                    applied.ifindex = cur_ifindex;
+                    if notable || ip_cfg.verbose {
+                        println!(
+                            "flowcone: TCX programs re-attached to {} (ifindex {})",
+                            ip_cfg.iface, cur_ifindex
+                        );
                     }
                 }
             }
 
             let sleep_dur = Duration::from_secs(if resolved_ip4 != 0 { 5 } else { 1 });
-            if !ip_notifier.wait_timeout(sleep_dur) {
+            match monitor {
+                Some(ref monitor) => {
+                    monitor.wait(wake_read_end.as_fd(), sleep_dur);
+                    // Drain the wake pipe (non blocking).
+                    let mut buf = [0u8; 32];
+                    while let Ok(n) = rustix::io::read(&wake_read_end, &mut buf) {
+                        if n == 0 {
+                            break;
+                        }
+                    }
+                }
+                None => {
+                    if !ip_notifier.wait_timeout(sleep_dur) {
+                        break;
+                    }
+                }
+            }
+            if !RUNNING.load(Ordering::Relaxed) {
                 break;
             }
         }
@@ -398,6 +630,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("flowcone: stopping");
     SIGNAL_WRITE_FD.store(-1, Ordering::SeqCst);
+    WAKE_WRITE_FD.store(-1, Ordering::SeqCst);
     notifier.notify_shutdown();
 
     if config.manage_nft {

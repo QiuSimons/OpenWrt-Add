@@ -2,14 +2,32 @@
 
 'use strict';
 
-import { popen, readfile } from 'fs';
+import { readfile } from 'fs';
+import { connect } from 'ubus';
 
+// Persistent connection, created once per module load (see luci.upnp).
+const ubus = connect();
+
+// Ask procd instead of forking `pidof flowcone` on every status request.
 function get_flowcone_pid() {
-	let p = popen('pidof flowcone 2>/dev/null');
-	let pid_str = p ? trim(p.read('all')) : '';
-	if (p) p.close();
-	let pids = split(pid_str, /\s+/);
-	return (length(pids) && pids[0] != '') ? +pids[0] : null;
+	if (!ubus)
+		return null;
+
+	const res = ubus.call('service', 'list', { name: 'flowcone', verbose: true });
+
+	if (type(res) != 'object' ||
+	    type(res.flowcone) != 'object' ||
+	    type(res.flowcone.instances) != 'object')
+		return null;
+
+	for (let instance in res.flowcone.instances) {
+		const info = res.flowcone.instances[instance];
+
+		if (type(info) == 'object' && info.running && info.pid)
+			return +info.pid;
+	}
+
+	return null;
 }
 
 function get_process_memory(pid) {
@@ -23,12 +41,11 @@ function get_process_memory(pid) {
 const methods = {
 	status: {
 		call: function(req) {
-			let pid = get_flowcone_pid();
-			let running = !!pid;
+			const pid = get_flowcone_pid();
 			return {
-				running: running,
+				running: pid != null,
 				pid: pid,
-				memory: running ? get_process_memory(pid) : null
+				memory: pid ? get_process_memory(pid) : null
 			};
 		}
 	},
