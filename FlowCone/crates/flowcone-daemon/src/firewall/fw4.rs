@@ -100,6 +100,10 @@ pub(crate) fn parse_has_ipv6_masq(nft_output: &str) -> bool {
         if !trimmed.contains("masquerade") {
             continue;
         }
+        // nat6's partial masquerade covers TCP/ICMP only; FlowCone owns UDP.
+        if trimmed.contains("flowcone-nat6-partial") {
+            continue;
+        }
         let has_v4 =
             family == "ip" || trimmed.contains("nfproto ipv4") || trimmed.contains("bcmfullcone4");
         let has_v6 = family == "ip6"
@@ -470,6 +474,18 @@ mod tests {
             fwds[0],
             "meta mark & 0x40000000 == 0x40000000 counter accept comment \"flowcone\""
         );
+    }
+
+    #[test]
+    fn test_parse_has_ipv6_masq_ignores_nat6_partial() {
+        let partial = "\
+table ip6 nat {
+        chain postrouting {
+                type nat hook postrouting priority srcnat; policy accept;
+                oif \"eth1\" meta l4proto != udp masquerade comment \"flowcone-nat6-partial\"
+        }
+}";
+        assert!(!parse_has_ipv6_masq(partial));
     }
 
     #[test]

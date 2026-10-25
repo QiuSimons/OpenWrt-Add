@@ -1,0 +1,16 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+
+sync_nat6() {
+    current="$(uci -q get flowcone.config.enable_v6)"
+    [ -n "$current" ] || current=0
+    state="$(cat /tmp/nat6-flowcone.mode 2>/dev/null)"
+    [ "$current" = "$state" ] && return 0
+    echo "$current" > /tmp/nat6-flowcone.mode
+    [ -x /etc/init.d/nat6 ] && /etc/init.d/nat6 restart
+}
+
+start() { sync_nat6; }
+restart() { sync_nat6; }
+reload() { sync_nat6; }

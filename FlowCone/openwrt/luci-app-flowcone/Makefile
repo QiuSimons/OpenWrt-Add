@@ -5,7 +5,7 @@
 include $(TOPDIR)/rules.mk
 
 LUCI_TITLE:=LuCI Support for FlowCone
-LUCI_DEPENDS:=+flowcone
+LUCI_DEPENDS:=+flowcone +nat6
 LUCI_PKGARCH:=all
 
 PKG_MAINTAINER:=QiuSimons <45143996+QiuSimons@users.noreply.github.com>

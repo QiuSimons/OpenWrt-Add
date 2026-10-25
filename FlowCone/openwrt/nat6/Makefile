@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=nat6
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 PKG_MAINTAINER:=sbwml <admin@cooluc.com>
 
@@ -23,8 +23,10 @@ define Package/nat6/install
 	$(INSTALL_DATA) ./files/nat6.hotplug $(1)/etc/hotplug.d/iface/90-nat6
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/nat6.init $(1)/etc/init.d/nat6
+	$(INSTALL_BIN) ./files/nat6-flowcone.init $(1)/etc/init.d/nat6-flowcone
 	$(INSTALL_DIR) $(1)/usr/share/ucitrack
 	$(INSTALL_CONF) ./files/nat6.ucitrack $(1)/usr/share/ucitrack/nat6.json
+	$(INSTALL_CONF) ./files/nat6-flowcone.ucitrack $(1)/usr/share/ucitrack/nat6-flowcone.json
 endef
 
 $(eval $(call BuildPackage,nat6))

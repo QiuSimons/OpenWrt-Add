@@ -65,7 +65,12 @@ start() {
 	nft add table ip6 nat 2>/dev/null
 	nft add chain ip6 nat prerouting { type nat hook prerouting priority 0\; } 2>/dev/null
 	nft add chain ip6 nat postrouting { type nat hook postrouting priority 100\; } 2>/dev/null
-	nft add rule ip6 nat postrouting oif $device masquerade 2>/dev/null
+	if [ "$(uci -q get flowcone.config.enable_v6)" = "1" ]; then
+		# FlowCone owns UDP fullcone/NAT66; let nat6 cover TCP/ICMP only.
+		nft add rule ip6 nat postrouting oif $device meta l4proto != udp masquerade comment "flowcone-nat6-partial" 2>/dev/null
+	else
+		nft add rule ip6 nat postrouting oif $device masquerade 2>/dev/null
+	fi
 	logger -p notice -t network -s "nat6: IPv6 NAT is ready"
 }
 

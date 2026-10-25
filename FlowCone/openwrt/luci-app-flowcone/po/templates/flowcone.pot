@@ -90,3 +90,18 @@ msgstr ""
 
 msgid "Interval must be between 1 and 3600 seconds."
 msgstr ""
+
+msgid "IPv6 NAT6 Helper"
+msgstr ""
+
+msgid "Use the nat6 package for ULA/RA/DHCPv6; FlowCone keeps IPv6 UDP fullcone when enabled."
+msgstr ""
+
+msgid "The nat6 package is not installed."
+msgstr ""
+
+msgid "IPv6 NAT6 helper updated."
+msgstr ""
+
+msgid "Failed to update IPv6 NAT6 helper:"
+msgstr ""

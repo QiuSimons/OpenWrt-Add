@@ -6,6 +6,7 @@
 'require view';
 'require ui';
 'require dom';
+'require fs';
 'require tools.widgets as widgets';
 
 const callFlowconeStatus = rpc.declare({
@@ -43,7 +44,9 @@ return view.extend({
 	load: function() {
 		return Promise.all([
 			L.resolveDefault(callFlowconeStatus(), {}),
-			uci.load('flowcone')
+			uci.load('flowcone'),
+			uci.load('firewall'),
+			L.resolveDefault(fs.access('/etc/init.d/nat6'), false)
 		]);
 	},
 
@@ -79,6 +82,38 @@ return view.extend({
 				}
 			}, _('Reload Service'));
 
+			var nat6Installed = res[3] === true;
+			var nat6On = uci.get('firewall', '@defaults[0]', 'nat6') === '1';
+			var nat6Cb = E('input', {
+				'type': 'checkbox',
+				'checked': nat6On,
+				'disabled': !nat6Installed
+			});
+			nat6Cb.addEventListener('change', function(ev) {
+				var enabled = ev.target.checked ? '1' : '0';
+				ev.target.disabled = true;
+				uci.set('firewall', '@defaults[0]', 'nat6', enabled);
+				Promise.resolve(uci.save())
+					.then(function() { return uci.apply(); })
+					.then(function() { return fs.exec('/etc/init.d/nat6', ['restart']); })
+					.then(function() { return fs.exec('/etc/init.d/flowcone', ['reload']); })
+					.then(function() {
+						ui.addNotification(null, E('p', _('IPv6 NAT6 helper updated.')), 'info');
+					})
+					.catch(function(err) {
+						ev.target.checked = !ev.target.checked;
+						ui.addNotification(null, E('p', _('Failed to update IPv6 NAT6 helper:') + ' ' + (err.message || err)), 'error');
+					})
+					.then(function() { ev.target.disabled = false; });
+			});
+			var nat6Row = E('div', { 'class': 'cbi-value' }, [
+				E('label', { 'class': 'cbi-value-title' }, _('IPv6 NAT6 Helper')),
+				E('div', { 'class': 'cbi-value-field' }, [
+					nat6Cb,
+					E('span', { 'class': 'cbi-value-description' }, _('Use the nat6 package for ULA/RA/DHCPv6; FlowCone keeps IPv6 UDP fullcone when enabled.')),
+					nat6Installed ? null : E('div', { 'style': 'color: var(--danger, #ef4444);' }, _('The nat6 package is not installed.'))
+				])
+			]);
 			var section = E('fieldset', { 'class': 'cbi-section' }, [
 				E('legend', {}, _('Status')),
 				E('div', { 'class': 'cbi-value' }, [
@@ -87,7 +122,8 @@ return view.extend({
 						statusEl,
 						reloadBtn
 					])
-				])
+				]),
+				nat6Row
 			]);
 
 			updateStatus(status, statusEl);
