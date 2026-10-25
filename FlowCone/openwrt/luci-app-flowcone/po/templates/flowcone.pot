@@ -100,8 +100,4 @@ msgstr ""
 msgid "The nat6 package is not installed."
 msgstr ""
 
-msgid "IPv6 NAT6 helper updated."
-msgstr ""
 
-msgid "Failed to update IPv6 NAT6 helper:"
-msgstr ""

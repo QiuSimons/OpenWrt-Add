@@ -100,8 +100,4 @@ msgstr "使用 nat6 包管理 ULA/RA/DHCPv6；启用时 FlowCone 仍负责 IPv6 
 msgid "The nat6 package is not installed."
 msgstr "nat6 包未安装。"
 
-msgid "IPv6 NAT6 helper updated."
-msgstr "IPv6 NAT6 辅助已更新。"
 
-msgid "Failed to update IPv6 NAT6 helper:"
-msgstr "更新 IPv6 NAT6 辅助失败："

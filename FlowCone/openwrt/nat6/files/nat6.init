@@ -3,7 +3,6 @@
 START=90
 
 interface() {
-	nic=$(ifconfig -a | grep -o '^[^ ]*')
 	dhcpv6_interface=$(uci -q show network | grep -E "dhcpv6|ip6addr" | grep -o 'network\.\([^\.]*\)' | sed 's/network.//')
 	IFS=$'\n'
 	for interface_name in $dhcpv6_interface
