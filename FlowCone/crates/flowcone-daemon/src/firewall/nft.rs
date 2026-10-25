@@ -1,10 +1,15 @@
 //! nftables command channel, rule discovery and the standalone table used on
 //! systems without fw4.
 
+use super::fw4::LIVENESS_TIMEOUT_SEC;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use super::fw4::{generate_fw4_srcnat_rule_v4, generate_fw4_srcnat_rule_v6, v4_src_set};
+use super::fw4::{
+    SET_FWD4, SET_FWD6, SET_V4, SET_V6, generate_fw4_srcnat_rule_v4, generate_fw4_srcnat_rule_v6,
+    generate_live_forward_rule_v4, generate_live_forward_rule_v6, generate_live_srcnat_rule_v4,
+    generate_live_srcnat_rule_v6, set_definitions, v4_src_set, v6_elements,
+};
 
 /// Generate IPv4 srcnat exemption rule for 'ip' family table (e.g. iptables-nft 'table ip nat').
 pub(crate) fn generate_srcnat_rule_ip(iface: &str) -> String {
@@ -25,20 +30,121 @@ pub(crate) fn generate_srcnat_rule_ip6(iface: &str, is_masq: bool) -> String {
     }
 }
 
-pub(crate) fn generate_standalone_script(iface: &str) -> String {
-    format!(
-        "table inet flowcone {{\n\
-         \x20   chain forward {{\n\
-         \x20       type filter hook forward priority filter - 1; policy accept;\n\
-         \x20       meta mark & 0x40000000 == 0x40000000 counter accept comment \"flowcone\"\n\
-         \x20   }}\n\
-         \x20   chain srcnat {{\n\
-         \x20       type nat hook postrouting priority srcnat - 1; policy accept;\n\
-         \x20       oifname \"{iface}\" meta l4proto udp ip saddr {{ {} }} counter return comment \"flowcone\"\n\
-         \x20   }}\n\
-         }}\n",
-        v4_src_set()
-    )
+/// Standalone NAT table used when the system has no nftables chains at all.
+/// It contains liveness sets, the FlowCone UDP exemption, and a normal
+/// masquerade fallback for TCP/ICMP and for the moments when the daemon is
+/// down (the set elements expire and the maquerade path takes over).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn generate_standalone_script_live(
+    iface: &str,
+    enable_v4: bool,
+    enable_v6: bool,
+    is_v6_masq: bool,
+    mark: u32,
+    bypass_mask: u32,
+    bypass_val: u32,
+) -> String {
+    if !enable_v4 && !enable_v6 {
+        return String::new();
+    }
+    let mut s = String::new();
+    s.push_str("table inet flowcone {\n");
+    s.push_str(&set_definitions());
+    s.push_str("    chain forward {\n");
+    s.push_str("        type filter hook forward priority filter - 1; policy accept;\n");
+    if enable_v4 {
+        s.push_str(&format!(
+            "        {}\n",
+            generate_live_forward_rule_v4(iface, mark)
+        ));
+    }
+    if enable_v6 {
+        s.push_str(&format!(
+            "        {}\n",
+            generate_live_forward_rule_v6(iface, mark)
+        ));
+    }
+    s.push_str("    }\n");
+    s.push_str("    chain srcnat {\n");
+    s.push_str("        type nat hook postrouting priority srcnat - 1; policy accept;\n");
+    if enable_v4 {
+        s.push_str(&format!(
+            "        {}\n",
+            generate_live_srcnat_rule_v4(iface, bypass_mask, bypass_val)
+        ));
+        s.push_str(&format!(
+            "        meta nfproto ipv4 ip saddr != 0.0.0.0/8 oifname \"{iface}\" counter masquerade comment \"flowcone\"\n"
+        ));
+    }
+    if enable_v6 {
+        s.push_str(&format!(
+            "        {}\n",
+            generate_live_srcnat_rule_v6(iface, bypass_mask, bypass_val)
+        ));
+        if is_v6_masq {
+            s.push_str(&format!(
+                "        meta nfproto ipv6 ip6 saddr != fe80::/10 oifname \"{iface}\" counter masquerade comment \"flowcone\"\n"
+            ));
+        } else {
+            s.push_str(&format!(
+                "        meta nfproto ipv6 ip6 saddr fc00::/7 oifname \"{iface}\" counter masquerade comment \"flowcone\"\n"
+            ));
+        }
+    }
+    s.push_str("    }\n");
+    s.push_str("}\n");
+    s
+}
+
+/// Refresh the liveness set elements in the standalone table.
+pub(crate) fn refresh_standalone_liveness(
+    enable_v4: bool,
+    enable_v6: bool,
+    is_v6_masq: bool,
+    verbose: bool,
+) -> bool {
+    if !nft_table_exists("inet", "flowcone") {
+        return false;
+    }
+    let mut script = String::new();
+    if enable_v4 {
+        let elements = flowcone_common::INTERNAL_V4_PREFIXES
+            .iter()
+            .map(|p| format!("{} timeout {}s", p, LIVENESS_TIMEOUT_SEC))
+            .collect::<Vec<_>>()
+            .join(", ");
+        script.push_str(&format!(
+            "add element inet flowcone {} {{ {} }}\n",
+            SET_V4, elements
+        ));
+        script.push_str(&format!(
+            "add element inet flowcone {} {{ 0.0.0.0/0 timeout {}s }}\n",
+            SET_FWD4, LIVENESS_TIMEOUT_SEC
+        ));
+    }
+    if enable_v6 {
+        script.push_str(&format!(
+            "add element inet flowcone {} {{ {} }}\n",
+            SET_V6,
+            v6_elements(is_v6_masq)
+        ));
+        script.push_str(&format!(
+            "add element inet flowcone {} {{ ::/0 timeout {}s }}\n",
+            SET_FWD6, LIVENESS_TIMEOUT_SEC
+        ));
+    }
+    if script.is_empty() {
+        return true;
+    }
+    match nft_apply(&script) {
+        Ok(()) => true,
+        Err(e) => {
+            if verbose {
+                eprintln!("flowcone: standalone liveness refresh failed: {}", e);
+            }
+            false
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,24 +439,6 @@ pub(crate) fn build_primary_insert_script(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_generate_rules_script() {
-        let script = generate_standalone_script("eth1");
-        assert!(script.contains("table inet flowcone"));
-        assert!(script.contains("priority filter - 1"));
-        assert!(script.contains("priority srcnat - 1"));
-        assert!(
-            script.contains(
-                "meta mark & 0x40000000 == 0x40000000 counter accept comment \"flowcone\""
-            )
-        );
-        assert!(script.contains(&format!(
-            "oifname \"eth1\" meta l4proto udp ip saddr {{ {} }}",
-            flowcone_common::INTERNAL_V4_PREFIXES.join(", ")
-        )));
-        assert!(script.contains("comment \"flowcone\""));
-    }
 
     #[test]
     fn test_generate_srcnat_rule_ip_and_ip6() {

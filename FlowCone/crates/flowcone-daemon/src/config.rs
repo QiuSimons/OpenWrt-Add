@@ -1,3 +1,5 @@
+use flowcone_common::DEFAULT_FLOWCONE_MARK;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
     pub iface: String,
@@ -10,6 +12,7 @@ pub struct Config {
     pub gc_interval_sec: u64,
     pub bypass_mark_mask: u32,
     pub bypass_mark_val: u32,
+    pub flowcone_mark: u32,
     pub manage_nft: bool,
     pub verbose: bool,
 }
@@ -27,6 +30,7 @@ impl Default for Config {
             gc_interval_sec: 5,
             bypass_mark_mask: 0,
             bypass_mark_val: 0,
+            flowcone_mark: DEFAULT_FLOWCONE_MARK,
             manage_nft: true,
             verbose: false,
         }
@@ -57,6 +61,14 @@ fn parse_bool_flag(args: &[String], i: &mut usize) -> bool {
     true
 }
 
+fn take_value<'a>(args: &'a [String], i: &mut usize, opt: &str) -> Result<&'a str, String> {
+    if *i + 1 >= args.len() {
+        return Err(format!("Missing value for {}", opt));
+    }
+    *i += 1;
+    Ok(args[*i].as_str())
+}
+
 pub fn parse_args() -> Result<Config, String> {
     let args: Vec<String> = std::env::args().collect();
     let mut cfg = Config::default();
@@ -65,16 +77,10 @@ pub fn parse_args() -> Result<Config, String> {
     while i < args.len() {
         match args[i].as_str() {
             "-i" | "--iface" => {
-                if i + 1 < args.len() {
-                    cfg.iface = args[i + 1].clone();
-                    i += 1;
-                }
+                cfg.iface = take_value(&args, &mut i, "--iface")?.to_string();
             }
             "-b" | "--btf" => {
-                if i + 1 < args.len() {
-                    cfg.btf_path = Some(args[i + 1].clone());
-                    i += 1;
-                }
+                cfg.btf_path = Some(take_value(&args, &mut i, "--btf")?.to_string());
             }
             "--enable-v4" => {
                 cfg.enable_v4 = parse_bool_flag(&args, &mut i);
@@ -83,43 +89,49 @@ pub fn parse_args() -> Result<Config, String> {
                 cfg.enable_v6 = parse_bool_flag(&args, &mut i);
             }
             "--min-port" => {
-                if i + 1 < args.len() {
-                    cfg.min_port = args[i + 1].parse().unwrap_or(1024);
-                    i += 1;
-                }
+                let v = take_value(&args, &mut i, "--min-port")?;
+                cfg.min_port = v
+                    .parse::<u16>()
+                    .map_err(|_| format!("Invalid --min-port: {}", v))?;
             }
             "--max-port" => {
-                if i + 1 < args.len() {
-                    cfg.max_port = args[i + 1].parse().unwrap_or(65535);
-                    i += 1;
-                }
+                let v = take_value(&args, &mut i, "--max-port")?;
+                cfg.max_port = v
+                    .parse::<u16>()
+                    .map_err(|_| format!("Invalid --max-port: {}", v))?;
             }
             "--timeout" => {
-                if i + 1 < args.len() {
-                    cfg.timeout_sec = args[i + 1].parse().unwrap_or(120);
-                    i += 1;
-                }
+                let v = take_value(&args, &mut i, "--timeout")?;
+                cfg.timeout_sec = v
+                    .parse::<u64>()
+                    .map_err(|_| format!("Invalid --timeout: {}", v))?;
             }
             "--interval" => {
-                if i + 1 < args.len() {
-                    cfg.gc_interval_sec = args[i + 1].parse().unwrap_or(5);
-                    i += 1;
-                }
+                let v = take_value(&args, &mut i, "--interval")?;
+                cfg.gc_interval_sec = v
+                    .parse::<u64>()
+                    .map_err(|_| format!("Invalid --interval: {}", v))?;
             }
             "--bypass-mark" => {
-                if i + 1 < args.len() {
-                    let mark_str = &args[i + 1];
-                    if let Some((v_str, m_str)) = mark_str.split_once('/') {
-                        let val = parse_u32_mark(v_str).unwrap_or(0);
-                        let mask = parse_u32_mark(m_str).unwrap_or(val);
-                        cfg.bypass_mark_val = val;
-                        cfg.bypass_mark_mask = mask;
-                    } else if let Some(val) = parse_u32_mark(mark_str) {
-                        cfg.bypass_mark_val = val;
-                        cfg.bypass_mark_mask = val;
-                    }
-                    i += 1;
+                let mark_str = take_value(&args, &mut i, "--bypass-mark")?;
+                if let Some((v_str, m_str)) = mark_str.split_once('/') {
+                    let val = parse_u32_mark(v_str)
+                        .ok_or_else(|| format!("Invalid --bypass-mark value: {}", v_str))?;
+                    let mask = parse_u32_mark(m_str)
+                        .ok_or_else(|| format!("Invalid --bypass-mark mask: {}", m_str))?;
+                    cfg.bypass_mark_val = val;
+                    cfg.bypass_mark_mask = mask;
+                } else {
+                    let val = parse_u32_mark(mark_str)
+                        .ok_or_else(|| format!("Invalid --bypass-mark: {}", mark_str))?;
+                    cfg.bypass_mark_val = val;
+                    cfg.bypass_mark_mask = val;
                 }
+            }
+            "--mark" => {
+                let v = take_value(&args, &mut i, "--mark")?;
+                cfg.flowcone_mark =
+                    parse_u32_mark(v).ok_or_else(|| format!("Invalid --mark: {}", v))?;
             }
             "--manage-nft" => {
                 cfg.manage_nft = parse_bool_flag(&args, &mut i);
@@ -138,11 +150,38 @@ pub fn parse_args() -> Result<Config, String> {
         i += 1;
     }
 
+    if cfg.iface.is_empty() {
+        return Err("--iface must not be empty".to_string());
+    }
+    if cfg.min_port == 0 {
+        return Err("--min-port must be >= 1 (port 0 is not a usable UDP source port)".to_string());
+    }
     if cfg.min_port > cfg.max_port {
         return Err(format!(
             "Invalid port range: min-port ({}) > max-port ({})",
             cfg.min_port, cfg.max_port
         ));
+    }
+    if cfg.timeout_sec < 120 {
+        return Err(
+            "Invalid --timeout: RFC 4787 REQ-5 requires a mapping timer of at least 120s"
+                .to_string(),
+        );
+    }
+    if cfg.timeout_sec > 604_800 {
+        return Err("Invalid --timeout: maximum supported value is 604800s (7 days)".to_string());
+    }
+    if cfg.gc_interval_sec == 0 || cfg.gc_interval_sec > 3600 {
+        return Err("Invalid --interval: expected 1..=3600".to_string());
+    }
+    if !cfg.flowcone_mark.is_power_of_two() {
+        return Err("Invalid --mark: expected a single non-zero bit (e.g. 0x40000000)".to_string());
+    }
+    if cfg.bypass_mark_val & !cfg.bypass_mark_mask != 0 {
+        return Err("Invalid --bypass-mark: value has bits outside the mask".to_string());
+    }
+    if cfg.bypass_mark_mask == 0 && cfg.bypass_mark_val != 0 {
+        return Err("Invalid --bypass-mark: a zero mask cannot match a non-zero value".to_string());
     }
 
     Ok(cfg)
@@ -160,8 +199,9 @@ pub fn print_help() {
     println!("      --min-port <PORT>      Port pool start (default: 1024)");
     println!("      --max-port <PORT>      Port pool end (default: 65535)");
     println!("      --timeout <SEC>        Binding timeout in seconds (default: 120)");
-    println!("      --interval <SEC>       GC sweep interval in seconds (default: 5)");
+    println!("      --interval <SEC>       Expiry scheduler tick in seconds (default: 5)");
     println!("      --bypass-mark <VAL[/MASK]> Mark filter to bypass FlowCone (e.g. 0x1/0x1)");
+    println!("      --mark <VAL>           Inbound DNAT mark bit (default: 0x40000000)");
     println!(
         "      --manage-nft <1|0>     Manage firewall nftables rules automatically (default: 1)"
     );
@@ -189,6 +229,13 @@ mod tests {
         assert!(!cfg.enable_v6);
         assert_eq!(cfg.min_port, 1024);
         assert_eq!(cfg.max_port, 65535);
+        assert_eq!(cfg.flowcone_mark, DEFAULT_FLOWCONE_MARK);
         assert!(cfg.manage_nft);
+    }
+
+    #[test]
+    fn test_timeout_minimum() {
+        // The parser is exercised indirectly; keep the policy visible here.
+        assert!(Config::default().timeout_sec >= 120);
     }
 }

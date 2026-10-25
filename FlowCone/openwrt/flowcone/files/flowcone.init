@@ -1,7 +1,9 @@
 #!/bin/sh /etc/rc.common
 
 USE_PROCD=1
-START=95
+# Start after honk/dae/daed so FlowCone TCX links are attached last.
+# If a proxy is restarted later, restart FlowCone too: link order is fixed at attach time.
+START=99
 STOP=10
 
 PROG=/usr/bin/flowcone
@@ -31,6 +33,9 @@ start_service() {
 		if [ -z "$interface" ] || [ "$interface" = "auto" ]; then
 			local wan_iface
 			network_find_wan wan_iface 2>/dev/null
+			if [ -z "$wan_iface" ]; then
+				network_find_wan6 wan_iface 2>/dev/null
+			fi
 			logical="$wan_iface"
 			[ -n "$wan_iface" ] && network_get_device dev "$wan_iface"
 		else
@@ -40,6 +45,9 @@ start_service() {
 	fi
 	if [ -z "$dev" ] || [ "$dev" = "auto" ]; then
 		dev=$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')
+	fi
+	if [ -z "$dev" ]; then
+		dev=$(ip -6 route show default 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n1)
 	fi
 	if [ -z "$dev" ]; then
 		# "wan" is a netifd logical name and never exists in /sys/class/net;
@@ -104,8 +112,8 @@ service_triggers() {
 	fi
 
 	[ -z "$wan_iface" ] && wan_iface="wan"
-	procd_add_interface_trigger "interface.*" "$wan_iface" /etc/init.d/flowcone restart
+	procd_add_interface_trigger "interface.*" "$wan_iface" /etc/init.d/flowcone reload
 	if [ -n "$wan6_iface" ] && [ "$wan6_iface" != "$wan_iface" ]; then
-		procd_add_interface_trigger "interface.*" "$wan6_iface" /etc/init.d/flowcone restart
+		procd_add_interface_trigger "interface.*" "$wan6_iface" /etc/init.d/flowcone reload
 	fi
 }

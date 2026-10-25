@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Copyright (C) 2026 QiuSimons <https://github.com/QiuSimons>
 
@@ -33,7 +33,7 @@ define Package/flowcone
   TITLE:=RFC 4787 Full-Cone NAT using eBPF and TCX
   URL:=https://github.com/QiuSimons/FlowCone
   DEPENDS:=$(FLOWCONE_RUST_ARCH_DEPENDS) \
-    +kmod-sched-core +kmod-sched-bpf +vmlinux-btf
+    +nftables +kmod-sched-core +kmod-sched-bpf +vmlinux-btf
 endef
 
 define Package/flowcone/description
@@ -60,6 +60,14 @@ define Package/flowcone/install
 
 	$(INSTALL_DIR) $(1)/etc/init.d/
 	$(INSTALL_BIN) $(CURDIR)/files/flowcone.init $(1)/etc/init.d/flowcone
+endef
+
+define Package/flowcone/postrm
+#!/bin/sh
+rm -f /usr/share/nftables.d/chain-pre/srcnat/10-flowcone.nft
+rm -f /usr/share/nftables.d/chain-pre/forward/10-flowcone.nft
+rm -f /etc/nftables.d/flowcone.nft
+exit 0
 endef
 
 $(eval $(call RustBinPackage,flowcone))

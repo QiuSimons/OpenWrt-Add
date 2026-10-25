@@ -70,8 +70,8 @@ msgstr "结束端口"
 msgid "Timeout (seconds)"
 msgstr "超时时间 (秒)"
 
-msgid "GC Interval (seconds)"
-msgstr "清理周期 (秒)"
+msgid "Expiry Scheduler Tick (seconds)"
+msgstr "过期调度器周期 (秒)"
 
 msgid "Firewall (fw4) Integration"
 msgstr "防火墙 (fw4) 集成"
@@ -84,3 +84,9 @@ msgstr "豁免 fwmark"
 
 msgid "Optional fwmark for custom policy routing."
 msgstr "可选的策略路由自定义豁免 fwmark 标记。"
+
+msgid "Timeout must be between 120 and 604800 seconds (RFC 4787 REQ-5)."
+msgstr "超时时间必须在 120 到 604800 秒之间（RFC 4787 REQ-5）。"
+
+msgid "Interval must be between 1 and 3600 seconds."
+msgstr "间隔必须在 1 到 3600 秒之间。"

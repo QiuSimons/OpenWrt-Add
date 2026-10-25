@@ -194,6 +194,18 @@ pub fn get_iface_addrs(ifindex: u32) -> Result<IfaceAddrs, NetlinkError> {
 
 /// Detect L2 header length for interface.
 /// Returns 14 for Ethernet (ARPHRD_ETHER = 1), 0 for PPP (512), NONE (65534), RAWIP (519), etc.
+fn l2_len_for_arp_type(dev_type: u16) -> u32 {
+    match dev_type {
+        // ARPHRD_ETHER
+        1 => 14,
+        // ARPHRD_PPP: TC sees the bare IP packet on pppoe-wan/ppp0; the PPP
+        // protocol field is not part of the skb at the TCX hook.
+        512 => 0,
+        // ARPHRD_NONE / RAWIP / TUN / WireGuard / GRE / SIT: bare IP.
+        _ => 0,
+    }
+}
+
 pub fn get_iface_l2_len(ifname: &str) -> u32 {
     let type_path = format!("/sys/class/net/{}/type", ifname);
     let Ok(content) = std::fs::read_to_string(type_path) else {
@@ -202,7 +214,7 @@ pub fn get_iface_l2_len(ifname: &str) -> u32 {
     let Ok(dev_type) = content.trim().parse::<u16>() else {
         return 14;
     };
-    if dev_type == 1 { 14 } else { 0 }
+    l2_len_for_arp_type(dev_type)
 }
 
 /// rtnetlink multicast groups: link state and IPv4/IPv6 address changes.
@@ -327,6 +339,14 @@ mod tests {
         let picked = pick_global_v4(&addrs).expect("an IPv4 address");
         assert_eq!(picked, [10, 0, 0, 0]);
         assert_eq!(pick_global_v4(&[addr(2, 10, 0, 0x20)]), None);
+    }
+
+    #[test]
+    fn test_l2_len_for_arp_type() {
+        assert_eq!(super::l2_len_for_arp_type(1), 14); // ARPHRD_ETHER
+        assert_eq!(super::l2_len_for_arp_type(512), 0); // ARPHRD_PPP / pppoe-wan TC data is bare IP
+        assert_eq!(super::l2_len_for_arp_type(772), 0); // ARPHRD_LOOPBACK
+        assert_eq!(super::l2_len_for_arp_type(65534), 0); // ARPHRD_NONE
     }
 
     #[test]

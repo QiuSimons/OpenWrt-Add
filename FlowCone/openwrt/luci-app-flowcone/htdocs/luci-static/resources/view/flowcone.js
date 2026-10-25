@@ -67,7 +67,7 @@ return view.extend({
 					var btn = ev.target;
 					btn.disabled = true;
 					btn.innerText = _('Reloading...');
-					callFlowconeAction('restart').then(function() {
+					callFlowconeAction('reload').then(function() {
 						btn.disabled = false;
 						btn.innerText = _('Reload Service');
 						ui.addNotification(null, E('p', _('FlowCone service reloaded successfully.')), 'info');
@@ -146,12 +146,24 @@ return view.extend({
 		o.datatype = 'uinteger';
 		o.placeholder = '120';
 		o.default = '120';
+		o.validate = function(section_id, value) {
+			var v = +value;
+			if (!(v >= 120 && v <= 604800))
+				return _('Timeout must be between 120 and 604800 seconds (RFC 4787 REQ-5).');
+			return true;
+		};
 		o.depends('_advanced', '1');
 
-		o = s.option(form.Value, 'interval', _('GC Interval (seconds)'));
+		o = s.option(form.Value, 'interval', _('Expiry Scheduler Tick (seconds)'));
 		o.datatype = 'uinteger';
 		o.placeholder = '5';
 		o.default = '5';
+		o.validate = function(section_id, value) {
+			var v = +value;
+			if (!(v >= 1 && v <= 3600))
+				return _('Interval must be between 1 and 3600 seconds.');
+			return true;
+		};
 		o.depends('_advanced', '1');
 
 		o = s.option(form.Flag, 'manage_nft', _('Firewall (fw4) Integration'),

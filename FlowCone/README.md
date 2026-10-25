@@ -17,7 +17,9 @@ FlowCone 运行在网络接口的 TCX（Ingress / Egress）钩子上，实现符
 - **RFC 4787 规范 (UDP)**：
   - **EIM (Endpoint-Independent Mapping)**：同一内网地址与端口在有效期内映射到固定的公网端口。
   - **EIF (Endpoint-Independent Filtering)**：外部主机向已建立映射的公网端口发送报文均可穿透转发至内网主机。
-  - **端口保持与奇偶性保持**：基于 BPF Array Bitmap 的端口分配算法，优先复用原始内网端口并保持端口奇偶性。
+  - **端口保持与奇偶性保持**：空闲端口队列 + 奇偶性队列，优先复用原始内网端口；端口唯一性由 BPF_NOEXIST 映射插入原子保证，无位图扫描、无用户态 GC。
+- **L2 自适应**：Ethernet、802.1Q/802.1ad VLAN、PPPoE session、PPP（含 1 字节协议压缩）和 RAWIP/TUN/WireGuard 均可解析。
+- **防火墙失效安全**：fw4 规则引用带 timeout 的 liveness set；守护进程崩溃/被 SIGKILL/禁用/卸载后 set 元素自动过期，fw4 masquerade/fullcone 接管，不会留下“eBPF 已停但 nft 仍豁免”的私网泄漏。
 - **TCX 挂载**：
   - 以 `LinkOrder::last()` 挂载于 TCX Ingress 和 Egress 链尾，不影响前序 BPF 过滤器及策略路由匹配。
   - 支持 `--bypass-mark` 配合 fwmark 规则放行特定流量。
@@ -32,7 +34,7 @@ FlowCone 运行在网络接口的 TCX（Ingress / Egress）钩子上，实现符
   - 通用 Linux 环境自动探测并注入系统现有的 `postrouting` (nat) 和 `forward` (filter) 链。
   - 退出时根据 rule handle 自动清理注入的防火墙规则。
 - **私网 IP 泄漏防护**：
-  - 出站时丢弃缺少传输层端口的私网分片报文，避免 RFC 1918 私网地址泄漏至公网。
+  - DHCP 客户端/中继、链路本地和广播/组播 UDP 不进入 FlowCone SNAT，交给系统防火墙处理。
 - **OpenWrt 支持**：
   - 提供 procd 托管服务、UCI 配置文件（`/etc/config/flowcone`）和 LuCI Web 管理界面（`luci-app-flowcone`）。
   - 支持外挂 BTF（如 `vmlinux-btf` 提供的 `/usr/lib/debug/boot/vmlinux`），可在未开启 `CONFIG_DEBUG_INFO_BTF=y` 的内核上运行。
@@ -138,9 +140,10 @@ Options:
       --enable-v6 <1|0>      Enable IPv6 Full-Cone NAT (auto-adaptive, default: 0)
       --min-port <PORT>      Port pool start (default: 1024)
       --max-port <PORT>      Port pool end (default: 65535)
-      --timeout <SEC>        Binding timeout in seconds (default: 120)
+      --timeout <SEC>        Binding timeout in seconds (default: 120, minimum 120)
       --interval <SEC>       GC sweep interval in seconds (default: 5)
       --bypass-mark <VAL[/MASK]> Mark filter to bypass FlowCone (e.g. 0x1/0x1)
+      --mark <VAL>           Inbound DNAT mark bit (default: 0x40000000)
       --manage-nft <1|0>     Manage firewall nftables rules automatically (default: 1)
   -v, --verbose              Verbose output
   -h, --help                 Show help
@@ -175,6 +178,21 @@ config flowcone 'config'
 ### Web 界面 (LuCI)
 
 安装 `luci-app-flowcone` 后，登录 OpenWrt Web 界面进入 **网络 -> FlowCone**，即可查看运行状态并修改参数。
+
+---
+
+## 实现边界与兼容性
+
+- UDP 数据面：FlowCone 负责 UDP EIM/EIF 和端口保持；TCP/ICMP 仍由系统 NAT/fw4 处理。standalone 表会为 TCP/ICMP 提供 masquerade 回退。
+- IPv4 分片：出站/入站分片通过独立 fragment target 做首片建映射、后续片查缓存；IPv4 大 UDP 已实测双向通过。
+- IPv6 分片：自建 veth 双向 3000B 已通过；主路由仍运行稳定 pre-frag6，尚未部署分片版本。
+- Hairpin：当前没有 LAN 侧 TC 入口，未实现 RFC 4787 REQ-9 的 hairpin。
+- IPv6 ULA NAT66：受控 veth、PPP 拓扑和主路由 PPPoE 均已验证 SNAT 到 WAN GUA + EIF 非请求回包（64B）；PPP TC 数据为裸 IP，l2_len=0，v6 inbound binding 使用显式写入。IPv6 分片已实现。
+- ICMP 错误：IPv4 Destination Unreachable/Time Exceeded/Parameter Problem 会翻译外层目的地址和嵌入 UDP 源，并重算外层 ICMP/内层 IP/UDP 校验和；IPv4 支持非空 UDP 载荷触发的可变长度错误。ICMPv6 错误翻译已在自建 veth lab 通过。
+- 软件 flow offload：forward accept 规则带 ct state new，并放在 fw4 flow add @ft 之后；已建立流继续走 flowtable，不阻断软件 offload。硬件 flow offload 仍会绕过 TC，必须关闭。
+- honk / daed 等 TC eBPF 透明代理：FlowCone 保持 TCX LinkOrder::last，只 OR 自己的 mark 位，不清除其他程序的 mark；DNAT mark 位可通过 --mark 配置以避免冲突。代理流量可用 --bypass-mark 让出，nft 豁免规则也会排除该 mark。OpenWrt init 的 START 从 95 调到 99，确保 honk(96)/dae(96)/daed(99) 先挂载、FlowCone 后挂载。运行期每 30 秒用进程内 query_tcx 检查一次；只有发现 FlowCone 不再是 TCX 尾部时才切换。切换使用两个 56 字节级的 tail-call dispatcher（A/B），它们指向同一份 FlowCone 主程序：先把未激活的 dispatcher 挂到链尾，再摘旧 dispatcher；主程序幂等，因此切换期间无 WAN 空窗、无双 NAT。检查不 fork tc/bpftool；正常场景不产生链路抖动。若之后单独重启代理，最多 30 秒后 FlowCone 会重新挂到最后；无法阻止其他程序在任意时刻再抢 last。
+- fw4 规则生命周期：规则引用 /etc/nftables.d/flowcone.nft 中的 timeout set；chain-pre 只保存规则，不保存活跃状态。fw4 reload 后由 SIGHUP/周期刷新重新填充 set，最坏 15 秒内回退到系统 masquerade。
+- generic 非 fw4 路径：仍使用内联前缀规则，liveness 保障只覆盖 fw4 与 standalone 表；通用 Linux 建议使用 fw4/nftables。
 
 ---
 

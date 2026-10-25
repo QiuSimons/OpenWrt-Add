@@ -70,7 +70,7 @@ msgstr ""
 msgid "Timeout (seconds)"
 msgstr ""
 
-msgid "GC Interval (seconds)"
+msgid "Expiry Scheduler Tick (seconds)"
 msgstr ""
 
 msgid "Firewall (fw4) Integration"
@@ -83,4 +83,10 @@ msgid "Bypass Fwmark"
 msgstr ""
 
 msgid "Optional fwmark for custom policy routing."
+msgstr ""
+
+msgid "Timeout must be between 120 and 604800 seconds (RFC 4787 REQ-5)."
+msgstr ""
+
+msgid "Interval must be between 1 and 3600 seconds."
 msgstr ""
