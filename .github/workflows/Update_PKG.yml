@@ -33,7 +33,6 @@ jobs:
           sed -i 's/\r$//' ./OpenAppFilter/open-app-filter/src/appfilter_ubus.c
           patch -l -p0 < patches/OpenAppFilter-disable-auto-load-engine.patch
           git clone --depth 1 https://github.com/sbwml/luci-app-mosdns
-          git clone --depth 1 https://github.com/sbwml/packages_new_nat6
           git clone --depth 1 https://github.com/sbwml/openwrt_helloworld
           wget https://github.com/kongfl888/openwrt-dns2socks/raw/refs/heads/master/Makefile -O ./openwrt_helloworld/dns2socks/Makefile
           rm -rf ./openwrt_helloworld/{luci-app-ssr-plus,luci-app-passwall,simple-obfs,lua-neturl,sing-box,luci-app-mihomo,mihomo,luci-app-nikki,nikki,luci-app-homeproxy,luci-app-openclash,luci-app-daed,daed,luci-app-dae,dae,v2ray-geodata}
