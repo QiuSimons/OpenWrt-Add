@@ -18,7 +18,6 @@ set_status() {
     log "STATUS -> $1"
 }
 
-mkdir -p /tmp
 : > "$LOG_FILE"
 
 if [ -z "$TARGET_DIR" ] || [ -z "$DOWNLOAD_URL" ]; then
@@ -28,7 +27,6 @@ if [ -z "$TARGET_DIR" ] || [ -z "$DOWNLOAD_URL" ]; then
 fi
 
 set_status "DOWNLOADING"
-
 log "Deploying dashboard to: $TARGET_DIR"
 log "Download URL: $DOWNLOAD_URL"
 
@@ -37,9 +35,9 @@ download_file() {
     if command -v curl >/dev/null 2>&1; then
         curl -s -S -k -L -f --connect-timeout 15 --max-time 180 -o "$output" "$url" >> "$LOG_FILE" 2>&1
     elif command -v wget >/dev/null 2>&1; then
-        wget --no-check-certificate -q -T 15 -t 3 -O "$output" "$url" >> "$LOG_FILE" 2>&1
+        wget --no-check-certificate -T 15 -t 3 -O "$output" "$url" >> "$LOG_FILE" 2>&1
     elif command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch --no-check-certificate -q --timeout 15 -O "$output" "$url" >> "$LOG_FILE" 2>&1
+        uclient-fetch --no-check-certificate --timeout 15 -O "$output" "$url" >> "$LOG_FILE" 2>&1
     else
         log "Error: No download tool found (curl, wget, or uclient-fetch)!"
         return 1
@@ -57,14 +55,14 @@ fetch_text() {
     fi
 }
 
+# Resolve latest release for Doona repository URLs (non-archive links)
 case "$DOWNLOAD_URL" in
-    *github.com/Zakkaus/doona*)
+    *github.com/Zakkaus/doona|*github.com/Zakkaus/doona/)
         PREFIX="${DOWNLOAD_URL%%https://github.com/*}"
         log "Checking latest release..."
 
         RESOLVED_URL=""
-        MAX_RETRIES=5
-        RETRY_DELAY=2
+        MAX_RETRIES=3
         attempt=1
 
         while [ "$attempt" -le "$MAX_RETRIES" ]; do
@@ -90,8 +88,8 @@ case "$DOWNLOAD_URL" in
                 break
             fi
 
-            log "Failed to fetch latest release tag (attempt $attempt/$MAX_RETRIES). Retrying in ${RETRY_DELAY}s..."
-            sleep "$RETRY_DELAY"
+            log "Failed to fetch latest tag (attempt $attempt/$MAX_RETRIES). Retrying in 2s..."
+            sleep 2
             attempt=$((attempt + 1))
         done
 
@@ -101,7 +99,6 @@ case "$DOWNLOAD_URL" in
         else
             log "Error: Failed to obtain latest release version after $MAX_RETRIES attempts."
             set_status "FAILED"
-            rm -rf "$TMP_DIR"
             exit 1
         fi
         ;;
@@ -110,38 +107,22 @@ esac
 normalize_target_dir() {
     case "$TARGET_DIR" in
         *..*) return 1 ;;
+        /etc/honk/*) ;;
+        *) return 1 ;;
     esac
 
     TARGET_DIR="${TARGET_DIR%/}"
-
-    local parent base canon_parent
-    parent="${TARGET_DIR%/*}"
-    base="${TARGET_DIR##*/}"
-
+    local base="${TARGET_DIR##*/}"
     case "$base" in
         ''|.|..) return 1 ;;
     esac
 
-    canon_parent="$(cd "$parent" 2>/dev/null && pwd -P)" || return 1
+    mkdir -p /etc/honk 2>/dev/null || true
+    local canon_honk
+    canon_honk="$(cd /etc/honk 2>/dev/null && pwd -P)" || return 1
+    TARGET_DIR="$canon_honk/$base"
 
-    case "$canon_parent" in
-        /etc/honk) ;;
-        *) return 1 ;;
-    esac
-
-    local target resolved
-    target="$canon_parent/$base"
-
-    if [ -L "$target" ]; then
-        return 1
-    fi
-
-    if [ -e "$target" ]; then
-        resolved="$(cd "$target" 2>/dev/null && pwd -P)" || return 1
-        [ "$resolved" = "$target" ] || return 1
-    fi
-
-    TARGET_DIR="$target"
+    [ -L "$TARGET_DIR" ] && return 1
     return 0
 }
 
@@ -152,31 +133,12 @@ if ! normalize_target_dir; then
 fi
 
 log "Downloading package..."
-
-rm -rf "$TMP_DIR"
 mkdir -p "$TMP_DIR"
 ARCHIVE_FILE="$TMP_DIR/package.tmp"
 
 if ! download_file "$DOWNLOAD_URL" "$ARCHIVE_FILE" || [ ! -s "$ARCHIVE_FILE" ]; then
-    ALT_URL=""
-    case "$DOWNLOAD_URL" in
-        *doona-v*)
-            ALT_URL=$(echo "$DOWNLOAD_URL" | sed 's/doona-v/doona-/')
-            ;;
-        *doona-[0-9]*)
-            ALT_URL=$(echo "$DOWNLOAD_URL" | sed 's/doona-/doona-v/')
-            ;;
-    esac
-    if [ -n "$ALT_URL" ] && [ "$ALT_URL" != "$DOWNLOAD_URL" ]; then
-        log "Retrying with alternative naming format: $ALT_URL"
-        download_file "$ALT_URL" "$ARCHIVE_FILE" || true
-    fi
-fi
-
-if [ ! -s "$ARCHIVE_FILE" ]; then
     log "Error: Download failed or file is empty."
     set_status "FAILED"
-    rm -rf "$TMP_DIR"
     exit 1
 fi
 
@@ -189,57 +151,49 @@ if case "$DOWNLOAD_URL" in *.tar.gz|*.tgz) true ;; *) false ;; esac; then
     if ! command -v tar >/dev/null 2>&1; then
         log "Error: 'tar' command not found!"
         set_status "FAILED"
-        rm -rf "$TMP_DIR"
         exit 1
     fi
     if ! tar -xzf "$ARCHIVE_FILE" -C "$EXTRACT_DIR" >> "$LOG_FILE" 2>&1; then
         log "Error: Failed to extract tar.gz archive."
         set_status "FAILED"
-        rm -rf "$TMP_DIR"
         exit 1
     fi
 else
     if ! command -v unzip >/dev/null 2>&1; then
         log "Error: 'unzip' command not found! Please run 'opkg update && opkg install unzip'."
         set_status "FAILED"
-        rm -rf "$TMP_DIR"
         exit 1
     fi
     if ! unzip -o -q "$ARCHIVE_FILE" -d "$EXTRACT_DIR" >> "$LOG_FILE" 2>&1; then
         log "Error: Failed to unzip archive."
         set_status "FAILED"
-        rm -rf "$TMP_DIR"
         exit 1
     fi
 fi
 
 DEPLOY_SRC="$EXTRACT_DIR"
-if [ ! -f "$DEPLOY_SRC/index.html" ] && [ -f "$EXTRACT_DIR/dist/index.html" ]; then
-    DEPLOY_SRC="$EXTRACT_DIR/dist"
+if [ ! -f "$DEPLOY_SRC/index.html" ]; then
+    DEPLOY_SRC="$(find "$EXTRACT_DIR" -maxdepth 3 -name "index.html" -exec dirname {} + 2>/dev/null | head -n 1)"
 fi
 
-if [ ! -f "$DEPLOY_SRC/index.html" ]; then
+if [ -z "$DEPLOY_SRC" ] || [ ! -f "$DEPLOY_SRC/index.html" ]; then
     log "Error: index.html not found in extracted package."
     set_status "FAILED"
-    rm -rf "$TMP_DIR"
     exit 1
 fi
 
 log "Deploying files to $TARGET_DIR..."
 mkdir -p "$TARGET_DIR"
-rm -rf "${TARGET_DIR:?}"/* "${TARGET_DIR:?}"/.[!.]* 2>/dev/null || true
-cp -rf "$DEPLOY_SRC/"* "$TARGET_DIR/"
-rm -rf "$TARGET_DIR"/*.md "$TARGET_DIR"/LICENSE* "$TARGET_DIR"/NOTICE "$TARGET_DIR"/LICENSES 2>/dev/null || true
+rm -rf "$TARGET_DIR"/* "$TARGET_DIR"/.[!.]* 2>/dev/null || true
+cp -rf "$DEPLOY_SRC/." "$TARGET_DIR/"
 chmod -R 755 "$TARGET_DIR"
 
 if [ -f "$TARGET_DIR/index.html" ]; then
     log "Installed successfully."
     set_status "SUCCESS"
-    rm -rf "$TMP_DIR"
     exit 0
 else
     log "Error: Failed to deploy files to $TARGET_DIR."
     set_status "FAILED"
-    rm -rf "$TMP_DIR"
     exit 1
 fi

@@ -7,11 +7,11 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-honk
 PKG_VERSION:=1.1.4
-PKG_RELEASE:=8
+PKG_RELEASE:=10
 
 LUCI_TITLE:=LuCI support for honk
 LUCI_PKGARCH:=all
-LUCI_DEPENDS:=+honk +luci-base +rpcd-mod-ucode
+LUCI_DEPENDS:=+honk +luci-base +rpcd-mod-ucode +unzip
 
 include $(TOPDIR)/feeds/luci/luci.mk
 
