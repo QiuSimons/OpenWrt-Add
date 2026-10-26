@@ -525,24 +525,29 @@ impl SessionManager {
 
     fn drain_events(&mut self, now: u64, timeout_ns: u64) -> usize {
         let mut drained = 0;
-        while drained < GC_QUEUE_DRAIN_MAX {
-            match self.events4.pop(0) {
-                Ok(ev) => {
-                    self.schedule4(now.saturating_add(timeout_ns), ev.key, ev.port, 0);
-                    drained += 1;
+        if self.pool_enable_v4 {
+            while drained < GC_QUEUE_DRAIN_MAX {
+                match self.events4.pop(0) {
+                    Ok(ev) => {
+                        self.schedule4(now.saturating_add(timeout_ns), ev.key, ev.port, 0);
+                        drained += 1;
+                    }
+                    Err(MapError::ElementNotFound) => break,
+                    Err(_) => break,
                 }
-                Err(MapError::ElementNotFound) => break,
-                Err(_) => break,
             }
         }
-        while drained < GC_QUEUE_DRAIN_MAX * 2 {
-            match self.events6.pop(0) {
-                Ok(ev) => {
-                    self.schedule6(now.saturating_add(timeout_ns), ev.key, ev.port, 0);
-                    drained += 1;
+        if self.pool_enable_v6 {
+            let limit = drained + GC_QUEUE_DRAIN_MAX;
+            while drained < limit {
+                match self.events6.pop(0) {
+                    Ok(ev) => {
+                        self.schedule6(now.saturating_add(timeout_ns), ev.key, ev.port, 0);
+                        drained += 1;
+                    }
+                    Err(MapError::ElementNotFound) => break,
+                    Err(_) => break,
                 }
-                Err(MapError::ElementNotFound) => break,
-                Err(_) => break,
             }
         }
         drained
@@ -652,38 +657,42 @@ impl SessionManager {
     fn rebuild_heaps(&mut self, timeout_ns: u64) {
         self.heap4.clear();
         self.heap6.clear();
-        let mut pending4: Vec<(u64, EndpointKey4, u16)> = Vec::new();
-        for (key, val) in self.ob_map4.iter().flatten() {
-            let port = u16::from_be(val.port_be());
-            let ib_last = self
-                .ib_map4
-                .get(&port, 0)
-                .ok()
-                .filter(|iv| iv.matches_key(&key))
-                .map(|iv| iv.last_seen())
-                .unwrap_or(0);
-            let deadline = val.last_seen().max(ib_last).saturating_add(timeout_ns);
-            pending4.push((deadline, key, port));
-        }
-        for (deadline, key, port) in pending4 {
-            self.schedule4(deadline, key, port, 0);
+        if self.pool_enable_v4 {
+            let mut pending4: Vec<(u64, EndpointKey4, u16)> = Vec::new();
+            for (key, val) in self.ob_map4.iter().flatten() {
+                let port = u16::from_be(val.port_be());
+                let ib_last = self
+                    .ib_map4
+                    .get(&port, 0)
+                    .ok()
+                    .filter(|iv| iv.matches_key(&key))
+                    .map(|iv| iv.last_seen())
+                    .unwrap_or(0);
+                let deadline = val.last_seen().max(ib_last).saturating_add(timeout_ns);
+                pending4.push((deadline, key, port));
+            }
+            for (deadline, key, port) in pending4 {
+                self.schedule4(deadline, key, port, 0);
+            }
         }
 
-        let mut pending6: Vec<(u64, EndpointKey6, u16)> = Vec::new();
-        for (key, val) in self.ob_map6.iter().flatten() {
-            let port = u16::from_be(val.port_be());
-            let ib_last = self
-                .ib_map6
-                .get(&port, 0)
-                .ok()
-                .filter(|iv| iv.matches_key(&key))
-                .map(|iv| iv.last_seen())
-                .unwrap_or(0);
-            let deadline = val.last_seen().max(ib_last).saturating_add(timeout_ns);
-            pending6.push((deadline, key, port));
-        }
-        for (deadline, key, port) in pending6 {
-            self.schedule6(deadline, key, port, 0);
+        if self.pool_enable_v6 {
+            let mut pending6: Vec<(u64, EndpointKey6, u16)> = Vec::new();
+            for (key, val) in self.ob_map6.iter().flatten() {
+                let port = u16::from_be(val.port_be());
+                let ib_last = self
+                    .ib_map6
+                    .get(&port, 0)
+                    .ok()
+                    .filter(|iv| iv.matches_key(&key))
+                    .map(|iv| iv.last_seen())
+                    .unwrap_or(0);
+                let deadline = val.last_seen().max(ib_last).saturating_add(timeout_ns);
+                pending6.push((deadline, key, port));
+            }
+            for (deadline, key, port) in pending6 {
+                self.schedule6(deadline, key, port, 0);
+            }
         }
     }
 
@@ -699,37 +708,41 @@ impl SessionManager {
             self.lost_notifications = false;
             self.heap4.clear();
             self.heap6.clear();
-            self.freed_ports.clear();
-            swept4 += sweep_family(
-                &mut self.ob_map4,
-                &mut self.ib_map4,
-                &mut self.expired_v4,
-                &mut self.orphan_ports,
-                &mut self.freed_ports,
-                now_ns,
-                timeout_ns,
-            );
-            self.freed_ports.sort_unstable();
-            self.freed_ports.dedup();
-            let freed = core::mem::take(&mut self.freed_ports);
-            for p in freed {
-                self.release_port4(p);
+            if self.pool_enable_v4 {
+                self.freed_ports.clear();
+                swept4 += sweep_family(
+                    &mut self.ob_map4,
+                    &mut self.ib_map4,
+                    &mut self.expired_v4,
+                    &mut self.orphan_ports,
+                    &mut self.freed_ports,
+                    now_ns,
+                    timeout_ns,
+                );
+                self.freed_ports.sort_unstable();
+                self.freed_ports.dedup();
+                let freed = core::mem::take(&mut self.freed_ports);
+                for p in freed {
+                    self.release_port4(p);
+                }
             }
-            self.freed_ports.clear();
-            swept6 += sweep_family(
-                &mut self.ob_map6,
-                &mut self.ib_map6,
-                &mut self.expired_v6,
-                &mut self.orphan_ports,
-                &mut self.freed_ports,
-                now_ns,
-                timeout_ns,
-            );
-            self.freed_ports.sort_unstable();
-            self.freed_ports.dedup();
-            let freed = core::mem::take(&mut self.freed_ports);
-            for p in freed {
-                self.release_port6(p);
+            if self.pool_enable_v6 {
+                self.freed_ports.clear();
+                swept6 += sweep_family(
+                    &mut self.ob_map6,
+                    &mut self.ib_map6,
+                    &mut self.expired_v6,
+                    &mut self.orphan_ports,
+                    &mut self.freed_ports,
+                    now_ns,
+                    timeout_ns,
+                );
+                self.freed_ports.sort_unstable();
+                self.freed_ports.dedup();
+                let freed = core::mem::take(&mut self.freed_ports);
+                for p in freed {
+                    self.release_port6(p);
+                }
             }
             self.rebuild_heaps(timeout_ns);
         }
