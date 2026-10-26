@@ -2,16 +2,19 @@
 	"luci-app-flowcone": {
 		"description": "Grant access to LuCI app flowcone",
 		"read": {
+			"file": {
+				"/etc/init.d/nat6": [ "stat" ]
+			},
 			"ubus": {
 				"luci.flowcone": [ "*" ]
 			},
-			"uci": [ "flowcone" ]
+			"uci": [ "flowcone", "firewall" ]
 		},
 		"write": {
 			"ubus": {
 				"luci.flowcone": [ "*" ]
 			},
-			"uci": [ "flowcone" ]
+			"uci": [ "flowcone", "firewall" ]
 		}
 	}
 }

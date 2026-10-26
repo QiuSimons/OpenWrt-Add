@@ -78,17 +78,18 @@ reload_service() {
 }
 
 service_triggers() {
-	procd_add_reload_trigger "flowcone" "firewall"
+	# UCI changes reach the daemon only through new command-line arguments,
+	# so a config change must restart it; firewall reloads only resync state.
+	procd_add_config_trigger "config.change" "flowcone" /etc/init.d/flowcone restart
+	procd_add_reload_trigger "firewall"
 
 	config_load flowcone
-	local interface enable_v6
-	config_get interface config interface ""
+	local enable_v6
 	config_get_bool enable_v6 config enable_v6 0
 
-	if [ -n "$interface" ] && [ "$interface" != "auto" ]; then
-		procd_add_reload_interface_trigger "$interface"
-	else
-		procd_add_reload_interface_trigger "wan"
-		[ "$enable_v6" -eq 1 ] && procd_add_reload_interface_trigger "wan6"
-	fi
+	# procd matches netifd logical interfaces, not the netdev name in the
+	# config, so arm the WAN triggers unconditionally; SIGHUP resyncs without
+	# dropping mappings and the daemon watches rtnetlink at runtime.
+	procd_add_reload_interface_trigger "wan"
+	[ "$enable_v6" -eq 1 ] && procd_add_reload_interface_trigger "wan6"
 }

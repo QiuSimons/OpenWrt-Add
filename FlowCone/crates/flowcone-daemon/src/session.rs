@@ -58,6 +58,8 @@ pub struct SessionManager {
     free_even6: Queue<MapData, u16>,
     free_odd6: Queue<MapData, u16>,
     port_flags: Array<MapData, u32>,
+    pool_enable_v4: bool,
+    pool_enable_v6: bool,
     min_port: u16,
     max_port: u16,
     freed_ports: Vec<u16>,
@@ -260,6 +262,8 @@ impl SessionManager {
             free_even6,
             free_odd6,
             port_flags,
+            pool_enable_v4: false,
+            pool_enable_v6: false,
             min_port: 0,
             max_port: 0,
             freed_ports: Vec::with_capacity(1024),
@@ -273,8 +277,15 @@ impl SessionManager {
     }
 
     pub fn configure_port_pool(&mut self, min_port: u16, max_port: u16) {
+        if min_port == 0 || min_port > max_port {
+            return;
+        }
         self.min_port = min_port;
         self.max_port = max_port;
+    }
+
+    fn pool_ready(&self) -> bool {
+        self.min_port != 0 && self.min_port <= self.max_port
     }
 
     fn drain_queue(q: &mut Queue<MapData, u16>) {
@@ -310,7 +321,7 @@ impl SessionManager {
     }
 
     fn init_family4(&mut self) {
-        if self.min_port == 0 || self.max_port == 0 {
+        if !self.pool_ready() {
             return;
         }
         Self::drain_queue(&mut self.free_even4);
@@ -335,7 +346,7 @@ impl SessionManager {
     }
 
     fn init_family6(&mut self) {
-        if self.min_port == 0 || self.max_port == 0 {
+        if !self.pool_ready() {
             return;
         }
         Self::drain_queue(&mut self.free_even6);
@@ -360,6 +371,8 @@ impl SessionManager {
     }
 
     pub fn init_port_pool(&mut self, enable_v4: bool, enable_v6: bool) {
+        self.pool_enable_v4 = enable_v4;
+        self.pool_enable_v6 = enable_v6;
         if enable_v4 {
             self.init_family4();
         }
@@ -399,6 +412,9 @@ impl SessionManager {
     }
 
     fn rebuild_family4(&mut self) {
+        if !self.pool_ready() {
+            return;
+        }
         Self::drain_queue(&mut self.free_even4);
         Self::drain_queue(&mut self.free_odd4);
         let mut p = self.min_port;
@@ -422,6 +438,9 @@ impl SessionManager {
     }
 
     fn rebuild_family6(&mut self) {
+        if !self.pool_ready() {
+            return;
+        }
         Self::drain_queue(&mut self.free_even6);
         Self::drain_queue(&mut self.free_odd6);
         let mut p = self.min_port;
@@ -447,8 +466,12 @@ impl SessionManager {
     fn rebuild_port_queues(&mut self) {
         if self.port_flags.get(&0, 0).unwrap_or(0) != 0 {
             let _ = self.port_flags.set(0, 0, 0);
-            self.rebuild_family4();
-            self.rebuild_family6();
+            if self.pool_enable_v4 {
+                self.rebuild_family4();
+            }
+            if self.pool_enable_v6 {
+                self.rebuild_family6();
+            }
         }
     }
 
@@ -635,6 +658,8 @@ impl SessionManager {
             let ib_last = self
                 .ib_map4
                 .get(&port, 0)
+                .ok()
+                .filter(|iv| iv.matches_key(&key))
                 .map(|iv| iv.last_seen())
                 .unwrap_or(0);
             let deadline = val.last_seen().max(ib_last).saturating_add(timeout_ns);
@@ -650,6 +675,8 @@ impl SessionManager {
             let ib_last = self
                 .ib_map6
                 .get(&port, 0)
+                .ok()
+                .filter(|iv| iv.matches_key(&key))
                 .map(|iv| iv.last_seen())
                 .unwrap_or(0);
             let deadline = val.last_seen().max(ib_last).saturating_add(timeout_ns);

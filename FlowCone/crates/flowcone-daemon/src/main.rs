@@ -453,8 +453,6 @@ struct AppliedState {
     ip6: [u8; 16],
     effective_v6: u32,
     v4_enabled: bool,
-    /// u32::MAX forces the first rule sync; then holds the IPv6 mode (0/1/2).
-    v6_mode: u32,
     v6_masq: bool,
     liveness: bool,
     ifindex: u32,
@@ -642,7 +640,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ip6: [0u8; 16],
             effective_v6: 0,
             v4_enabled: false,
-            v6_mode: u32::MAX,
             v6_masq: false,
             liveness: false,
             ifindex: start_ifindex,
@@ -779,8 +776,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 let active_v4 = ip_cfg.enable_v4 && resolved_ip4 != 0;
-                let shrinking = (applied.v4_enabled && !active_v4)
-                    || (applied.effective_v6 > effective_v6 && applied.effective_v6 != u32::MAX);
+                let shrinking =
+                    (applied.v4_enabled && !active_v4) || (applied.effective_v6 > effective_v6);
                 let mut stage_ok = true;
                 let mut rules_staged = false;
 
@@ -847,7 +844,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             );
                         if sync_ok {
                             applied.v4_enabled = active_v4;
-                            applied.v6_mode = effective_v6;
                             applied.effective_v6 = effective_v6;
                             applied.v6_masq = is_v6_masq;
                             applied.liveness = firewall::liveness_supported();
@@ -863,7 +859,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     } else {
                         applied.v4_enabled = active_v4;
-                        applied.v6_mode = effective_v6;
                         applied.effective_v6 = effective_v6;
                         applied.v6_masq = is_v6_masq;
                         applied.liveness = false;
@@ -929,7 +924,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if ip_cfg.manage_nft && applied.liveness {
                 let _ = firewall::refresh_liveness(
                     applied.v4_enabled,
-                    applied.v6_mode != 0,
+                    applied.effective_v6 != 0,
                     applied.v6_masq,
                     ip_cfg.verbose,
                 );
