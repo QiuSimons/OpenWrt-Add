@@ -25,11 +25,13 @@ def main():
         print('[WARN] no apk found in ' + a.src); return 0
     targets = set(ARM64) | {'x86_64'}
     for d in targets: os.makedirs(os.path.join(a.out,d), exist_ok=True)
-    unknown = []
+    assumed = 0
     for f in apks:
         n = os.path.basename(f); arch = detect_arch(n)
         if arch is None:
+            # 文件名不带架构（luci-*、arch=all 的包）时按架构无关分发
             arch = 'all'
+            assumed += 1
             print('  [assume-all] ' + n)
         if arch == 'all':
             for t in targets: shutil.copy2(f, os.path.join(a.out,t,n))
@@ -44,9 +46,7 @@ def main():
             os.makedirs(os.path.join(a.out,arch), exist_ok=True)
             shutil.copy2(f, os.path.join(a.out,arch,n))
             print('  [' + arch + '] ' + n)
-    if unknown:
-        print('[ERROR] cannot detect arch from filename: ' + ', '.join(unknown))
-        return 1
+    print('[INFO] %d apk(s) routed as arch-independent (filename carried no arch)' % assumed)
     return 0
 
 if __name__ == '__main__':
