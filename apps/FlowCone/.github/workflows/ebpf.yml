@@ -4,11 +4,10 @@ on:
   push:
     branches:
       - master
-    paths-ignore:
-      - 'crates/flowcone-daemon/ebpf/flowcone-ebpf.bin'
-      - '.github/workflows/build.yml'
-      - 'README.md'
-      - 'LICENSE'
+    paths:
+      - 'crates/flowcone-ebpf/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
   workflow_dispatch:
 
 permissions:

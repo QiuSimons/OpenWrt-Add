@@ -8,6 +8,14 @@ on:
         required: false
         default: '25'
         type: string
+  push:
+    branches:
+      - master
+    paths:
+      - 'openwrt/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
 
 permissions:
   contents: write

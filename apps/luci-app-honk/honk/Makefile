@@ -3,17 +3,17 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=honk
-PKG_VERSION:=0.1.0_beta2
+PKG_VERSION:=0.1.0_beta3
 PKG_RELEASE:=1
 
 # Raw upstream release tag. It keeps the dots in qualifiers (e.g. v0.0.1.beta.49)
 # because that is what the GitHub release asset name uses.
-HONK_RELEASE_TAG:=v0.1.0-beta.2
-HONK_ASSET_TAG:=v0.1.0-beta.2
+HONK_RELEASE_TAG:=v0.1.0-beta.3
+HONK_ASSET_TAG:=v0.1.0-beta.3
 
 # SHA256 of each release tarball, kept in sync by scripts/update_honk_version.sh.
-HONK_HASH_X86_64:=40ea1cfbf68525a30273675641efed869169732294fe024e4efcf66016f6f57b
-HONK_HASH_AARCH64:=bef60542db1d29fa87ad3b5300d0960a1bd173b7ba1121b423b27985a202eb2c
+HONK_HASH_X86_64:=c839b648a443abde8b9bbc8290ebc3c6cd6a5c3e579f391a79016304820354ff
+HONK_HASH_AARCH64:=216ace91ba157f909fca2ecf1f3b33015251b9481382609542fc6907dd521602
 
 PKG_LICENSE:=AGPL-3.0-only
 PKG_LICENSE_FILE:=LICENSE

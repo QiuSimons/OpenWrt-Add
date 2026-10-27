@@ -1,4 +1,4 @@
-Licence text shared by 19 packages (MIT)
+Licence text shared by 16 packages (MIT)
 ========================================================================
 @codemirror/autocomplete 6.20.3 (MIT) — LICENSE
     Copyright (C) 2018-2021 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
@@ -18,17 +18,11 @@ Licence text shared by 19 packages (MIT)
     Copyright (C) 2018 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
 @lezer/highlight 1.2.5 (MIT) — LICENSE
     Copyright (C) 2018 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
-@lezer/lr 1.4.10 (MIT) — LICENSE
-    Copyright (C) 2018 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
 @marijn/find-cluster-break 1.0.4 (MIT) — LICENSE
     Copyright (C) 2024 by Marijn Haverbeke <marijn@haverbeke.berlin>
-aria-hidden 1.2.6 (MIT) — LICENSE
-    Copyright (c) 2017 Anton Korzunov
 clsx 2.1.1 (MIT) — license
     Copyright (c) Luke Edwards <luke.edwards05@gmail.com> (lukeed.com)
 openapi-fetch 0.17.0 (MIT) — LICENSE
-    Copyright (c) 2023 Drew Powers
-openapi-typescript-helpers 0.1.0 (MIT) — LICENSE
     Copyright (c) 2023 Drew Powers
 react 19.3.0 (MIT) — LICENSE
     Copyright (c) Meta Platforms, Inc. and affiliates.
@@ -161,18 +155,12 @@ FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 
 
-Licence text shared by 8 packages (Apache-2.0)
+Licence text shared by 5 packages (Apache-2.0)
 ========================================================================
-@internationalized/date 3.12.4 (Apache-2.0) — LICENSE
-    Copyright 2019 Adobe
 @internationalized/number 3.6.8 (Apache-2.0) — LICENSE
     Copyright 2019 Adobe
 @internationalized/string 3.2.10 (Apache-2.0) — LICENSE
     Copyright 2019 Adobe
-@react-types/shared 3.36.1 (Apache-2.0) — LICENSE
-    Copyright 2019 Adobe
-@swc/helpers 0.5.23 (Apache-2.0) — LICENSE
-    Copyright 2024 SWC contributors.
 react-aria 3.52.1 (Apache-2.0) — LICENSE
     Copyright 2019 Adobe
 react-aria-components 1.21.1 (Apache-2.0) — LICENSE
@@ -655,21 +643,6 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-tslib 2.8.1 (0BSD) — LICENSE.txt
-========================================================================
-Copyright (c) Microsoft Corporation.
-
-Permission to use, copy, modify, and/or distribute this software for any
-purpose with or without fee is hereby granted.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-PERFORMANCE OF THIS SOFTWARE.
-
 vite 6.4.3 (MIT) — LICENSE.md
 ========================================================================
 Only helper code that Vite writes into the build ships: the module preload polyfill, the preload helper for dynamic imports and the CommonJS interop helper of @rollup/plugin-commonjs, which Vite bundles.
@@ -737,8 +710,3 @@ Repository: rollup/plugins
 > LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 > THE SOFTWARE.
-
-
-Packages without a licence file
-========================================================================
-client-only 0.0.1 (MIT)

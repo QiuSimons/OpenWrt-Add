@@ -1,0 +1,57 @@
+name: Update upstream
+
+on:
+  schedule:
+    - cron: '23 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Check upstream changes
+        id: upstream
+        run: |
+          set -euo pipefail
+
+          # 通过 git 协议直接获取上游 master 分支 commit SHA，避免 GitHub REST API 限流
+          latest_full=$(git ls-remote https://github.com/ptpt52/natflow.git refs/heads/master | awk '{print $1}')
+          if [ -z "$latest_full" ]; then
+            echo "Error: Failed to fetch upstream commit."
+            exit 1
+          fi
+
+          latest_commit="${latest_full:0:7}"
+          current_commit=$(grep '^PKG_REAL_VERSION:=' ./natflow/Makefile | cut -d= -f2 | tr -d '[:space:]')
+
+          echo "Current version: ${current_commit}"
+          echo "Upstream version: ${latest_commit}"
+
+          if [ "$current_commit" = "$latest_commit" ]; then
+            echo "Upstream is up to date, skipping."
+            echo "has_update=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "has_update=true" >> "$GITHUB_OUTPUT"
+          echo "commit=${latest_commit}" >> "$GITHUB_OUTPUT"
+
+          # 更新 Makefile 中的版本号
+          today=$(date +'%Y.%m.%d')
+          sed -i "s|^PKG_VERSION:=.*|PKG_VERSION:=${today}~${latest_commit}|" ./natflow/Makefile
+          sed -i "s|^PKG_REAL_VERSION:=.*|PKG_REAL_VERSION:=${latest_commit}|" ./natflow/Makefile
+
+      - name: Commit and push changes
+        if: steps.upstream.outputs.has_update == 'true'
+        run: |
+          git config --global user.name "SimonsQiu"
+          git config --global user.email "simonsqiu@foxmail.com"
+          git add ./natflow/Makefile
+          git commit -m "chore(natflow): update upstream to ${{ steps.upstream.outputs.commit }}"
+          git push origin master
