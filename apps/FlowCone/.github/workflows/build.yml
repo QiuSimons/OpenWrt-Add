@@ -111,11 +111,123 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Rust musl target & cross linker
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+
+          if [ "${{ matrix.arch }}" = "aarch64_generic" ]; then
+            sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+            rustup target add aarch64-unknown-linux-musl
+            echo "RUST_TARGET=aarch64-unknown-linux-musl" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          else
+            rustup target add x86_64-unknown-linux-musl
+            echo "RUST_TARGET=x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
+          fi
+
+      - name: Prebuild flowcone binary on host
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Building flowcone-daemon for target: $RUST_TARGET"
+          cargo build --release --locked -p flowcone-daemon --target "$RUST_TARGET"
+
+          mkdir -p openwrt/flowcone/files
+          cp "target/${RUST_TARGET}/release/flowcone" openwrt/flowcone/files/flowcone.bin
+          chmod +x openwrt/flowcone/files/flowcone.bin
+          cp LICENSE openwrt/flowcone/files/LICENSE
+
       - name: Prepare Makefile for SDK build
         shell: bash
         run: |
-          # Remove vmlinux-btf dependency for generic SDK container
-          sed -i 's/+vmlinux-btf//g' openwrt/flowcone/Makefile
+          set -euo pipefail
+          python3 - << 'PYEOF'
+          import re
+          import textwrap
+
+          with open('openwrt/flowcone/Makefile', 'r') as f:
+              orig = f.read()
+
+          v_m = re.search(r'^PKG_VERSION:=(.*)$', orig, re.M)
+          r_m = re.search(r'^PKG_RELEASE:=(.*)$', orig, re.M)
+          m_m = re.search(r'^PKG_MAINTAINER:=(.*)$', orig, re.M)
+
+          pkg_version = v_m.group(1).strip() if v_m else "0.1.0"
+          pkg_release = r_m.group(1).strip() if r_m else "1"
+          pkg_maintainer = m_m.group(1).strip() if m_m else "QiuSimons"
+
+          makefile = textwrap.dedent(f"""\
+          include $(TOPDIR)/rules.mk
+
+          PKG_NAME:=flowcone
+          PKG_VERSION:={pkg_version}
+          PKG_RELEASE:={pkg_release}
+
+          PKG_LICENSE:=GPL-3.0-or-later
+          PKG_LICENSE_FILES:=LICENSE
+          PKG_MAINTAINER:={pkg_maintainer}
+
+          include $(INCLUDE_DIR)/package.mk
+
+          FLOWCONE_RUST_ARCH_DEPENDS:=@(aarch64||arm||i386||i686||riscv64||x86_64)
+
+          define Package/flowcone
+            SECTION:=net
+            CATEGORY:=Network
+            SUBMENU:=Routing and Redirection
+            TITLE:=RFC 4787 Full-Cone NAT using eBPF and TCX
+            URL:=https://github.com/QiuSimons/FlowCone
+            DEPENDS:=$(FLOWCONE_RUST_ARCH_DEPENDS) \\
+              +nftables +kmod-sched-core +kmod-sched-bpf
+          endef
+
+          define Package/flowcone/description
+            Dual-stack RFC 4787 Full-Cone NAT for OpenWrt using eBPF and TCX.
+          endef
+
+          define Package/flowcone/conffiles
+          /etc/config/flowcone
+          endef
+
+          define Build/Prepare
+          \tmkdir -p $(PKG_BUILD_DIR)
+          \t$(CP) $(CURDIR)/files/LICENSE $(PKG_BUILD_DIR)/LICENSE
+          endef
+
+          define Build/Configure
+          endef
+
+          define Build/Compile
+          endef
+
+          define Package/flowcone/install
+          \t$(INSTALL_DIR) $(1)/usr/bin/
+          \t$(INSTALL_BIN) $(CURDIR)/files/flowcone.bin $(1)/usr/bin/flowcone
+
+          \t$(INSTALL_DIR) $(1)/etc/config/
+          \t$(INSTALL_CONF) $(CURDIR)/files/flowcone.config $(1)/etc/config/flowcone
+
+          \t$(INSTALL_DIR) $(1)/etc/init.d/
+          \t$(INSTALL_BIN) $(CURDIR)/files/flowcone.init $(1)/etc/init.d/flowcone
+          endef
+
+          define Package/flowcone/postrm
+          #!/bin/sh
+          rm -f /usr/share/nftables.d/chain-pre/srcnat/10-flowcone.nft
+          rm -f /usr/share/nftables.d/chain-pre/forward/10-flowcone.nft
+          rm -f /etc/nftables.d/flowcone.nft
+          exit 0
+          endef
+
+          $(eval $(call BuildPackage,flowcone))
+          """)
+
+          with open('openwrt/flowcone/Makefile', 'w') as f:
+              f.write(makefile)
+          PYEOF
 
       - name: Build packages
         uses: openwrt/gh-action-sdk@main
@@ -123,7 +235,7 @@ jobs:
           CONTAINER: docker.io/openwrt/sdk
           ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
           FEEDNAME: packages_ci
-          PACKAGES: flowcone luci-app-flowcone
+          PACKAGES: flowcone luci-app-flowcone nat6
           NO_REFRESH_CHECK: true
           NO_SHFMT_CHECK: true
 
@@ -146,7 +258,7 @@ jobs:
             name="${base%.*}"
 
             # Filter for FlowCone packages only
-            if [[ "$base" != *flowcone* ]]; then
+            if [[ "$base" != *flowcone* && "$base" != nat6* ]]; then
               continue
             fi
 
