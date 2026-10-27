@@ -11,14 +11,16 @@
 # Build/Compile 的再赋值（例如 flowcone 的 RustBinPackage 分支）。
 #
 # 用法:
-#   ./core/scripts/apply_prebuilt.sh <feed_dir> [prebuilt_mount_path]
+#   ./core/scripts/apply_prebuilt.sh <feed_dir> [prebuilt_mount_path] [prebuilt_host_dir]
 # ==============================================================================
 set -euo pipefail
 
-FEED="${1:?usage: apply_prebuilt.sh <feed_dir> [prebuilt_mount_path]}"
+FEED="${1:?usage: apply_prebuilt.sh <feed_dir> [prebuilt_mount_path] [prebuilt_host_dir]}"
 PREBUILT="${2:-/prebuilt}"
+# 容器内路径（写进 Makefile）与宿主机路径（用于校验产物存在）是两套命名空间，
+# 分开传参才能在提交给 docker 之前就发现 prebuild/apply 清单不同步。
+PREBUILT_HOST="${3:-}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MARKER="OpenWrt-Add CI prebuilt override"
 
 log() { printf '[apply-prebuilt] %s\n' "$*"; }
@@ -52,6 +54,17 @@ for entry in "${PACKAGES[@]}"; do
     continue
   fi
 
+  if [ -n "$PREBUILT_HOST" ]; then
+    dir="${pname:-$(basename "$reldir")}"
+    pdir="$PREBUILT_HOST/$dir/bin"
+    [ -d "$pdir" ] || die "缺少预编译产物: $pdir（prebuild 与 apply 的包清单不同步）"
+    if [ "$kind" = rust ]; then
+      [ -f "$pdir/$binname" ] || die "缺少预编译二进制: $pdir/$binname"
+    else
+      compgen -G "$pdir/*" >/dev/null || die "预编译目录为空: $pdir"
+    fi
+  fi
+
   python3 - "$mk" "$kind" "$MARKER" "$PREBUILT" "$pname" "$binname" <<'PY' || die "patch failed: $mk"
 import re, sys
 
@@ -63,7 +76,6 @@ if kind == 'go':
     src = re.sub(r'^(PKG_BUILD_DEPENDS:?=[^\n]*?)\bgolang/host\b[ \t]*', r'\1', src, flags=re.M)
 else:
     src = re.sub(r'^(PKG_BUILD_DEPENDS:?=[^\n]*?)\brust/host\b[ \t]*', r'\1', src, flags=re.M)
-src = re.sub(r'^(PKG_BUILD_DEPENDS:?=)[ \t]+$', r'\1', src, flags=re.M)
 
 # 2) 末尾追加覆盖块（压过上游在 include 之后的再赋值）
 if kind == 'go':
@@ -109,7 +121,7 @@ done
 # ------------------------------------------------------------------------------
 fail=0
 for entry in "${PACKAGES[@]}"; do
-  IFS='|' read -r reldir kind pname binname <<< "$entry"
+  reldir="${entry%%|*}"
   mk="$FEED/$reldir/Makefile"
   [ -f "$mk" ] || continue
 

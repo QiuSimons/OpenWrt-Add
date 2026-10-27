@@ -2,3 +2,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.tmp
+
+# CI 工作目录（构建产物，不提交）
+prebuilt/
+staging_feed/
