@@ -31,18 +31,39 @@ chown -R 1000:1000 /builder /artifacts
 
 cat > /tmp/inner.sh <<'INNER_EOF'
 set -e
+
 [ ! -f setup.sh ] || bash setup.sh
 
-echo "src-link custom /feed" > feeds.conf
-./scripts/feeds update custom
+# 保留官方 feeds 并追加本地 feed，否则 feeds/packages 下的 lang/golang 等 include 无法解析
+[ -f feeds.conf.default ] || { echo "feeds.conf.default missing"; exit 1; }
+cp feeds.conf.default feeds.conf
+sed -i \
+    -e 's,https://git.openwrt.org/feed/,https://github.com/openwrt/,' \
+    -e 's,https://git.openwrt.org/openwrt/,https://github.com/openwrt/,' \
+    -e 's,https://git.openwrt.org/project/,https://github.com/openwrt/,' \
+    feeds.conf
+echo "src-link custom /feed" >> feeds.conf
+
+./scripts/feeds update -a
 ./scripts/feeds install -a -p custom
+
+[ -f feeds/packages/lang/golang/golang-package.mk ] || {
+    echo "feeds/packages missing after feeds update"; exit 1; }
 
 pkgs=$(find /feed -type f -name Makefile -exec grep -H '^PKG_NAME:=' {} + | awk -F':=' '{print $2}' | tr -d '[:space:]' | sort -u)
 for p in $pkgs; do
     echo "CONFIG_PACKAGE_$p=m" >> .config
 done
 
-make defconfig
+if ! make defconfig > /tmp/defconfig.log 2>&1; then
+    cat /tmp/defconfig.log
+    echo "---------- context ----------"
+    for n in $(grep -oE '\.config-package\.in:[0-9]+' /tmp/defconfig.log | cut -d: -f2 | sort -un); do
+        echo "== around $n =="
+        sed -n "$((n - 4)),$((n + 4))p" tmp/.config-package.in 2>/dev/null || true
+    done
+    exit 1
+fi
 
 make package/compile -j$(nproc) IGNORE_ERRORS=1 || make package/compile -j1 IGNORE_ERRORS=1 V=s || true
 
