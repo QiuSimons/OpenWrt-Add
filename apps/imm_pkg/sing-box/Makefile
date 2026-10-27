@@ -95,7 +95,6 @@ endef
 Package/sing-box-tiny/description:=$(Package/sing-box/description)
 
 define Package/sing-box-tiny/config
-  DEFAULT_VARIANT:=1
   depends on $(subst @,,$(GO_ARCH_DEPENDS))
 
   config SING_BOX_TINY_BUILD_ACME
