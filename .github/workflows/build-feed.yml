@@ -82,13 +82,26 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v7
 
+      # key 覆盖所有影响产物的输入：各包 Makefile 里的版本/URL、vendored 的
+      # flowcone 源码、以及构建脚本自身。命中即代表可以整段跳过预编译。
+      - name: Restore prebuilt binaries
+        id: prebuilt-cache
+        uses: actions/cache@v4
+        with:
+          path: prebuilt
+          key: prebuilt-bin-${{ matrix.arch }}-${{ hashFiles('core/scripts/prebuild_host.sh', 'apps/**/Makefile', 'apps/FlowCone/Cargo.lock', 'apps/FlowCone/crates/**') }}
+          restore-keys: |
+            prebuilt-bin-${{ matrix.arch }}-
+
       - name: Set up Go
+        if: steps.prebuilt-cache.outputs.cache-hit != 'true'
         uses: actions/setup-go@v5
         with:
           go-version: 'stable'
           cache: false
 
       - name: Install cross toolchain
+        if: steps.prebuilt-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -112,6 +125,7 @@ jobs:
           llvm-strip --version | head -n 1
 
       - name: Cache Go module downloads
+        if: steps.prebuilt-cache.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
@@ -120,6 +134,7 @@ jobs:
             prebuild-gomod-${{ matrix.arch }}-
 
       - name: Cache cargo registry
+        if: steps.prebuilt-cache.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -130,6 +145,7 @@ jobs:
             prebuild-cargo-${{ matrix.arch }}-
 
       - name: Prebuild host binaries
+        if: steps.prebuilt-cache.outputs.cache-hit != 'true'
         shell: bash
         run: ./core/scripts/prebuild_host.sh "${{ matrix.arch }}" prebuilt
 
