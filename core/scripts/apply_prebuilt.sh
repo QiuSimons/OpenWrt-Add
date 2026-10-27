@@ -4,12 +4,14 @@
 #
 # 在 SDK 容器启动前改写 staging_feed 中的包 Makefile：
 #   1. 摘掉 golang/host / rust/host 构建依赖（消除容器内工具链引导）
-#   2. 将 Build/Compile 重定向为“直接取用宿主机预编译二进制”
+#   2. 在文件末尾追加 Build/Compile 覆盖，直接取用宿主机预编译二进制
 #   3. 保留原始 Makefile 的包元数据（DEPENDS / conffiles / install / config）
+#
+# 覆盖块放在文件末尾而不是 include 之后，是为了压过上游在 include 之后对
+# Build/Compile 的再赋值（例如 flowcone 的 RustBinPackage 分支）。
 #
 # 用法:
 #   ./core/scripts/apply_prebuilt.sh <feed_dir> [prebuilt_mount_path]
-#   例: ./core/scripts/apply_prebuilt.sh staging_feed /prebuilt
 # ==============================================================================
 set -euo pipefail
 
@@ -24,24 +26,24 @@ die() { printf '::error::[apply-prebuilt] %s\n' "$*" >&2; exit 1; }
 
 [ -d "$FEED" ] || die "feed dir not found: $FEED"
 
-# 相对 staging_feed 的包目录 | 类型(go|rust)
+# 相对 staging_feed 的包目录 | 类型(go|rust) | 预编译目录名 | 二进制名
 PACKAGES=(
-  "imm_pkg/frp|go"
-  "luci-app-mosdns/mosdns|go"
-  "OpenWrt-mihomo/mihomo-meta|go"
-  "OpenWrt-mihomo/mihomo-alpha|go"
-  "imm_pkg/sing-box|go"
-  "openwrt-einat-ebpf|rust"
+  "imm_pkg/frp|go||"
+  "luci-app-mosdns/mosdns|go||"
+  "OpenWrt-mihomo/mihomo-meta|go||"
+  "OpenWrt-mihomo/mihomo-alpha|go||"
+  "imm_pkg/sing-box|go||"
+  "openwrt-einat-ebpf|rust|einat-ebpf|einat"
+  "FlowCone/openwrt/flowcone|rust|flowcone|flowcone"
 )
 
 patched=0
 for entry in "${PACKAGES[@]}"; do
-  reldir="${entry%%|*}"
-  kind="${entry##*|}"
+  IFS='|' read -r reldir kind pname binname <<< "$entry"
   mk="$FEED/$reldir/Makefile"
 
   if [ ! -f "$mk" ]; then
-    log "SKIP $reldir (no Makefile, 上游可能已移除该包)"
+    log "SKIP $reldir (无 Makefile，上游可能已移除该包)"
     continue
   fi
 
@@ -50,21 +52,20 @@ for entry in "${PACKAGES[@]}"; do
     continue
   fi
 
-  python3 - "$mk" "$kind" "$MARKER" "$PREBUILT" <<'PY' || die "patch failed: $mk"
+  python3 - "$mk" "$kind" "$MARKER" "$PREBUILT" "$pname" "$binname" <<'PY' || die "patch failed: $mk"
 import re, sys
 
-path, kind, marker, prebuilt = sys.argv[1:5]
+path, kind, marker, prebuilt, pname, binname = sys.argv[1:7]
 src = open(path, encoding='utf-8').read()
 
+# 1) 就地摘除宿主工具链依赖（必须在 include package.mk 之前生效）
 if kind == 'go':
-    anchor_re = r'^include \$\$\{?\}?.*golang-package\.mk\s*$'
-    anchor = re.search(r'^include.*golang-package\.mk\s*$', src, re.M)
+    src = re.sub(r'^(PKG_BUILD_DEPENDS:?=[^\n]*?)\bgolang/host\b[ \t]*', r'\1', src, flags=re.M)
 else:
-    anchor = re.search(r'^include.*rust-package\.mk\s*$', src, re.M)
+    src = re.sub(r'^(PKG_BUILD_DEPENDS:?=[^\n]*?)\brust/host\b[ \t]*', r'\1', src, flags=re.M)
+src = re.sub(r'^(PKG_BUILD_DEPENDS:?=)[ \t]+$', r'\1', src, flags=re.M)
 
-if not anchor:
-    sys.exit('anchor include not found in ' + path)
-
+# 2) 末尾追加覆盖块（压过上游在 include 之后的再赋值）
 if kind == 'go':
     block = f"""
 # --- {marker} ---
@@ -83,26 +84,20 @@ Build/InstallDev:=
 else:
     block = f"""
 # --- {marker} ---
-# 宿主机已用 Rust musl 交叉编译出静态 einat 二进制，容器内不再引导 rust/host
+# 宿主机已用 Rust musl 交叉编译出静态二进制，容器内不再引导 rust/host 工具链
 PKG_BUILD_DEPENDS:=
 define Build/Compile
 	$(INSTALL_DIR) $(PKG_INSTALL_DIR)/bin
-	$(INSTALL_BIN) {prebuilt}/einat-ebpf/bin/einat $(PKG_INSTALL_DIR)/bin/einat
+	$(INSTALL_BIN) {prebuilt}/{pname}/bin/{binname} $(PKG_INSTALL_DIR)/bin/{binname}
 endef
 Build/InstallDev:=
 # --- end {marker} ---
 """
 
-insert_at = anchor.end()
-new = src[:insert_at] + block + src[insert_at:]
-
-# 原始 PKG_BUILD_DEPENDS 行内的宿主工具链词元一并摘除（双保险）
-if kind == 'go':
-    new = re.sub(r'^(PKG_BUILD_DEPENDS:?=\s*)golang/host\b.*$', r'\1', new, flags=re.M)
-else:
-    new = re.sub(r'^(PKG_BUILD_DEPENDS:?=\s*)(?:rust/host)\s*', r'\1', new, flags=re.M)
-
-open(path, 'w', encoding='utf-8').write(new)
+if not src.endswith('\n'):
+    src += '\n'
+src += block
+open(path, 'w', encoding='utf-8').write(src)
 print('     injected: ' + path)
 PY
 
@@ -114,7 +109,7 @@ done
 # ------------------------------------------------------------------------------
 fail=0
 for entry in "${PACKAGES[@]}"; do
-  reldir="${entry%%|*}"
+  IFS='|' read -r reldir kind pname binname <<< "$entry"
   mk="$FEED/$reldir/Makefile"
   [ -f "$mk" ] || continue
 
@@ -124,10 +119,9 @@ for entry in "${PACKAGES[@]}"; do
     continue
   fi
 
-  # 覆盖块之后不应再有宿主 go/rust 工具链的构建依赖赋值
-  tail_block="$(awk -v m="$MARKER" 'index($0, m) {f=1} f' "$mk")"
-  if echo "$tail_block" | grep -qE '^PKG_BUILD_DEPENDS:=[^\n]*(golang/host|rust/host)'; then
-    log "FAIL $reldir: 覆盖块之后仍存在宿主工具链构建依赖"
+  # 所有 PKG_BUILD_DEPENDS 赋值行都不应再含宿主工具链（含 include 之前的原行）
+  if grep -nE '^PKG_BUILD_DEPENDS:?=.*(golang/host|rust/host)' "$mk"; then
+    log "FAIL $reldir: 仍存在宿主工具链构建依赖"
     fail=1
   fi
 done
@@ -135,5 +129,3 @@ done
 [ "$fail" -eq 0 ] || die "预编译注入校验失败"
 
 log "完成：共注入 $patched 个包"
-log "覆盖块内容抽查（sing-box）:"
-awk -v m="$MARKER" 'index($0, m) {f=1} f' "$FEED/imm_pkg/sing-box/Makefile" 2>/dev/null | head -n 20 || true

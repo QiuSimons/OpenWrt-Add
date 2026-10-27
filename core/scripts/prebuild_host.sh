@@ -248,6 +248,20 @@ prebuild_einat() {
   assert_elf "$out/einat"
 }
 
+prebuild_flowcone() {
+  local dir="apps/FlowCone" out="$OUT/flowcone/bin"
+  [ -d "$dir/crates/flowcone-daemon" ] || { log "SKIP flowcone (包已移除)"; return 0; }
+  rm -rf "$OUT/flowcone"; mkdir -p "$out"
+
+  # 仓库内已提交 crates/flowcone-daemon/ebpf/flowcone-ebpf.bin，
+  # build.rs 直接拷贝该 eBPF 产物，因此宿主机构建不需要 clang / nightly。
+  ( cd "$dir" && cargo build --release --locked -p flowcone-daemon --target "$RUST_TARGET" ) \
+    || die "cargo build failed: flowcone"
+
+  cp "$dir/target/$RUST_TARGET/release/flowcone" "$out/flowcone"
+  assert_elf "$out/flowcone"
+}
+
 # ==============================================================================
 main() {
   log "repo=$REPO_ROOT out=$OUT goarch=$GOARCH rust_target=$RUST_TARGET"
@@ -261,6 +275,7 @@ main() {
   want mihomo   && prebuild_mihomo
   want sing-box && prebuild_singbox
   want einat    && prebuild_einat
+  want flowcone  && prebuild_flowcone
   true
 
   # 清单：容器内据此校验"该包确实走了预编译路径"
