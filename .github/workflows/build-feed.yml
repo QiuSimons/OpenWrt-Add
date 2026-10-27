@@ -105,8 +105,6 @@ jobs:
 
           docker run --rm \
             --user root \
-            -e UPSTREAM_URL="https://openwrt.fastly.net" \
-            -e FILE_HOST="https://openwrt.fastly.net" \
             -v "${{ github.workspace }}/staging_feed:/feed:ro" \
             -v "${{ github.workspace }}/artifacts:/artifacts" \
             -v "${{ github.workspace }}/core/scripts/build_in_container.sh:/build.sh:ro" \
