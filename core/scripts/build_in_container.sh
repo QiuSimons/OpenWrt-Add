@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 set -e
 
-# 1. 宿主编译依赖补齐 (vmlinux-btf 所需 pahole/llvm，以及预编译 rustc/cargo 避免从源码重编译 Rust 工具链)
+# 1. 宿主编译依赖补齐 (vmlinux-btf 所需 pahole/llvm)
 if command -v apt-get >/dev/null 2>&1; then
     if [ -f /etc/debian_version ] && grep -q "^11" /etc/debian_version; then
         printf "deb [check-valid-until=no trusted=yes] http://archive.debian.org/debian/ bullseye main\ndeb [check-valid-until=no trusted=yes] http://archive.debian.org/debian-security/ bullseye-security main\n" > /etc/apt/sources.list
         rm -rf /etc/apt/sources.list.d/*
     fi
     apt-get update -o Acquire::Check-Valid-Until=false || apt-get update
-    apt-get install -y --no-install-recommends dwarves llvm cargo rustc || apt-get install -y dwarves llvm || apt-get install -y pahole
+    apt-get install -y --no-install-recommends dwarves llvm || apt-get install -y dwarves llvm || apt-get install -y pahole
     rm -rf /var/lib/apt/lists/*
 elif command -v apk >/dev/null 2>&1; then
-    apk add --no-cache dwarves cargo rust
+    apk add --no-cache dwarves
 fi
 
 pahole_bin="$(command -v pahole || which pahole || true)"
@@ -24,15 +24,6 @@ llvm_objcopy_bin="$(command -v llvm-objcopy || find /usr/bin -name 'llvm-objcopy
 if [ -n "$llvm_objcopy_bin" ]; then
     mkdir -p /builder/staging_dir/host/bin
     ln -sf "$llvm_objcopy_bin" /builder/staging_dir/host/bin/llvm-objcopy
-fi
-
-# 软链接预编译的 cargo/rustc，避免 OpenWrt 重复编译耗时数十倍的 rust/host
-cargo_bin="$(command -v cargo || which cargo || true)"
-rustc_bin="$(command -v rustc || which rustc || true)"
-if [ -n "$cargo_bin" ] && [ -n "$rustc_bin" ]; then
-    mkdir -p /builder/staging_dir/host/bin
-    ln -sf "$cargo_bin" /builder/staging_dir/host/bin/cargo
-    ln -sf "$rustc_bin" /builder/staging_dir/host/bin/rustc
 fi
 
 # 2. 授权并启动编译
