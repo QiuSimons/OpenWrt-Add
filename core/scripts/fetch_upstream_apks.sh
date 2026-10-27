@@ -8,7 +8,7 @@ mkdir -p "$OUT_DIR"
 [ -f "$CONF" ] || { echo "[upstream] no config, skip"; exit 0; }
 
 total=0
-while IFS='|' read -r name repo pattern _dir; do
+while IFS='|' read -r name repo _dir pattern; do
     name="$(echo "$name" | xargs)"
     repo="$(echo "$repo" | xargs)"
     pattern="$(echo "$pattern" | xargs)"

@@ -98,7 +98,7 @@ jobs:
           echo "Total packages in feed to build: $(find staging_feed -maxdepth 2 -name Makefile | wc -l)"
           # 排除已改为直接取上游 Release 的包，避免与上游同名包冲突
           if [ -f core/assets/upstream-releases.conf ]; then
-            awk -F'|' '!/^[[:space:]]*#/ && NF>=4 {print $4}' core/assets/upstream-releases.conf | tr -d ' ' | while read -r d; do
+            awk -F'|' '!/^[[:space:]]*#/ && NF>=4 {print $3}' core/assets/upstream-releases.conf | tr -d ' ' | while read -r d; do
               [ -n "$d" ] && rm -rf "staging_feed/$(basename "$d")" && echo "excluded from local build: $d"
             done
           fi

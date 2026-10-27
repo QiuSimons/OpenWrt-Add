@@ -1,3 +1,2 @@
 # 需要以 PKGARCH:=all 发布的本仓编译二进制包
 # 每行一个包名（PKG_NAME）
-flowcone

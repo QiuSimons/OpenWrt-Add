@@ -29,7 +29,8 @@ def main():
     for f in apks:
         n = os.path.basename(f); arch = detect_arch(n)
         if arch is None:
-            unknown.append(n); continue
+            arch = 'all'
+            print('  [assume-all] ' + n)
         if arch == 'all':
             for t in targets: shutil.copy2(f, os.path.join(a.out,t,n))
             print('  [all] ' + n)
