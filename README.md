@@ -108,6 +108,10 @@ wget -qO /etc/apk/keys/custom-feed.rsa.pub https://<username>.github.io/OpenWrt-
 # 添加源配置 (自动匹配当前硬件架构目录)
 echo "https://<username>.github.io/OpenWrt-Add/$(apk --print-arch)" > /etc/apk/repositories.d/custom-feed.list
 
+# aarch64 cortex 设备启用通用源（一次性）
+grep -qx aarch64_generic /etc/apk/arch 2>/dev/null || echo aarch64_generic >> /etc/apk/arch
+echo "https://<username>.github.io/OpenWrt-Add/aarch64_generic" >> /etc/apk/repositories.d/custom-feed.list
+
 # 更新并安装
 apk update
 apk add <包名>
