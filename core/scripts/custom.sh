@@ -361,7 +361,7 @@ sync_immortalwrt_luci() {
 # 15. lede_pkg (fullconenat-nft, r8168 - 现代驱动与模块)
 # ------------------------------------------------------------------------------
 sync_lede_pkg() {
-    log_info "正在同步: lede_pkg (r8168 -> apps/lede_pkg, fullconenat-nft -> invasive/fullconenat-nft)..."
+    log_info "正在同步: lede_pkg (r8168, fullconenat-nft)..."
     local tmp_dir
     tmp_dir="$(mktemp -d)"
 
@@ -371,12 +371,10 @@ sync_lede_pkg() {
     )
 
     if sparse_clone "https://github.com/coolsnowwolf/lede" "$tmp_dir/upstream" "${subpaths[@]}"; then
-        # 1. 侵入性组件部署到 invasive/
         mkdir -p "$tmp_dir/invasive_fullcone"
         cp -rf "$tmp_dir/upstream/package/network/services/fullconenat-nft" "$tmp_dir/invasive_fullcone/"
         deploy_dir "$tmp_dir/invasive_fullcone/fullconenat-nft" "$REPO_ROOT/invasive/fullconenat-nft"
 
-        # 2. 独立驱动保持在 apps/lede_pkg/r8168
         mkdir -p "$tmp_dir/apps_lede/r8168"
         cp -rf "$tmp_dir/upstream/package/kernel/r8168" "$tmp_dir/apps_lede/"
         deploy_dir "$tmp_dir/apps_lede/r8168" "$REPO_ROOT/apps/lede_pkg/r8168"
