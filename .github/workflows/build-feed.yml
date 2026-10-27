@@ -88,9 +88,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p staging_feed artifacts dl
+          mkdir -p staging_feed artifacts dl node_prebuilt
           cp -a apps/* staging_feed/ 2>/dev/null || true
           cp -a themes/* staging_feed/ 2>/dev/null || true
+          if [ -d staging_feed/feeds_packages_lang_node-prebuilt ]; then
+            cp -a staging_feed/feeds_packages_lang_node-prebuilt/. node_prebuilt/
+            rm -rf staging_feed/feeds_packages_lang_node-prebuilt
+          fi
           echo "Total packages in feed to build: $(find staging_feed -maxdepth 2 -name Makefile | wc -l)"
 
       - name: Cache OpenWrt Package Downloads (dl)
@@ -116,6 +120,7 @@ jobs:
             -v "${{ github.workspace }}/staging_feed:/feed:ro" \
             -v "${{ github.workspace }}/artifacts:/artifacts" \
             -v "${{ github.workspace }}/dl:/builder/dl" \
+            -v "${{ github.workspace }}/node_prebuilt:/node_prebuilt:ro" \
             -v "${{ github.workspace }}/core/scripts/build_in_container.sh:/build.sh:ro" \
             "${image}" \
             bash /build.sh

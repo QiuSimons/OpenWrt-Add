@@ -57,6 +57,16 @@ echo "src-link custom /feed" >> feeds.conf
 ./scripts/feeds update packages luci custom
 ./scripts/feeds install -a -p custom
 
+# 用预编译 node 替换 SDK 内置的源码编译版
+if [ -d /node_prebuilt ] && [ -f /node_prebuilt/Makefile ]; then
+    rm -rf feeds/packages/lang/node
+    cp -rf /node_prebuilt feeds/packages/lang/node
+    node_ver=$(curl -fsSL --retry 3 https://api.github.com/repos/sbwml/node_workflow/tags 2>/dev/null | grep '"name"' | head -n 1 | sed -E 's/.*"name": "v([^"]+)".*/\1/')
+    if [ -n "$node_ver" ]; then
+        sed -i "s|^PKG_VERSION:=.*|PKG_VERSION:=$node_ver|" feeds/packages/lang/node/Makefile
+    fi
+fi
+
 [ -f feeds/packages/lang/golang/golang-package.mk ] || {
     echo "feeds/packages missing after feeds update"; exit 1; }
 
@@ -65,6 +75,7 @@ pkgs=$(./scripts/feeds list -s custom | awk '{print $1}')
 for p in $pkgs; do
     echo "CONFIG_PACKAGE_$p=m" >> .config
 done
+echo "CONFIG_PACKAGE_node=m" >> .config
 
 if ! make defconfig > /tmp/defconfig.log 2>&1; then
     cat /tmp/defconfig.log
