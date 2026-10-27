@@ -35,7 +35,7 @@ export GITHUB_ACTIONS=""
 # 保留官方 feeds 并追加本地 custom feed
 [ -f feeds.conf.default ] || { echo "feeds.conf.default missing"; exit 1; }
 cp feeds.conf.default feeds.conf
-sed -i     -e 's,https://git.openwrt.org/feed/,https://github.com/openwrt/,'     -e 's,https://git.openwrt.org/openwrt/,https://github.com/openwrt/,'     -e 's,https://git.openwrt.org/project/,https://github.com/openwrt/,'     feeds.conf
+sed -i -e 's,https://git.openwrt.org/feed/,https://github.com/openwrt/,' -e 's,https://git.openwrt.org/openwrt/,https://github.com/openwrt/,' -e 's,https://git.openwrt.org/project/,https://github.com/openwrt/,' feeds.conf
 echo "src-link custom /feed" >> feeds.conf
 
 # 仅拉取编译所需的核心 feeds (packages, luci, custom)，跳过无关的巨型仓库
@@ -63,6 +63,10 @@ for p in $pkgs; do
     echo "CONFIG_PACKAGE_$p=m" >> .config
 done
 echo "CONFIG_PACKAGE_node=m" >> .config
+
+# 关掉 AUTOREMOVE：开启时每个构建目录先跑 check-depends，判定脏就 clean-build，
+# 会把 SDK 预置的内核头/工具链目录清掉，导致 vmlinux-btf 与 luci 模块连锁失败
+echo "# CONFIG_AUTOREMOVE is not set" >> .config
 
 # 记录计划编译的包清单，供宿主机侧 manifest 闸门比对
 mkdir -p /artifacts/manifest
@@ -98,16 +102,21 @@ for c in EINAT_EBPF_BACKEND_LIBBPF EINAT_EBPF_BINDGEN EINAT_EBPF_STATIC; do
         contract_fail=1
     fi
 done
-# sing-box tiny 的标签集合必须与预编译时使用的完全一致
-built_tags=" CLASH_API GVISOR QUIC UTLS WIREGUARD "
-for c in $(grep -oE '^CONFIG_SING_BOX_TINY_BUILD_[A-Z0-9_]+=y$' .config \
-             | sed 's/^CONFIG_SING_BOX_TINY_BUILD_//; s/=y$//'); do
-    case "$built_tags" in
-        *" $c "*) ;;
-        *) echo "::error::sing-box tiny 特性 ${c} 已启用，但预编译未包含（更新 prebuild_host.sh 的 tags）"
-           contract_fail=1 ;;
-    esac
-done
+# sing-box tiny 的标签集合必须与预编译时使用的完全一致：
+# 以产物里的 tags.txt 为准，容器侧不再另存一份清单
+if grep -qE '^CONFIG_PACKAGE_sing-box-tiny=[ym]$' .config; then
+    if [ ! -f /prebuilt/sing-box/tags.txt ]; then
+        echo "::error::sing-box tiny 已启用，但 /prebuilt/sing-box/tags.txt 不存在"
+        contract_fail=1
+    else
+        for c in $(grep -oE '^CONFIG_SING_BOX_TINY_BUILD_[A-Z0-9_]+=y$' .config \
+                     | sed 's/^CONFIG_SING_BOX_TINY_BUILD_//; s/=y$//'); do
+            grep -qx "$c" /prebuilt/sing-box/tags.txt \
+                || { echo "::error::sing-box tiny 特性 $c 已启用，但预编译未包含"; contract_fail=1; }
+        done
+    fi
+fi
+
 if [ "$contract_fail" -ne 0 ]; then
     echo "::error::预编译契约校验失败，终止以避免发布与目标不一致的二进制"
     exit 1
@@ -145,8 +154,9 @@ if [ -s /tmp/failed.txt ]; then
         [ -n "$tgt" ] || continue
         out="/artifacts/logs/$(echo "$tgt" | sed 's|^package/||; s|/|_|g').log"
         echo "=== re-running $tgt/compile V=s -> $out ==="
-        make "$tgt/compile" V=s > "$out" 2>&1 || true
+        make "$tgt/compile" V=s 2>&1 | tee "$out" || true
     done < /tmp/failed.txt
+
 fi
 
 mkdir -p /artifacts/bin

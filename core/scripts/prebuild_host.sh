@@ -28,6 +28,10 @@ case "$ARCH" in
 esac
 
 export CGO_ENABLED=0 GOOS=linux GOARCH
+
+# sing-box tiny 变体的构建 tag，对应 Makefile 里 Package/sing-box-tiny/config
+# 的 Kconfig 默认值（64 位架构）。容器侧据此校验，不另存一份。
+SINGBOX_TAGS="badlinkname,tfogo_checklinkname0,with_clash_api,with_gvisor,with_quic,with_utls,with_wireguard"
 mkdir -p "$OUT"
 # 转成绝对路径：gobuild 在子 shell 里 cd 到源码目录后再解析 -o，
 # 相对路径会被解析到源码树内，产物落到临时目录而 assert_elf 找不到。
@@ -215,13 +219,16 @@ prebuild_singbox() {
   # 对应 Package/sing-box-tiny/config 的 Kconfig 默认值（64 位架构）：
   #   CLASH_API=y GVISOR=y QUIC=y UTLS=y WIREGUARD=y，其余默认 n
   # 若上游改动默认值，build_in_container.sh 的契约校验会立刻失败。
-  local tags="badlinkname,tfogo_checklinkname0,with_clash_api,with_gvisor,with_quic,with_utls,with_wireguard"
+  local tags="$SINGBOX_TAGS"
   local ldflags="-s -w -checklinkname=0"
   ldflags+=" -X github.com/sagernet/sing-box/constant.Version=$SRC_VERSION"
   ldflags+=" -X runtime.godebugDefault=multipathtcp=0,tlssha1=1"
 
   gobuild "$src" "$out" ./cmd/sing-box "$tags" "$ldflags"
   assert_elf "$out/sing-box"
+
+  # 供容器内的契约校验读取，避免 tag 清单在两侧各写一份
+  printf '%s\n' $(echo "$SINGBOX_TAGS" | tr ',' ' ') > "$OUT/sing-box/tags.txt"
 }
 
 prebuild_einat() {
@@ -276,24 +283,8 @@ want() {
   case "$ONLY" in *",$1,"*) return 0 ;; *) return 1 ;; esac
 }
 
-resolve_only() {
-  local mk
-  for mk in apps/imm_pkg/frp/Makefile apps/luci-app-mosdns/mosdns/Makefile \
-            apps/OpenWrt-mihomo/mihomo-meta/Makefile apps/OpenWrt-mihomo/mihomo-alpha/Makefile \
-            apps/imm_pkg/sing-box/Makefile apps/openwrt-einat-ebpf/Makefile; do
-    [ -f "$mk" ] || { printf '%-46s MISSING\n' "$mk"; continue; }
-    resolve_source "$mk"
-    printf '%-46s v=%-14s r=%-4s b=%-14s %s\n' "$mk" "$SRC_VERSION" "$SRC_RELEASE" "$SRC_BUILDVER" "$SRC_URL"
-  done
-}
-
 main() {
   log "repo=$REPO_ROOT out=$OUT goarch=$GOARCH rust_target=$RUST_TARGET"
-
-  if [ "${PREBUILD_RESOLVE_ONLY:-0}" = 1 ]; then
-    resolve_only
-    return 0
-  fi
 
   want frp      && prebuild_frp
   want mosdns   && prebuild_mosdns
