@@ -248,6 +248,15 @@ jobs:
           find artifacts/bin/ -type f -name "*.apk" -exec cp {} dist/ \; 2>/dev/null || true
           echo "Total APKs successfully prepared: $(ls -1 dist/*.apk 2>/dev/null | wc -l)"
 
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-logs-${{ matrix.arch }}-${{ matrix.sdk }}
+          path: artifacts/logs
+          if-no-files-found: warn
+          retention-days: 3
+
       - name: Verify package manifest
         if: always()
         shell: bash

@@ -113,8 +113,41 @@ if [ "$contract_fail" -ne 0 ]; then
     exit 1
 fi
 
-# 全核心高并发编译，彻底移除 -j1 单线程串行回退，个别包异常毫秒级隔离
-IGNORE_ERRORS=1 make package/compile -j$(($(nproc) + 1)) || true
+# ---------------------------------------------------------------------------
+# 逐包编译，不用 make package/compile
+#
+# package/Makefile 里有 "package-y += kernel/linux"，所以 make package/compile
+# 一定会把 package/kernel/linux、package/toolchain 一起处理；CONFIG_AUTOREMOVE
+# 判定脏了会先 clean-build，把 SDK 预置的内核头清掉，依赖 $(LINUX_DIR) 的
+# vmlinux-btf 必挂。改为只构建本 feed 装出来的包目录。
+# ---------------------------------------------------------------------------
+targets=""
+for d in package/feeds/custom/*; do
+    [ -e "$d" ] || continue
+    targets="$targets package/feeds/custom/$(basename "$d")/compile"
+done
+[ -n "$targets" ] || { echo "::error::no build targets (feeds install 失败?)"; exit 1; }
+echo "build targets:$targets"
+
+# shellcheck disable=SC2086
+IGNORE_ERRORS=1 make -j"$(( $(nproc) + 1 ))" $targets 2>&1 | tee /tmp/build.log || true
+
+mkdir -p /artifacts/logs
+cp /tmp/build.log /artifacts/logs/00-build.log
+
+# 失败的包单独复跑一次带 V=s，日志留档，避免下次还要靠猜
+grep -oE 'ERROR: package/[^ ]+ .*failed to build' /tmp/build.log 2>/dev/null \
+    | awk '{print $2}' | sort -u > /tmp/failed.txt || true
+if [ -s /tmp/failed.txt ]; then
+    echo "failed packages:"
+    sed 's/^/  /' /tmp/failed.txt
+    while IFS= read -r tgt; do
+        [ -n "$tgt" ] || continue
+        out="/artifacts/logs/$(echo "$tgt" | sed 's|^package/||; s|/|_|g').log"
+        echo "=== re-running $tgt/compile V=s -> $out ==="
+        make "$tgt/compile" V=s > "$out" 2>&1 || true
+    done < /tmp/failed.txt
+fi
 
 mkdir -p /artifacts/bin
 find bin/packages/ -path '*/custom/*' -name '*.apk' -exec cp {} /artifacts/bin/ \; 2>/dev/null || true
