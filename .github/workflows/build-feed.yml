@@ -96,6 +96,12 @@ jobs:
             rm -rf staging_feed/feeds_packages_lang_node-prebuilt
           fi
           echo "Total packages in feed to build: $(find staging_feed -maxdepth 2 -name Makefile | wc -l)"
+          # 排除已改为直接取上游 Release 的包，避免与上游同名包冲突
+          if [ -f core/assets/upstream-releases.conf ]; then
+            awk -F'|' '!/^[[:space:]]*#/ && NF>=4 {print $4}' core/assets/upstream-releases.conf | tr -d ' ' | while read -r d; do
+              [ -n "$d" ] && rm -rf "staging_feed/$(basename "$d")" && echo "excluded from local build: $d"
+            done
+          fi
 
       - name: Cache OpenWrt Package Downloads (dl)
         uses: actions/cache@v4
@@ -167,6 +173,9 @@ jobs:
         with:
           path: raw_artifacts
           merge-multiple: true
+
+      - name: Fetch Upstream Prebuilt APKs
+        run: bash core/scripts/fetch_upstream_apks.sh raw_artifacts/upstream
 
       - name: Install Host Tools (apk-tools & signing)
         run: |
