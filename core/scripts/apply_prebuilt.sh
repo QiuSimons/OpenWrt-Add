@@ -27,6 +27,12 @@ log() { printf '[apply-prebuilt] %s\n' "$*"; }
 die() { printf '::error::[apply-prebuilt] %s\n' "$*" >&2; exit 1; }
 
 [ -d "$FEED" ] || die "feed dir not found: $FEED"
+# 入参允许相对路径，但后续不再依赖调用方 cwd
+FEED="$(cd "$FEED" && pwd)"
+if [ -n "$PREBUILT_HOST" ]; then
+  [ -d "$PREBUILT_HOST" ] || die "prebuilt host dir not found: $PREBUILT_HOST"
+  PREBUILT_HOST="$(cd "$PREBUILT_HOST" && pwd)"
+fi
 
 # 相对 staging_feed 的包目录 | 类型(go|rust) | 预编译目录名 | 二进制名
 PACKAGES=(

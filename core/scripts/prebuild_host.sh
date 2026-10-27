@@ -256,7 +256,7 @@ prebuild_einat() {
 }
 
 prebuild_flowcone() {
-  local dir="apps/FlowCone" out="$OUT/flowcone/bin"
+  local dir="$REPO_ROOT/apps/FlowCone" out="$OUT/flowcone/bin"
   [ -d "$dir/crates/flowcone-daemon" ] || { log "SKIP flowcone (包已移除)"; return 0; }
   rm -rf "$OUT/flowcone"; mkdir -p "$out"
 
