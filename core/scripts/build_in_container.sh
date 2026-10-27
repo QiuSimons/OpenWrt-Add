@@ -68,6 +68,12 @@ echo "CONFIG_PACKAGE_node=m" >> .config
 # 会把 SDK 预置的内核头/工具链目录清掉，导致 vmlinux-btf 与 luci 模块连锁失败
 echo "# CONFIG_AUTOREMOVE is not set" >> .config
 
+# luci.mk 会按这些开关拉 host 工具（csstidy/host、ucode/host、luasrcdiet/host），
+# 而 SDK 里没有对应源码（package/ 只有 kernel 与 toolchain），全关掉
+for opt in LUCI_CSSTIDY LUCI_UTMIN LUCI_SRCDIET; do
+    echo "# CONFIG_$opt is not set" >> .config
+done
+
 # 记录计划编译的包清单，供宿主机侧 manifest 闸门比对
 mkdir -p /artifacts/manifest
 printf '%s\n' $pkgs | sort -u > /artifacts/manifest/expected.txt
@@ -123,28 +129,6 @@ if [ "$contract_fail" -ne 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 先构建 staging 提供者
-#
-# SDK 的 staging_dir 里没有 ucode 的 dev 头，而 feeds/luci 的 ucode-mod-html、
-# rpcd-mod-luci、lucihttp 等模块在编译时直接 include <ucode/module.h>，
-# 却只在 DEPENDS 里写了 +libucode（运行期依赖），没有 PKG_BUILD_DEPENDS。
-# 完整源码树里 ucode 先于它们构建所以没事，SDK 里必须显式补上这一步。
-# ---------------------------------------------------------------------------
-stage_providers() {
-    local d
-    for d in package/utils/ucode; do
-        [ -d "$d" ] || { echo "staging provider not found: $d"; continue; }
-        echo "=== staging provider: $d ==="
-        if ! make "$d/compile" > /tmp/stage-provider.log 2>&1; then
-            tail -n 40 /tmp/stage-provider.log
-            echo "::error::staging provider failed: $d"
-            exit 1
-        fi
-    done
-}
-stage_providers
-
-# ---------------------------------------------------------------------------
 # 逐包编译，不用 make package/compile
 #
 # package/Makefile 里有 "package-y += kernel/linux"，所以 make package/compile
@@ -161,7 +145,9 @@ done
 echo "build targets:$targets"
 
 # shellcheck disable=SC2086
-IGNORE_ERRORS=1 make -j"$(( $(nproc) + 1 ))" $targets 2>&1 | tee /tmp/build.log || true
+# -k: 某个前置依赖失败时不要中止整轮，我们的包能建多少建多少，
+#    最终由 manifest 闸门判定哪些包真的缺了
+IGNORE_ERRORS=1 make -k -j"$(( $(nproc) + 1 ))" $targets 2>&1 | tee /tmp/build.log || true
 
 mkdir -p /artifacts/logs
 cp /tmp/build.log /artifacts/logs/00-build.log
