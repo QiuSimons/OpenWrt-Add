@@ -88,10 +88,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p staging_feed artifacts
+          mkdir -p staging_feed artifacts dl
           cp -a apps/* staging_feed/ 2>/dev/null || true
           cp -a themes/* staging_feed/ 2>/dev/null || true
           echo "Total packages in feed to build: $(find staging_feed -maxdepth 2 -name Makefile | wc -l)"
+
+      - name: Cache OpenWrt Package Downloads (dl)
+        uses: actions/cache@v4
+        with:
+          path: dl
+          key: ${{ matrix.arch }}-${{ matrix.sdk }}-dl-${{ hashFiles('staging_feed/**/Makefile') }}
+          restore-keys: |
+            ${{ matrix.arch }}-${{ matrix.sdk }}-dl-
 
       - name: Compile Packages in OpenWrt SDK Container
         continue-on-error: true
@@ -107,6 +115,7 @@ jobs:
             --user root \
             -v "${{ github.workspace }}/staging_feed:/feed:ro" \
             -v "${{ github.workspace }}/artifacts:/artifacts" \
+            -v "${{ github.workspace }}/dl:/builder/dl" \
             -v "${{ github.workspace }}/core/scripts/build_in_container.sh:/build.sh:ro" \
             "${image}" \
             bash /build.sh
