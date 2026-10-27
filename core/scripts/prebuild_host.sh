@@ -29,6 +29,9 @@ esac
 
 export CGO_ENABLED=0 GOOS=linux GOARCH
 mkdir -p "$OUT"
+# 转成绝对路径：gobuild 在子 shell 里 cd 到源码目录后再解析 -o，
+# 相对路径会被解析到源码树内，产物落到临时目录而 assert_elf 找不到。
+OUT="$(cd "$OUT" && pwd)"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
