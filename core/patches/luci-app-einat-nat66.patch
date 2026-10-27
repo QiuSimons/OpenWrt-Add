@@ -1,0 +1,26 @@
+From 6bd2ece670ecca90d5bcd4deb7defdab89e5add8 Mon Sep 17 00:00:00 2001
+From: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
+Date: Thu, 11 Sep 2025 17:05:57 +0800
+Subject: [PATCH] nat66
+
+---
+ htdocs/luci-static/resources/view/einat.js | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/htdocs/luci-static/resources/view/einat.js b/htdocs/luci-static/resources/view/einat.js
+index ff92063..ca0a81c 100644
+--- a/htdocs/luci-static/resources/view/einat.js
++++ b/htdocs/luci-static/resources/view/einat.js
+@@ -130,9 +130,9 @@ return view.extend({
+ 		o.default = o.disabled;
+ 		o.rmempty = false;
+ 
+-		//o = s.option(form.Flag, 'nat66', _('NAT66'));
+-		//o.default = o.disabled;
+-		//o.rmempty = false;
++		o = s.option(form.Flag, 'nat66', _('NAT66'));
++		o.default = o.disabled;
++		o.rmempty = false;
+ 
+ 		o = s.option(widgets.DeviceSelect, 'ifname', _('External interface'));
+ 		o.multiple = false;

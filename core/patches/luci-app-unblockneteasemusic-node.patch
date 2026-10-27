@@ -1,0 +1,22 @@
+From a8804282b9dc97c171b14c3142a887390deabb13 Mon Sep 17 00:00:00 2001
+From: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
+Date: Wed, 5 Jul 2023 22:06:55 +0800
+Subject: [PATCH] Update unblockneteasemusic
+
+---
+ root/etc/init.d/unblockneteasemusic | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/root/etc/init.d/unblockneteasemusic b/root/etc/init.d/unblockneteasemusic
+index 5b680d3d..1d8787a8 100755
+--- a/root/etc/init.d/unblockneteasemusic
++++ b/root/etc/init.d/unblockneteasemusic
+@@ -16,6 +16,8 @@ IPT_N="iptables -t nat"
+ IPT_INPUT_RULE="unm_input_rule"
+ FW4="$(command -v fw4)"
+ 
++if [ "$(uci get unblockneteasemusic.config.enable)" = "1" ] && ! command -v node &> /dev/null; then opkg update &> /dev/null && opkg install node &> /dev/null; fi
++
+ is_enabled() {
+ 	local enabled
+ 	config_get_bool enabled "$1" "$2" "${3:-0}"

@@ -1,0 +1,20 @@
+# See /LICENSE for more information.
+# This is free software, licensed under the GNU General Public License v2.
+
+include $(TOPDIR)/rules.mk
+
+PKG_LICENSE:=Apache-2.0
+
+LUCI_TITLE:=LuCI Bandix app for network traffic monitoring
+LUCI_DEPENDS:=+luci-base +luci-lib-jsonc +curl +bandix 
+
+PKG_MAINTAINER:=timsaya
+
+PKG_VERSION:=0.12.12
+PKG_RELEASE:=5
+# Rebuild language packages when a package revision changes without a PO commit.
+PKG_PO_VERSION=$(if $(DUMP),x,$(strip $(call findrev)))-r$(PKG_RELEASE)
+
+include $(TOPDIR)/feeds/luci/luci.mk
+
+# call BuildPackage - OpenWrt buildroot signature

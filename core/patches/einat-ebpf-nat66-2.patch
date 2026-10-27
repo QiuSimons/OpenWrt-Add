@@ -1,0 +1,29 @@
+From aa766bd469900b7f9a6ac05f10621337267ed66f Mon Sep 17 00:00:00 2001
+From: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
+Date: Thu, 11 Sep 2025 17:03:51 +0800
+Subject: [PATCH] nat66 makefile
+
+---
+ Makefile | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index 36ea3f7..b4a3298 100644
+--- a/Makefile
++++ b/Makefile
+@@ -94,14 +94,13 @@ define Package/$(PKG_NAME)/config
+ 
+ 		config EINAT_EBPF_IPV6
+ 			bool "Enable IPV6 NAT66 feature"
+-			default n
++			default y
+ 			help
+ 			  It would increase load time of eBPF programs to
+ 			  about 4 times.
+ 
+ 		config EINAT_EBPF_BACKEND_LIBBPF
+ 			bool "Enable libbpf backend"
+-			default y if (aarch64 || x86_64)
+ 			default n
+ 			help
+ 			  Add fallback BPF loading backend: "libbpf".

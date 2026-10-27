@@ -3,199 +3,51 @@ name: Update PKG
 on:
   workflow_dispatch:
   schedule:
-    - cron: 0 16 * * *
+    - cron: '23 20 * * *'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Update Makefile
+      - name: Setup Environment
         run: |
-          rm -rf FlowCone airconnect-openwrt luci-theme-graphite luci-app-graphite localclash-luci lede_pkg openwrt-bandix luci-app-bandix luci-app-frpc_frps openwrt-einat-ebpf luci-app-einat nft-fullcone shortcut-fe luci-app-airconnect feeds_packages_lang_node-prebuilt package_kernel_r8125 OpenAppFilter luci-app-mosdns packages_new_nat6 luci-app-daed openwrt-r8168 luci-theme-argon luci-app-ramfree luci-app-argon-config luci-app-dnsfilter luci-theme-edge luci-app-xlnetacc luci-app-mentohust MentoHUST-OpenWrt-ipk luci-app-oled homeproxy OpenClash luci-app-wechatpush luci-app-v2raya luci-app-natmapt openwrt-natmapt openwrt-stuntman luci-app-unblockneteasemusic OpenWrt-mihomo wrtbwmon luci-app-wrtbwmon openwrt_helloworld openwrt_pkgs openwrt-natflow autocore-arm luci-app-taskplan luci-app-partexp luci-app-frps luci-app-frpc luci-app-uugamebooster uugamebooster luci-app-ap-modem luci-app-arpbind imm_pkg openwrt-qBittorrent luci-app-filemanager luci-app-dae luci-app-honk luci-theme-aurora luci-app-aurora-config 
-          git clone --depth 1 https://github.com/Zakkaus/luci-theme-graphite
-          git clone --depth 1 https://github.com/Zakkaus/luci-app-graphite
-          git clone --depth 1 https://github.com/QiuSimons/FlowCone
-          git clone --depth 1 https://github.com/qoli/localclash-luci
-          git clone --depth 1 https://github.com/QiuSimons/luci-app-honk
-          git clone --depth 1 https://git.cooluc.com/sbwml/shortcut-fe
-          sed -i '/AUTOLOAD/d' ./shortcut-fe/shortcut-fe/Makefile
-          cp -rf ./shortcut-fe.bak ./shortcut-fe/shortcut-fe/files/etc/init.d/shortcut-fe
-          rm -rf ./shortcut-fe
-          git clone --depth 1 https://github.com/QiuSimons/airconnect-openwrt
-          git clone --depth 1 https://github.com/sbwml/feeds_packages_lang_node-prebuilt
-          git clone --depth 1 https://github.com/sbwml/package_kernel_r8125
-          git clone -b v6 https://github.com/sbwml/OpenAppFilter
-          sed -i 's/\r$//' ./OpenAppFilter/open-app-filter/src/appfilter_ubus.c
-          patch -l -p0 < patches/OpenAppFilter-disable-auto-load-engine.patch
-          git clone --depth 1 https://github.com/sbwml/luci-app-mosdns
-          git clone --depth 1 https://github.com/sbwml/openwrt_helloworld
-          wget https://github.com/kongfl888/openwrt-dns2socks/raw/refs/heads/master/Makefile -O ./openwrt_helloworld/dns2socks/Makefile
-          rm -rf ./openwrt_helloworld/{luci-app-ssr-plus,luci-app-passwall,simple-obfs,lua-neturl,sing-box,luci-app-mihomo,mihomo,luci-app-nikki,nikki,luci-app-homeproxy,luci-app-openclash,luci-app-daed,daed,luci-app-dae,dae,v2ray-geodata}
-          git clone --depth 1 https://github.com/fw876/helloworld
-          git clone --depth 1 https://github.com/Openwrt-Passwall/openwrt-passwall
-          cp -rf ./helloworld/lua-neturl ./openwrt_helloworld/lua-neturl
-          cp -rf ./helloworld/simple-obfs ./openwrt_helloworld/simple-obfs
-          cp -rf ./helloworld/luci-app-ssr-plus ./openwrt_helloworld/luci-app-ssr-plus
-          cp -rf ./openwrt-passwall/luci-app-passwall ./openwrt_helloworld/luci-app-passwall
-          rm -rf ./helloworld
-          rm -rf ./openwrt-passwall
-          sed -i '/select PACKAGE_trojan-plus/{N;s/default y/default n/;}' ./openwrt_helloworld/luci-app-passwall/Makefile
-          sed -i 's/result.insecure = "0"/result.insecure = "1"/g' ./openwrt_helloworld/luci-app-ssr-plus/root/usr/share/shadowsocksr/subscribe.lua
-          git clone --depth 1 https://github.com/sbwml/openwrt_pkgs
-          rm -rf ./openwrt_pkgs/luci-app-ramfree
-          rm -rf ./openwrt_pkgs/luci-app-zerotier
-          git clone https://github.com/sbwml/autocore-arm
-          #git -C autocore-arm checkout b465a40
-          sed -i '/init/d' ./autocore-arm/Makefile
-          sed -i '/autocore.json/a\\	$(INSTALL_BIN) ./files/x86/autocore $(1)/etc/init.d/' ./autocore-arm/Makefile
-          sed -i '/autocore.json/a\\	$(INSTALL_DIR) $(1)/etc/init.d' ./autocore-arm/Makefile
-          cp -rf ./autocore ./autocore-arm/files/x86/
-          sed -i 's/png/svg/g' ./autocore-arm/files/generic/29_ports.js
-          sed -i "s|/sys/module/shortcut_fe/refcnt|/etc/init.d/shortcut-fe|" ./autocore-arm/files/generic/luci
-          git clone --depth 1 https://github.com/sbwml/openwrt-qBittorrent
-          git clone -b kix --depth 1 https://github.com/QiuSimons/luci-app-daed
-          git clone -b kix --depth 1 https://github.com/QiuSimons/luci-app-dae
-          git clone --depth 1 https://github.com/QiuSimons/openwrt-natflow
-          git clone --depth 1 https://github.com/muink/openwrt-einat-ebpf
-          pushd openwrt-einat-ebpf
-          wget -qO - https://github.com/muink/openwrt-einat-ebpf/commit/66d09a2.patch | patch -p1
-          wget -qO - https://github.com/muink/openwrt-einat-ebpf/commit/aa766bd.patch | patch -p1
-          sed -i 's/=60/=99/g' ./files/einat.init
-          popd
-          git clone --depth 1 https://github.com/muink/luci-app-einat
-          pushd luci-app-einat
-          wget -qO - https://github.com/muink/luci-app-einat/commit/6bd2ece.patch | patch -p1
-          popd
-          git clone --depth 1 https://github.com/timsaya/openwrt-bandix
-          sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/g' openwrt-bandix/openwrt-bandix/Makefile
-          git clone --depth 1 https://github.com/timsaya/luci-app-bandix
-          git clone -b master https://github.com/jerrykuku/luci-theme-argon
-          sed -i 's/26rem/30rem/g' ./luci-theme-argon/htdocs/luci-static/argon/css/cascade.css
-          sed -i 's/\.login-page \.login-container{margin-left:0rem !important;width:100%}/.login-page .login-container{margin-left:0rem !important;width:100%;height:auto!important;position:fixed;top:0;bottom:0;overflow-y:auto}/' ./luci-theme-argon/htdocs/luci-static/argon/css/cascade.css
-          #git -C ./luci-theme-argon checkout 88cd27c
-          #sed -i 's/420px/440px/g' ./luci-theme-argon/htdocs/luci-static/argon/css/cascade.css
-          git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config
-          git clone --depth 1 https://github.com/eamonxg/luci-theme-aurora
-          git clone --depth 1 https://github.com/eamonxg/luci-app-aurora-config
-          git clone --depth 1 https://github.com/kiddin9/luci-app-dnsfilter
-          git clone --depth 1 https://github.com/kiddin9/luci-theme-edge
-          git clone --depth 1 https://github.com/kiddin9/luci-app-xlnetacc
-          git clone --depth 1 https://github.com/BoringCat/luci-app-mentohust
-          git clone --depth 1 https://github.com/KyleRicardo/MentoHUST-OpenWrt-ipk
-          git clone --depth 1 https://github.com/NateLol/luci-app-oled
-          git clone --depth 1 https://github.com/immortalwrt/homeproxy
-          git clone --depth 1 https://github.com/vernesong/OpenClash
-          rm -rf ./OpenClash/luci-app-openclash/root/etc/openclash/GeoSite.dat
-          git clone --depth 1 https://github.com/tty228/luci-app-wechatpush
-          git clone --depth 1 https://github.com/muink/luci-app-natmapt
-          git clone --depth 1 https://github.com/muink/openwrt-natmapt
-          git clone --depth 1 https://github.com/muink/openwrt-stuntman
-          git clone --depth 1 https://github.com/UnblockNeteaseMusic/luci-app-unblockneteasemusic
-          sed -i 's, +node,,g' ./luci-app-unblockneteasemusic/Makefile
-          pushd luci-app-unblockneteasemusic
-          wget -qO - https://github.com/UnblockNeteaseMusic/luci-app-unblockneteasemusic/commit/a880428.patch | patch -p1
-          popd
-          git clone --depth 1 https://github.com/morytyann/OpenWrt-mihomo
-          git clone --depth 1 https://github.com/brvphoenix/wrtbwmon
-          git clone --depth 1 https://github.com/brvphoenix/luci-app-wrtbwmon
-          git clone --depth 1 https://github.com/sirpdboy/luci-app-taskplan
-          #cp -rf ./sirpdboy-package/luci-app-taskplan ./luci-app-taskplan
-          sed -i 's/admin\/control\/taskplan/admin\/system\/taskplan/g' ./luci-app-taskplan/luci-app-taskplan/root/usr/share/luci/menu.d/luci-app-taskplan.json
-          git clone --depth 1 https://github.com/sirpdboy/luci-app-partexp
-          #cp -rf ./sirpdboy-package/luci-app-partexp ./luci-app-partexp
-          #rm -rf ./luci-app-partexp/luci-app-partexp/po/zh_Hans
-          #sed -i 's, - !, -o !,g' luci-app-partexp/luci-app-partexp/root/etc/init.d/partexp
-          #sed -i 's,expquit 1 ,#expquit 1 ,g' luci-app-partexp/luci-app-partexp/root/etc/init.d/partexp
-          #rm -rf ./sirpdboy-package
-          git clone --depth 1 https://github.com/superzjg/luci-app-frpc_frps
-          git clone --depth 1 https://github.com/coolsnowwolf/luci
-          cp -rf ./luci/applications/luci-app-uugamebooster ./luci-app-uugamebooster
-          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-uugamebooster/Makefile
-          rm -rf ./luci
-          git clone --depth 1 https://github.com/coolsnowwolf/packages
-          cp -rf ./packages/net/uugamebooster ./uugamebooster
-          rm -rf ./packages
-          git clone --depth 1 https://github.com/linkease/openwrt-app-actions
-          cp -rf ./openwrt-app-actions/applications/luci-app-ap-modem ./luci-app-ap-modem
-          rm -rf ./openwrt-app-actions
-          git clone --depth 1 https://github.com/immortalwrt/luci
-          cp -rf ./luci/applications/luci-app-ramfree ./luci-app-ramfree
-          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-ramfree/Makefile
-          cp -rf ./luci/applications/luci-app-arpbind ./luci-app-arpbind
-          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-arpbind/Makefile
-          rm -rf ./luci-app-zerotier
-          cp -rf ./luci/applications/luci-app-zerotier ./luci-app-zerotier
-          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-zerotier/Makefile
-          rm -rf ./luci-app-3cat
-          cp -rf ./luci/applications/luci-app-3cat ./luci-app-3cat
-          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' luci-app-3cat/Makefile
-          rm -rf ./luci
-          git clone --depth 1 https://github.com/coolsnowwolf/lede
-          mkdir -p lede_pkg
-          cp -rf ./lede/package/network/services/fullconenat-nft ./lede_pkg/fullconenat-nft
-          cp -rf ./lede/package/kernel/r8168 ./lede_pkg/r8168
-          rm -rf ./lede
-          git clone https://github.com/immortalwrt/packages
-          mkdir -p imm_pkg
-          cp -rf ./packages/utils/cpulimit ./imm_pkg/cpulimit
-          cp -rf ./packages/net/3proxy ./imm_pkg/3proxy
-          cp -rf ./packages/net/subconverter ./imm_pkg/subconverter
-          cp -rf ./packages/net/zerotier ./imm_pkg/zerotier
-          #rm -rf ./imm_pkg/zerotier/patches/0006-add-support-for-miniupnpc-2.2.8.patch
-          #wget https://github.com/sbwml/feeds_packages_net_zerotier/raw/refs/heads/main/patches/0006-fix-UPNP_GetValidIGD-function-call-for-miniupnpc-2.2.patch -O imm_pkg/zerotier/patches/0006-fix-UPNP_GetValidIGD-function-call-for-miniupnpc-2.2.patch
-          cp -rf ./packages/libs/jpcre2 ./imm_pkg/jpcre2
-          cp -rf ./packages/libs/rapidjson ./imm_pkg/rapidjson
-          cp -rf ./packages/libs/libcron ./imm_pkg/libcron
-          cp -rf ./packages/libs/quickjspp ./imm_pkg/quickjspp
-          cp -rf ./packages/libs/toml11 ./imm_pkg/toml11
-          cp -rf ./packages/libs/libcronet ./imm_pkg/libcronet
-          cp -rf ./packages/net/sing-box ./imm_pkg/sing-box
-          sed -i 's|\.\./\.\./|$(TOPDIR)/feeds/packages/|' ./imm_pkg/sing-box/Makefile
-          cp -rf ./packages/net/frp ./imm_pkg/frp
-          sed -i '/etc/d' imm_pkg/frp/Makefile
-          sed -i '/defaults/{N;d;}' imm_pkg/frp/Makefile
-          sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/packages|g' imm_pkg/frp/Makefile
-          sed -i 's/ node\/host//;/Build\/Compile/,/endef/d' imm_pkg/frp/Makefile
-          sed -i '/golang-package.mk/i GO_PKG_TAGS:=noweb' imm_pkg/frp/Makefile
-          rm -rf ./packages
-          #git clone --depth 1 https://github.com/Ysurac/openmptcprouter-feeds
-          #mkdir -p autorate
-          #cp -rf ./openmptcprouter-feeds/tsping ./autorate/tsping
-          #cp -rf ./openmptcprouter-feeds/sqm-autorate ./autorate/sqm-autorate
-          #cp -rf ./openmptcprouter-feeds/luci-app-sqm-autorate ./autorate/luci-app-sqm-autorate
-          #rm -rf ./openmptcprouter-feeds
-          find . -mindepth 2 -name ".git" -type d -exec rm -rf {} +
-          bash remove_upx.sh
-          bash create_acl_for_luci.sh -a
-          bash move_2_services.sh
-          bash fix_permissions.sh
-          bash list.sh
-          bash fix_pkg_version.sh
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq patch curl git
 
-      - name: Commit file
+      - name: Sync and Standardize Packages
         run: |
-          git config --global user.email simonsqiu@foxmail.com
-          git config --global user.name SimonsQiu
-          git add .
-          git commit -m "Update `date +%Y/%m/%d\ %H:%M:%S\ %Z`" -a
+          chmod +x core/scripts/*.sh core/tools/*.sh 2>/dev/null || true
+          bash core/scripts/update.sh
+
+      - name: Commit changes
+        run: |
+          git config --global user.email "simonsqiu@foxmail.com"
+          git config --global user.name "SimonsQiu"
+          if [ -n "$(git status --porcelain)" ]; then
+            git add .
+            git commit -m "Update $(date +'%Y/%m/%d %H:%M:%S %Z')"
+          else
+            echo "No changes to commit."
+          fi
         continue-on-error: true
 
       - name: Push changes
         uses: ad-m/github-push-action@master
         with:
-          github_token: ${{secrets.GITHUB_TOKEN}}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           branch: master
         continue-on-error: true
 
       - name: Cleanup Workflow Logs
         uses: Mattraks/delete-workflow-runs@main
         with:
-          token: ${{secrets.GITHUB_TOKEN}}
+          token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           retain_days: 3
         continue-on-error: true

@@ -1,0 +1,90 @@
+{
+	"luci-app-bandix": {
+		"description": "Grant access to bandix traffic monitoring",
+		"read": {
+			"ubus": {
+				"luci.bandix": [
+					"getStatus",
+					"getMetrics",
+					"getMetricsDay",
+					"getMetricsWeek",
+					"getMetricsMonth",
+					"getConnection",
+					"getConnectionFlows",
+					"setHostname",
+					"deleteDevice",
+					"getDnsQueries",
+					"getDnsStats",
+					"getScheduleLimits",
+					"setScheduleLimit",
+					"deleteScheduleLimit",
+					"clearData",
+					"restartService",
+					"getVersion",
+					"getSystemArch",
+					"checkUpdate",
+					"installUpdate",
+					"getTrafficUsageRanking",
+					"getTrafficUsageIncrements",
+					"getRateLimitWhitelist",
+					"getTrafficQuotas",
+					"getGeoipStatus"
+				]
+			},
+			"uci": [
+				"bandix"
+			]
+		},
+		"write": {
+			"ubus": {
+				"luci.bandix": [
+					"getStatus",
+					"getMetrics",
+					"getMetricsDay",
+					"getMetricsWeek",
+					"getMetricsMonth",
+					"getConnection",
+					"getConnectionFlows",
+					"setHostname",
+					"deleteDevice",
+					"deleteDevices",
+					"getDnsQueries",
+					"getDnsStats",
+					"getScheduleLimits",
+					"setScheduleLimit",
+					"deleteScheduleLimit",
+					"clearData",
+					"restartService",
+					"getVersion",
+					"getSystemArch",
+					"checkUpdate",
+					"installUpdate",
+					"getTrafficUsageRanking",
+					"getTrafficUsageIncrements",
+					"getRateLimitWhitelist",
+					"getRateLimitWhitelistEnabled",
+					"setRateLimitWhitelistEnabled",
+					"addRateLimitWhitelist",
+					"deleteRateLimitWhitelist",
+					"setDefaultRateLimit",
+					"updateScheduleLimit",
+					"getTrafficQuotas",
+					"setTrafficQuota",
+					"setDirectionalTrafficQuota",
+					"setTrafficQuotaConfig",
+					"deleteTrafficQuota",
+					"getGeoipStatus",
+					"manageGeoip"
+				]
+			},
+			"uci": [
+				"bandix"
+			],
+			"file": {
+				"/tmp/bandix-geoip-upload.mmdb": [
+					"write"
+				]
+			}
+		}
+	}
+}

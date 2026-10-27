@@ -1,0 +1,1580 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgid "Bandix Traffic Monitor"
+msgstr "Монитор трафика Bandix"
+
+msgid "Loading data..."
+msgstr "Загрузка данных..."
+
+msgid "Unable to fetch data"
+msgstr "Не удалось получить данные"
+
+msgid "Unable to fetch history data"
+msgstr "Не удалось получить данные истории"
+
+msgid "Hostname"
+msgstr "Имя хоста"
+
+msgid "IP Address"
+msgstr "IP-адрес"
+
+msgid "MAC Address"
+msgstr "MAC-адрес"
+
+msgid "Download Speed"
+msgstr "Скорость загрузки"
+
+msgid "Upload Speed"
+msgstr "Скорость выгрузки"
+
+msgid "Total Download"
+msgstr "Всего загружено"
+
+msgid "Total Upload"
+msgstr "Всего выгружено"
+
+msgid "Download Limit"
+msgstr "Ограничение загрузки"
+
+msgid "Upload Limit"
+msgstr "Ограничение выгрузки"
+
+msgid "Interface Language"
+msgstr "Язык интерфейса"
+
+msgid "Select the display language for Bandix Traffic Monitor"
+msgstr "Выберите язык отображения для монитора трафика Bandix"
+
+msgid "Device Info"
+msgstr "Информация об устройстве"
+
+msgid "Device List"
+msgstr "Список устройств"
+
+msgid "LAN Traffic"
+msgstr "Трафик LAN"
+
+msgid "WAN Traffic"
+msgstr "Трафик WAN"
+
+msgid "Network Type"
+msgstr "Тип Сети"
+
+msgid "Rate Limit"
+msgstr "Ограничение скорости"
+
+msgid "Actions"
+msgstr "Действия"
+
+msgid "Online Devices"
+msgstr "Устройства в сети"
+
+msgid "WAN Only"
+msgstr "Только WAN"
+
+msgid "Settings"
+msgstr "Настройки"
+
+msgid "Device Settings"
+msgstr "Настройки устройства"
+
+msgid "Rate Limits"
+msgstr "Настройки ограничения"
+
+msgid "Remove Rate Limit"
+msgstr "Снять ограничение"
+
+msgid "Save"
+msgstr "Сохранить"
+
+msgid "Cancel"
+msgstr "Отмена"
+
+msgid "Set Rate Limit"
+msgstr "Установить ограничение"
+
+msgid "Device"
+msgstr "Устройство"
+
+msgid "Set Hostname"
+msgstr "Установить имя хоста"
+
+msgid "Please enter hostname"
+msgstr "Введите имя хоста"
+
+msgid "Hostname set successfully"
+msgstr "Имя хоста успешно установлено"
+
+msgid "Failed to set hostname"
+msgstr "Не удалось установить имя хоста"
+
+msgid "Unlimited"
+msgstr "Без ограничений"
+
+msgid "Settings saved successfully"
+msgstr "Настройки успешно сохранены"
+
+msgid "Failed to save settings"
+msgstr "Не удалось сохранить настройки"
+
+msgid "Please enter a valid speed value"
+msgstr "Введите допустимое значение скорости"
+
+msgid "Speed value must be greater than 0"
+msgstr "Скорость должна быть больше 0"
+
+msgid "Saving..."
+msgstr "Сохранение..."
+
+msgid "Rate limiting only applies to WAN traffic."
+msgstr "Ограничение скорости применяется только к трафику WAN. Некоторые внутренние трафики LAN могут не отслеживаться из-за аппаратного ускорения коммутации."
+
+msgid "Tip: Enter 0 for unlimited"
+msgstr "Подсказка: введите 0 для без ограничений"
+
+msgid "Traffic History"
+msgstr "История трафика"
+
+msgid "Realtime Traffic Trends"
+msgstr "Тренды Трафика в Реальном Времени"
+
+msgid "Select Device"
+msgstr "Выбрать устройство"
+
+msgid "All Devices"
+msgstr "Все устройства"
+
+msgid "Time Range"
+msgstr "Временной диапазон"
+
+msgid "Last 5 minutes"
+msgstr "Последние 5 минут"
+
+msgid "Last 30 minutes"
+msgstr "Последние 30 минут"
+
+msgid "Last 2 hours"
+msgstr "Последние 2 часа"
+
+msgid "Type"
+msgstr "Тип"
+
+msgid "Total"
+msgstr "Всего"
+
+msgid "LAN"
+msgstr "Трафик LAN"
+
+msgid "WAN"
+msgstr "Трафик WAN"
+
+msgid "Refresh"
+msgstr "Обновить"
+
+msgid "Upload Rate"
+msgstr "Скорость выгрузки"
+
+msgid "Download Rate"
+msgstr "Скорость загрузки"
+
+msgid "Last"
+msgstr "Последний"
+
+msgid "second"
+msgstr "секунда"
+
+msgid "minute"
+msgstr "минута"
+
+msgid "hour"
+msgstr "час"
+
+msgid "day"
+msgstr "день"
+
+msgid "week"
+msgstr "неделя"
+
+msgid "Other Rates"
+msgstr "Другие скорости"
+
+msgid "Cumulative"
+msgstr "Накопительный трафик"
+
+msgid "Total Uploaded"
+msgstr "Всего отправлено"
+
+msgid "Total Downloaded"
+msgstr "Всего загружено"
+
+msgid "LAN Uploaded"
+msgstr "LAN отправлено"
+
+msgid "LAN Downloaded"
+msgstr "LAN загружено"
+
+msgid "WAN Uploaded"
+msgstr "WAN отправлено"
+
+msgid "WAN Downloaded"
+msgstr "WAN загружено"
+
+msgid "LAN Upload"
+msgstr "Скорость отправки LAN"
+
+msgid "LAN Download"
+msgstr "Скорость загрузки LAN"
+
+msgid "WAN Upload"
+msgstr "Скорость отправки WAN"
+
+msgid "WAN Download"
+msgstr "Скорость загрузки WAN"
+
+msgid "Never Online"
+msgstr "Никогда не был в сети"
+
+msgid "Just Now"
+msgstr "Только что"
+
+msgid "min ago"
+msgstr "мин назад"
+
+msgid "h ago"
+msgstr "ч назад"
+
+msgid "days ago"
+msgstr "дн назад"
+
+msgid "months ago"
+msgstr "мес назад"
+
+msgid "years ago"
+msgstr "лет назад"
+
+msgid "Last Online"
+msgstr "Последний раз в сети"
+
+msgid "Zoom"
+msgstr "Масштаб"
+
+msgid "Sort By"
+msgstr "Сортировать по"
+
+msgid "Online Status"
+msgstr "Статус в сети"
+
+msgid "Total Traffic"
+msgstr "Всего трафика"
+
+msgid "Ascending"
+msgstr "По возрастанию"
+
+msgid "Descending"
+msgstr "По убыванию"
+
+msgid "Sort by Speed"
+msgstr "Сортировать по скорости"
+
+msgid "Sort by Traffic"
+msgstr "Сортировать по трафику"
+
+msgid "Simple Mode"
+msgstr "Простой режим"
+
+msgid "Detailed Mode"
+msgstr "Подробный режим"
+
+msgid "Bandix DNS Monitor"
+msgstr "Монитор DNS Bandix"
+
+msgid "DNS Monitor"
+msgstr "Монитор DNS"
+
+msgid "DNS Query Records"
+msgstr "Записи запросов DNS"
+
+msgid "DNS Statistics"
+msgstr "Статистика DNS"
+
+msgid "DNS Monitoring Disabled"
+msgstr "Мониторинг DNS отключён"
+
+msgid "Please enable DNS monitoring in settings"
+msgstr "Включите мониторинг DNS в настройках"
+
+msgid "Go to Settings"
+msgstr "Перейти в настройки"
+
+msgid "No Data"
+msgstr "Нет данных"
+
+msgid "Time"
+msgstr "Время"
+
+msgid "Domain"
+msgstr "Домен"
+
+msgid "Query Type"
+msgstr "Тип запроса"
+
+msgid "Response Code"
+msgstr "Код ответа"
+
+msgid "Response Time"
+msgstr "Время отклика"
+
+msgid "Source IP"
+msgstr "IP источника"
+
+msgid "Destination IP"
+msgstr "IP назначения"
+
+msgid "Response IPs"
+msgstr "IP ответа"
+
+msgid "Response Result"
+msgstr "Результат ответа"
+
+msgid "DNS Server"
+msgstr "DNS-сервер"
+
+msgid "Query"
+msgstr "Запрос"
+
+msgid "Response"
+msgstr "Ответ"
+
+msgid "Filter"
+msgstr "Фильтр"
+
+msgid "Domain Filter"
+msgstr "Фильтр домена"
+
+msgid "Device Filter"
+msgstr "Фильтр устройства"
+
+msgid "DNS Server Filter"
+msgstr "Фильтр DNS-сервера"
+
+msgid "Type Filter"
+msgstr "Фильтр типа"
+
+msgid "All"
+msgstr "Все"
+
+msgid "Period"
+msgstr "Период"
+
+msgid "Display Mode"
+msgstr "Режим Отображения"
+
+msgid "This Year"
+msgstr "Этот Год"
+
+msgid "Week"
+msgstr "Эта Неделя"
+
+msgid "Month"
+msgstr "Этот Месяц"
+
+msgid "Year"
+msgstr "Этот Год"
+
+msgid "Queries Only"
+msgstr "Только запросы"
+
+msgid "Responses Only"
+msgstr "Только ответы"
+
+msgid "Search"
+msgstr "Поиск"
+
+msgid "Search Domain"
+msgstr "Поиск домена"
+
+msgid "Search Device"
+msgstr "Поиск устройства"
+
+msgid "Search DNS Server"
+msgstr "Поиск DNS-сервера"
+
+msgid "Clear"
+msgstr "Очистить"
+
+msgid "Previous"
+msgstr "Предыдущая"
+
+msgid "Next"
+msgstr "Следующая"
+
+msgid "Page"
+msgstr "Страница"
+
+msgid "of"
+msgstr "из"
+
+msgid "records"
+msgstr "записей"
+
+msgid "Per Page"
+msgstr "На странице"
+
+msgid "Total Queries"
+msgstr "Всего запросов"
+
+msgid "Total Responses"
+msgstr "Всего ответов"
+
+msgid "Queries with Response"
+msgstr "Запросы с ответом"
+
+msgid "Queries without Response"
+msgstr "Запросы без ответа"
+
+msgid "Avg Response Time"
+msgstr "Среднее время ответа"
+
+msgid "Min Response Time"
+msgstr "Минимальное время ответа"
+
+msgid "Max Response Time"
+msgstr "Максимальное время ответа"
+
+msgid "Success Rate"
+msgstr "Процент успеха"
+
+msgid "Success"
+msgstr "Успешно"
+
+msgid "Failure"
+msgstr "Ошибка"
+
+msgid "Top Domains"
+msgstr "Самые запрашиваемые домены"
+
+msgid "Top Query Types"
+msgstr "Самые частые типы запросов"
+
+msgid "Top Devices"
+msgstr "Самые активные устройства"
+
+msgid "Top DNS Servers"
+msgstr "Самые частые DNS-серверы"
+
+msgid "Unique Devices"
+msgstr "Уникальных устройств"
+
+msgid "ms"
+msgstr "мс"
+
+msgid "minutes"
+msgstr "минут"
+
+msgid "Unknown Device"
+msgstr "Неизвестное устройство"
+
+msgid "Domain not found"
+msgstr "Домен не найден"
+
+msgid "Server error"
+msgstr "Ошибка сервера"
+
+msgid "Format error"
+msgstr "Ошибка формата"
+
+msgid "Refused"
+msgstr "Отказ"
+
+msgid "Other"
+msgstr "Другое"
+
+msgid "Does not include DoH and DoT"
+msgstr "Не включает DoH и DoT"
+
+msgid "Latest Response Time"
+msgstr "Последнее время ответа"
+
+msgid "Response Code Distribution"
+msgstr "Распределение кодов ответа"
+
+msgid "Response Time Percentiles"
+msgstr "Перцентили времени ответа"
+
+msgid "P50"
+msgstr "P50"
+
+msgid "P90"
+msgstr "P90"
+
+msgid "P95"
+msgstr "P95"
+
+msgid "P99"
+msgstr "P99"
+
+msgid "Bandix Connection Monitor"
+msgstr "Монитор соединений Bandix"
+
+msgid "Connection Monitor"
+msgstr "Монитор соединений"
+
+msgid "Device Connection Statistics"
+msgstr "Статистика соединений по устройствам"
+
+msgid "Global Connection Statistics"
+msgstr "Общая статистика соединений"
+
+msgid "Active TCP"
+msgstr "Активный TCP"
+
+msgid "Active UDP"
+msgstr "Активный UDP"
+
+msgid "Closed TCP"
+msgstr "Закрытый TCP"
+
+msgid "Total Connections"
+msgstr "Всего соединений"
+
+msgid "Last Updated"
+msgstr "Последнее обновление"
+
+msgid "TCP Connections"
+msgstr "Соединения TCP"
+
+msgid "UDP Connections"
+msgstr "Соединения UDP"
+
+msgid "Established TCP"
+msgstr "Установленный TCP"
+
+msgid "TIME_WAIT TCP"
+msgstr "TIME_WAIT TCP"
+
+msgid "CLOSE_WAIT TCP"
+msgstr "CLOSE_WAIT TCP"
+
+msgid "Total Devices"
+msgstr "Всего устройств"
+
+msgid "Connection Monitor Disabled"
+msgstr "Мониторинг соединений отключён"
+
+msgid "Please enable connection monitoring in settings"
+msgstr "Включите мониторинг соединений в настройках"
+
+msgid "List only shows LAN device connections, data may differ from total connections."
+msgstr "Список показывает только соединения устройств LAN, данные могут отличаться от общего числа соединений."
+
+msgid "TCP Status Details"
+msgstr "Подробности статуса TCP"
+
+msgid "Basic Settings"
+msgstr "Основные настройки"
+
+msgid "Traffic Monitor Settings"
+msgstr "Настройки монитора трафика"
+
+msgid "Connection Monitor Settings"
+msgstr "Настройки монитора соединений"
+
+msgid "DNS Monitor Settings"
+msgstr "Настройки монитора DNS"
+
+msgid "Bandix Basic Configuration"
+msgstr "Базовая конфигурация Bandix"
+
+msgid "Configure basic parameters for Bandix service"
+msgstr "Настройка базовых параметров службы Bandix"
+
+msgid "Bandix Traffic Monitor Configuration"
+msgstr "Конфигурация монитора трафика Bandix"
+
+msgid "Configure traffic monitoring related parameters"
+msgstr "Настройка параметров мониторинга трафика"
+
+msgid "Bandix Connection Monitor Configuration"
+msgstr "Конфигурация монитора соединений Bandix"
+
+msgid "Configure connection monitoring related parameters"
+msgstr "Настройка параметров мониторинга соединений"
+
+msgid "Bandix DNS Monitor Configuration"
+msgstr "Конфигурация монитора DNS Bandix"
+
+msgid "Configure DNS monitoring related parameters"
+msgstr "Настройка параметров мониторинга DNS"
+
+msgid "Enable"
+msgstr "Включить"
+
+msgid "Enable Bandix Traffic Monitor Service"
+msgstr "Включить службу мониторинга трафика Bandix"
+
+msgid "Enable Traffic Monitoring"
+msgstr "Включить мониторинг трафика"
+
+msgid "Enable Connection Monitoring"
+msgstr "Включить мониторинг соединений"
+
+msgid "Enable DNS Monitoring"
+msgstr "Включить мониторинг DNS"
+
+msgid "Simplified Chinese"
+msgstr "Китайский упрощённый"
+
+msgid "Traditional Chinese"
+msgstr "Китайский традиционный"
+
+msgid "Port"
+msgstr "Порт"
+
+msgid "Port for Bandix service to listen on"
+msgstr "Порт, на котором прослушивает служба Bandix"
+
+msgid "TC Priority"
+msgstr "Приоритет TC"
+
+msgid "Set TC filter priority to better coexist with other eBPF TC programs. Lower numbers indicate higher priority. 0 means system-assigned."
+msgstr "Установите приоритет фильтра TC для лучшего сосуществования с другими программами eBPF TC. Меньшие числа указывают на более высокий приоритет. 0 означает назначенный системой."
+
+msgid "Monitor Interface"
+msgstr "Интерфейс мониторинга"
+
+msgid "Select the LAN network interface to monitor"
+msgstr "Выберите сетевой интерфейс LAN для мониторинга"
+
+msgid "Speed Units"
+msgstr "Единицы скорости"
+
+msgid "Select the speed display unit format"
+msgstr "Выберите формат единиц отображения скорости"
+
+msgid "Bytes Units (B/s, KiB/s, MiB/s)"
+msgstr "Единицы в байтах (B/s, KiB/s, MiB/s)"
+
+msgid "Bits Units (bps, kbps, Mbps)"
+msgstr "Единицы в битах (bps, kbps, Mbps)"
+
+msgid "Interface Theme"
+msgstr "Тема интерфейса"
+
+msgid "Select the display theme for Bandix Traffic Monitor"
+msgstr "Выберите тему отображения монитора трафика Bandix"
+
+msgid "Follow System"
+msgstr "Следовать системе"
+
+msgid "Light Mode"
+msgstr "Светлый режим"
+
+msgid "Dark Mode"
+msgstr "Тёмный режим"
+
+msgid "Feedback"
+msgstr "Обратная связь"
+
+msgid "Log Level"
+msgstr "Уровень журналирования"
+
+msgid "Set the log level for Bandix service"
+msgstr "Установить уровень логирования службы Bandix"
+
+msgid "Offline Timeout"
+msgstr "Таймаут офлайн"
+
+msgid "Set the timeout for device offline detection (seconds). Devices inactive for longer than this time will be marked as offline"
+msgstr "Установить таймаут определения офлайн (секунды). Устройства, неактивные дольше, будут помечены офлайн"
+
+msgid "Realtime Traffic Period"
+msgstr "Период трафика в реальном времени"
+
+msgid "10 minutes interval uses about 60 KiB per device"
+msgstr "Интервал 10 минут использует около 60 KiB на устройство"
+
+msgid "Data Flush Interval"
+msgstr "Интервал сброса данных"
+
+msgid "Set the interval for flushing data to disk"
+msgstr "Установить интервал записи данных на диск"
+
+msgid "1 minute"
+msgstr "1 минута"
+
+msgid "5 minutes"
+msgstr "5 минут"
+
+msgid "10 minutes"
+msgstr "10 минут"
+
+msgid "15 minutes"
+msgstr "15 минут"
+
+msgid "20 minutes"
+msgstr "20 минут"
+
+msgid "25 minutes"
+msgstr "25 минут"
+
+msgid "30 minutes"
+msgstr "30 минут"
+
+msgid "1 hour"
+msgstr "1 час"
+
+msgid "2 hours"
+msgstr "2 часа"
+
+msgid "12 hours"
+msgstr "12 часов"
+
+msgid "24 hours"
+msgstr "24 часа"
+
+msgid "Data Directory"
+msgstr "Каталог данных"
+
+msgid "If you change the directory, please manually add it to the backup directory"
+msgstr "Если вы измените каталог, пожалуйста, добавьте его вручную в каталог резервных копий"
+
+msgid "Bandix data storage directory"
+msgstr "Каталог хранения данных Bandix"
+
+msgid "Enable Bandix connection monitoring"
+msgstr "Включить мониторинг соединений Bandix"
+
+msgid "Enable Bandix DNS monitoring"
+msgstr "Включить мониторинг DNS Bandix"
+
+msgid "DNS Max Records"
+msgstr "Максимум записей DNS"
+
+msgid "Set the maximum number of DNS query records to keep. Older records will be deleted when this limit is exceeded"
+msgstr "Установить максимальное количество сохраняемых записей DNS. При превышении старые записи будут удаляться"
+
+msgid "Persist DNS Data"
+msgstr "Сохранять данные DNS"
+
+msgid "Enable DNS data persistence functionality, data will only be persisted to disk when this option is enabled"
+msgstr "Включить функцию постоянного хранения данных DNS, данные будут сохраняться на диск только при включении этой опции"
+
+msgid "DNS Data Flush Interval"
+msgstr "Интервал сброса данных DNS"
+
+msgid "Set the interval for flushing DNS data to disk"
+msgstr "Установить интервал для сброса данных DNS на диск"
+
+msgid "Persist History Data"
+msgstr "Сохранять историю данных"
+
+msgid "Enable data persistence functionality, data will only be persisted to disk when this option is enabled"
+msgstr "Включить функцию постоянного хранения данных, данные будут сохраняться на диск только при включении этой опции"
+
+msgid "Does not occupy storage space, stored only in memory"
+msgstr "Не занимает дисковое пространство, хранится только в памяти"
+
+msgid "Query & Response"
+msgstr "Запрос и Ответ"
+
+msgid "Queries"
+msgstr "Запросы"
+
+msgid "Responses"
+msgstr "Ответы"
+
+msgid "Average Response Time"
+msgstr "Среднее Время Ответа"
+
+msgid "Show More"
+msgstr "Показать больше"
+
+msgid "Show Less"
+msgstr "Показать меньше"
+
+msgid "Add Schedule Rule"
+msgstr "Добавить правило ограничения по расписанию"
+
+msgid "Add Rule"
+msgstr "Добавить правило"
+
+msgid "Set rate limit rules for different time periods"
+msgstr "Установить правила ограничения скорости для разных периодов времени"
+
+msgid "Time Slot"
+msgstr "Временной интервал"
+
+msgid "Days of Week"
+msgstr "Дни недели"
+
+msgid "Mon"
+msgstr "Пн"
+
+msgid "Tue"
+msgstr "Вт"
+
+msgid "Wed"
+msgstr "Ср"
+
+msgid "Thu"
+msgstr "Чт"
+
+msgid "Fri"
+msgstr "Пт"
+
+msgid "Sat"
+msgstr "Сб"
+
+msgid "Sun"
+msgstr "Вс"
+
+msgid "Adding..."
+msgstr "Добавление..."
+
+msgid "Failed to add schedule rule: "
+msgstr "Не удалось добавить правило расписания: "
+
+msgid "Please set time slot"
+msgstr "Пожалуйста, установите временной интервал"
+
+msgid "Please select at least one day"
+msgstr "Пожалуйста, выберите хотя бы один день"
+
+msgid "No scheduled rules yet, click \"Add Rule\" to start setting"
+msgstr "Правил расписания пока нет, нажмите \"Добавить правило\", чтобы начать настройку"
+
+msgid "Loading..."
+msgstr "Загрузка..."
+
+msgid "Loading in chunks, please wait... (%d/%d)"
+msgstr "Поштучная загрузка, подождите... (%d/%d)"
+
+msgid "No schedule rules"
+msgstr "Нет правил расписания"
+
+msgid "Failed to load schedule rules"
+msgstr "Не удалось загрузить правила расписания"
+
+msgid "Delete Schedule Rule"
+msgstr "Удалить правило ограничения по расписанию"
+
+msgid "Are you sure you want to delete this schedule rule?"
+msgstr "Вы уверены, что хотите удалить это правило расписания?"
+
+msgid "Failed to delete schedule rule"
+msgstr "Не удалось удалить правило расписания"
+
+msgid "Delete Device"
+msgstr "Удалить устройство"
+
+msgid "Are you sure you want to delete this device? Traffic history will be removed."
+msgstr "Вы уверены, что хотите удалить это устройство? История трафика будет удалена."
+
+msgid "Failed to delete device"
+msgstr "Не удалось удалить устройство"
+
+msgid "Confirm"
+msgstr "Подтвердить"
+
+msgid "Close"
+msgstr "Закрыть"
+
+msgid "rule"
+msgstr "правило"
+
+msgid "rules"
+msgstr "правила"
+
+msgid "more"
+msgstr "еще"
+
+msgid "No active rule"
+msgstr "Нет активных правил"
+
+msgid "Schedule Rules"
+msgstr "Правила ограничения по расписанию"
+
+msgid "Upload Statistics"
+msgstr "Статистика отправки"
+
+msgid "Download Statistics"
+msgstr "Статистика загрузки"
+
+msgid "Cumulative Traffic"
+msgstr "Накопительный трафик"
+
+msgid "Daily"
+msgstr "Ежедневно"
+
+msgid "Weekly"
+msgstr "Еженедельно"
+
+msgid "Monthly"
+msgstr "Ежемесячно"
+
+msgid "Statistics"
+msgstr "Статистика"
+
+msgid "Average"
+msgstr "Среднее"
+
+msgid "Maximum"
+msgstr "Максимум"
+
+msgid "Minimum"
+msgstr "Минимум"
+
+msgid "Clear Traffic Data"
+msgstr "Очистить данные трафика"
+
+msgid "Are you sure you want to clear all traffic data? This action cannot be undone."
+msgstr "Вы уверены, что хотите очистить все данные трафика? Это действие нельзя отменить."
+
+msgid "Failed to clear traffic data: "
+msgstr "Не удалось очистить данные трафика: "
+
+msgid "Restart Service"
+msgstr "Перезапустить службу"
+
+msgid "Restart Bandix Service"
+msgstr "Перезапустить службу Bandix"
+
+msgid "Are you sure you want to restart the Bandix service?"
+msgstr "Вы уверены, что хотите перезапустить службу Bandix?"
+
+msgid "Failed to restart service: "
+msgstr "Не удалось перезапустить службу: "
+
+msgid "Realtime"
+msgstr "В реальном времени"
+
+msgid "Last 24 Hours"
+msgstr "Последние 24 часа"
+
+msgid "Last 7 Days"
+msgstr "Последние 7 дней"
+
+msgid "Last 30 Days"
+msgstr "Последние 30 дней"
+
+msgid "Last 10 Minutes"
+msgstr "Последние 10 минут"
+
+msgid "Last 15 Minutes"
+msgstr "Последние 15 минут"
+
+msgid "Last 30 Minutes"
+msgstr "Последние 30 минут"
+
+msgid "Last 1 Hour"
+msgstr "Последний 1 час"
+
+msgid "Starting installation..."
+msgstr "Начало установки..."
+
+msgid "Page will refresh in 3 seconds."
+msgstr "Страница обновится через 3 секунды."
+
+msgid "Installation failed"
+msgstr "Установка не удалась"
+
+msgid "Installation failed at step: "
+msgstr "Установка не удалась на шаге: "
+
+msgid "Details: "
+msgstr "Подробности: "
+
+msgid "Installation failed: "
+msgstr "Установка не удалась: "
+
+msgid "Unknown error"
+msgstr "Неизвестная ошибка"
+
+msgid "Service restarted successfully."
+msgstr "Служба успешно перезапущена."
+
+msgid "Service restart may have failed. Please check manually."
+msgstr "Перезапуск службы мог не удаться. Пожалуйста, проверьте вручную."
+
+msgid "Please restart the service."
+msgstr "Пожалуйста, перезапустите службу."
+
+msgid "LuCI App updated successfully!"
+msgstr "Приложение LuCI успешно обновлено!"
+
+msgid "Bandix updated successfully!"
+msgstr "Bandix успешно обновлен!"
+
+msgid "LuCI App has update: "
+msgstr "Приложение LuCI имеет обновление: "
+
+msgid "Bandix has update: "
+msgstr "Bandix имеет обновление: "
+
+msgid "LuCI App is up to date: "
+msgstr "Приложение LuCI актуально: "
+
+msgid "Bandix is up to date: "
+msgstr "Bandix актуален: "
+
+msgid "Updates Available"
+msgstr "Доступны Обновления"
+
+msgid "No Updates Available"
+msgstr "Нет Доступных Обновлений"
+
+msgid "Detected Architecture"
+msgstr "Обнаруженная Архитектура"
+
+msgid "Package Manager"
+msgstr "Менеджер Пакетов"
+
+msgid "LuCI Assets"
+msgstr "Ресурсы LuCI"
+
+msgid "Bandix Assets"
+msgstr "Ресурсы Bandix"
+
+msgid "Failed to check for updates"
+msgstr "Не удалось проверить обновления"
+
+msgid "Failed to check for updates: "
+msgstr "Не удалось проверить обновления: "
+
+msgid "Checking..."
+msgstr "Проверка..."
+
+msgid "Check for Updates"
+msgstr "Проверить Обновления"
+
+msgid "Installing..."
+msgstr "Установка..."
+
+msgid "Download and Install"
+msgstr "Скачать и Установить"
+
+msgid "Manual Download"
+msgstr "Ручная Загрузка"
+
+msgid "Starting installation... The page will refresh automatically in 30 seconds."
+msgstr "Начало установки... Страница автоматически обновится через 30 секунд."
+
+msgid "Please clear your browser cache manually after updating."
+msgstr "Пожалуйста, вручную очистите кеш браузера после обновления."
+
+msgid "Traffic Statistics"
+msgstr "Статистика трафика"
+
+msgid "Device Usage Ranking"
+msgstr "Рейтинг использования устройств"
+
+msgid "Start Date"
+msgstr "Дата начала"
+
+msgid "End Date"
+msgstr "Дата окончания"
+
+msgid "Reset"
+msgstr "Сбросить"
+
+msgid "Today"
+msgstr "Сегодня"
+
+msgid "Yesterday"
+msgstr "Вчера"
+
+msgid "This Week"
+msgstr "На этой неделе"
+
+msgid "Last Week"
+msgstr "На прошлой неделе"
+
+msgid "This Month"
+msgstr "В этом месяце"
+
+msgid "Last Month"
+msgstr "В прошлом месяце"
+
+msgid "Last 90 Days"
+msgstr "Последние 90 дней"
+
+msgid "Last Year"
+msgstr "За последний год"
+
+msgid "Traffic Timeline"
+msgstr "Временная шкала трафика"
+
+msgid "Aggregation:"
+msgstr "Агрегация:"
+
+msgid "Hourly"
+msgstr "По часам"
+
+msgid "Device:"
+msgstr "Устройство:"
+
+msgid "Traffic Push URL"
+msgstr "URL для отправки трафика"
+
+msgid "Push traffic data to a remote HTTP endpoint (POST JSON). Leave empty to disable."
+msgstr "Отправлять данные трафика на удаленную HTTP конечную точку (POST JSON). Оставьте пустым для отключения."
+
+msgid "Device Event Push URL"
+msgstr "URL для отправки событий устройства"
+
+msgid "Push device online/offline events to a remote HTTP endpoint (POST JSON on state change). Leave empty to disable."
+msgstr "Отправлять события подключения/отключения устройства на удаленную HTTP конечную точку (POST JSON при изменении состояния). Оставьте пустым для отключения."
+
+msgid "Additional Subnets"
+msgstr "Дополнительные подсети"
+
+msgid "Additional local subnets (comma-separated CIDR notation, e.g. '192.168.2.0/24,10.0.0.0/8'). Leave empty to use only interface subnet."
+msgstr "Дополнительные локальные подсети (CIDR нотация через запятую, напр. '192.168.2.0/24,10.0.0.0/8'). Оставьте пустым для использования только подсети интерфейса."
+
+msgid "Exclude Interface Device"
+msgstr "Исключить устройство интерфейса"
+
+msgid "Exclude the router itself (interface device) from traffic statistics"
+msgstr "Исключить сам роутер (устройство интерфейса) из статистики трафика"
+
+msgid "Enable Neighbor Flush"
+msgstr "Включить сброс таблицы соседей"
+
+msgid "Enable periodic flush of neighbor table data. Generally not recommended if the device list works normally."
+msgstr "Включить периодический сброс данных таблицы соседей. Обычно не рекомендуется, если список устройств работает нормально."
+
+msgid "Neighbor Flush Interval"
+msgstr "Интервал сброса таблицы соседей"
+
+msgid "Set the interval for flushing neighbor table data"
+msgstr "Установить интервал сброса данных таблицы соседей"
+
+msgid "No devices"
+msgstr "Нет устройств"
+
+msgid "LAN Traffic is viewed from the entire subnet perspective, so upload and download are always equal, forming a closed loop. Additionally, due to the presence of dedicated hardware switching chips, LAN traffic between 2 devices (e.g., PC - NAS) within the local network may not be monitorable."
+msgstr "Трафик LAN рассматривается с точки зрения всей подсети, поэтому загрузка и выгрузка всегда равны, образуя замкнутый цикл. Кроме того, из-за наличия специализированных аппаратных коммутационных чипов, трафик LAN между 2 устройствами (например, ПК - NAS) в локальной сети может быть не подлежащим мониторингу."
+
+msgid "Protocol"
+msgstr "Протокол"
+
+msgid "State"
+msgstr "Состояние"
+
+msgid "Send"
+msgstr "Отправка"
+
+msgid "Reply"
+msgstr "Ответ"
+
+msgid "Flags"
+msgstr "Флаги"
+
+msgid "Loading…"
+msgstr "Загрузка…"
+
+msgid "No connections"
+msgstr "Нет подключений"
+
+msgid "pkts"
+msgstr "пакеты"
+
+msgid "Failed to load"
+msgstr "Ошибка загрузки"
+
+msgid "Connection Details"
+msgstr "Подробности соединения"
+
+msgid "Details"
+msgstr "Подробнее"
+
+msgid "Orig Src"
+msgstr "Ист. отпр."
+
+msgid "Orig Dst"
+msgstr "Назнач. отпр."
+
+msgid "Repl Src"
+msgstr "Ист. ответа"
+
+msgid "Repl Dst"
+msgstr "Назнач. ответа"
+
+msgid "TC backend"
+msgstr "Бэкенд TC"
+
+msgid "Select TC attach backend. Recommendation: use auto by default; tcx is preferred on kernel >= 6.6; netlink is safer on older kernels."
+msgstr "Выберите бэкенд подключения TC. Рекомендация: по умолчанию используйте auto; tcx предпочтителен на ядре >= 6.6; netlink безопаснее на старых ядрах."
+
+msgid "TC order"
+msgstr "Порядок TC"
+
+msgid "Netlink priority"
+msgstr "Приоритет Netlink"
+
+msgid "Only used when backend is netlink. Range: 0..65535 (0 means default)."
+msgstr "Используется только при backend=netlink. Диапазон: 0..65535 (0 означает по умолчанию)."
+
+msgid "TCX ingress anchor program id"
+msgstr "ID якорной программы TCX ingress"
+
+msgid "Used when tc_order is before/after. Must be a valid ingress program id on the same interface."
+msgstr "Используется, когда tc_order имеет значение before/after. Должен быть корректный ID ingress-программы на том же интерфейсе."
+
+msgid "TCX egress anchor program id"
+msgstr "ID якорной программы TCX egress"
+
+msgid "Used when tc_order is before/after. Must be a valid egress program id on the same interface."
+msgstr "Используется, когда tc_order имеет значение before/after. Должен быть корректный ID egress-программы на том же интерфейсе."
+
+msgid "Traffic Quota"
+msgstr "Квота трафика"
+
+msgid "Quota Status"
+msgstr "Состояние квоты"
+
+msgid "Minute Quota"
+msgstr "Минутная квота"
+
+msgid "Hourly Quota"
+msgstr "Часовая квота"
+
+msgid "Daily Quota"
+msgstr "Суточная квота"
+
+msgid "Weekly Quota"
+msgstr "Недельная квота"
+
+msgid "Monthly Quota"
+msgstr "Месячная квота"
+
+msgid "Lifetime Quota"
+msgstr "Общая квота"
+
+msgid "WAN upload and download are counted together. Enter 0 for unlimited."
+msgstr "Входящий и исходящий трафик WAN учитываются вместе. Введите 0, чтобы отключить ограничение."
+
+msgid "Not configured"
+msgstr "Не настроено"
+
+msgid "Blocked"
+msgstr "Заблокировано"
+
+msgid "Active"
+msgstr "Активна"
+
+msgid "No quota usage data"
+msgstr "Нет данных об использовании квоты"
+
+msgid "Delete Quota"
+msgstr "Удалить квоту"
+
+msgid "Save Quota"
+msgstr "Сохранить квоту"
+
+msgid "Usage starts when a quota is first saved."
+msgstr "Учет трафика начинается после первого сохранения квоты."
+
+msgid "Minute"
+msgstr "Минута"
+
+msgid "Lifetime"
+msgstr "Всего"
+
+msgid "Quota exceeded"
+msgstr "Квота превышена"
+
+msgid "Quota active"
+msgstr "Квота активна"
+
+msgid "WAN traffic is blocked because a quota was reached."
+msgstr "Трафик WAN заблокирован, так как достигнута квота."
+
+msgid "Quota blocked"
+msgstr "Блокировка по квоте"
+
+msgid "Quota values must be non-negative and within the supported range."
+msgstr "Значения квоты должны быть неотрицательными и находиться в поддерживаемом диапазоне."
+
+msgid "Failed to save traffic quota"
+msgstr "Не удалось сохранить квоту трафика"
+
+msgid "Delete Traffic Quota"
+msgstr "Удалить квоту трафика"
+
+msgid "Delete this quota and all of its accumulated usage?"
+msgstr "Удалить эту квоту и все накопленные данные об использовании?"
+
+msgid "Failed to delete traffic quota"
+msgstr "Не удалось удалить квоту трафика"
+
+msgid "Rules / Quota"
+msgstr "Правила / Квота"
+
+msgid "Failed to load traffic quotas"
+msgstr "Не удалось загрузить квоты трафика"
+
+msgid "Unavailable"
+msgstr "Недоступно"
+
+msgid "Show reply direction"
+msgstr "Показывать обратное направление"
+
+msgid "Available space"
+msgstr "Свободное место"
+
+msgid "Cannot prepare storage. Check free space and directory permissions."
+msgstr "Не удалось подготовить хранилище. Проверьте свободное место и права доступа."
+
+msgid "Checking database version…"
+msgstr "Проверка версии базы…"
+
+msgid "Checking storage…"
+msgstr "Проверка хранилища…"
+
+msgid "Choose an uncompressed .mmdb file within the upload size limit."
+msgstr "Выберите несжатый файл .mmdb, не превышающий ограничение размера."
+
+msgid "Country/region + network organization — approximately 12 MiB"
+msgstr "Страна/регион + сетевая организация · около 12 MiB"
+
+msgid "Country/region — approximately 3.3 MiB"
+msgstr "Страна/регион · около 3,3 MiB"
+
+msgid "Data source"
+msgstr "Источник данных"
+
+msgid "Data terms"
+msgstr "Условия использования"
+
+msgid "Database contents"
+msgstr "Содержимое базы"
+
+msgid "Database directory"
+msgstr "Каталог базы"
+
+msgid "Database enabled"
+msgstr "База данных включена"
+
+msgid "Database is up to date"
+msgstr "База данных актуальна"
+
+msgid "Database operation failed"
+msgstr "Ошибка операции с базой"
+
+msgid "Database operation failed. Retry or upload a local database."
+msgstr "Операция не удалась. Повторите попытку или загрузите локальную базу."
+
+msgid "Database upload failed"
+msgstr "Не удалось загрузить базу"
+
+msgid "Database validation failed. The previous database is unchanged."
+msgstr "Проверка не пройдена. Предыдущая база сохранена."
+
+msgid "Delete"
+msgstr "Удалить"
+
+msgid "Delete GeoIP databases"
+msgstr "Удалить базы GeoIP"
+
+msgid "Disabled"
+msgstr "Отключено"
+
+msgid "Documentation address"
+msgstr "Адрес для документации"
+
+msgid "Download and enable"
+msgstr "Скачать и включить"
+
+msgid "Download cancelled"
+msgstr "Загрузка отменена"
+
+msgid "Downloading database…"
+msgstr "Скачивание базы…"
+
+msgid "Enable IP location lookup"
+msgstr "Включить геолокацию IP"
+
+msgid "Enabled"
+msgstr "Включено"
+
+msgid "GeoIP service is unavailable. Enable connection monitoring and apply settings, or update Bandix."
+msgstr "GeoIP недоступен. Включите мониторинг соединений и примените настройки либо обновите Bandix."
+
+msgid "IP location database"
+msgstr "База геолокации IP"
+
+msgid "Importing database…"
+msgstr "Импорт базы…"
+
+msgid "Link-local address"
+msgstr "Локальный адрес канала"
+
+msgid "Loading database…"
+msgstr "Подключение базы…"
+
+msgid "Local network"
+msgstr "Локальная сеть"
+
+msgid "Loopback"
+msgstr "Петлевой адрес"
+
+msgid "Maximum upload size"
+msgstr "Максимальный размер загрузки"
+
+msgid "Multicast"
+msgstr "Многоадресная рассылка"
+
+msgid "Not installed"
+msgstr "Не установлено"
+
+msgid "Private address"
+msgstr "Частный адрес"
+
+msgid "Province/city (uploaded database)"
+msgstr "Регион/город (загруженная база)"
+
+msgid "Province/city + network organization — approximately 57 MiB"
+msgstr "Регион/город + сетевая организация · около 57 MiB"
+
+msgid "Remove installed databases and disable IP location lookup?"
+msgstr "Удалить базы и отключить геолокацию IP?"
+
+msgid "Reserved address"
+msgstr "Зарезервированный адрес"
+
+msgid "Shared address (CGNAT)"
+msgstr "Общий адрес (CGNAT)"
+
+msgid "Storage used"
+msgstr "Занято места"
+
+msgid "The installed database could not be loaded. Download or upload it again."
+msgstr "Не удалось открыть базу. Скачайте или загрузите её повторно."
+
+msgid "Unknown"
+msgstr "Неизвестно"
+
+msgid "Unknown location"
+msgstr "Местоположение неизвестно"
+
+msgid "Unspecified address"
+msgstr "Неуказанный адрес"
+
+msgid "Update database"
+msgstr "Обновить базу"
+
+msgid "Upload an uncompressed Country, City or ASN .mmdb file. To add ASN, install a Country or City database first."
+msgstr "Можно загрузить несжатый файл Country, City или ASN .mmdb. Перед ASN установите Country или City."
+
+msgid "Upload and enable"
+msgstr "Загрузить и включить"
+
+msgid "Upload database"
+msgstr "Загрузить базу"
+
+msgid "Uploading database…"
+msgstr "Загрузка базы…"
+
+msgid "Use persistent storage or an external drive. Save and apply directory changes before downloading."
+msgstr "Используйте постоянное хранилище или внешний диск. Перед скачиванием сохраните и примените изменение каталога."
+
+msgid "Verifying database…"
+msgstr "Проверка базы…"
+
+msgid "Version"
+msgstr "Версия"
+
+msgid "Country/region"
+msgstr "Страна/регион"
+
+msgid "Province/city"
+msgstr "Регион/город"
+
+msgid "Network organization"
+msgstr "Сетевая организация"
+
+msgid "Not enough free space for this database."
+msgstr "Недостаточно места для этой базы."
+
+msgid "Required space"
+msgstr "Требуемое место"
+
+msgid "Database ready"
+msgstr "База готова"
+
+msgid "Listen Address"
+msgstr "Адрес прослушивания"
+
+msgid "IP address for Bandix to listen on. Use 127.0.0.1 for local access or 0.0.0.0 / :: for all interfaces."
+msgstr "IP-адрес прослушивания Bandix. Используйте 127.0.0.1 для локального доступа или 0.0.0.0 / :: для всех интерфейсов."
+
+msgid "ASN / network organization"
+msgstr "ASN / сетевая организация"
+
+msgid "Country/region + province/city"
+msgstr "Страна/регион + область/город"
+
+msgid "Database build dates"
+msgstr "Даты сборки баз данных"
+
+msgid "Download contents"
+msgstr "Содержимое загрузки"
+
+msgid "Installed data source"
+msgstr "Источник установленных данных"
+
+msgid "Installed databases"
+msgstr "Установленные базы данных"
+
+msgid "Release version"
+msgstr "Версия выпуска"
+
+msgid "Location and ASN databases work together."
+msgstr "Базы геолокации и ASN работают совместно."
+
+msgid "Database details"
+msgstr "Сведения о базах данных"
+
+msgid "Apply directory changes before downloading."
+msgstr "Примените изменения каталога перед загрузкой."
+
+msgid "Batch deletion is unavailable. Update the Bandix service."
+msgstr "Пакетное удаление недоступно. Обновите службу Bandix."
+
+#, c-format
+msgid "Delete selected devices (%d)? Their traffic history, hostname bindings, rate limits and quotas will also be removed. Online devices may reappear."
+msgstr "Удалить выбранные устройства (%d)? История трафика, привязки имён, ограничения скорости и квоты также будут удалены. Активные устройства могут появиться снова."
+
+msgid "Delete selected"
+msgstr "Удалить выбранные"
+
+#, c-format
+msgid "Deleted: %d; not found: %d; failed: %d."
+msgstr "Удалено: %d; не найдено: %d; ошибок: %d."
+
+msgid "Failed to delete devices"
+msgstr "Не удалось удалить устройства"
+
+msgid "Invalid batch deletion response"
+msgstr "Некорректный ответ пакетного удаления"
+
+msgid "Select all"
+msgstr "Выбрать все"
+
+msgid "Select device"
+msgstr "Выбрать устройство"
+
+msgid "Search this page: protocol, IP, port, location, ASN…"
+msgstr "Поиск на странице: протокол, IP, порт, геолокация, ASN…"
+
+msgid "Search connections on this page"
+msgstr "Поиск соединений на этой странице"
+
+msgid "Matches on this page"
+msgstr "Совпадения на странице"
+
+msgid "No matching connections on this page"
+msgstr "На этой странице нет подходящих соединений"
