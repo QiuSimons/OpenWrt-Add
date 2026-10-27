@@ -32,7 +32,8 @@ git clone https://github.com/QiuSimons/OpenWrt-Add.git package/custom
 ```text
 OpenWrt-Add/
 ├── .github/workflows/
-│   └── Update_PKG.yml        # GitHub Actions 定时更新工作流 (每天 00:00 UTC+8)
+│   ├── Update_PKG.yml        # 定时同步上游源码 (每天 00:00 UTC+8)
+│   └── build-feed.yml        # 编译 APK 软件源与 ImageBuilder 离线包
 ├── core/                     # 管理总目录 (构建脚本、离线补丁、规则与工具)
 │   ├── scripts/              # 自动化同步主控及后处理脚本
 │   │   ├── update.sh         # 主同步脚本 (支持全量与单包同步)
@@ -43,9 +44,13 @@ OpenWrt-Add/
 │   │   ├── create_acl.sh     # 自动补全缺少的 LuCI rpcd ACL 配置
 │   │   ├── remove_upx.sh     # 清除 Makefile 中的 upx 指令
 │   │   ├── apply_whitelist.sh# MosDNS / Passwall 直连白名单追加
-│   │   └── fix_permissions.sh# 权限规范化
+│   │   ├── fix_permissions.sh# 权限规范化
+│   │   ├── build_in_container.sh # SDK 容器内: feeds、defconfig 与 package/compile
+│   │   ├── prebuild_host.sh  # runner 上交叉编译 Go/Rust 组件，免容器工具链引导
+│   │   ├── apply_prebuilt.sh # 把预编译二进制注入 feed 的包 Makefile
+│   │   └── verify_manifest.py# 包清单闸门，防止静默产出残缺 feed
 │   ├── patches/              # 离线补丁文件
-│   ├── assets/               # 静态文件 (autocore 启动脚本、直连域名列表)
+│   ├── assets/               # 静态文件 (autocore 启动脚本、直连域名列表、闸门 allowlist)
 │   └── tools/                # 路由器端独立运维工具 (clean-overlay.sh 等)
 ├── themes/                   # 主题样式及配套配置
 ├── apps/                     # 非侵入性包 (现代 JS 架构应用、CLI 工具、标准驱动与后台)
@@ -96,6 +101,14 @@ apps/luci-app-demo | https://github.com/example/luci-app-demo
 ## 二进制 APK 软件源与 ImageBuilder 使用
 
 本仓库提供 GitHub Actions 工作流（`.github/workflows/build-feed.yml`），可将 `apps/` 目录下的软件包编译为 `.apk`，并按架构生成各分支软件源及 ImageBuilder 离线包。
+
+构建管线要点：
+
+- Go / Rust 组件（sing-box、mihomo-meta、mihomo-alpha、frp、mosdns、einat-ebpf、flowcone）在 runner 上交叉编译，
+  apply_prebuilt.sh 只改写对应 Makefile 的 Build/Compile，DEPENDS、conffiles、install 等元数据仍以仓库内 Makefile 为准。
+- 其余包（含依赖目标内核 BTF 的 vmlinux-btf）在 OpenWrt SDK 容器内正常编译。
+- 每个计划编译的包都必须产出 apk；缺失且不在 core/assets/build-allow-missing.conf 中，工作流直接失败。
+- prebuild_host.sh 的版本号与源码地址从各包 Makefile 解析，跟随每日同步自动更新。
 
 ### 1. 路由器在线安装
 
