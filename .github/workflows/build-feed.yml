@@ -192,7 +192,8 @@ jobs:
             cp -a staging_feed/feeds_packages_lang_node-prebuilt/. node_prebuilt/
             rm -rf staging_feed/feeds_packages_lang_node-prebuilt
           fi
-          echo "Total packages in feed to build: $(find staging_feed -maxdepth 2 -name Makefile | wc -l)"
+          # -maxdepth 2 会漏掉 imm_pkg/、OpenWrt-mihomo/ 这类嵌套包，按实际包定义统计
+          echo "Package Makefiles in feed: $(find staging_feed -name Makefile -not -path '*/src/*' | wc -l)"
 
       - name: Apply prebuilt binaries to feed
         shell: bash
