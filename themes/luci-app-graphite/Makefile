@@ -24,6 +24,6 @@ define Package/luci-app-graphite/conffiles
 /etc/config/graphite
 endef
 
-include ../../luci.mk
+include $(TOPDIR)/feeds/luci/luci.mk
 
 # call BuildPackage - OpenWrt buildroot signature

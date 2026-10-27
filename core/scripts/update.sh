@@ -219,13 +219,16 @@ run_post_processing() {
     # 5. 合并 Passwall & MosDNS 直连白名单
     bash "$SCRIPT_DIR/apply_whitelist.sh"
 
-    # 6. 配置 sing-box 默认编译变体为 tiny
+    # 6. 修复 Makefile 相对 include 路径
+    bash "$SCRIPT_DIR/fix_relative_includes.sh"
+
+    # 7. 配置 sing-box 默认编译变体为 tiny
     bash "$SCRIPT_DIR/patch_singbox_tiny.sh"
 
-    # 7. 修复 Makefile 版本号以符合 Alpine/apk 规范
+    # 8. 修复 Makefile 版本号以符合 Alpine/apk 规范
     bash "$SCRIPT_DIR/fix_pkg_version.sh"
 
-    # 8. 规范化文件与脚本权限
+    # 9. 规范化文件与脚本权限
     bash "$SCRIPT_DIR/fix_permissions.sh"
 
     log_info "${CLR_BOLD}>>> 全局规则修复与环境标准化完成！${CLR_RESET}"

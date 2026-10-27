@@ -61,6 +61,6 @@ case "$$1" in *upgrade*) exit 0 ;; esac
 }
 endef
 
-include ../../luci.mk
+include $(TOPDIR)/feeds/luci/luci.mk
 
 # call BuildPackage - OpenWrt buildroot signature
