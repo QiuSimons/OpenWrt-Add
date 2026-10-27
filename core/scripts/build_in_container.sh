@@ -123,6 +123,28 @@ if [ "$contract_fail" -ne 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 先构建 staging 提供者
+#
+# SDK 的 staging_dir 里没有 ucode 的 dev 头，而 feeds/luci 的 ucode-mod-html、
+# rpcd-mod-luci、lucihttp 等模块在编译时直接 include <ucode/module.h>，
+# 却只在 DEPENDS 里写了 +libucode（运行期依赖），没有 PKG_BUILD_DEPENDS。
+# 完整源码树里 ucode 先于它们构建所以没事，SDK 里必须显式补上这一步。
+# ---------------------------------------------------------------------------
+stage_providers() {
+    local d
+    for d in package/utils/ucode; do
+        [ -d "$d" ] || { echo "staging provider not found: $d"; continue; }
+        echo "=== staging provider: $d ==="
+        if ! make "$d/compile" > /tmp/stage-provider.log 2>&1; then
+            tail -n 40 /tmp/stage-provider.log
+            echo "::error::staging provider failed: $d"
+            exit 1
+        fi
+    done
+}
+stage_providers
+
+# ---------------------------------------------------------------------------
 # 逐包编译，不用 make package/compile
 #
 # package/Makefile 里有 "package-y += kernel/linux"，所以 make package/compile
