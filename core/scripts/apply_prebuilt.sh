@@ -15,6 +15,9 @@
 # ==============================================================================
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DROP_CONF="${DROP_CONF:-$SCRIPT_DIR/../assets/drop-packages.conf}"
+
 FEED="${1:?usage: apply_prebuilt.sh <feed_dir> [prebuilt_mount_path] [prebuilt_host_dir]}"
 PREBUILT="${2:-/prebuilt}"
 # 容器内路径（写进 Makefile）与宿主机路径（用于校验产物存在）是两套命名空间，
@@ -44,6 +47,44 @@ PACKAGES=(
   "openwrt-einat-ebpf|rust|einat-ebpf|einat"
   "FlowCone/openwrt/flowcone|rust|flowcone|flowcone"
 )
+
+# ------------------------------------------------------------------------------
+# 按 core/assets/drop-packages.conf 移除互斥变体：删掉它的 BuildPackage 求值，
+# 使 kconfig 中不存在该符号，避免被 select / 默认值重新选上。
+# ------------------------------------------------------------------------------
+drop_packages() {
+  local conf="$DROP_CONF" reldir pkg mk
+  if [ ! -f "$conf" ]; then
+    return 0
+  fi
+  while read -r reldir pkg _; do
+    case "$reldir" in ''|'#'*) continue ;; esac
+    [ -n "$pkg" ] || continue
+    mk="$FEED/$reldir/Makefile"
+    if [ ! -f "$mk" ]; then
+      log "SKIP drop $pkg (无 Makefile: $reldir)"
+      continue
+    fi
+    python3 - "$mk" "$pkg" <<'PY' || die "drop failed: $pkg"
+import re, sys
+path, pkg = sys.argv[1], sys.argv[2]
+src = open(path, encoding='utf-8').read()
+pat = re.compile(r'^\$\(eval \$\(call (?:BuildPackage|GoBinPackage|RustBinPackage),'
+                 + re.escape(pkg) + r'\)\)[ \t]*$', re.M)
+m = pat.search(src)
+if not m:
+    if ('# drop-packages.conf' in src) and (' ' + pkg) in src:
+        sys.exit(0)  # 已摘除
+    sys.exit('package eval not found: ' + pkg)
+note = '# drop-packages.conf: 本 feed 不构建 ' + pkg + '\n'
+src = src[:m.start()] + note + src[m.end():]
+open(path, 'w', encoding='utf-8').write(src)
+print('     dropped: ' + pkg + ' (' + path + ')')
+PY
+  done < "$conf"
+}
+
+drop_packages
 
 patched=0
 for entry in "${PACKAGES[@]}"; do

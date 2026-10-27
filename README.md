@@ -50,7 +50,7 @@ OpenWrt-Add/
 │   │   ├── apply_prebuilt.sh # 把预编译二进制注入 feed 的包 Makefile
 │   │   └── verify_manifest.py# 包清单闸门，防止静默产出残缺 feed
 │   ├── patches/              # 离线补丁文件
-│   ├── assets/               # 静态文件 (autocore 启动脚本、直连域名列表、闸门 allowlist)
+│   ├── assets/               # 静态文件 (autocore 启动脚本、直连域名、闸门 allowlist、变体摘除清单)
 │   └── tools/                # 路由器端独立运维工具 (clean-overlay.sh 等)
 ├── themes/                   # 主题样式及配套配置
 ├── apps/                     # 非侵入性包 (现代 JS 架构应用、CLI 工具、标准驱动与后台)

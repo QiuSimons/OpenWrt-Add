@@ -56,24 +56,17 @@ fi
     echo "feeds/packages missing after feeds update"; exit 1; }
 
 # 精确获取 custom feed 下所有有效包名并启用编译
+# 互斥变体（如 sing-box full）已在 apply_prebuilt.sh 中按 drop-packages.conf 摘除，
+# 不会出现在这个列表里。
 pkgs=$(./scripts/feeds list -s custom | awk '{print $1}')
-
-# 只发布其中一个互斥变体的包：sing-box 发 tiny（custom.sh 的
-# patch_singbox_tiny.sh 已把它设为默认，宿主机的 prebuild_host.sh 也只编 tiny）。
-# 必须同时从 expected 清单排除，否则 manifest 闸门会向它要 apk。
-SKIP_PKGS="sing-box"
-
-mkdir -p /artifacts/manifest
-: > /artifacts/manifest/expected.txt
 for p in $pkgs; do
-    case " $SKIP_PKGS " in
-        *" $p "*) echo "skip package (not published here): $p"; continue ;;
-    esac
     echo "CONFIG_PACKAGE_$p=m" >> .config
-    echo "$p" >> /artifacts/manifest/expected.txt
 done
-sort -u -o /artifacts/manifest/expected.txt /artifacts/manifest/expected.txt
 echo "CONFIG_PACKAGE_node=m" >> .config
+
+# 记录计划编译的包清单，供宿主机侧 manifest 闸门比对
+mkdir -p /artifacts/manifest
+printf '%s\n' $pkgs | sort -u > /artifacts/manifest/expected.txt
 
 if ! make defconfig > /tmp/defconfig.log 2>&1; then
     cat /tmp/defconfig.log
@@ -94,6 +87,8 @@ grep -E '^CONFIG_PACKAGE_[A-Za-z0-9_.+-]+=[ym]$' .config \
 
 contract_fail=0
 if grep -qE '^CONFIG_PACKAGE_sing-box=[ym]$' .config; then
+    echo '--- who selects it ---'
+    grep -n 'PACKAGE_sing-box' tmp/.config-package.in 2>/dev/null | head -n 20 || true
     echo "::error::sing-box(full 变体) 被启用，但 core/scripts/prebuild_host.sh 只预编译了 tiny 变体"
     contract_fail=1
 fi
