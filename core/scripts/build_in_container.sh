@@ -57,14 +57,23 @@ fi
 
 # 精确获取 custom feed 下所有有效包名并启用编译
 pkgs=$(./scripts/feeds list -s custom | awk '{print $1}')
-for p in $pkgs; do
-    echo "CONFIG_PACKAGE_$p=m" >> .config
-done
-echo "CONFIG_PACKAGE_node=m" >> .config
 
-# 记录计划编译的包清单，供宿主机侧 manifest 闸门比对
+# 只发布其中一个互斥变体的包：sing-box 发 tiny（custom.sh 的
+# patch_singbox_tiny.sh 已把它设为默认，宿主机的 prebuild_host.sh 也只编 tiny）。
+# 必须同时从 expected 清单排除，否则 manifest 闸门会向它要 apk。
+SKIP_PKGS="sing-box"
+
 mkdir -p /artifacts/manifest
-printf '%s\n' $pkgs | sort -u > /artifacts/manifest/expected.txt
+: > /artifacts/manifest/expected.txt
+for p in $pkgs; do
+    case " $SKIP_PKGS " in
+        *" $p "*) echo "skip package (not published here): $p"; continue ;;
+    esac
+    echo "CONFIG_PACKAGE_$p=m" >> .config
+    echo "$p" >> /artifacts/manifest/expected.txt
+done
+sort -u -o /artifacts/manifest/expected.txt /artifacts/manifest/expected.txt
+echo "CONFIG_PACKAGE_node=m" >> .config
 
 if ! make defconfig > /tmp/defconfig.log 2>&1; then
     cat /tmp/defconfig.log
