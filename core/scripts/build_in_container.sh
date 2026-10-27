@@ -68,6 +68,10 @@ for p in $pkgs; do
 done
 echo "CONFIG_PACKAGE_node=m" >> .config
 
+# 记录计划编译的包清单，供宿主机侧 manifest 闸门比对
+mkdir -p /artifacts/manifest
+printf '%s\n' $pkgs | sort -u > /artifacts/manifest/expected.txt
+
 if ! make defconfig > /tmp/defconfig.log 2>&1; then
     cat /tmp/defconfig.log
     echo "---------- context ----------"
@@ -75,6 +79,39 @@ if ! make defconfig > /tmp/defconfig.log 2>&1; then
         echo "== around $n =="
         sed -n "$((n - 4)),$((n + 4))p" tmp/.config-package.in 2>/dev/null || true
     done
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 预编译契约校验：宿主机预编译的二进制必须与 defconfig 实际选择一致。
+# 一旦上游 Makefile 变更默认特性，这里会立刻失败，而不是静默发布功能缺失的包。
+# ---------------------------------------------------------------------------
+grep -E '^CONFIG_PACKAGE_[A-Za-z0-9_.+-]+=[ym]$' .config \
+    | sed 's/^CONFIG_PACKAGE_//; s/=[ym]$//' | sort -u > /artifacts/manifest/enabled.txt
+
+contract_fail=0
+if grep -qE '^CONFIG_PACKAGE_sing-box=[ym]$' .config; then
+    echo "::error::sing-box(full 变体) 被启用，但 core/scripts/prebuild_host.sh 只预编译了 tiny 变体"
+    contract_fail=1
+fi
+for c in EINAT_EBPF_BACKEND_LIBBPF EINAT_EBPF_BINDGEN EINAT_EBPF_STATIC; do
+    if grep -qE "^CONFIG_${c}=y$" .config; then
+        echo "::error::${c} 已启用，宿主机预编译的 einat 不含该特性"
+        contract_fail=1
+    fi
+done
+# sing-box tiny 的标签集合必须与预编译时使用的完全一致
+built_tags=" CLASH_API GVISOR QUIC UTLS WIREGUARD "
+for c in $(grep -oE '^CONFIG_SING_BOX_TINY_BUILD_[A-Z0-9_]+=y$' .config \
+             | sed 's/^CONFIG_SING_BOX_TINY_BUILD_//; s/=y$//'); do
+    case "$built_tags" in
+        *" $c "*) ;;
+        *) echo "::error::sing-box tiny 特性 ${c} 已启用，但预编译未包含（更新 prebuild_host.sh 的 tags）"
+           contract_fail=1 ;;
+    esac
+done
+if [ "$contract_fail" -ne 0 ]; then
+    echo "::error::预编译契约校验失败，终止以避免发布与目标不一致的二进制"
     exit 1
 fi
 

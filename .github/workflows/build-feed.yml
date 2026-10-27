@@ -68,10 +68,84 @@ jobs:
 
           echo "sdks=$(jq -nc --args '$ARGS.positional' -- "${sdks[@]}")" >> "$GITHUB_OUTPUT"
 
+  prebuild:
+    name: Prebuild ${{ matrix.arch }} binaries on host
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - aarch64_generic
+          - x86_64
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+
+      - name: Install Rust musl target & cross linker
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.arch }}" = "aarch64_generic" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends gcc-aarch64-linux-gnu
+            rustup target add aarch64-unknown-linux-musl
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          else
+            rustup target add x86_64-unknown-linux-musl
+          fi
+
+      - name: Verify bpf toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v clang >/dev/null 2>&1 || sudo apt-get install -y -qq --no-install-recommends clang
+          command -v llvm-strip >/dev/null 2>&1 || sudo apt-get install -y -qq --no-install-recommends llvm
+          clang --version | head -n 1
+          llvm-strip --version | head -n 1
+
+      - name: Cache Go module downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: prebuild-gomod-${{ matrix.arch }}-${{ hashFiles('apps/**/Makefile') }}
+          restore-keys: |
+            prebuild-gomod-${{ matrix.arch }}-
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: prebuild-cargo-${{ matrix.arch }}-${{ hashFiles('apps/openwrt-einat-ebpf/Makefile') }}
+          restore-keys: |
+            prebuild-cargo-${{ matrix.arch }}-
+
+      - name: Prebuild host binaries
+        shell: bash
+        run: ./core/scripts/prebuild_host.sh "${{ matrix.arch }}" prebuilt
+
+      - name: Upload prebuilt binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: prebuilt-${{ matrix.arch }}
+          path: prebuilt
+          if-no-files-found: error
+          retention-days: 1
+
   build-packages:
     name: Build ${{ matrix.arch }}-openwrt-${{ matrix.sdk }}
     runs-on: ubuntu-latest
-    needs: resolve-sdks
+    needs:
+      - resolve-sdks
+      - prebuild
     strategy:
       fail-fast: false
       matrix:
@@ -83,6 +157,12 @@ jobs:
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v7
+
+      - name: Download prebuilt binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: prebuilt-${{ matrix.arch }}
+          path: prebuilt
 
       - name: Assemble Combined Feed (Apps + Themes)
         shell: bash
@@ -102,6 +182,10 @@ jobs:
               [ -n "$d" ] && rm -rf "staging_feed/$(basename "$d")" && echo "excluded from local build: $d"
             done
           fi
+
+      - name: Apply prebuilt binaries to feed
+        shell: bash
+        run: ./core/scripts/apply_prebuilt.sh staging_feed /prebuilt
 
       - name: Cache OpenWrt Package Downloads (dl)
         uses: actions/cache@v4
@@ -127,6 +211,7 @@ jobs:
             -v "${{ github.workspace }}/artifacts:/artifacts" \
             -v "${{ github.workspace }}/dl:/builder/dl" \
             -v "${{ github.workspace }}/node_prebuilt:/node_prebuilt:ro" \
+            -v "${{ github.workspace }}/prebuilt:/prebuilt:ro" \
             -v "${{ github.workspace }}/core/scripts/build_in_container.sh:/build.sh:ro" \
             "${image}" \
             bash /build.sh
@@ -150,6 +235,16 @@ jobs:
           shopt -s nullglob
           find artifacts/bin/ -type f -name "*.apk" -exec cp {} dist/ \; 2>/dev/null || true
           echo "Total APKs successfully prepared: $(ls -1 dist/*.apk 2>/dev/null | wc -l)"
+
+      - name: Verify package manifest
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 core/scripts/verify_manifest.py \
+            --expected artifacts/manifest/expected.txt \
+            --apk-dir artifacts/bin \
+            --allow-missing core/assets/build-allow-missing.conf
 
       - name: Upload Build Artifacts
         if: always()
@@ -177,10 +272,32 @@ jobs:
       - name: Fetch Upstream Prebuilt APKs
         run: bash core/scripts/fetch_upstream_apks.sh raw_artifacts/upstream
 
-      - name: Install Host Tools (apk-tools & signing)
+      - name: Install apk-tools (static, no apt dependency)
+        shell: bash
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq apk-tools openssl zstd python3
+          set -euo pipefail
+
+          # Ubuntu 24.04 软件源里没有 apk-tools，这正是此前 4h40m 构建被 5 秒
+          # apt 失败清零的根因。改为直接取 Alpine 官方静态构建，零发行版依赖。
+          ALPINE_BRANCH="v3.22"
+          MIRROR="https://dl-cdn.alpinelinux.org/alpine/${ALPINE_BRANCH}/main/x86_64"
+          TMP="$(mktemp -d)"
+
+          curl -fsSL --retry 3 -o "$TMP/APKINDEX.tar.gz" "$MIRROR/APKINDEX.tar.gz"
+          tar -xzf "$TMP/APKINDEX.tar.gz" -C "$TMP" APKINDEX
+          APK_VER="$(awk '/^P:apk-tools-static$-/{f=1;next} f&&/^V:/{sub(/^V:/,"");print;exit}' "$TMP/APKINDEX")"
+          [ -n "$APK_VER" ] || { echo "::error::无法从 APKINDEX 解析 apk-tools-static 版本"; exit 1; }
+          echo "apk-tools-static version: $APK_VER"
+
+          curl -fsSL --retry 3 -o "$TMP/apk-tools-static.apk" "$MIRROR/apk-tools-static-${APK_VER}.apk"
+          mkdir -p "$TMP/x" && tar -xzf "$TMP/apk-tools-static.apk" -C "$TMP/x"
+          sudo install -m0755 "$TMP/x/sbin/apk.static" /usr/local/bin/apk
+
+          apk --version | head -n 1
+          for t in openssl zstd python3 tar; do
+            command -v "$t" >/dev/null 2>&1 || { echo "::error::missing required tool: $t"; exit 1; }
+          done
+
 
       - name: Execute Smart Fan-out
         run: |
