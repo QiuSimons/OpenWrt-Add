@@ -126,8 +126,6 @@ jobs:
           PACKAGES: flowcone luci-app-flowcone
           NO_REFRESH_CHECK: true
           NO_SHFMT_CHECK: true
-          UPSTREAM_URL: https://openwrt.fastly.net
-          FILE_HOST: https://openwrt.fastly.net
 
       - name: Show built files
         shell: bash
