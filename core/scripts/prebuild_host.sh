@@ -227,8 +227,12 @@ prebuild_singbox() {
   gobuild "$src" "$out" ./cmd/sing-box "$tags" "$ldflags"
   assert_elf "$out/sing-box"
 
-  # 供容器内的契约校验读取，避免 tag 清单在两侧各写一份
-  printf '%s\n' $(echo "$SINGBOX_TAGS" | tr ',' ' ') > "$OUT/sing-box/tags.txt"
+  # 供容器内的契约校验读取。这里输出的是 Kconfig 特性名（CLASH_API 等），
+  # 由构建 tag 机械推导（去掉 with_ 前缀并大写），不是另一份手工清单。
+  local features
+  features=$(echo "$SINGBOX_TAGS" | tr ',' '\n' | sed -n 's/^with_//p' | tr 'a-z' 'A-Z')
+  [ -n "$features" ] || die "sing-box: 未能从构建 tag 推导出特性名"
+  printf '%s\n' $features > "$OUT/sing-box/features.txt"
 }
 
 prebuild_einat() {

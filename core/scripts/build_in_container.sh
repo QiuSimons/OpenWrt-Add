@@ -105,13 +105,13 @@ done
 # sing-box tiny 的标签集合必须与预编译时使用的完全一致：
 # 以产物里的 tags.txt 为准，容器侧不再另存一份清单
 if grep -qE '^CONFIG_PACKAGE_sing-box-tiny=[ym]$' .config; then
-    if [ ! -f /prebuilt/sing-box/tags.txt ]; then
-        echo "::error::sing-box tiny 已启用，但 /prebuilt/sing-box/tags.txt 不存在"
+    if [ ! -f /prebuilt/sing-box/features.txt ]; then
+        echo "::error::sing-box tiny 已启用，但 /prebuilt/sing-box/features.txt 不存在"
         contract_fail=1
     else
         for c in $(grep -oE '^CONFIG_SING_BOX_TINY_BUILD_[A-Z0-9_]+=y$' .config \
                      | sed 's/^CONFIG_SING_BOX_TINY_BUILD_//; s/=y$//'); do
-            grep -qx "$c" /prebuilt/sing-box/tags.txt \
+            grep -qx "$c" /prebuilt/sing-box/features.txt \
                 || { echo "::error::sing-box tiny 特性 $c 已启用，但预编译未包含"; contract_fail=1; }
         done
     fi
