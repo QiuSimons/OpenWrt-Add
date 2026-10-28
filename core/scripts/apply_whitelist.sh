@@ -35,10 +35,10 @@ append_domains() {
 
 echo "[Whitelist] 正在合并直连域名白名单..."
 
-# Passwall 规则文件 (处于 legacy/)
+# Passwall
 append_domains "$REPO_ROOT/legacy/openwrt_helloworld/luci-app-passwall/root/usr/share/passwall/rules/direct_host"
 
-# MosDNS 规则文件 (处于 apps/)
+# MosDNS
 append_domains "$REPO_ROOT/apps/luci-app-mosdns/luci-app-mosdns/root/etc/mosdns/rule/whitelist.txt"
 
 echo "[Whitelist] 直连域名白名单处理完毕。"

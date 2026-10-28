@@ -2,16 +2,10 @@
 # ==============================================================================
 # OpenWrt-Add 宿主机预编译器
 #
-# 在 GitHub Actions runner 上直接交叉编译 Go / Rust 组件，产出与 OpenWrt
-# golang-package.mk / rust-package.mk 等价的目标二进制，供 SDK 容器纯打包使用。
-# 目的：消除 SDK 容器内的 golang/host、rust/host 工具链引导（每次 20~60 分钟）。
-#
+# 在 runner 上交叉编译 Go / Rust 组件，免去 SDK 容器内工具链引导。
 # 用法:
 #   ./core/scripts/prebuild_host.sh <arch> [outdir]
 #   arch: x86_64 | aarch64_generic
-#   PREBUILD_ONLY=frp,mosdns 只构建指定包（本地调试）
-#
-# 版本号/源码地址一律从各包 Makefile 解析，脚本内不硬编码，跟随每日 Update PKG。
 # ==============================================================================
 set -euo pipefail
 
@@ -29,12 +23,9 @@ esac
 
 export CGO_ENABLED=0 GOOS=linux GOARCH
 
-# sing-box tiny 变体的构建 tag，对应 Makefile 里 Package/sing-box-tiny/config
-# 的 Kconfig 默认值（64 位架构）。容器侧据此校验，不另存一份。
+# sing-box tiny 编译配置 (对齐 Package/sing-box-tiny/config 默认值)
 SINGBOX_TAGS="badlinkname,tfogo_checklinkname0,with_clash_api,with_gvisor,with_quic,with_utls,with_wireguard"
 mkdir -p "$OUT"
-# 转成绝对路径：gobuild 在子 shell 里 cd 到源码目录后再解析 -o，
-# 相对路径会被解析到源码树内，产物落到临时目录而 assert_elf 找不到。
 OUT="$(cd "$OUT" && pwd)"
 
 WORK="$(mktemp -d)"
@@ -43,13 +34,7 @@ trap 'rm -rf "$WORK"' EXIT
 log() { printf '[prebuild:%s] %s\n' "$ARCH" "$*"; }
 die() { printf '::error::[prebuild:%s] %s\n' "$ARCH" "$*" >&2; exit 1; }
 
-# ------------------------------------------------------------------------------
-# 解析 Makefile 的源码信息，结果写入全局变量：
-#   SRC_VERSION  PKG_VERSION（缺省回落到 PKG_UPSTREAM_VERSION）
-#   SRC_RELEASE  PKG_RELEASE（缺省 1）
-#   SRC_BUILDVER PKG_BUILD_VERSION（仅 mihomo 使用，缺省为空）
-#   SRC_URL      展开变量后的源码 tarball 地址（git 源自动转换为 codeload 地址）
-# ------------------------------------------------------------------------------
+# 解析 Makefile 中的源码信息
 resolve_source() {
   local makefile="$1" tmp
   [ -f "$makefile" ] || die "Makefile not found: $makefile"
@@ -216,9 +201,6 @@ prebuild_singbox() {
   fetch_source sing-box "$mk"
   rm -rf "$out"; mkdir -p "$out"
 
-  # 对应 Package/sing-box-tiny/config 的 Kconfig 默认值（64 位架构）：
-  #   CLASH_API=y GVISOR=y QUIC=y UTLS=y WIREGUARD=y，其余默认 n
-  # 若上游改动默认值，build_in_container.sh 的契约校验会立刻失败。
   local tags="$SINGBOX_TAGS"
   local ldflags="-s -w -checklinkname=0"
   ldflags+=" -X github.com/sagernet/sing-box/constant.Version=$SRC_VERSION"
@@ -227,11 +209,10 @@ prebuild_singbox() {
   gobuild "$src" "$out" ./cmd/sing-box "$tags" "$ldflags"
   assert_elf "$out/sing-box"
 
-  # 供容器内的契约校验读取。这里输出的是 Kconfig 特性名（CLASH_API 等），
-  # 由构建 tag 机械推导（去掉 with_ 前缀并大写），不是另一份手工清单。
+  # 导出特性列表供容器校验
   local features
   features=$(echo "$SINGBOX_TAGS" | tr ',' '\n' | sed -n 's/^with_//p' | tr 'a-z' 'A-Z')
-  [ -n "$features" ] || die "sing-box: 未能从构建 tag 推导出特性名"
+  [ -n "$features" ] || die "sing-box: 未能推导特性名"
   printf '%s\n' $features > "$OUT/sing-box/features.txt"
 }
 
@@ -243,8 +224,7 @@ prebuild_einat() {
   fetch_source einat-ebpf "$mk"
   rm -rf "$out"; mkdir -p "$out"
 
-  # build.rs 用 clang 编译 BPF，需要 <bpf/bpf_helpers.h>；容器内由 bpf-headers
-  # 提供，宿主机上取 libbpf 官方头文件（版本与 libbpf-sys 1.7 对齐）。
+  # 获取 libbpf 头文件供 build.rs 编译 BPF
   local inc="$WORK/libbpf-inc"
   curl -fsSL --retry 3 -o "$WORK/libbpf.tar.gz" \
     "https://github.com/libbpf/libbpf/archive/refs/tags/v1.7.0.tar.gz" \
@@ -256,7 +236,6 @@ prebuild_einat() {
   command -v clang >/dev/null || die "clang is required for einat-ebpf bpf build"
   command -v llvm-strip >/dev/null || die "llvm-strip is required for einat-ebpf bpf build"
 
-  # 与 OpenWrt 默认特性一致: ipv6=y, libbpf=n, bindgen=n, static=n
   ( cd "$src" && EINAT_BPF_CFLAGS="-I$inc" \
       cargo build --release --locked --target "$RUST_TARGET" \
         --no-default-features --features aya,ipv6 ) \
@@ -271,8 +250,7 @@ prebuild_flowcone() {
   [ -d "$dir/crates/flowcone-daemon" ] || { log "SKIP flowcone (包已移除)"; return 0; }
   rm -rf "$OUT/flowcone"; mkdir -p "$out"
 
-  # 仓库内已提交 crates/flowcone-daemon/ebpf/flowcone-ebpf.bin，build.rs 直接
-  # 拷贝该 eBPF 产物，因此宿主机构建不需要 clang / nightly。
+  # 使用 flowcone 已签入的 ebpf 产物
   ( cd "$dir" && cargo build --release --locked -p flowcone-daemon --target "$RUST_TARGET" ) \
     || die "cargo build failed: flowcone"
 

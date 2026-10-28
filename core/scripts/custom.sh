@@ -1,17 +1,12 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# 特殊插件与大仓子包同步处理模块 (Custom Handlers)
-#
-# 此脚本包含需要补丁、目录重组或从大型单体仓库中按需提取（Sparse Checkout）的插件。
-# 各函数相互独立，维护时定位到对应包名的函数即可。
+# 特殊插件同步与补丁处理模块
 # ==============================================================================
 
-# 定位仓库根目录与 core 内部资源目录
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 PATCH_DIR="$REPO_ROOT/core/patches"
 ASSET_DIR="$REPO_ROOT/core/assets"
 
-# 引入基础日志工具 (如果被独立执行)
 if ! type log_info >/dev/null 2>&1; then
     log_info() { echo -e "\033[32m[INFO]\033[0m $*"; }
     log_warn() { echo -e "\033[33m[WARN]\033[0m $*"; }
@@ -19,7 +14,7 @@ if ! type log_info >/dev/null 2>&1; then
 fi
 
 # ------------------------------------------------------------------------------
-# 1. OpenAppFilter (应用过滤 - 传统架构)
+# OpenAppFilter
 # ------------------------------------------------------------------------------
 sync_openappfilter() {
     local target="legacy/OpenAppFilter"
@@ -41,7 +36,7 @@ sync_openappfilter() {
 }
 
 # ------------------------------------------------------------------------------
-# 2. openwrt_helloworld (聚合 Passwall、SSR-Plus 等 - 传统架构)
+# openwrt_helloworld
 # ------------------------------------------------------------------------------
 sync_helloworld() {
     local target="legacy/openwrt_helloworld"
@@ -78,7 +73,7 @@ sync_helloworld() {
 }
 
 # ------------------------------------------------------------------------------
-# 3. openwrt_pkgs (去重 ramfree 和 zerotier - 传统架构)
+# openwrt_pkgs
 # ------------------------------------------------------------------------------
 sync_openwrt_pkgs() {
     local target="legacy/openwrt_pkgs"
@@ -97,7 +92,7 @@ sync_openwrt_pkgs() {
 }
 
 # ------------------------------------------------------------------------------
-# 4. OpenClash (清理冗余 GeoSite.dat 缩减体积 - 传统架构)
+# OpenClash
 # ------------------------------------------------------------------------------
 sync_openclash() {
     local target="legacy/OpenClash"
@@ -116,7 +111,7 @@ sync_openclash() {
 }
 
 # ------------------------------------------------------------------------------
-# 5. autocore-arm (注入 x86 调优 - 现代应用)
+# autocore-arm
 # ------------------------------------------------------------------------------
 sync_autocore_arm() {
     local target="apps/autocore-arm"
@@ -147,8 +142,7 @@ sync_autocore_arm() {
 }
 
 # ------------------------------------------------------------------------------
-# 5b. MentoHUST-OpenWrt-ipk (GCC 14 类型修复 - 从上游 clone 后 patch)
-# 覆盖 packages.conf 里 MentoHUST-OpenWrt-ipk 的默认 sync，拉取后自动打补丁。
+# MentoHUST-OpenWrt-ipk (打补丁修复 GCC 14 类型错误)
 # ------------------------------------------------------------------------------
 sync_mentohust_openwrt_ipk() {
     local target="apps/MentoHUST-OpenWrt-ipk"
@@ -157,7 +151,6 @@ sync_mentohust_openwrt_ipk() {
     tmp_dir="$(mktemp -d)"
 
     if clone_repo "https://github.com/KyleRicardo/MentoHUST-OpenWrt-ipk" "$tmp_dir/MentoHUST-OpenWrt-ipk"; then
-        # 修复 GCC 14 -Wincompatible-pointer-types 错误 (strnormalize.h 与 strnormalize.c 签名统一为 size_t*)
         if [ -f "$PATCH_DIR/mentohust-gcc14-size_t.patch" ]; then
             (cd "$tmp_dir/MentoHUST-OpenWrt-ipk" && \
              patch -p1 -N < "$PATCH_DIR/mentohust-gcc14-size_t.patch" 2>/dev/null) || \
@@ -173,7 +166,7 @@ sync_mentohust_openwrt_ipk() {
 }
 
 # ------------------------------------------------------------------------------
-# 6. openwrt-einat-ebpf (NAT66 eBPF 模块 - 现代应用)
+# openwrt-einat-ebpf
 # ------------------------------------------------------------------------------
 sync_einat_ebpf() {
     local target="apps/openwrt-einat-ebpf"
@@ -197,7 +190,7 @@ sync_einat_ebpf() {
 }
 
 # ------------------------------------------------------------------------------
-# 7. luci-app-einat (NAT66 界面 - 现代 JS 架构)
+# luci-app-einat
 # ------------------------------------------------------------------------------
 sync_luci_einat() {
     local target="apps/luci-app-einat"
@@ -218,7 +211,7 @@ sync_luci_einat() {
 }
 
 # ------------------------------------------------------------------------------
-# 8. openwrt-bandix (跳过校验 Hash - 现代应用)
+# openwrt-bandix
 # ------------------------------------------------------------------------------
 sync_openwrt_bandix() {
     local target="apps/openwrt-bandix"
@@ -237,7 +230,7 @@ sync_openwrt_bandix() {
 }
 
 # ------------------------------------------------------------------------------
-# 9. luci-theme-argon (Argon 主题界面样式优化 - 主题分类)
+# luci-theme-argon
 # ------------------------------------------------------------------------------
 sync_argon_theme() {
     local target="themes/luci-theme-argon"
@@ -260,7 +253,7 @@ sync_argon_theme() {
 }
 
 # ------------------------------------------------------------------------------
-# 10. luci-app-unblockneteasemusic (网易云解锁修复 - 现代应用)
+# luci-app-unblockneteasemusic
 # ------------------------------------------------------------------------------
 sync_unblockmusic() {
     local target="apps/luci-app-unblockneteasemusic"
@@ -282,7 +275,7 @@ sync_unblockmusic() {
 }
 
 # ------------------------------------------------------------------------------
-# 11. luci-app-taskplan (菜单目录重定位 - 现代应用)
+# luci-app-taskplan
 # ------------------------------------------------------------------------------
 sync_taskplan() {
     local target="apps/luci-app-taskplan"
@@ -304,7 +297,7 @@ sync_taskplan() {
 }
 
 # ------------------------------------------------------------------------------
-# 12. uugamebooster (UU 加速器 - 现代应用)
+# uugamebooster
 # ------------------------------------------------------------------------------
 sync_uugamebooster() {
     log_info "正在同步: uugamebooster 与 luci-app-uugamebooster (按需提取)..."
@@ -333,7 +326,7 @@ sync_uugamebooster() {
 }
 
 # ------------------------------------------------------------------------------
-# 13. luci-app-ap-modem (从 openwrt-app-actions 提取 - 现代应用)
+# luci-app-ap-modem
 # ------------------------------------------------------------------------------
 sync_ap_modem() {
     local target="apps/luci-app-ap-modem"
@@ -353,7 +346,7 @@ sync_ap_modem() {
 }
 
 # ------------------------------------------------------------------------------
-# 14. immortalwrt/luci (提取 ramfree, arpbind, zerotier, 3cat - 全部为现代应用)
+# immortalwrt/luci (ramfree, arpbind, zerotier, 3cat)
 # ------------------------------------------------------------------------------
 sync_immortalwrt_luci() {
     log_info "正在同步: immortalwrt LuCI 模块 (ramfree, arpbind, zerotier, 3cat)..."
@@ -384,7 +377,7 @@ sync_immortalwrt_luci() {
 }
 
 # ------------------------------------------------------------------------------
-# 15. lede_pkg (fullconenat-nft, r8168 - 现代驱动与模块)
+# lede_pkg (fullconenat-nft, r8168)
 # ------------------------------------------------------------------------------
 sync_lede_pkg() {
     log_info "正在同步: lede_pkg (r8168, fullconenat-nft)..."
@@ -413,7 +406,7 @@ sync_lede_pkg() {
 }
 
 # ------------------------------------------------------------------------------
-# 16. imm_pkg (从 immortalwrt/packages 稀疏提取 sing-box, frp, cpulimit 等 - 现代应用)
+# imm_pkg (sing-box, frp, cpulimit 等)
 # ------------------------------------------------------------------------------
 sync_imm_pkg() {
     local target="apps/imm_pkg"
@@ -467,7 +460,7 @@ sync_imm_pkg() {
 }
 
 # ------------------------------------------------------------------------------
-# 批量执行所有定制包同步
+# 批量执行定制同步
 # ------------------------------------------------------------------------------
 run_all_custom_sync() {
     local -a handlers=(

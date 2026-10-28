@@ -4,11 +4,11 @@
 #
 # 在 SDK 容器启动前改写 staging_feed 中的包 Makefile：
 #   1. 摘掉 golang/host / rust/host 构建依赖（消除容器内工具链引导）
-#   2. 在文件末尾追加 Build/Compile 覆盖，直接取用宿主机预编译二进制
+#   2. 在 BuildPackage 前注入 Build/Compile 覆盖，直接取用宿主机预编译二进制
 #   3. 保留原始 Makefile 的包元数据（DEPENDS / conffiles / install / config）
 #
-# 覆盖块放在文件末尾而不是 include 之后，是为了压过上游在 include 之后对
-# Build/Compile 的再赋值（例如 flowcone 的 RustBinPackage 分支）。
+# 覆盖块放在 BuildPackage 之前，确保生成规则时绑定覆盖的 Build/Compile，
+# 同时禁用 RustBinPackage 避免冲突。
 #
 # 用法:
 #   ./core/scripts/apply_prebuilt.sh <feed_dir> [prebuilt_mount_path] [prebuilt_host_dir]
@@ -20,8 +20,6 @@ DROP_CONF="${DROP_CONF:-$SCRIPT_DIR/../assets/drop-packages.conf}"
 
 FEED="${1:?usage: apply_prebuilt.sh <feed_dir> [prebuilt_mount_path] [prebuilt_host_dir]}"
 PREBUILT="${2:-/prebuilt}"
-# 容器内路径（写进 Makefile）与宿主机路径（用于校验产物存在）是两套命名空间，
-# 分开传参才能在提交给 docker 之前就发现 prebuild/apply 清单不同步。
 PREBUILT_HOST="${3:-}"
 
 MARKER="OpenWrt-Add CI prebuilt override"
@@ -30,7 +28,6 @@ log() { printf '[apply-prebuilt] %s\n' "$*"; }
 die() { printf '::error::[apply-prebuilt] %s\n' "$*" >&2; exit 1; }
 
 [ -d "$FEED" ] || die "feed dir not found: $FEED"
-# 入参允许相对路径，但后续不再依赖调用方 cwd
 FEED="$(cd "$FEED" && pwd)"
 if [ -n "$PREBUILT_HOST" ]; then
   [ -d "$PREBUILT_HOST" ] || die "prebuilt host dir not found: $PREBUILT_HOST"
@@ -48,10 +45,7 @@ PACKAGES=(
   "FlowCone/openwrt/flowcone|rust|flowcone|flowcone"
 )
 
-# ------------------------------------------------------------------------------
-# 按 core/assets/drop-packages.conf 移除互斥变体：删掉它的 BuildPackage 求值，
-# 使 kconfig 中不存在该符号，避免被 select / 默认值重新选上。
-# ------------------------------------------------------------------------------
+# 按 drop-packages.conf 移除互斥变体
 drop_packages() {
   local conf="$DROP_CONF" reldir pkg mk
   if [ ! -f "$conf" ]; then
@@ -118,19 +112,16 @@ import re, sys
 path, kind, marker, prebuilt, pname, binname = sys.argv[1:7]
 src = open(path, encoding='utf-8').read()
 
-# 1) 就地摘除宿主工具链依赖（必须在 include package.mk 之前生效）
+# 摘除宿主工具链构建依赖
 if kind == 'go':
     src = re.sub(r'^(PKG_BUILD_DEPENDS:?=[^\n]*?)\bgolang/host\b[ \t]*', r'\1', src, flags=re.M)
 else:
     src = re.sub(r'^(PKG_BUILD_DEPENDS:?=[^\n]*?)\brust/host\b[ \t]*', r'\1', src, flags=re.M)
-    # 禁用 RustBinPackage，避免覆盖我们自定义的 Build/Compile
     src = re.sub(r'(\$\(eval\s+\$\(call\s+RustBinPackage[^\)]*\)\))', r'# \1 (disabled for prebuilt)', src)
 
-# 2) 生成覆盖块
 if kind == 'go':
     block = f"""
 # --- {marker} ---
-# 宿主机已用 Go 交叉编译出目标二进制，容器内不再引导 golang/host 工具链
 PKG_BUILD_DEPENDS:=
 GO_PKG_PREBUILT_DIR:={prebuilt}/$(PKG_NAME)
 GO_PKG_BUILD_BIN_DIR:=$(GO_PKG_PREBUILT_DIR)/bin
@@ -145,7 +136,6 @@ Build/InstallDev:=
 else:
     block = f"""
 # --- {marker} ---
-# 宿主机已用 Rust musl 交叉编译出静态二进制，容器内不再引导 rust/host 工具链
 PKG_BUILD_DEPENDS:=
 define Build/Compile
 	$(INSTALL_DIR) $(PKG_INSTALL_DIR)/bin
@@ -155,7 +145,7 @@ Build/InstallDev:=
 # --- end {marker} ---
 """
 
-# 3) 必须在 $(eval $(call BuildPackage...)) 之前生效，否则 BuildPackage 生成目标规则时无法绑定覆盖的 Build/Compile
+# 在 BuildPackage 前注入覆盖块
 m = re.search(r'^[ \t]*\$\(eval\s+\$\(call\s+BuildPackage', src, flags=re.M)
 if m:
     src = src[:m.start()] + block + '\n' + src[m.start():]
@@ -170,9 +160,6 @@ PY
   patched=$((patched + 1))
 done
 
-# ------------------------------------------------------------------------------
-# 校验：注入后不允许在生效位置残留宿主编译器依赖
-# ------------------------------------------------------------------------------
 fail=0
 for entry in "${PACKAGES[@]}"; do
   reldir="${entry%%|*}"
@@ -185,7 +172,6 @@ for entry in "${PACKAGES[@]}"; do
     continue
   fi
 
-  # 所有 PKG_BUILD_DEPENDS 赋值行都不应再含宿主工具链（含 include 之前的原行）
   if grep -qE '^PKG_BUILD_DEPENDS:?=.*(golang/host|rust/host)' "$mk"; then
     log "FAIL $reldir: 仍存在宿主工具链构建依赖"
     grep -nE '^PKG_BUILD_DEPENDS:?=.*(golang/host|rust/host)' "$mk" | sed 's/^/  /'

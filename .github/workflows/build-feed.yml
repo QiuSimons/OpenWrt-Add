@@ -80,8 +80,6 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v7
 
-      # key 覆盖所有影响产物的输入：各包 Makefile 里的版本/URL、vendored 的
-      # flowcone 源码、以及构建脚本自身。命中即代表可以整段跳过预编译。
       - name: Restore prebuilt binaries
         id: prebuilt-cache
         uses: actions/cache@v4
@@ -105,7 +103,6 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
 
-          # runner 镜像通常已自带 clang / llvm-strip，缺失时才安装
           need() {
             command -v "$1" >/dev/null 2>&1 || sudo apt-get install -y -qq --no-install-recommends "$2"
           }
@@ -190,7 +187,6 @@ jobs:
             cp -a staging_feed/feeds_packages_lang_node-prebuilt/. node_prebuilt/
             rm -rf staging_feed/feeds_packages_lang_node-prebuilt
           fi
-          # -maxdepth 2 会漏掉 imm_pkg/、OpenWrt-mihomo/ 这类嵌套包，按实际包定义统计
           echo "Package Makefiles in feed: $(find staging_feed -name Makefile -not -path '*/src/*' | wc -l)"
 
       - name: Apply prebuilt binaries to feed
@@ -319,9 +315,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 索引必须与打包工具同版本：OpenWrt 25.x 用 apk v3（.apk / .adb），
-          # 而 Alpine 稳定版的 apk-tools 仍是 2.x（v3 只在 edge 才有）。
-          # 直接用构建这些包的 SDK 镜像里自带的 apk，版本天然对齐。
+          # 使用 SDK 镜像内置的 apk 工具生成 packages.adb
           image="docker.io/openwrt/sdk:x86_64-${SDK_TAG}"
           echo "Using SDK image ${image} for indexing"
           docker pull "${image}"

@@ -32,7 +32,7 @@ git clone https://github.com/QiuSimons/OpenWrt-Add.git package/custom
 ```text
 OpenWrt-Add/
 ├── .github/workflows/
-│   ├── Update_PKG.yml        # 定时同步上游源码 (每天 00:00 UTC+8)
+│   ├── Update_PKG.yml        # 定时同步上游源码 (每天 04:23 UTC+8 / 20:23 UTC)
 │   └── build-feed.yml        # 编译 APK 软件源与 ImageBuilder 离线包
 ├── core/                     # 管理总目录 (构建脚本、离线补丁、规则与工具)
 │   ├── scripts/              # 自动化同步主控及后处理脚本
@@ -44,18 +44,21 @@ OpenWrt-Add/
 │   │   ├── create_acl.sh     # 自动补全缺少的 LuCI rpcd ACL 配置
 │   │   ├── remove_upx.sh     # 清除 Makefile 中的 upx 指令
 │   │   ├── apply_whitelist.sh# MosDNS / Passwall 直连白名单追加
+│   │   ├── fix_relative_includes.sh # 修复 Makefile 相对 include 路径
+│   │   ├── patch_singbox_tiny.sh # 配置 sing-box 默认编译变体为 tiny
 │   │   ├── fix_permissions.sh# 权限规范化
 │   │   ├── build_in_container.sh # SDK 容器内: feeds、defconfig 与 package/compile
 │   │   ├── prebuild_host.sh  # runner 上交叉编译 Go/Rust 组件，免容器工具链引导
 │   │   ├── apply_prebuilt.sh # 把预编译二进制注入 feed 的包 Makefile
+│   │   ├── smart_fanout.py   # 产物按架构分发
 │   │   └── verify_manifest.py# 包清单闸门，防止静默产出残缺 feed
 │   ├── patches/              # 离线补丁文件
 │   ├── assets/               # 静态文件 (autocore 启动脚本、直连域名、闸门 allowlist、变体摘除清单)
 │   └── tools/                # 路由器端独立运维工具 (clean-overlay.sh 等)
-├── themes/                   # 主题样式及配套配置
-├── apps/                     # 非侵入性包 (现代 JS 架构应用、CLI 工具、标准驱动与后台)
-├── legacy/                   # 传统架构应用 (使用 luasrc/cbi 的旧版 LuCI 应用)
-└── invasive/                 # 侵入性组件 (必须打补丁修改 OpenWrt 内核或源码才能运行的组件)
+├── themes/                   # 主题与外观配置
+├── apps/                     # 独立应用、驱动与后台服务
+├── legacy/                   # 基于 luasrc/cbi 的旧版应用
+└── invasive/                 # 需修改 OpenWrt 源码或内核的组件
 ```
 
 ---
