@@ -61,6 +61,15 @@ echo "src-link custom /feed" >> feeds.conf
 ./scripts/feeds install -a
 ./scripts/feeds install -a -p custom
 
+# 上游 packages feed 自带一个 full 变体的 sing-box（net/sing-box），而本 feed
+# 只发布 tiny 版本，且包名不同（sing-box-tiny，靠 PROVIDES 提供 sing-box 这个名字），
+# 因此 -p custom 覆盖不到它。把它从构建树里移除，否则 full 会被真的构建并发布。
+./scripts/feeds uninstall sing-box 2>/dev/null || true
+if [ -e package/feeds/packages/sing-box ]; then
+    echo "::error::上游 sing-box 仍留在构建树中"
+    exit 1
+fi
+
 # 用预编译 node 替换 SDK 内置的源码编译版
 if [ -d /node_prebuilt ] && [ -f /node_prebuilt/Makefile ]; then
     rm -rf feeds/packages/lang/node
