@@ -275,7 +275,9 @@ jobs:
 
   publish-feed:
     name: Smart Fan-out, Sign & Deploy Feed
-    needs: build-packages
+    needs:
+      - resolve-sdks
+      - build-packages
     runs-on: ubuntu-latest
     if: always() && needs.build-packages.result != 'cancelled'
     steps:
@@ -287,33 +289,6 @@ jobs:
         with:
           path: raw_artifacts
           merge-multiple: true
-
-      - name: Install apk-tools (static, no apt dependency)
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # Ubuntu 24.04 软件源里没有 apk-tools，这正是此前 4h40m 构建被 5 秒
-          # apt 失败清零的根因。改为直接取 Alpine 官方静态构建，零发行版依赖。
-          ALPINE_BRANCH="v3.22"
-          MIRROR="https://dl-cdn.alpinelinux.org/alpine/${ALPINE_BRANCH}/main/x86_64"
-          TMP="$(mktemp -d)"
-
-          curl -fsSL --retry 3 -o "$TMP/APKINDEX.tar.gz" "$MIRROR/APKINDEX.tar.gz"
-          tar -xzf "$TMP/APKINDEX.tar.gz" -C "$TMP" APKINDEX
-          APK_VER="$(awk '/^P:apk-tools-static$-/{f=1;next} f&&/^V:/{sub(/^V:/,"");print;exit}' "$TMP/APKINDEX")"
-          [ -n "$APK_VER" ] || { echo "::error::无法从 APKINDEX 解析 apk-tools-static 版本"; exit 1; }
-          echo "apk-tools-static version: $APK_VER"
-
-          curl -fsSL --retry 3 -o "$TMP/apk-tools-static.apk" "$MIRROR/apk-tools-static-${APK_VER}.apk"
-          mkdir -p "$TMP/x" && tar -xzf "$TMP/apk-tools-static.apk" -C "$TMP/x"
-          sudo install -m0755 "$TMP/x/sbin/apk.static" /usr/local/bin/apk
-
-          apk --version | head -n 1
-          for t in openssl zstd python3 tar; do
-            command -v "$t" >/dev/null 2>&1 || { echo "::error::missing required tool: $t"; exit 1; }
-          done
-
 
       - name: Execute Smart Fan-out
         run: |
@@ -338,18 +313,39 @@ jobs:
           cp certs/custom-feed.rsa.pub public/keys/custom-feed.rsa.pub
 
       - name: Generate Signed Index (packages.adb) for Each Architecture
+        shell: bash
+        env:
+          SDK_TAG: ${{ fromJson(needs.resolve-sdks.outputs.sdks)[0] }}
         run: |
-          for dir in public/*; do
-            if [ -d "$dir" ] && [ "$(basename "$dir")" != "keys" ]; then
-              arch_tag=$(basename "$dir")
-              cd "$dir"
-              if compgen -G "*.apk" > /dev/null; then
-                echo "--> Indexing & Signing $arch_tag repository..."
-                apk mkndx --allow-untrusted -o packages.adb --sign ../certs/feed-key.pem *.apk
-              fi
-              cd - > /dev/null
-            fi
-          done
+          set -euo pipefail
+
+          # 索引必须与打包工具同版本：OpenWrt 25.x 用 apk v3（.apk / .adb），
+          # 而 Alpine 稳定版的 apk-tools 仍是 2.x（v3 只在 edge 才有）。
+          # 直接用构建这些包的 SDK 镜像里自带的 apk，版本天然对齐。
+          image="docker.io/openwrt/sdk:x86_64-${SDK_TAG}"
+          echo "Using SDK image ${image} for indexing"
+          docker pull "${image}"
+
+          docker run --rm --user root \
+            -v "${PWD}/public:/public" \
+            -v "${PWD}/certs:/certs:ro" \
+            "${image}" bash -c '
+              set -e
+              APK=/builder/staging_dir/host/bin/apk
+              [ -x "$APK" ] || { echo "::error::apk not found in SDK image"; exit 1; }
+              "$APK" --version | head -n 1
+
+              for dir in /public/*/; do
+                [ -d "$dir" ] || continue
+                arch=$(basename "$dir")
+                [ "$arch" = keys ] && continue
+                shopt -s nullglob
+                files=("$dir"*.apk)
+                [ ${#files[@]} -gt 0 ] || continue
+                echo "--> indexing $arch (${#files[@]} apk)"
+                ( cd "$dir" && "$APK" mkndx --allow-untrusted -o packages.adb --sign /certs/feed-key.pem "${files[@]}" )
+              done
+            '
 
       - name: Build ImageBuilder Offline Bundle
         run: |

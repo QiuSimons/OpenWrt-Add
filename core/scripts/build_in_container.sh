@@ -58,7 +58,9 @@ fi
 # 精确获取 custom feed 下所有有效包名并启用编译
 # 互斥变体（如 sing-box full）已在 apply_prebuilt.sh 中按 drop-packages.conf 摘除，
 # 不会出现在这个列表里。
-pkgs=$(./scripts/feeds list -s custom | awk '{print $1}')
+# -r <feed> 才是列出该 feed 的包；-s 列的是 feed 名与 URL（曾误用，导致清单全是
+# base/custom/luci 这类 feed 名）。list_feed 还会打印 TARGET: 行，一并过滤。
+pkgs=$(./scripts/feeds list -r custom | grep -v '^TARGET:' | awk 'NF {print $1}' | sort -u)
 for p in $pkgs; do
     echo "CONFIG_PACKAGE_$p=m" >> .config
 done
