@@ -52,10 +52,9 @@ echo "src-link custom /feed" >> feeds.conf
 # "does not exist"，头文件也进不了 staging，所有相关包连锁编译失败。
 ./scripts/feeds update base packages luci custom
 
-# 先按 feeds.conf 顺序装全部包（让 base 的依赖可解析），再用 custom 覆盖同名包，
-# 保证我们这些定制过的 luci-app-* 不被上游版本顶掉。
+# 先按 feeds.conf 顺序装全部包，再用 custom 覆盖同名包
 ./scripts/feeds install -a
-./scripts/feeds install -a -p custom
+./scripts/feeds install -f -a -p custom
 
 # 上游 packages feed 自带一个 full 变体的 sing-box（net/sing-box），而本 feed
 # 只发布 tiny 版本，且包名不同（sing-box-tiny，靠 PROVIDES 提供 sing-box 这个名字），
@@ -208,6 +207,13 @@ fi
 
 mkdir -p /artifacts/bin
 find bin/packages/ -path '*/custom/*' -name '*.apk' -exec cp {} /artifacts/bin/ \; 2>/dev/null || true
+find bin/targets/ -name '*.apk' -exec cp -u {} /artifacts/bin/ \; 2>/dev/null || true
+if [ -f /artifacts/manifest/expected.txt ]; then
+    while IFS= read -r pkg || [ -n "$pkg" ]; do
+        [ -n "$pkg" ] || continue
+        find bin/ -type f -name "${pkg}-[0-9]*.apk" -exec cp -u {} /artifacts/bin/ \; 2>/dev/null || true
+    done < /artifacts/manifest/expected.txt
+fi
 INNER_EOF
 
 chmod 755 /tmp/inner.sh

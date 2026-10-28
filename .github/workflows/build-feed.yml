@@ -364,9 +364,18 @@ jobs:
         uses: actions/deploy-pages@v5
 
       - name: Upload ImageBuilder Bundle to Release
-        uses: softprops/action-gh-release@v3
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-        with:
-          tag_name: latest-packages
-          name: "OpenWrt-Add Precompiled APKs"
-          files: dist/openwrt-add-apks-bundle.tar.gz
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view latest-packages --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+            gh release create latest-packages --title "OpenWrt-Add Precompiled APKs" --notes "Precompiled APK bundle for ImageBuilder" --repo "${{ github.repository }}"
+
+          for attempt in 1 2 3; do
+            if gh release upload latest-packages dist/openwrt-add-apks-bundle.tar.gz --clobber --repo "${{ github.repository }}"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
