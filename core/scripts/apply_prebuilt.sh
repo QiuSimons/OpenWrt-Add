@@ -120,16 +120,20 @@ else:
     src = re.sub(r'(\$\(eval\s+\$\(call\s+RustBinPackage[^\)]*\)\))', r'# \1 (disabled for prebuilt)', src)
 
 if kind == 'go':
+    pdir_name = pname if pname else '$(PKG_NAME)'
     block = f"""
 # --- {marker} ---
 PKG_BUILD_DEPENDS:=
-GO_PKG_PREBUILT_DIR:={prebuilt}/$(PKG_NAME)
-GO_PKG_BUILD_BIN_DIR:=$(GO_PKG_PREBUILT_DIR)/bin
+GO_PKG_PREBUILT_DIR:={prebuilt}/{pdir_name}
+GO_PKG_BUILD_BIN_DIR?=$(PKG_BUILD_DIR)/.go_work/build/bin
+define Build/Compile
+	$(INSTALL_DIR) $(GO_PKG_BUILD_BIN_DIR)
+	$(CP) $(GO_PKG_PREBUILT_DIR)/bin/* $(GO_PKG_BUILD_BIN_DIR)/
+endef
 define GoPackage/Package/Install/Bin
 	$(INSTALL_DIR) $(1)$(GO_PKG_INSTALL_BIN_PATH)
-	$(INSTALL_BIN) $(GO_PKG_PREBUILT_DIR)/bin/* $(1)$(GO_PKG_INSTALL_BIN_PATH)/
+	$(INSTALL_BIN) $(GO_PKG_BUILD_BIN_DIR)/* $(1)$(GO_PKG_INSTALL_BIN_PATH)/
 endef
-Build/Compile:=
 Build/InstallDev:=
 # --- end {marker} ---
 """
