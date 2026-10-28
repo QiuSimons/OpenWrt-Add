@@ -130,11 +130,20 @@ done
 echo "manifest expects $(wc -l < /artifacts/manifest/expected.txt) package(s)"
 
 contract_fail=0
-if grep -qE '^CONFIG_PACKAGE_sing-box=[ym]$' .config; then
+# sing-box 只发 tiny：full 的 BuildPackage 已被 apply_prebuilt 按 drop-packages.conf 摘除。
+# 注意 .config 里的 CONFIG_PACKAGE_sing-box 可能只是 tiny 的 PROVIDES 产生的虚拟符号
+# （homeproxy 的 +sing-box 依赖会 select 它），不代表 full 的真实包被构建。
+# 因此判定依据是"真实包是否仍在构建系统里"，而不是这个符号。
+if [ ! -f tmp/.packageinfo ]; then
+    echo "::error::tmp/.packageinfo 缺失，无法校验 sing-box 变体"
+    contract_fail=1
+elif grep -q '^Package: sing-box$' tmp/.packageinfo; then
     echo '--- who selects it ---'
     grep -n 'PACKAGE_sing-box' tmp/.config-package.in 2>/dev/null | head -n 20 || true
-    echo "::error::sing-box(full 变体) 被启用，但 core/scripts/prebuild_host.sh 只预编译了 tiny 变体"
+    echo "::error::sing-box(full) 的真实包仍在构建系统中，drop-packages.conf 未生效"
     contract_fail=1
+elif grep -qE '^CONFIG_PACKAGE_sing-box=[ym]$' .config; then
+    echo "note: CONFIG_PACKAGE_sing-box 仅由 tiny 的 PROVIDES 提供（虚拟符号），full 不会被构建"
 fi
 for c in EINAT_EBPF_BACKEND_LIBBPF EINAT_EBPF_BINDGEN EINAT_EBPF_STATIC; do
     if grep -qE "^CONFIG_${c}=y$" .config; then
