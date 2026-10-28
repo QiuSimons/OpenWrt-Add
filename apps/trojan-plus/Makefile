@@ -25,6 +25,7 @@ PKG_MAINTAINER:=Trojan-Plus-Group
 
 include $(INCLUDE_DIR)/package.mk
 include $(INCLUDE_DIR)/cmake.mk
+include ./boost-version.mk
 
 TARGET_CXXFLAGS += -Wall -Wextra
 TARGET_CXXFLAGS += $(FPIC)
@@ -58,7 +59,8 @@ define Package/trojan-plus
 	URL:=https://github.com/Trojan-Plus-Group/trojan-plus
 	DEPENDS:= \
 		+libpthread +libstdcpp +libopenssl \
-		+boost +boost-system +boost-program_options
+		+boost +boost-program_options \
+		$(if $(filter y,$(NEED_BOOST_SYSTEM)),,+boost-system)
 	PROVIDES:=trojan
 endef
 

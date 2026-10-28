@@ -123,8 +123,10 @@ if kind == 'go':
     src = re.sub(r'^(PKG_BUILD_DEPENDS:?=[^\n]*?)\bgolang/host\b[ \t]*', r'\1', src, flags=re.M)
 else:
     src = re.sub(r'^(PKG_BUILD_DEPENDS:?=[^\n]*?)\brust/host\b[ \t]*', r'\1', src, flags=re.M)
+    # 禁用 RustBinPackage，避免覆盖我们自定义的 Build/Compile
+    src = re.sub(r'(\$\(eval\s+\$\(call\s+RustBinPackage[^\)]*\)\))', r'# \1 (disabled for prebuilt)', src)
 
-# 2) 末尾追加覆盖块（压过上游在 include 之后的再赋值）
+# 2) 生成覆盖块
 if kind == 'go':
     block = f"""
 # --- {marker} ---
@@ -153,9 +155,14 @@ Build/InstallDev:=
 # --- end {marker} ---
 """
 
-if not src.endswith('\n'):
-    src += '\n'
-src += block
+# 3) 必须在 $(eval $(call BuildPackage...)) 之前生效，否则 BuildPackage 生成目标规则时无法绑定覆盖的 Build/Compile
+m = re.search(r'^[ \t]*\$\(eval\s+\$\(call\s+BuildPackage', src, flags=re.M)
+if m:
+    src = src[:m.start()] + block + '\n' + src[m.start():]
+else:
+    if not src.endswith('\n'):
+        src += '\n'
+    src += block
 open(path, 'w', encoding='utf-8').write(src)
 print('     injected: ' + path)
 PY

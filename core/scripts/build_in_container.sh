@@ -1,35 +1,31 @@
 #!/usr/bin/env bash
 set -e
 
-# 1. 宿主编译依赖补齐 (vmlinux-btf 需要 pahole 对 shadow BTF 编码)
+# 1. 宿主编译依赖补齐 (vmlinux-btf 需要 pahole 和 llvm-objcopy 对 shadow BTF 编码)
 if command -v apt-get >/dev/null 2>&1; then
     if [ -f /etc/debian_version ] && grep -q "^11" /etc/debian_version; then
         printf "deb [check-valid-until=no trusted=yes] http://archive.debian.org/debian/ bullseye main\ndeb [check-valid-until=no trusted=yes] http://archive.debian.org/debian-security/ bullseye-security main\n" > /etc/apt/sources.list
         rm -rf /etc/apt/sources.list.d/*
     fi
     apt-get update -o Acquire::Check-Valid-Until=false || apt-get update
-    apt-get install -y --no-install-recommends dwarves || apt-get install -y pahole
+    apt-get install -y --no-install-recommends dwarves llvm || apt-get install -y dwarves llvm || apt-get install -y pahole
     rm -rf /var/lib/apt/lists/*
 elif command -v apk >/dev/null 2>&1; then
     apk add --no-cache dwarves
 fi
 
-pahole_bin="$(command -v pahole || true)"
+pahole_bin="$(command -v pahole || which pahole || true)"
 if [ -n "$pahole_bin" ] && [ -x "$pahole_bin" ]; then
     mkdir -p /builder/staging_dir/host/bin
-    # 不直接软链：这个 SDK 是 Debian 11，dwarves 偏老，走 --btf_encode_detached
-    # 会报 "btf_elf__write: failed to add .BTF section ... 2!"。
-    # vmlinux-btf 的 Makefile 用 --help 里有没有这个选项来二选一，因此这里把
-    # 该选项从 --help 输出里滤掉，让它走官方的 -J + objcopy 兜底分支。
-    cat > /builder/staging_dir/host/bin/pahole <<WRAP
-#!/bin/sh
-case "\$1" in
-  --help|-h) "$pahole_bin" --help 2>&1 | grep -v -- '--btf_encode_detached' ;;
-  *) exec "$pahole_bin" "\$@" ;;
-esac
-WRAP
-    chmod 755 /builder/staging_dir/host/bin/pahole
-    echo "pahole wrapper installed (btf_encode_detached hidden, -J fallback used)"
+    ln -sf "$pahole_bin" /builder/staging_dir/host/bin/pahole
+    echo "Using pahole binary: $pahole_bin ($("$pahole_bin" --version 2>/dev/null || true))"
+fi
+
+llvm_objcopy_bin="$(command -v llvm-objcopy || find /usr/bin -name 'llvm-objcopy*' 2>/dev/null | head -n 1 || true)"
+if [ -n "$llvm_objcopy_bin" ]; then
+    mkdir -p /builder/staging_dir/host/bin
+    ln -sf "$llvm_objcopy_bin" /builder/staging_dir/host/bin/llvm-objcopy
+    echo "Using llvm-objcopy: $llvm_objcopy_bin"
 fi
 
 # 2. 授权并启动编译

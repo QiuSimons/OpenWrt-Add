@@ -16592,7 +16592,7 @@ void str_normalize_gbk(char *text, unsigned options)
 	text[i_to] = 0;
 }
 
-int gbk_to_utf8(const char *from, unsigned int from_len, char **to, unsigned int *to_len)
+int gbk_to_utf8(const char *from, unsigned int from_len, char **to, size_t *to_len)
 {
 	char *result = *to;
 	unsigned i_from = 0;
@@ -16642,7 +16642,7 @@ int gbk_to_utf8(const char *from, unsigned int from_len, char **to, unsigned int
 }
 
 
-int utf8_to_gbk(const char *from, unsigned int from_len, char **to, unsigned int *to_len)
+int utf8_to_gbk(const char *from, unsigned int from_len, char **to, size_t *to_len)
 {
 	char *result = *to;
 	unsigned i_from = 0;

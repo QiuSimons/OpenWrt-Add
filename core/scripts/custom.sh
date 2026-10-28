@@ -147,6 +147,32 @@ sync_autocore_arm() {
 }
 
 # ------------------------------------------------------------------------------
+# 5b. MentoHUST-OpenWrt-ipk (GCC 14 类型修复 - 从上游 clone 后 patch)
+# 覆盖 packages.conf 里 MentoHUST-OpenWrt-ipk 的默认 sync，拉取后自动打补丁。
+# ------------------------------------------------------------------------------
+sync_mentohust_openwrt_ipk() {
+    local target="apps/MentoHUST-OpenWrt-ipk"
+    log_info "正在同步: $target (KyleRicardo/MentoHUST-OpenWrt-ipk + gcc14 patch)..."
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+
+    if clone_repo "https://github.com/KyleRicardo/MentoHUST-OpenWrt-ipk" "$tmp_dir/MentoHUST-OpenWrt-ipk"; then
+        # 修复 GCC 14 -Wincompatible-pointer-types 错误 (strnormalize.h 与 strnormalize.c 签名统一为 size_t*)
+        if [ -f "$PATCH_DIR/mentohust-gcc14-size_t.patch" ]; then
+            (cd "$tmp_dir/MentoHUST-OpenWrt-ipk" && \
+             patch -p1 -N < "$PATCH_DIR/mentohust-gcc14-size_t.patch" 2>/dev/null) || \
+             log_warn "mentohust-gcc14-size_t.patch 跳过或已包含"
+        fi
+
+        deploy_dir "$tmp_dir/MentoHUST-OpenWrt-ipk" "$REPO_ROOT/$target"
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+    rm -rf "$tmp_dir"
+    return 1
+}
+
+# ------------------------------------------------------------------------------
 # 6. openwrt-einat-ebpf (NAT66 eBPF 模块 - 现代应用)
 # ------------------------------------------------------------------------------
 sync_einat_ebpf() {
@@ -405,7 +431,6 @@ sync_imm_pkg() {
         "libs/libcron"
         "libs/quickjspp"
         "libs/toml11"
-        "libs/libcronet"
         "net/sing-box"
         "net/frp"
     )
@@ -451,6 +476,7 @@ run_all_custom_sync() {
         sync_openwrt_pkgs
         sync_openclash
         sync_autocore_arm
+        sync_mentohust_openwrt_ipk
         sync_einat_ebpf
         sync_luci_einat
         sync_openwrt_bandix

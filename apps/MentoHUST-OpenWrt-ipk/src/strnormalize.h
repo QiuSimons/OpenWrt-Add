@@ -12,6 +12,8 @@
 #ifndef __STRNORMALIZE_H__
 #define __STRNORMALIZE_H__
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -25,8 +27,8 @@ void str_normalize_init();
 void str_normalize_gbk(char *text, unsigned options);
 void str_normalize_utf8(char *text, unsigned options);
 
-int gbk_to_utf8(const char *from, unsigned int from_len, char **to, unsigned int *to_len);
-int utf8_to_gbk(const char *from, unsigned int from_len, char **to, unsigned int *to_len);
+int gbk_to_utf8(const char *from, unsigned int from_len, char **to, size_t *to_len);
+int utf8_to_gbk(const char *from, unsigned int from_len, char **to, size_t *to_len);
 
 #ifdef __cplusplus
 }
