@@ -14,7 +14,7 @@ elif command -v apk >/dev/null 2>&1; then
     apk add --no-cache dwarves
 fi
 
-pahole_bin="$(command -v pahole || which pahole || true)"
+pahole_bin="$(command -v pahole || true)"
 if [ -n "$pahole_bin" ] && [ -x "$pahole_bin" ]; then
     mkdir -p /builder/staging_dir/host/bin
     # 不直接软链：这个 SDK 是 Debian 11，dwarves 偏老，走 --btf_encode_detached
@@ -70,14 +70,11 @@ if [ -e package/feeds/packages/sing-box ]; then
     exit 1
 fi
 
-# 用预编译 node 替换 SDK 内置的源码编译版
+# 用预编译 node 替换 SDK 内置的源码编译版。版本跟随仓库同步的 feed，
+# 不再在构建时访问 GitHub API（无认证会被限流，失败时还会静默降级）。
 if [ -d /node_prebuilt ] && [ -f /node_prebuilt/Makefile ]; then
     rm -rf feeds/packages/lang/node
     cp -rf /node_prebuilt feeds/packages/lang/node
-    node_ver=$(curl -fsSL --retry 3 https://api.github.com/repos/sbwml/node_workflow/tags 2>/dev/null | grep '"name"' | head -n 1 | sed -E 's/.*"name": "v([^"]+)".*/\1/')
-    if [ -n "$node_ver" ]; then
-        sed -i "s|^PKG_VERSION:=.*|PKG_VERSION:=$node_ver|" feeds/packages/lang/node/Makefile
-    fi
 fi
 
 [ -f feeds/packages/lang/golang/golang-package.mk ] || {
@@ -86,8 +83,7 @@ fi
 # 精确获取 custom feed 下所有有效包名并启用编译
 # 互斥变体（如 sing-box full）已在 apply_prebuilt.sh 中按 drop-packages.conf 摘除，
 # 不会出现在这个列表里。
-# -r <feed> 才是列出该 feed 的包；-s 列的是 feed 名与 URL（曾误用，导致清单全是
-# base/custom/luci 这类 feed 名）。list_feed 还会打印 TARGET: 行，一并过滤。
+# -r <feed> 列该 feed 的包；-s 列的是 feed 名与 URL。list_feed 还会输出 TARGET: 行。
 pkgs=$(./scripts/feeds list -r custom | grep -v '^TARGET:' | awk 'NF {print $1}' | sort -u)
 [ -n "$pkgs" ] || { echo "::error::custom feed 里没有解析到任何包"; exit 1; }
 echo "packages in custom feed: $(echo "$pkgs" | wc -l)"
@@ -122,9 +118,6 @@ fi
 # 预编译契约校验：宿主机预编译的二进制必须与 defconfig 实际选择一致。
 # 一旦上游 Makefile 变更默认特性，这里会立刻失败，而不是静默发布功能缺失的包。
 # ---------------------------------------------------------------------------
-grep -E '^CONFIG_PACKAGE_[A-Za-z0-9_.+-]+=[ym]$' .config \
-    | sed 's/^CONFIG_PACKAGE_//; s/=[ym]$//' | sort -u > /artifacts/manifest/enabled.txt
-
 # manifest 闸门只针对"本 feed 的包"（feeds 列出的）中 kconfig 真正启用的那些。
 # defconfig 会因为架构/内核符号不满足而丢掉个别包，那些是结构性不可构建，
 # 单列出来供排查，不作为失败条件。
@@ -183,10 +176,9 @@ fi
 # ---------------------------------------------------------------------------
 # 逐包编译，不用 make package/compile
 #
-# package/Makefile 里有 "package-y += kernel/linux"，所以 make package/compile
-# 一定会把 package/kernel/linux、package/toolchain 一起处理；CONFIG_AUTOREMOVE
-# 判定脏了会先 clean-build，把 SDK 预置的内核头清掉，依赖 $(LINUX_DIR) 的
-# vmlinux-btf 必挂。改为只构建本 feed 装出来的包目录。
+# package/Makefile 里有 "package-y += kernel/linux"，make package/compile 会把
+# package/kernel/linux、package/toolchain 一起卷进来（配上前面的 AUTOREMOVE
+# 关闭仍然没必要），因此只构建本 feed 装出来的包目录。
 # ---------------------------------------------------------------------------
 targets=""
 for d in package/feeds/custom/*; do
@@ -194,11 +186,10 @@ for d in package/feeds/custom/*; do
     targets="$targets package/feeds/custom/$(basename "$d")/compile"
 done
 [ -n "$targets" ] || { echo "::error::no build targets (feeds install 失败?)"; exit 1; }
-echo "build targets:$targets"
+echo "build targets: $(echo $targets | wc -w) package dir(s)"
 
+# -k: 前置依赖失败不中止整轮，由 manifest 闸门判定哪些包真的缺了
 # shellcheck disable=SC2086
-# -k: 某个前置依赖失败时不要中止整轮，我们的包能建多少建多少，
-#    最终由 manifest 闸门判定哪些包真的缺了
 IGNORE_ERRORS=1 make -k -j"$(( $(nproc) + 1 ))" $targets 2>&1 | tee /tmp/build.log || true
 
 mkdir -p /artifacts/logs

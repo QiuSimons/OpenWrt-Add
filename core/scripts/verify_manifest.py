@@ -35,12 +35,10 @@ def main():
     ap.add_argument('--apk-dir', required=True, help='实际产出的 apk 目录')
     ap.add_argument('--allow-missing', default='core/assets/build-allow-missing.conf',
                     help='允许缺失的包清单（每行一个包名）')
-    ap.add_argument('--allow-empty', action='store_true',
-                    help='允许预期清单为空（仅本地调试用）')
     args = ap.parse_args()
 
     expected = load_list(args.expected)
-    if not expected and not args.allow_empty:
+    if not expected:
         print(f'::error::预期包清单为空或缺失: {args.expected}')
         print('::error::（容器内 defconfig 阶段未生成清单，说明编译提前崩了）')
         return 1

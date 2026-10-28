@@ -73,7 +73,7 @@ pat = re.compile(r'^\$\(eval \$\(call (?:BuildPackage|GoBinPackage|RustBinPackag
                  + re.escape(pkg) + r'\)\)[ \t]*$', re.M)
 m = pat.search(src)
 if not m:
-    if ('# drop-packages.conf' in src) and (' ' + pkg) in src:
+    if '# drop-packages.conf: 本 feed 不构建 ' + pkg in src:
         sys.exit(0)  # 已摘除
     sys.exit('package eval not found: ' + pkg)
 note = '# drop-packages.conf: 本 feed 不构建 ' + pkg + '\n'
@@ -179,8 +179,9 @@ for entry in "${PACKAGES[@]}"; do
   fi
 
   # 所有 PKG_BUILD_DEPENDS 赋值行都不应再含宿主工具链（含 include 之前的原行）
-  if grep -nE '^PKG_BUILD_DEPENDS:?=.*(golang/host|rust/host)' "$mk"; then
+  if grep -qE '^PKG_BUILD_DEPENDS:?=.*(golang/host|rust/host)' "$mk"; then
     log "FAIL $reldir: 仍存在宿主工具链构建依赖"
+    grep -nE '^PKG_BUILD_DEPENDS:?=.*(golang/host|rust/host)' "$mk" | sed 's/^/  /'
     fail=1
   fi
 done
