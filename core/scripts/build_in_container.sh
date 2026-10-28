@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-# 安装 pahole 和 llvm-objcopy 供 vmlinux-btf 编码
+# Install pahole and llvm-objcopy for vmlinux-btf encoding
 if command -v apt-get >/dev/null 2>&1; then
     if [ -f /etc/debian_version ] && grep -q "^11" /etc/debian_version; then
         printf "deb [check-valid-until=no trusted=yes] http://archive.debian.org/debian/ bullseye main\ndeb [check-valid-until=no trusted=yes] http://archive.debian.org/debian-security/ bullseye-security main\n" > /etc/apt/sources.list
@@ -28,12 +28,12 @@ if [ -n "$llvm_objcopy_bin" ]; then
     echo "Using llvm-objcopy: $llvm_objcopy_bin"
 fi
 
-chown -R 1000:1000 /builder /artifacts
+chown -R 1000:1000 /builder /artifacts /cached_apks 2>/dev/null || true
 
 cat > /tmp/inner.sh <<'INNER_EOF'
 set -e
 
-# 清除 CI 环境变量
+# Clear CI environment variables
 export CI=""
 export GITHUB_ACTIONS=""
 
@@ -42,23 +42,26 @@ export GITHUB_ACTIONS=""
 [ -f feeds.conf.default ] || { echo "feeds.conf.default missing"; exit 1; }
 cp feeds.conf.default feeds.conf
 sed -i -e 's,https://git.openwrt.org/feed/,https://github.com/openwrt/,' -e 's,https://git.openwrt.org/openwrt/,https://github.com/openwrt/,' -e 's,https://git.openwrt.org/project/,https://github.com/openwrt/,' feeds.conf
-echo "src-link custom /feed" >> feeds.conf
+# custom feed takes highest priority
+sed -i '1i src-link custom /feed' feeds.conf
 
-# OpenWrt 25.x SDK 中 base 为独立 feed，需更新以提供基础库依赖
-./scripts/feeds update base packages luci custom
+# Update base feed for OpenWrt 25.x SDK core dependencies
+./scripts/feeds update custom base packages luci
 
-# 安装全部 feed 包，并用 custom feed 覆盖同名包
-./scripts/feeds install -a
+# Install custom feed first to establish symlinks
 ./scripts/feeds install -f -a -p custom
 
-# 移除上游 packages feed 中的 sing-box full 变体，避免与 custom feed 的 tiny 变体冲突
-./scripts/feeds uninstall sing-box 2>/dev/null || true
+# Install remaining feeds for dependencies
+./scripts/feeds install -a
+
+# Remove conflicting upstream package directories
+rm -rf package/feeds/packages/sing-box package/feeds/packages/frp package/feeds/base/r8168 package/kernel/r8168
 if [ -e package/feeds/packages/sing-box ]; then
-    echo "::error::上游 sing-box 仍留在构建树中"
+    echo "::error::upstream sing-box remained in build tree"
     exit 1
 fi
 
-# 使用预编译 node 替换源码版
+# Replace source node with prebuilt node
 if [ -d /node_prebuilt ] && [ -f /node_prebuilt/Makefile ]; then
     rm -rf feeds/packages/lang/node
     cp -rf /node_prebuilt feeds/packages/lang/node
@@ -67,19 +70,19 @@ fi
 [ -f feeds/packages/lang/golang/golang-package.mk ] || {
     echo "feeds/packages missing after feeds update"; exit 1; }
 
-# 获取 custom feed 包列表并写入 .config
+# Collect custom feed package list and populate .config
 pkgs=$(./scripts/feeds list -r custom | grep -v '^TARGET:' | awk 'NF {print $1}' | sort -u)
-[ -n "$pkgs" ] || { echo "::error::custom feed 里没有解析到任何包"; exit 1; }
+[ -n "$pkgs" ] || { echo "::error::no packages found in custom feed"; exit 1; }
 echo "packages in custom feed: $(echo "$pkgs" | wc -l)"
 for p in $pkgs; do
     echo "CONFIG_PACKAGE_$p=m" >> .config
 done
 echo "CONFIG_PACKAGE_node=m" >> .config
 
-# 禁用 AUTOREMOVE，防止 clean-build 清理 SDK 预置内核头与工具链
+# Disable AUTOREMOVE to keep SDK kernel headers and toolchains intact
 echo "# CONFIG_AUTOREMOVE is not set" >> .config
 
-# 禁用 SDK 中无源码的 LuCI host 工具
+# Disable LuCI host tools that lack source in SDK
 for opt in LUCI_CSSTIDY LUCI_UTMIN LUCI_SRCDIET; do
     echo "# CONFIG_$opt is not set" >> .config
 done
@@ -96,7 +99,7 @@ if ! make defconfig > /tmp/defconfig.log 2>&1; then
     exit 1
 fi
 
-# 记录 defconfig 实际启用的 custom 包列表
+# Record custom packages enabled by defconfig
 : > /artifacts/manifest/expected.txt
 for p in $pkgs; do
     if grep -qxE "CONFIG_PACKAGE_$p=[ym]" .config; then
@@ -108,74 +111,95 @@ done
 echo "manifest expects $(wc -l < /artifacts/manifest/expected.txt) package(s)"
 
 contract_fail=0
-# 校验 tmp/.packageinfo 中是否残留 sing-box full 变体
+# Verify no sing-box full variant remains in tmp/.packageinfo
 if [ ! -f tmp/.packageinfo ]; then
-    echo "::error::tmp/.packageinfo 缺失，无法校验 sing-box 变体"
+    echo "::error::tmp/.packageinfo missing, unable to verify sing-box variant"
     contract_fail=1
 elif grep -q '^Package: sing-box$' tmp/.packageinfo; then
     echo '--- who selects it ---'
     grep -n 'PACKAGE_sing-box' tmp/.config-package.in 2>/dev/null | head -n 20 || true
-    echo "::error::sing-box(full) 的真实包仍在构建系统中，drop-packages.conf 未生效"
+    echo "::error::sing-box full package still present in build tree"
     contract_fail=1
 elif grep -qE '^CONFIG_PACKAGE_sing-box=[ym]$' .config; then
-    echo "note: CONFIG_PACKAGE_sing-box 仅由 tiny 的 PROVIDES 提供（虚拟符号），full 不会被构建"
+    echo "note: CONFIG_PACKAGE_sing-box provided by tiny PROVIDES, full will not build"
 fi
 for c in EINAT_EBPF_BACKEND_LIBBPF EINAT_EBPF_BINDGEN EINAT_EBPF_STATIC; do
     if grep -qE "^CONFIG_${c}=y$" .config; then
-        echo "::error::${c} 已启用，宿主机预编译的 einat 不含该特性"
+        echo "::error::${c} enabled but host prebuilt einat lacks this feature"
         contract_fail=1
     fi
 done
-# 校验 sing-box tiny 实际启用的特性与预编译 features.txt 一致
+# Verify enabled sing-box tiny features match prebuilt features.txt
 if grep -qE '^CONFIG_PACKAGE_sing-box-tiny=[ym]$' .config; then
     if [ ! -f /prebuilt/sing-box/features.txt ]; then
-        echo "::error::sing-box tiny 已启用，但 /prebuilt/sing-box/features.txt 不存在"
+        echo "::error::sing-box tiny enabled but /prebuilt/sing-box/features.txt missing"
         contract_fail=1
     else
         for c in $(grep -oE '^CONFIG_SING_BOX_TINY_BUILD_[A-Z0-9_]+=y$' .config \
                      | sed 's/^CONFIG_SING_BOX_TINY_BUILD_//; s/=y$//'); do
             grep -qx "$c" /prebuilt/sing-box/features.txt \
-                || { echo "::error::sing-box tiny 特性 $c 已启用，但预编译未包含"; contract_fail=1; }
+                || { echo "::error::sing-box tiny feature $c enabled but not in prebuilt"; contract_fail=1; }
         done
     fi
 fi
 
 if [ "$contract_fail" -ne 0 ]; then
-    echo "::error::预编译契约校验失败，终止以避免发布与目标不一致的二进制"
+    echo "::error::prebuilt contract verification failed, aborting"
     exit 1
 fi
 
-# 针对 custom feed 逐包构建，避免触发全量内核编译
+# Plan incremental build targets
+mkdir -p /artifacts/bin
 targets=""
-for d in package/feeds/custom/*; do
-    [ -e "$d" ] || continue
-    targets="$targets package/feeds/custom/$(basename "$d")/compile"
-done
-[ -n "$targets" ] || { echo "::error::no build targets (feeds install 失败?)"; exit 1; }
-echo "build targets: $(echo $targets | wc -w) package dir(s)"
 
-# shellcheck disable=SC2086
-IGNORE_ERRORS=1 make -k -j"$(( $(nproc) + 1 ))" $targets 2>&1 | tee /tmp/build.log || true
+if [ -f /core/scripts/incremental_build.py ] && [ -d /cached_apks ]; then
+    echo "=== Running incremental build planner ==="
+    python3 /core/scripts/incremental_build.py plan \
+        --package-dir package/feeds/custom \
+        --packageinfo tmp/.packageinfo \
+        --manifest /artifacts/manifest/expected.txt \
+        --cache-dir /cached_apks \
+        --artifacts-bin /artifacts/bin \
+        --output-targets /tmp/targets.txt
 
-mkdir -p /artifacts/logs
-cp /tmp/build.log /artifacts/logs/00-build.log
-
-# 失败的包单独重跑一次并留档日志
-grep -oE 'ERROR: package/[^ ]+ .*failed to build' /tmp/build.log 2>/dev/null \
-    | awk '{print $2}' | sort -u > /tmp/failed.txt || true
-if [ -s /tmp/failed.txt ]; then
-    echo "failed packages:"
-    sed 's/^/  /' /tmp/failed.txt
-    while IFS= read -r tgt; do
-        [ -n "$tgt" ] || continue
-        out="/artifacts/logs/$(echo "$tgt" | sed 's|^package/||; s|/|_|g').log"
-        echo "=== re-running $tgt/compile V=s -> $out ==="
-        make "$tgt/compile" V=s 2>&1 | tee "$out" || true
-    done < /tmp/failed.txt
-
+    if [ -f /tmp/targets.txt ]; then
+        targets=$(cat /tmp/targets.txt)
+    fi
+else
+    for d in package/feeds/custom/*; do
+        [ -e "$d" ] || continue
+        targets="$targets package/feeds/custom/$(basename "$d")/compile"
+    done
 fi
 
-mkdir -p /artifacts/bin
+mkdir -p /artifacts/logs
+
+if [ -n "$targets" ]; then
+    echo "build targets: $(echo $targets | wc -w) package dir(s) need compile"
+    # shellcheck disable=SC2086
+    IGNORE_ERRORS=1 make -k -j"$(( $(nproc) + 1 ))" $targets 2>&1 | tee /tmp/build.log || true
+
+    # Re-run failed packages individually with verbose logging
+    grep -oE 'ERROR: package/[^ ]+ .*failed to build' /tmp/build.log 2>/dev/null \
+        | awk '{print $2}' | sort -u > /tmp/failed.txt || true
+    if [ -s /tmp/failed.txt ]; then
+        echo "failed packages:"
+        sed 's/^/  /' /tmp/failed.txt
+        while IFS= read -r tgt; do
+            [ -n "$tgt" ] || continue
+            out="/artifacts/logs/$(echo "$tgt" | sed 's|^package/||; s|/|_|g').log"
+            echo "=== re-running $tgt/compile V=s -> $out ==="
+            make "$tgt/compile" V=s 2>&1 | tee "$out" || true
+        done < /tmp/failed.txt
+    fi
+else
+    echo "=== [INCREMENTAL] All packages cached, skip compile ==="
+    touch /tmp/build.log
+fi
+
+cp /tmp/build.log /artifacts/logs/00-build.log
+
+# Collect built APKs into /artifacts/bin
 find bin/packages/ -path '*/custom/*' -name '*.apk' -exec cp {} /artifacts/bin/ \; 2>/dev/null || true
 find bin/targets/ -name '*.apk' -exec cp -u {} /artifacts/bin/ \; 2>/dev/null || true
 if [ -f /artifacts/manifest/expected.txt ]; then
@@ -183,6 +207,17 @@ if [ -f /artifacts/manifest/expected.txt ]; then
         [ -n "$pkg" ] || continue
         find bin/ -type f -name "${pkg}-[0-9]*.apk" -exec cp -u {} /artifacts/bin/ \; 2>/dev/null || true
     done < /artifacts/manifest/expected.txt
+fi
+
+# Update incremental build cache
+if [ -f /core/scripts/incremental_build.py ] && [ -d /cached_apks ]; then
+    echo "=== Updating incremental package cache ==="
+    python3 /core/scripts/incremental_build.py save \
+        --package-dir package/feeds/custom \
+        --packageinfo tmp/.packageinfo \
+        --manifest /artifacts/manifest/expected.txt \
+        --cache-dir /cached_apks \
+        --artifacts-bin /artifacts/bin
 fi
 INNER_EOF
 

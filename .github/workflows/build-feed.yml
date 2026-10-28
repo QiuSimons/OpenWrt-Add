@@ -201,6 +201,19 @@ jobs:
           restore-keys: |
             ${{ matrix.arch }}-${{ matrix.sdk }}-dl-
 
+      - name: Restore Incremental Package Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: cached_apks
+          key: ${{ matrix.arch }}-${{ matrix.sdk }}-apks-${{ github.sha }}
+          restore-keys: |
+            ${{ matrix.arch }}-${{ matrix.sdk }}-apks-
+
+      - name: Ensure Cache and Working Directories
+        shell: bash
+        run: |
+          mkdir -p cached_apks artifacts
+
       - name: Compile Packages in OpenWrt SDK Container
         continue-on-error: true
         shell: bash
@@ -218,11 +231,13 @@ jobs:
             -v "${{ github.workspace }}/dl:/builder/dl" \
             -v "${{ github.workspace }}/node_prebuilt:/node_prebuilt:ro" \
             -v "${{ github.workspace }}/prebuilt:/prebuilt:ro" \
+            -v "${{ github.workspace }}/core:/core:ro" \
+            -v "${{ github.workspace }}/cached_apks:/cached_apks" \
             -v "${{ github.workspace }}/core/scripts/build_in_container.sh:/build.sh:ro" \
             "${image}" \
             bash /build.sh
 
-          sudo chown -R "$USER:$USER" "${{ github.workspace }}/artifacts"
+          sudo chown -R "$USER:$USER" "${{ github.workspace }}/artifacts" "${{ github.workspace }}/cached_apks"
 
       - name: Show Built Files
         if: always()
@@ -269,6 +284,13 @@ jobs:
           path: dist/*.apk
           if-no-files-found: warn
 
+      - name: Save Incremental Package Cache
+        if: always() && hashFiles('cached_apks/fingerprints.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: cached_apks
+          key: ${{ matrix.arch }}-${{ matrix.sdk }}-apks-${{ github.sha }}-${{ github.run_id }}
+
   publish-feed:
     name: Smart Fan-out, Sign & Deploy Feed
     needs:
@@ -284,7 +306,6 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: raw_artifacts
-          merge-multiple: true
 
       - name: Execute Smart Fan-out
         run: |
@@ -337,9 +358,53 @@ jobs:
                 files=("$dir"*.apk)
                 [ ${#files[@]} -gt 0 ] || continue
                 echo "--> indexing $arch (${#files[@]} apk)"
-                ( cd "$dir" && "$APK" mkndx --allow-untrusted -o packages.adb --sign /certs/feed-key.pem "${files[@]}" )
+
+                # 若存在损坏或不兼容的 APK，剔除坏包重试
+                max_retries=5
+                attempt=0
+                while [ "$attempt" -lt "$max_retries" ]; do
+                  attempt=$((attempt + 1))
+                  shopt -s nullglob
+                  cur_files=("$dir"*.apk)
+                  [ ${#cur_files[@]} -gt 0 ] || { echo "::warning::[$arch] no apks found"; break; }
+
+                  set +e
+                  out=$(cd "$dir" && "$APK" mkndx --allow-untrusted -o packages.adb --sign /certs/feed-key.pem "${cur_files[@]}" 2>&1)
+                  ret=$?
+                  set -e
+
+                  if [ $ret -eq 0 ]; then
+                    echo "--> successfully indexed $arch"
+                    break
+                  fi
+
+                  echo "$out"
+                  bad_files=$(echo "$out" | grep -oE "(ERROR: )?[^ :'\"]+\.apk" | sed 's/^ERROR: //' | sort -u || true)
+                  removed=0
+                  if [ -n "$bad_files" ]; then
+                    for bf in $bad_files; do
+                      target_file=""
+                      if [ -f "$bf" ]; then
+                        target_file="$bf"
+                      elif [ -f "$dir/$(basename "$bf")" ]; then
+                        target_file="$dir/$(basename "$bf")"
+                      fi
+                      if [ -n "$target_file" ]; then
+                        echo "::warning::[$arch] removing invalid apk: $target_file"
+                        rm -f "$target_file"
+                        removed=1
+                      fi
+                    done
+                  fi
+                  if [ "$removed" -eq 0 ]; then
+                    echo "::warning::[$arch] mkndx failed with non-recoverable error"
+                    break
+                  fi
+                done
               done
             '
+
+          sudo chown -R "$USER:$USER" public
 
       - name: Build ImageBuilder Offline Bundle
         run: |
