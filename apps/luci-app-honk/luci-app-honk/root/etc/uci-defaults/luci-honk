@@ -60,7 +60,7 @@ if [ -f /etc/honk/config.dae ]; then
 	' 2>/dev/null || true
 fi
 
-rm -rf /tmp/luci-*
+rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache /tmp/luci-*.lmo
 /etc/init.d/rpcd reload 2>/dev/null
 
 exit 0
