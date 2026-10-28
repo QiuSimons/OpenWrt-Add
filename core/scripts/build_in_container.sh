@@ -17,7 +17,19 @@ fi
 pahole_bin="$(command -v pahole || which pahole || true)"
 if [ -n "$pahole_bin" ] && [ -x "$pahole_bin" ]; then
     mkdir -p /builder/staging_dir/host/bin
-    ln -sf "$pahole_bin" /builder/staging_dir/host/bin/pahole
+    # 不直接软链：这个 SDK 是 Debian 11，dwarves 偏老，走 --btf_encode_detached
+    # 会报 "btf_elf__write: failed to add .BTF section ... 2!"。
+    # vmlinux-btf 的 Makefile 用 --help 里有没有这个选项来二选一，因此这里把
+    # 该选项从 --help 输出里滤掉，让它走官方的 -J + objcopy 兜底分支。
+    cat > /builder/staging_dir/host/bin/pahole <<WRAP
+#!/bin/sh
+case "\$1" in
+  --help|-h) "$pahole_bin" --help 2>&1 | grep -v -- '--btf_encode_detached' ;;
+  *) exec "$pahole_bin" "\$@" ;;
+esac
+WRAP
+    chmod 755 /builder/staging_dir/host/bin/pahole
+    echo "pahole wrapper installed (btf_encode_detached hidden, -J fallback used)"
 fi
 
 # 2. 授权并启动编译
@@ -38,8 +50,15 @@ cp feeds.conf.default feeds.conf
 sed -i -e 's,https://git.openwrt.org/feed/,https://github.com/openwrt/,' -e 's,https://git.openwrt.org/openwrt/,https://github.com/openwrt/,' -e 's,https://git.openwrt.org/project/,https://github.com/openwrt/,' feeds.conf
 echo "src-link custom /feed" >> feeds.conf
 
-# 仅拉取编译所需的核心 feeds (packages, luci, custom)，跳过无关的巨型仓库
-./scripts/feeds update packages luci custom
+# base 在这个版本里是一个 feed（feeds.conf.default 里就列着），而 SDK 自带的
+# package/ 只有 kernel 与 toolchain。不装 base 的话，libopenssl / pcre2 /
+# argp-standalone / lua / json-c / ucode / libbpf 这些依赖在构建系统里
+# "does not exist"，头文件也进不了 staging，所有相关包连锁编译失败。
+./scripts/feeds update base packages luci custom
+
+# 先按 feeds.conf 顺序装全部包（让 base 的依赖可解析），再用 custom 覆盖同名包，
+# 保证我们这些定制过的 luci-app-* 不被上游版本顶掉。
+./scripts/feeds install -a
 ./scripts/feeds install -a -p custom
 
 # 用预编译 node 替换 SDK 内置的源码编译版
