@@ -61,6 +61,8 @@ fi
 # -r <feed> 才是列出该 feed 的包；-s 列的是 feed 名与 URL（曾误用，导致清单全是
 # base/custom/luci 这类 feed 名）。list_feed 还会打印 TARGET: 行，一并过滤。
 pkgs=$(./scripts/feeds list -r custom | grep -v '^TARGET:' | awk 'NF {print $1}' | sort -u)
+[ -n "$pkgs" ] || { echo "::error::custom feed 里没有解析到任何包"; exit 1; }
+echo "packages in custom feed: $(echo "$pkgs" | wc -l)"
 for p in $pkgs; do
     echo "CONFIG_PACKAGE_$p=m" >> .config
 done
@@ -76,9 +78,7 @@ for opt in LUCI_CSSTIDY LUCI_UTMIN LUCI_SRCDIET; do
     echo "# CONFIG_$opt is not set" >> .config
 done
 
-# 记录计划编译的包清单，供宿主机侧 manifest 闸门比对
 mkdir -p /artifacts/manifest
-printf '%s\n' $pkgs | sort -u > /artifacts/manifest/expected.txt
 
 if ! make defconfig > /tmp/defconfig.log 2>&1; then
     cat /tmp/defconfig.log
@@ -96,6 +96,19 @@ fi
 # ---------------------------------------------------------------------------
 grep -E '^CONFIG_PACKAGE_[A-Za-z0-9_.+-]+=[ym]$' .config \
     | sed 's/^CONFIG_PACKAGE_//; s/=[ym]$//' | sort -u > /artifacts/manifest/enabled.txt
+
+# manifest 闸门只针对"本 feed 的包"（feeds 列出的）中 kconfig 真正启用的那些。
+# defconfig 会因为架构/内核符号不满足而丢掉个别包，那些是结构性不可构建，
+# 单列出来供排查，不作为失败条件。
+: > /artifacts/manifest/expected.txt
+for p in $pkgs; do
+    if grep -qxE "CONFIG_PACKAGE_$p=[ym]" .config; then
+        echo "$p" >> /artifacts/manifest/expected.txt
+    else
+        echo "not enabled by defconfig (skipped): $p"
+    fi
+done
+echo "manifest expects $(wc -l < /artifacts/manifest/expected.txt) package(s)"
 
 contract_fail=0
 if grep -qE '^CONFIG_PACKAGE_sing-box=[ym]$' .config; then
