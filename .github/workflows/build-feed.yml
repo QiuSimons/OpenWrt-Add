@@ -82,7 +82,7 @@ jobs:
 
       - name: Restore prebuilt binaries
         id: prebuilt-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: prebuilt
           key: prebuilt-bin-${{ matrix.arch }}-${{ hashFiles('core/scripts/prebuild_host.sh', 'apps/**/Makefile', 'apps/FlowCone/Cargo.lock', 'apps/FlowCone/crates/**') }}
@@ -91,7 +91,7 @@ jobs:
 
       - name: Set up Go
         if: steps.prebuilt-cache.outputs.cache-hit != 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: 'stable'
           cache: false
@@ -121,7 +121,7 @@ jobs:
 
       - name: Cache Go module downloads
         if: steps.prebuilt-cache.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/go/pkg/mod
           key: prebuild-gomod-${{ matrix.arch }}-${{ hashFiles('apps/**/Makefile') }}
@@ -130,7 +130,7 @@ jobs:
 
       - name: Cache cargo registry
         if: steps.prebuilt-cache.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -194,7 +194,7 @@ jobs:
         run: ./core/scripts/apply_prebuilt.sh staging_feed /prebuilt prebuilt
 
       - name: Cache OpenWrt Package Downloads (dl)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: dl
           key: ${{ matrix.arch }}-${{ matrix.sdk }}-dl-${{ hashFiles('staging_feed/**/Makefile') }}
@@ -202,7 +202,7 @@ jobs:
             ${{ matrix.arch }}-${{ matrix.sdk }}-dl-
 
       - name: Restore Incremental Package Cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: cached_apks
           key: ${{ matrix.arch }}-${{ matrix.sdk }}-apks-${{ github.sha }}
@@ -286,7 +286,7 @@ jobs:
 
       - name: Save Incremental Package Cache
         if: always() && hashFiles('cached_apks/fingerprints.json') != ''
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: cached_apks
           key: ${{ matrix.arch }}-${{ matrix.sdk }}-apks-${{ github.sha }}-${{ github.run_id }}
