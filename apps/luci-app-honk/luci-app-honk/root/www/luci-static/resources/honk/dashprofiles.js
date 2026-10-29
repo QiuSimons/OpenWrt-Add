@@ -50,6 +50,25 @@ var DASHBOARD_PROFILES = {
 		ghfastMirror: 'https://ghfast.top/https://github.com/Zakkaus/doona',
 		ghproxyMirror: 'https://ghproxy.net/https://github.com/Zakkaus/doona',
 		pkgName: 'doona-*.tar.gz'
+	},
+	doona_lite: {
+		name: 'Doona Lite',
+		label: function() { return _('Doona Lite'); },
+		apiName: 'Native API',
+		defaultPort: DEFAULT_PORT,
+		defaultDir: '/etc/honk/doona-lite',
+		buildUrl: function(info, targetHost, port, secret, protocol, forceFresh) {
+			var hostPart = (targetHost.indexOf(':') !== -1 && targetHost.charAt(0) !== '[') ? '[' + targetHost + ']' : targetHost;
+			var url = protocol + '://' + hostPart + ':' + port + '/ui/';
+			if (forceFresh) {
+				url += '?_t=' + Date.now();
+			}
+			return url;
+		},
+		githubRelease: 'https://github.com/Zakkaus/doona',
+		ghfastMirror: 'https://ghfast.top/https://github.com/Zakkaus/doona',
+		ghproxyMirror: 'https://ghproxy.net/https://github.com/Zakkaus/doona',
+		pkgName: 'doona-lite-*.tar.gz'
 	}
 };
 
@@ -61,6 +80,8 @@ function exampleConfig(profile) {
 }
 
 function getProfile(type) {
+	if (type === 'doona-lite')
+		type = 'doona_lite';
 	return DASHBOARD_PROFILES[type] || DASHBOARD_PROFILES.zashboard;
 }
 

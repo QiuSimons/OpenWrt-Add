@@ -285,6 +285,9 @@ msgstr "选择当前生效的 Web 管理面板。"
 msgid "Doona"
 msgstr "Doona"
 
+msgid "Doona Lite"
+msgstr "Doona Lite"
+
 msgid "Native API is configured, but dashboard files are missing in the UI directory. You can download and deploy it directly."
 msgstr "Native API 已配置，但 UI 目录中缺少面板文件。您可以直接下载并部署。"
 

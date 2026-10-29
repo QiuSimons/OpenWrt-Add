@@ -3,6 +3,7 @@
 
 TARGET_DIR="${1:-}"
 DOWNLOAD_URL="${2:-}"
+TARGET_TYPE="${3:-}"
 
 LOG_FILE="/tmp/honk_dashboard_download.log"
 STATUS_FILE="/tmp/honk_dashboard_download.status"
@@ -21,7 +22,7 @@ set_status() {
 : > "$LOG_FILE"
 
 if [ -z "$TARGET_DIR" ] || [ -z "$DOWNLOAD_URL" ]; then
-    log "Error: usage: $0 <target-dir> <archive-url>"
+    log "Error: usage: $0 <target-dir> <archive-url> [target-type]"
     set_status "FAILED"
     exit 1
 fi
@@ -61,6 +62,14 @@ case "$DOWNLOAD_URL" in
         PREFIX="${DOWNLOAD_URL%%https://github.com/*}"
         log "Checking latest release..."
 
+        IS_LITE=0
+        case "$TARGET_TYPE" in
+            *lite*) IS_LITE=1 ;;
+        esac
+        case "$TARGET_DIR" in
+            *lite*) IS_LITE=1 ;;
+        esac
+
         RESOLVED_URL=""
         MAX_RETRIES=3
         attempt=1
@@ -75,15 +84,26 @@ case "$DOWNLOAD_URL" in
 
             if [ -n "$LATEST_TAG" ]; then
                 log "Latest tag: $LATEST_TAG"
+                TAG_NO_V="${LATEST_TAG#[vV]}"
                 ASSETS_HTML=$(fetch_text "https://github.com/Zakkaus/doona/releases/expanded_assets/$LATEST_TAG")
-                ASSET_PATH=$(printf "%s" "$ASSETS_HTML" | grep -o '/Zakkaus/doona/releases/download/[^"]*/doona-[^"]*\.tar\.gz' | grep -v 'fonts' | head -n 1)
-                if [ -n "$ASSET_PATH" ]; then
-                    RESOLVED_URL="https://github.com${ASSET_PATH}"
-                    log "Found package: $ASSET_PATH"
+                if [ "$IS_LITE" -eq 1 ]; then
+                    ASSET_PATH=$(printf "%s" "$ASSETS_HTML" | grep -o '/Zakkaus/doona/releases/download/[^"]*/doona-lite-[^"]*\.tar\.gz' | head -n 1)
+                    if [ -n "$ASSET_PATH" ]; then
+                        RESOLVED_URL="https://github.com${ASSET_PATH}"
+                        log "Found package: $ASSET_PATH"
+                    else
+                        RESOLVED_URL="https://github.com/Zakkaus/doona/releases/download/${LATEST_TAG}/doona-lite-${TAG_NO_V}.tar.gz"
+                        log "Inferred package URL: $RESOLVED_URL"
+                    fi
                 else
-                    TAG_NO_V="${LATEST_TAG#[vV]}"
-                    RESOLVED_URL="https://github.com/Zakkaus/doona/releases/download/${LATEST_TAG}/doona-${TAG_NO_V}.tar.gz"
-                    log "Inferred package URL: $RESOLVED_URL"
+                    ASSET_PATH=$(printf "%s" "$ASSETS_HTML" | grep -o '/Zakkaus/doona/releases/download/[^"]*/doona-[^"]*\.tar\.gz' | grep -v 'fonts' | grep -v 'lite' | grep -v 'precompressed' | head -n 1)
+                    if [ -n "$ASSET_PATH" ]; then
+                        RESOLVED_URL="https://github.com${ASSET_PATH}"
+                        log "Found package: $ASSET_PATH"
+                    else
+                        RESOLVED_URL="https://github.com/Zakkaus/doona/releases/download/${LATEST_TAG}/doona-${TAG_NO_V}.tar.gz"
+                        log "Inferred package URL: $RESOLVED_URL"
+                    fi
                 fi
                 break
             fi

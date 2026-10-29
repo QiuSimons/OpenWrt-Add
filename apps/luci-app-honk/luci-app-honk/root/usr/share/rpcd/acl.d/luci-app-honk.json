@@ -10,6 +10,7 @@
 				"/etc/honk/config.dae",
 				"/etc/honk/config.d/*",
 				"/etc/honk/doona/*",
+				"/etc/honk/doona-lite/*",
 				"/etc/honk/zashboard/*"
 			]
 		},
@@ -22,6 +23,7 @@
 				"/etc/honk/config.dae",
 				"/etc/honk/config.d/*",
 				"/etc/honk/doona/*",
+				"/etc/honk/doona-lite/*",
 				"/etc/honk/zashboard/*"
 			]
 		}

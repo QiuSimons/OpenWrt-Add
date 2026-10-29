@@ -11,17 +11,35 @@ const DEFAULT_SECRET = "honk114514";
 
 const DASHBOARD_DIRS = {
 	zashboard: "/etc/honk/zashboard",
-	doona: "/etc/honk/doona"
+	doona: "/etc/honk/doona",
+	doona_lite: "/etc/honk/doona-lite"
 };
 
+function normalize_dashboard_type(type) {
+	if (type == "doona-lite")
+		return "doona_lite";
+	return type;
+}
+
 function get_dashboard_dir(type) {
+	type = normalize_dashboard_type(type);
 	return DASHBOARD_DIRS[type] || DASHBOARD_DIRS.doona;
+}
+
+function is_other_default_ui(ui_path, current_type) {
+	current_type = normalize_dashboard_type(current_type);
+	for (let t, dir in DASHBOARD_DIRS) {
+		if (t != current_type && dir == ui_path)
+			return true;
+	}
+	return false;
 }
 
 function is_valid_dashboard_type(type) {
 	if (type == "none")
 		return true;
 
+	type = normalize_dashboard_type(type);
 	for (let known in keys(DASHBOARD_DIRS))
 		if (known == type)
 			return true;
@@ -328,8 +346,6 @@ function get_dashboard_info(req) {
 	}
 
 	let target_default_ui = get_dashboard_dir(requested_type);
-	let other_type = (requested_type == "zashboard") ? "doona" : "zashboard";
-	let other_default_ui = get_dashboard_dir(other_type);
 
 	if (parsed_native && parsed_native.enabled && parsed_native.listen) {
 		res.external_controller = parsed_native.listen;
@@ -337,7 +353,7 @@ function get_dashboard_info(req) {
 		res.port = parsed_native.port || DEFAULT_PORT;
 		res.secret = parsed_native.secret;
 
-		res.external_ui = (parsed_native.ui && parsed_native.ui != other_default_ui) ? parsed_native.ui : target_default_ui;
+		res.external_ui = (parsed_native.ui && !is_other_default_ui(parsed_native.ui, requested_type)) ? parsed_native.ui : target_default_ui;
 
 		let index_path = res.external_ui + "/index.html";
 		let s = stat(index_path);
@@ -345,7 +361,7 @@ function get_dashboard_info(req) {
 
 		if (!res.has_ui) {
 			res.configured = true;
-		} else if (parsed_native.ui && parsed_native.ui != other_default_ui) {
+		} else if (parsed_native.ui && !is_other_default_ui(parsed_native.ui, requested_type)) {
 			res.configured = true;
 		} else {
 			res.configured = false;
@@ -363,6 +379,7 @@ function download_dashboard(req) {
 	if (!is_valid_dashboard_type(requested_type) || requested_type == "none") {
 		requested_type = "doona";
 	}
+	requested_type = normalize_dashboard_type(requested_type);
 
 	let url = (req && req.args && req.args.url) ? req.args.url : "";
 	if (!match(url, /^https?:\/\//) || match(url, /[ \t\r\n'"`]/)) {
@@ -371,10 +388,8 @@ function download_dashboard(req) {
 
 	let api_cfg = get_api_config();
 	let parsed_native = api_cfg.parsed_native;
-	let other_type = (requested_type == "zashboard") ? "doona" : "zashboard";
-	let other_default_ui = get_dashboard_dir(other_type);
 	let target_dir = get_dashboard_dir(requested_type);
-	if (parsed_native && parsed_native.ui && parsed_native.ui != other_default_ui &&
+	if (parsed_native && parsed_native.ui && !is_other_default_ui(parsed_native.ui, requested_type) &&
 	    is_safe_ui_dir(parsed_native.ui)) {
 		target_dir = parsed_native.ui;
 	}
@@ -391,8 +406,9 @@ function download_dashboard(req) {
 	let safe_script = replace(script, "'", "'\\''");
 	let safe_target = replace(target_dir, "'", "'\\''");
 	let safe_url = replace(url, "'", "'\\''");
+	let safe_type = replace(requested_type, "'", "'\\''");
 
-	let cmd = sprintf("/bin/sh '%s' '%s' '%s' >/dev/null 2>&1 &", safe_script, safe_target, safe_url);
+	let cmd = sprintf("/bin/sh '%s' '%s' '%s' '%s' >/dev/null 2>&1 &", safe_script, safe_target, safe_url, safe_type);
 	let rc = system(cmd);
 	if (rc != 0)
 		return { success: false, message: "failed to dispatch the download task" };
@@ -403,6 +419,7 @@ function download_dashboard(req) {
 function switch_dashboard_api(target_type) {
 	cached_pid = null;
 
+	target_type = normalize_dashboard_type(target_type);
 	if (!is_valid_dashboard_type(target_type))
 		return { success: false, message: "Invalid dashboard type" };
 
