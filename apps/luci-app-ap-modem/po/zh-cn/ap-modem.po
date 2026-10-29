@@ -2,7 +2,6 @@ msgid ""
 msgstr ""
 "Content-Type: text/plain; charset=UTF-8"
 
-
 msgid "Access AP / Modem"
 msgstr "访问AP/光猫"
 
