@@ -37,25 +37,25 @@ jobs:
           git config --global user.name "SimonsQiu"
 
           before="$(git rev-parse HEAD)"
-          changed=false
           feed_changed=false
 
           if [ -n "$(git status --porcelain)" ]; then
             git add .
             git commit -m "Update $(date +'%Y/%m/%d %H:%M:%S %Z')"
-            changed=true
-            # feed 内容只来自 apps/ 与 themes/；legacy/、core/ 的改动不重建整个 feed
+
+            # feed 只由 apps/ 与 themes/ 装配；legacy/、core/ 的改动不必重建
             paths="$(git diff --name-only "$before" HEAD -- apps themes)"
             if [ -n "$paths" ]; then
               feed_changed=true
-              echo "paths under apps/themes:"
-              echo "$paths" | head -n 20
+              count="$(printf '%s\n' "$paths" | wc -l)"
+              echo "apps/themes touched: ${count} file(s)"
+              # 用 awk 而不是 head：pipefail 下 head 提前关管道会让本步骤中止
+              printf '%s\n' "$paths" | awk 'NR<=20'
             fi
           else
             echo "No changes to commit."
           fi
 
-          echo "changed=${changed}" >> "$GITHUB_OUTPUT"
           echo "feed_changed=${feed_changed}" >> "$GITHUB_OUTPUT"
         continue-on-error: true
 
