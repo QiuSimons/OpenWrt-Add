@@ -132,8 +132,8 @@ uci commit network
 uci set upnpd.config.enabled='1'
 uci del upnpd.config.force_forwarding
 uci set upnpd.config.ext_allow_private_ipv4='1'
-#uci del upnpd.config.use_stun
-#uci del upnpd.config.stun_host
+uci set upnpd.config.use_stun='1'
+uci set upnpd.config.stun_host='stun.miwifi.com'
 uci commit upnpd
 
 #网易云音乐
