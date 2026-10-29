@@ -119,23 +119,27 @@ apps/luci-app-demo | https://github.com/example/luci-app-demo
 
 ```bash
 # 导入源公钥
-wget -qO /etc/apk/keys/custom-feed.rsa.pub https://<username>.github.io/OpenWrt-Add/keys/custom-feed.rsa.pub
+wget -qO /etc/apk/keys/custom-feed.rsa.pub https://qiusimons.github.io/OpenWrt-Add/keys/custom-feed.rsa.pub
 
 # 添加源配置 (自动匹配当前硬件架构目录)
-echo "https://<username>.github.io/OpenWrt-Add/$(apk --print-arch)" > /etc/apk/repositories.d/custom-feed.list
+echo "https://qiusimons.github.io/OpenWrt-Add/$(apk --print-arch)" > /etc/apk/repositories.d/custom-feed.list
 
 # aarch64 cortex 设备启用通用源（一次性）
 grep -qx aarch64_generic /etc/apk/arch 2>/dev/null || echo aarch64_generic >> /etc/apk/arch
-echo "https://<username>.github.io/OpenWrt-Add/aarch64_generic" >> /etc/apk/repositories.d/custom-feed.list
+echo "https://qiusimons.github.io/OpenWrt-Add/aarch64_generic" >> /etc/apk/repositories.d/custom-feed.list
 
 # 更新并安装
 apk update
 apk add <包名>
 ```
 
+> [!TIP]
+> - 若全新路由器提示 SSL/TLS 证书错误，可先安装基础证书库：`apk add --allow-untrusted ca-bundle`，或使用 `wget --no-check-certificate`。
+> - 浏览器亦可直接访问 [https://qiusimons.github.io/OpenWrt-Add/](https://qiusimons.github.io/OpenWrt-Add/) 查看各架构包清单及索引状态。
+
 ### 2. ImageBuilder 离线打包
 
-从 Releases 页面下载 `openwrt-add-apks-bundle.tar.gz`：
+前往 [Releases 页面](https://github.com/QiuSimons/OpenWrt-Add/releases/tag/latest-packages) 下载 [`openwrt-add-apks-bundle.tar.gz`](https://github.com/QiuSimons/OpenWrt-Add/releases/download/latest-packages/openwrt-add-apks-bundle.tar.gz)：
 
 ```bash
 # 解压至 ImageBuilder 的 packages 目录

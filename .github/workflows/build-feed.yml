@@ -348,6 +348,7 @@ jobs:
             "${image}" bash /generate_index.sh
 
           sudo chown -R "$USER:$USER" public
+          python3 core/scripts/generate_index_html.py public
 
       - name: Build ImageBuilder Offline Bundle
         run: |
