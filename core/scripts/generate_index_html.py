@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Generate index.html for root and per-architecture directories in public feed."""
-import sys, pathlib
+import html, sys, pathlib, urllib.parse
 
 
 def main():
@@ -97,11 +97,22 @@ apk add &lt;包名&gt;</code></pre>
 <body>
   <div class="card">
     <a href="../" class="back">← 返回软件源首页</a>
-    <h1>架构目录: {a} ({len(apks)} 个包)</h1>
+    <h1>架构目录: {html.escape(a)} ({len(apks)} 个包)</h1>
     <p>索引文件：<a href="packages.adb"><strong>packages.adb</strong></a></p>
-    <ul>
-      {''.join(f'<li><a href="{apk}">{apk}</a></li>' for apk in apks)}
+    <input type="text" id="filter" placeholder="搜索软件包 (如 sing-box, mosdns)..." onkeyup="filterPkgs()" style="width: 100%; box-sizing: border-box; padding: 10px 14px; font-size: 14px; border: 1px solid #d0d7de; border-radius: 6px; margin: 12px 0 16px 0;">
+    <ul id="pkg-list">
+      {''.join(f'<li><a href="{urllib.parse.quote(apk)}">{html.escape(apk)}</a></li>' for apk in apks)}
     </ul>
+    <script>
+    function filterPkgs() {{
+      var q = document.getElementById('filter').value.toLowerCase();
+      var lis = document.querySelectorAll('#pkg-list li');
+      for (var i = 0; i < lis.length; i++) {{
+        var txt = lis[i].textContent || lis[i].innerText;
+        lis[i].style.display = txt.toLowerCase().indexOf(q) > -1 ? "" : "none";
+      }}
+    }}
+    </script>
   </div>
 </body>
 </html>
