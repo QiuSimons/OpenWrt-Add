@@ -32,16 +32,31 @@ jobs:
       - name: Commit changes
         id: commit
         run: |
+          set -euo pipefail
           git config --global user.email "simonsqiu@foxmail.com"
           git config --global user.name "SimonsQiu"
+
+          before="$(git rev-parse HEAD)"
+          changed=false
+          feed_changed=false
+
           if [ -n "$(git status --porcelain)" ]; then
             git add .
             git commit -m "Update $(date +'%Y/%m/%d %H:%M:%S %Z')"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+            changed=true
+            # feed 内容只来自 apps/ 与 themes/；legacy/、core/ 的改动不重建整个 feed
+            paths="$(git diff --name-only "$before" HEAD -- apps themes)"
+            if [ -n "$paths" ]; then
+              feed_changed=true
+              echo "paths under apps/themes:"
+              echo "$paths" | head -n 20
+            fi
           else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No changes to commit."
           fi
+
+          echo "changed=${changed}" >> "$GITHUB_OUTPUT"
+          echo "feed_changed=${feed_changed}" >> "$GITHUB_OUTPUT"
         continue-on-error: true
 
       - name: Push changes
@@ -53,7 +68,7 @@ jobs:
       # GITHUB_TOKEN 产生的 push 事件不会触发其它工作流（防递归），
       # 而 workflow_dispatch 是官方豁免的两种事件之一，所以显式派发一次。
       - name: Trigger feed build
-        if: steps.commit.outputs.changed == 'true' && steps.push.outcome == 'success'
+        if: steps.commit.outputs.feed_changed == 'true' && steps.push.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow run "Build APK Feed & ImageBuilder Bundle" --ref master
