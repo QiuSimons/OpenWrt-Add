@@ -258,6 +258,57 @@ prebuild_flowcone() {
   assert_elf "$out/flowcone"
 }
 
+prebuild_dae() {
+  local mk=apps/luci-app-dae/dae/Makefile
+  [ -f "$mk" ] || { log "SKIP dae (包已移除)"; return 0; }
+
+  local src="$WORK/dae" out="$OUT/dae/bin"
+  fetch_source dae "$mk"
+  rm -rf "$out"; mkdir -p "$out"
+
+  local bpf_headers="$WORK/dae_bpf_headers"
+  git clone --depth 1 https://github.com/daeuniverse/dae_bpf_headers "$bpf_headers" \
+    || die "download dae_bpf_headers failed"
+  mkdir -p "$src/control/kern/headers" "$src/trace/kern/headers"
+  cp -rf "$bpf_headers"/* "$src/control/kern/headers/"
+  cp -rf "$bpf_headers"/* "$src/trace/kern/headers/"
+
+  command -v clang >/dev/null || die "clang is required for dae bpf build"
+  command -v llvm-strip >/dev/null || die "llvm-strip is required for dae bpf build"
+
+  (
+    cd "$src"
+    BPF_CLANG=clang \
+    BPF_STRIP_FLAG="-strip=llvm-strip" \
+    BPF_CFLAGS="-O2 -Wall -DMAX_MATCH_SET_LEN=1024" \
+    BPF_TARGET="bpfel,bpfeb" \
+    BPF_TRACE_TARGET="$GOARCH" \
+    go generate ./control/control.go
+    BPF_CLANG=clang \
+    BPF_STRIP_FLAG="-strip=llvm-strip" \
+    BPF_CFLAGS="-O2 -Wall -DMAX_MATCH_SET_LEN=1024" \
+    BPF_TARGET="bpfel,bpfeb" \
+    BPF_TRACE_TARGET="$GOARCH" \
+    go generate ./trace/trace.go
+  ) || die "dae: bpf generate failed"
+
+  local pgo_args=()
+  local pgo_file="$REPO_ROOT/apps/luci-app-dae/dae/pprof/default.pgo"
+  [ -f "$pgo_file" ] && pgo_args+=("-pgo=$pgo_file")
+
+  local ldflags="-s -w"
+  ldflags+=" -X github.com/daeuniverse/dae/cmd.Version=$SRC_VERSION"
+  ldflags+=" -X github.com/daeuniverse/dae/common/consts.MaxMatchSetLen_=1024"
+
+  (
+    cd "$src"
+    GOFLAGS="-mod=mod" GOEXPERIMENT=newinliner,simd \
+      go build -trimpath "${pgo_args[@]}" -ldflags "$ldflags" -tags trace -o "$out/dae" .
+  ) || die "go build failed: dae"
+
+  assert_elf "$out/dae"
+}
+
 # ==============================================================================
 ONLY=",${PREBUILD_ONLY:-},"
 want() {
@@ -274,6 +325,7 @@ main() {
   want sing-box && prebuild_singbox
   want einat    && prebuild_einat
   want flowcone && prebuild_flowcone
+  want dae      && prebuild_dae
   true
 
   ( cd "$OUT" && find . -type f ! -name 'manifest.txt' | sed 's|^\./||' | sort ) > "$OUT/manifest.txt"

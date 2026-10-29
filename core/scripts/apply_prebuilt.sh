@@ -41,6 +41,7 @@ PACKAGES=(
   "OpenWrt-mihomo/mihomo-meta|go||"
   "OpenWrt-mihomo/mihomo-alpha|go||"
   "imm_pkg/sing-box|go||"
+  "luci-app-dae/dae|go||"
   "openwrt-einat-ebpf|rust|einat-ebpf|einat"
   "FlowCone/openwrt/flowcone|rust|flowcone|flowcone"
 )
@@ -115,6 +116,7 @@ src = open(path, encoding='utf-8').read()
 # 摘除宿主工具链构建依赖
 if kind == 'go':
     src = re.sub(r'^(PKG_BUILD_DEPENDS:?=[^\n]*?)\bgolang/host\b[ \t]*', r'\1', src, flags=re.M)
+    src = re.sub(r'^(PKG_BUILD_DEPENDS:?=[^\n]*?)\bbpf-headers\b[ \t]*', r'\1', src, flags=re.M)
 else:
     src = re.sub(r'^(PKG_BUILD_DEPENDS:?=[^\n]*?)\brust/host\b[ \t]*', r'\1', src, flags=re.M)
     src = re.sub(r'(\$\(eval\s+\$\(call\s+RustBinPackage[^\)]*\)\))', r'# \1 (disabled for prebuilt)', src)
