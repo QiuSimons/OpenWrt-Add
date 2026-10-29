@@ -278,17 +278,19 @@ prebuild_dae() {
 
   (
     cd "$src"
+    local target_goarch="$GOARCH"
+    unset GOARCH
     BPF_CLANG=clang \
     BPF_STRIP_FLAG="-strip=llvm-strip" \
     BPF_CFLAGS="-O2 -Wall -DMAX_MATCH_SET_LEN=1024" \
     BPF_TARGET="bpfel,bpfeb" \
-    BPF_TRACE_TARGET="$GOARCH" \
+    BPF_TRACE_TARGET="$target_goarch" \
     go generate ./control/control.go
     BPF_CLANG=clang \
     BPF_STRIP_FLAG="-strip=llvm-strip" \
     BPF_CFLAGS="-O2 -Wall -DMAX_MATCH_SET_LEN=1024" \
     BPF_TARGET="bpfel,bpfeb" \
-    BPF_TRACE_TARGET="$GOARCH" \
+    BPF_TRACE_TARGET="$target_goarch" \
     go generate ./trace/trace.go
   ) || die "dae: bpf generate failed"
 
