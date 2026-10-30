@@ -1,0 +1,74 @@
+name: Bump v2ray-geodata release
+
+on:
+  schedule:
+    # 周一 01:11 Asia/Shanghai = 周日 17:11 UTC
+    - cron: '11 17 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  bump:
+    name: Bump PKG_RELEASE to today's date
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Update PKG_RELEASE
+        id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=apps/v2ray-geodata/Makefile
+          [ -f "$file" ] || { echo "::error::$file 不存在"; exit 1; }
+
+          # 与 cron 同一时区
+          version="$(TZ=Asia/Shanghai date +%Y%m%d)"
+          old="$(grep -m1 '^PKG_RELEASE:=' "$file" | sed 's/^PKG_RELEASE:=//')"
+
+          if [ "$old" = "$version" ]; then
+            echo "PKG_RELEASE 已是 $version，无需改动"
+            changed=false
+          else
+            sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=$version/" "$file"
+            echo "PKG_RELEASE: $old -> $version"
+            changed=true
+          fi
+
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push
+        if: steps.bump.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add apps/v2ray-geodata/Makefile
+          git commit -m "chore(v2ray-geodata): bump PKG_RELEASE to ${{ steps.bump.outputs.version }}"
+
+          for i in 1 2 3; do
+            if git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:master; then
+              exit 0
+            fi
+            echo "push 失败（第 $i 次），先 rebase 再试"
+            git fetch -q origin master
+            git rebase -q origin/master || { echo "::error::rebase 冲突，需人工处理"; exit 1; }
+          done
+          echo "::error::push 连续 3 次失败"
+          exit 1
+
+      # GITHUB_TOKEN 的 push 不会触发 build-feed
+      - name: Trigger feed build
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run "Build APK Feed & ImageBuilder Bundle" --ref master
