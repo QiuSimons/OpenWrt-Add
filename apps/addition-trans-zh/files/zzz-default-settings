@@ -1,7 +1,7 @@
 #!/bin/sh
 
-#aurora
-uci set luci.main.mediaurlbase='/luci-static/aurora'
+#vantage
+uci set luci.main.mediaurlbase='/luci-static/vantage'
 uci commit luci
 
 #自动语言
