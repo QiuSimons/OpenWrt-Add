@@ -110,179 +110,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Clone honk source
-        shell: bash
-        run: |
-          set -euo pipefail
-          pkg_source_url=$(grep -E '^[[:space:]]*PKG_SOURCE_URL:=' honk/Makefile | head -n 1 | cut -d= -f2 | tr -d '[:space:]')
-          pkg_source_ver=$(grep -E '^[[:space:]]*PKG_SOURCE_VERSION:=' honk/Makefile | head -n 1 | cut -d= -f2 | tr -d '[:space:]')
-          echo "Cloning ${pkg_source_url} (commit: ${pkg_source_ver})..."
-          git clone "${pkg_source_url}" honk-src
-          (cd honk-src && git checkout "${pkg_source_ver}")
-
-      - name: Setup Rust targets & toolchain
+      - name: Install host build tools
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang llvm libbpf-dev cmake libclang-dev zstd
+          curl -sSfL https://github.com/aya-rs/bpf-linker/releases/latest/download/bpf-linker-x86_64-unknown-linux-musl.tar.zst | sudo tar --zstd -xf - -C /usr/local/bin
+          bpf-linker --version
 
-          if [ "${{ matrix.arch }}" = "aarch64_generic" ]; then
-            T="aarch64-unknown-linux-musl"
-          else
-            T="x86_64-unknown-linux-musl"
-          fi
-          echo "RUST_TARGET=$T" >> "$GITHUB_ENV"
-
-          # 关键：必须在 honk-src 下为 rust-toolchain.toml 指定的 toolchain 安装 target
-          (cd honk-src && rustup target add "$T")
-
-          # 提取并安装 honk-ebpf 锁定的 nightly toolchain 及其组件
-          EBPF_CHANNEL=$(grep -oP '^channel\s*=\s*"\K[^"]+' honk-src/crates/honk-ebpf/rust-toolchain.toml 2>/dev/null || echo "nightly")
-          echo "EBPF_CHANNEL=$EBPF_CHANNEL" >> "$GITHUB_ENV"
-          rustup toolchain install "$EBPF_CHANNEL" --component rust-src,llvm-tools
-
-      - name: Setup Zig for musl C/C++ cross-compilation
+      - name: Setup Zig for BoringSSL musl cross-compilation
         uses: mlugg/setup-zig@v2
         with:
           version: 0.14.1
 
-      - name: Install bpf-linker
+      - name: Build honk-core binary
         shell: bash
         run: |
-          set -euo pipefail
-          curl -sSfL https://github.com/aya-rs/bpf-linker/releases/latest/download/bpf-linker-x86_64-unknown-linux-musl.tar.zst | sudo tar --zstd -xf - -C /usr/local/bin
-          bpf-linker --version
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            honk-src -> target
-            honk-src/crates/honk-ebpf -> target
-
-      - name: Build honk-ebpf object
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd honk-src/crates/honk-ebpf
-          cargo "+${EBPF_CHANNEL}" build --release -Zbuild-std=core --target bpfel-unknown-none
-
-      - name: Prebuild honk-core on host
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd honk-src
-          T="${RUST_TARGET}"
-          export ZIGCC_TARGET="${T/-unknown/}"
-          L=$(printf '%s' "$T" | tr '-' '_')
-          U=$(printf '%s' "$T" | tr 'a-z-' 'A-Z_')
-          export "CC_${L}=$PWD/ci/zigcc"
-          export "CXX_${L}=$PWD/ci/zigcxx"
-          export "CARGO_TARGET_${U}_LINKER=$PWD/ci/zigcc"
-          if [[ "$T" == *-musl ]]; then
-            export "CARGO_TARGET_${U}_RUSTFLAGS=-C link-self-contained=no"
-          fi
-
-          echo "Building honk-core for target: $T"
-          cargo build --release --locked \
-            -p honk-core \
-            --no-default-features \
-            --features ebpf,rprx,native-api,mimalloc \
-            --target "$T"
-
-          mkdir -p ../honk/files
-          cp "target/${T}/release/honk-core" ../honk/files/honk-core.bin
-          chmod +x ../honk/files/honk-core.bin
-
-      - name: Prepare Makefile for SDK build
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - << 'PYEOF'
-          import re
-          import textwrap
-
-          with open('honk/Makefile', 'r') as f:
-              orig = f.read()
-
-          v_m = re.search(r'^PKG_VERSION:=(.*)$', orig, re.M)
-          r_m = re.search(r'^PKG_RELEASE:=(.*)$', orig, re.M)
-          m_m = re.search(r'^PKG_MAINTAINER:=(.*)$', orig, re.M)
-
-          pkg_version = v_m.group(1).strip() if v_m else "0.1.0"
-          pkg_release = r_m.group(1).strip() if r_m else "1"
-          pkg_maintainer = m_m.group(1).strip() if m_m else "QiuSimons"
-
-          makefile = textwrap.dedent(f"""\
-          include $(TOPDIR)/rules.mk
-
-          PKG_NAME:=honk
-          PKG_VERSION:={pkg_version}
-          PKG_RELEASE:={pkg_release}
-
-          PKG_LICENSE:=AGPL-3.0-only
-          PKG_LICENSE_FILES:=LICENSE
-          PKG_MAINTAINER:={pkg_maintainer}
-
-          include $(INCLUDE_DIR)/package.mk
-
-          HONK_RUST_ARCH_DEPENDS:=@(aarch64||x86_64)
-
-          define Package/honk
-            SECTION:=net
-            CATEGORY:=Network
-            SUBMENU:=Web Servers/Proxies
-            TITLE:=honk - eBPF transparent proxy engine (dae-compatible)
-            URL:=https://github.com/daeuniverse/honk
-            DEPENDS:=$(HONK_RUST_ARCH_DEPENDS) \\
-              +ca-bundle +ip-full \\
-              +kmod-sched-core +kmod-sched-bpf +kmod-veth +kmod-nft-queue \\
-              +v2ray-geoip +v2ray-geosite \\
-              +@KERNEL_XDP_SOCKETS
-          endef
-
-          define Package/honk/conffiles
-          /etc/honk/config.dae
-          /etc/honk/config.d/
-          /etc/honk/state/
-          /etc/config/honk
-          endef
-
-          define Build/Prepare
-          \tmkdir -p $(PKG_BUILD_DIR)
-          endef
-
-          define Build/Configure
-          endef
-
-          define Build/Compile
-          endef
-
-          define Package/honk/install
-          \t$(INSTALL_DIR) $(1)/usr/bin
-          \t$(INSTALL_BIN) $(CURDIR)/files/honk-core.bin $(1)/usr/bin/honk-core
-
-          \t$(INSTALL_DIR) $(1)/etc/honk/config.d
-          \t$(INSTALL_CONF) $(CURDIR)/files/config.dae $(1)/etc/honk/config.dae
-          \t$(INSTALL_CONF) $(CURDIR)/files/config.d/node.dae $(1)/etc/honk/config.d/node.dae
-          \t$(INSTALL_CONF) $(CURDIR)/files/config.d/route.dae $(1)/etc/honk/config.d/route.dae
-          \t$(INSTALL_CONF) $(CURDIR)/files/config.d/dns.dae $(1)/etc/honk/config.d/dns.dae
-          \t$(INSTALL_CONF) $(CURDIR)/files/config.d/api.dae $(1)/etc/honk/config.d/api.dae
-
-          \t$(INSTALL_DIR) $(1)/etc/config
-          \t$(INSTALL_CONF) $(CURDIR)/files/honk.config $(1)/etc/config/honk
-
-          \t$(INSTALL_DIR) $(1)/etc/init.d
-          \t$(INSTALL_BIN) $(CURDIR)/files/honk.init $(1)/etc/init.d/honk
-          endef
-
-          $(eval $(call BuildPackage,honk))
-          """)
-
-          with open('honk/Makefile', 'w') as f:
-              f.write(makefile)
-          PYEOF
+          ./scripts/build_honk_core.sh "${{ matrix.arch }}" honk/files/honk-core.bin
 
       - name: Build packages
         uses: openwrt/gh-action-sdk@main

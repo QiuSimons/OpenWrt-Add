@@ -5,7 +5,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=honk
-PKG_VERSION:=2026.11.03
+PKG_VERSION:=2026.11.03~77176ff
 PKG_RELEASE:=1
 
 # 若 files/ 下无预编译二进制，才声明从 git 下载源码
@@ -18,30 +18,10 @@ PKG_MIRROR_HASH:=skip
 PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_VERSION)
 PKG_SOURCE:=$(PKG_SOURCE_SUBDIR)-$(PKG_SOURCE_VERSION).tar.gz
 endif
-PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 
 PKG_LICENSE:=AGPL-3.0-only
 PKG_LICENSE_FILES:=LICENSE
 PKG_MAINTAINER:=QiuSimons <https://github.com/QiuSimons>
-
-PKG_BUILD_PARALLEL:=1
-PKG_BUILD_FLAGS:=no-mips16
-
-# 本地源码开发树探测：指定 HONK_SRC_DIR，或位于 honk 源码树内/同级
-HONK_LOCAL_DIR := $(strip \
-  $(if $(HONK_SRC_DIR),\
-    $(HONK_SRC_DIR),\
-    $(if $(wildcard $(CURDIR)/crates/honk-core/Cargo.toml),\
-      $(CURDIR),\
-      $(if $(wildcard $(CURDIR)/../../crates/honk-core/Cargo.toml),\
-        $(CURDIR)/../..,\
-        $(if $(wildcard $(TOPDIR)/../../honk/crates/honk-core/Cargo.toml),\
-          $(TOPDIR)/../../honk,\
-        )\
-      )\
-    )\
-  )\
-)
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -83,73 +63,26 @@ define Package/honk/conffiles
 /etc/config/honk
 endef
 
-ifeq ($(ARCH),aarch64)
-  RUST_TARGET:=aarch64-unknown-linux-musl
-else ifeq ($(ARCH),x86_64)
-  RUST_TARGET:=x86_64-unknown-linux-musl
-else
-  RUST_TARGET:=$(ARCH)-unknown-linux-musl
-endif
-
-RUST_TARGET_UPPER:=$(shell echo $(RUST_TARGET) | tr 'a-z-' 'A-Z_')
-
-ifneq ($(wildcard $(CURDIR)/files/honk-core.bin),)
 define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
 endef
 
 define Build/Compile
 	$(INSTALL_DIR) $(PKG_INSTALL_DIR)/bin
-	$(INSTALL_BIN) $(CURDIR)/files/honk-core.bin $(PKG_INSTALL_DIR)/bin/honk-core
-endef
-else
-ifneq ($(HONK_LOCAL_DIR),)
-define Build/Prepare
-	mkdir -p $(PKG_BUILD_DIR)
-	$(CP) $(HONK_LOCAL_DIR)/Cargo.toml $(PKG_BUILD_DIR)/
-	$(CP) $(HONK_LOCAL_DIR)/Cargo.lock $(PKG_BUILD_DIR)/
-	$(CP) $(HONK_LOCAL_DIR)/crates $(PKG_BUILD_DIR)/
-	$(CP) $(HONK_LOCAL_DIR)/rust-toolchain.toml $(PKG_BUILD_DIR)/ 2>/dev/null || true
-	$(CP) $(HONK_LOCAL_DIR)/LICENSE $(PKG_BUILD_DIR)/ 2>/dev/null || true
-endef
-endif
-
-define Build/Compile
-	export PATH="$(HOME)/.cargo/bin:$(PATH)"; \
-	export STAGING_DIR="$(STAGING_DIR)"; \
-	command -v cargo >/dev/null 2>&1 || { \
-		echo "ERROR: host cargo not found! Please install Rust via https://rustup.rs" >&2; \
+	@if [ -f $(CURDIR)/files/honk-core.bin ]; then \
+		$(INSTALL_BIN) $(CURDIR)/files/honk-core.bin $(PKG_INSTALL_DIR)/bin/honk-core; \
+	elif [ -f $(PKG_INSTALL_DIR)/bin/honk-core ]; then \
+		true; \
+	else \
+		echo "ERROR: $(CURDIR)/files/honk-core.bin missing!" >&2; \
+		echo "Compile it first via: ./scripts/build_honk_core.sh <arch>" >&2; \
 		exit 1; \
-	}; \
-	if command -v rustup >/dev/null 2>&1; then \
-		rustup target add $(RUST_TARGET) 2>/dev/null || true; \
-	fi; \
-	export CARGO_TARGET_$(RUST_TARGET_UPPER)_LINKER="$(TARGET_CC)"; \
-	export CC_$(RUST_TARGET_UPPER)="$(TARGET_CC)"; \
-	export CXX_$(RUST_TARGET_UPPER)="$(TARGET_CXX)"; \
-	export AR_$(RUST_TARGET_UPPER)="$(TARGET_AR)"; \
-	export CFLAGS_$(RUST_TARGET_UPPER)="$(TARGET_CFLAGS)"; \
-	export CARGO_BUILD_TARGET_DIR="$(PKG_BUILD_DIR)/target"; \
-	cargo build --release --locked \
-		-p honk-core \
-		--no-default-features \
-		--features ebpf,rprx,native-api,mimalloc \
-		--manifest-path $(PKG_BUILD_DIR)/Cargo.toml \
-		--target $(RUST_TARGET)
-	$(INSTALL_DIR) $(PKG_INSTALL_DIR)/bin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/target/$(RUST_TARGET)/release/honk-core $(PKG_INSTALL_DIR)/bin/honk-core
+	fi
 endef
-endif
 
 define Package/honk/install
 	$(INSTALL_DIR) $(1)/usr/bin
-	if [ -f $(PKG_INSTALL_DIR)/bin/honk-core ]; then \
-		$(INSTALL_BIN) $(PKG_INSTALL_DIR)/bin/honk-core $(1)/usr/bin/honk-core; \
-	elif [ -f $(CURDIR)/files/honk-core.bin ]; then \
-		$(INSTALL_BIN) $(CURDIR)/files/honk-core.bin $(1)/usr/bin/honk-core; \
-	else \
-		$(INSTALL_BIN) $(PKG_BUILD_DIR)/target/$(RUST_TARGET)/release/honk-core $(1)/usr/bin/honk-core; \
-	fi
+	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/bin/honk-core $(1)/usr/bin/honk-core
 
 	$(INSTALL_DIR) $(1)/etc/honk/config.d
 	$(INSTALL_CONF) $(CURDIR)/files/config.dae $(1)/etc/honk/config.dae
