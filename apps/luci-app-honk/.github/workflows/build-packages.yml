@@ -174,11 +174,12 @@ jobs:
           name: honk-core-${{ matrix.arch }}
           path: honk/files
 
-      - name: Remove vmlinux-btf dependency for CI
+      - name: Remove KERNEL_DEBUG_INFO_BTF dependency for CI
         shell: bash
         run: |
-          # SDK has no vmlinux-btf package, so drop the optional dependency.
-          sed -i '/HONK_USE_VMLINUX_BTF:vmlinux-btf/d' honk/Makefile
+          # No KERNEL_DEBUG_INFO_BTF in the SDK: make the kernel-BTF choice
+          # selectable so the conditional vmlinux-btf dep stays inactive.
+          sed -i '/depends on KERNEL_DEBUG_INFO_BTF/d' honk/Makefile
 
       - name: Build packages
         uses: openwrt/gh-action-sdk@main
