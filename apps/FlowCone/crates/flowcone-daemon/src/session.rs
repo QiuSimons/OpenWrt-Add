@@ -295,14 +295,14 @@ impl SessionManager {
     fn set_range_state(state: &mut Array<MapData, u8>, min: u16, max: u16) {
         let mut p = min as u32;
         while p <= max as u32 {
-            let _ = state.set(p, 1, 0);
+            let _ = state.set(p, &1, 0);
             p += 1;
         }
     }
 
     fn set_reserved_state(state: &mut Array<MapData, u8>, ports: &[u16]) {
         for &port in ports {
-            let _ = state.set(port as u32, 1, 0);
+            let _ = state.set(port as u32, &1, 0);
         }
     }
 
@@ -334,8 +334,8 @@ impl SessionManager {
             } else {
                 &mut self.free_odd4
             };
-            if q.push(p, 0).is_err() {
-                let _ = self.port_flags.set(0, 1, 0);
+            if q.push(&p, 0).is_err() {
+                let _ = self.port_flags.set(0, &1, 0);
                 break;
             }
             if p == self.max_port {
@@ -359,8 +359,8 @@ impl SessionManager {
             } else {
                 &mut self.free_odd6
             };
-            if q.push(p, 0).is_err() {
-                let _ = self.port_flags.set(0, 1, 0);
+            if q.push(&p, 0).is_err() {
+                let _ = self.port_flags.set(0, &1, 0);
                 break;
             }
             if p == self.max_port {
@@ -385,14 +385,14 @@ impl SessionManager {
         if self.free_state4.get(&(port as u32), 0).unwrap_or(0) != 0 {
             return;
         }
-        let _ = self.free_state4.set(port as u32, 1, 0);
+        let _ = self.free_state4.set(port as u32, &1, 0);
         let q = if (port & 1) == 0 {
             &mut self.free_even4
         } else {
             &mut self.free_odd4
         };
-        if q.push(port, 0).is_err() {
-            let _ = self.port_flags.set(0, 1, 0);
+        if q.push(&port, 0).is_err() {
+            let _ = self.port_flags.set(0, &1, 0);
         }
     }
 
@@ -400,14 +400,14 @@ impl SessionManager {
         if self.free_state6.get(&(port as u32), 0).unwrap_or(0) != 0 {
             return;
         }
-        let _ = self.free_state6.set(port as u32, 1, 0);
+        let _ = self.free_state6.set(port as u32, &1, 0);
         let q = if (port & 1) == 0 {
             &mut self.free_even6
         } else {
             &mut self.free_odd6
         };
-        if q.push(port, 0).is_err() {
-            let _ = self.port_flags.set(0, 1, 0);
+        if q.push(&port, 0).is_err() {
+            let _ = self.port_flags.set(0, &1, 0);
         }
     }
 
@@ -425,8 +425,8 @@ impl SessionManager {
                 } else {
                     &mut self.free_odd4
                 };
-                if q.push(p, 0).is_err() {
-                    let _ = self.port_flags.set(0, 1, 0);
+                if q.push(&p, 0).is_err() {
+                    let _ = self.port_flags.set(0, &1, 0);
                     return;
                 }
             }
@@ -451,8 +451,8 @@ impl SessionManager {
                 } else {
                     &mut self.free_odd6
                 };
-                if q.push(p, 0).is_err() {
-                    let _ = self.port_flags.set(0, 1, 0);
+                if q.push(&p, 0).is_err() {
+                    let _ = self.port_flags.set(0, &1, 0);
                     return;
                 }
             }
@@ -465,7 +465,7 @@ impl SessionManager {
 
     fn rebuild_port_queues(&mut self) {
         if self.port_flags.get(&0, 0).unwrap_or(0) != 0 {
-            let _ = self.port_flags.set(0, 0, 0);
+            let _ = self.port_flags.set(0, &0, 0);
             if self.pool_enable_v4 {
                 self.rebuild_family4();
             }
@@ -480,10 +480,10 @@ impl SessionManager {
     pub fn set_config(&mut self, cfg: GlobalConfig) -> bool {
         let active = self.active_map.get(&0, 0).unwrap_or(0) & 1;
         let next = 1 - active;
-        if self.config_map.set(next, cfg, 0).is_err() {
+        if self.config_map.set(next, &cfg, 0).is_err() {
             return false;
         }
-        if self.active_map.set(0, next, 0).is_err() {
+        if self.active_map.set(0, &next, 0).is_err() {
             return false;
         }
         true
@@ -704,7 +704,7 @@ impl SessionManager {
 
         let flag = self.gc_flags.get(&0, 0).unwrap_or(0);
         if flag != 0 || self.lost_notifications {
-            let _ = self.gc_flags.set(0, 0, 0);
+            let _ = self.gc_flags.set(0, &0, 0);
             self.lost_notifications = false;
             self.heap4.clear();
             self.heap6.clear();

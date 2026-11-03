@@ -9,10 +9,11 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
     commit-message:
       prefix: "ci"
       include: "scope"
+    open-pull-requests-limit: 10
 
   # 自动更新 Rust 工作区依赖 (flowcone-common 与 flowcone-daemon)
   - package-ecosystem: "cargo"
@@ -22,6 +23,7 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    versioning-strategy: increase
     open-pull-requests-limit: 10
     groups:
       rust-dependencies:
@@ -36,6 +38,7 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    versioning-strategy: increase
     open-pull-requests-limit: 10
     groups:
       ebpf-dependencies:

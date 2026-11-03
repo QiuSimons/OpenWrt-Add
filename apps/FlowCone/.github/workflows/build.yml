@@ -118,6 +118,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends musl-tools
 
+          rustup update stable
           if [ "${{ matrix.arch }}" = "aarch64_generic" ]; then
             sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
             rustup target add aarch64-unknown-linux-musl

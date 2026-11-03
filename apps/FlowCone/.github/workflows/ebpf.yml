@@ -39,6 +39,14 @@ jobs:
       - name: Build flowcone-ebpf
         shell: bash
         run: |
+          SYSROOT=$(rustc +nightly --print sysroot)
+          for f in "$SYSROOT"/lib/libLLVM*.so; do
+            if [ -f "$f" ] && [ ! -L "$f" ] && grep -q '^INPUT(' "$f" 2>/dev/null; then
+              target=$(sed -n 's/^INPUT(\(.*\))/\1/p' "$f")
+              ln -sf "$target" "$f"
+            fi
+          done
+
           cargo +nightly build --manifest-path crates/flowcone-ebpf/Cargo.toml --release --target=bpfel-unknown-none -Z build-std=core
           mkdir -p crates/flowcone-daemon/ebpf
           cp crates/flowcone-ebpf/target/bpfel-unknown-none/release/flowcone-ebpf crates/flowcone-daemon/ebpf/flowcone-ebpf.bin

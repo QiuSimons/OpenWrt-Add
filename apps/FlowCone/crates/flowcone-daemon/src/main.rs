@@ -7,11 +7,12 @@ mod session;
 use aya::maps::{Array, HashMap, MapData, ProgramArray, Queue};
 use aya::programs::links::LinkOrder;
 use aya::programs::tc::{
-    SchedClassifier, SchedClassifierLinkId, TcAttachOptions, TcAttachType, qdisc_add_clsact,
+    SchedClassifier, SchedClassifierLinkId, TcAttach, TcAttachType, qdisc_add_clsact,
 };
 use aya::{EbpfLoader, VerifierLogLevel};
 use flowcone_common::GlobalConfig;
 use session::SessionManager;
+use std::ffi::CString;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
@@ -112,7 +113,6 @@ fn attach_classifier(
     let type_name = match attach_type {
         TcAttachType::Ingress => "ingress",
         TcAttachType::Egress => "egress",
-        _ => "custom",
     };
 
     // bpf_link_update() is a no-op for a live link and fails with -ENOLINK once
@@ -129,10 +129,13 @@ fn attach_classifier(
         return Ok(());
     }
 
-    let link_id = match prog.attach_with_options(
-        iface,
-        attach_type,
-        TcAttachOptions::TcxOrder(LinkOrder::last()),
+    let c_iface = CString::new(iface)?;
+    let link_id = match prog.attach(
+        &c_iface,
+        TcAttach::Tcx {
+            attach_type,
+            order: LinkOrder::last(),
+        },
     ) {
         Ok(id) => {
             if log_success {
@@ -142,7 +145,7 @@ fn attach_classifier(
         }
         Err(e) => {
             eprintln!("flowcone: TCX {} fallback to netlink: {:?}", type_name, e);
-            prog.attach(iface, attach_type)?
+            prog.attach(&c_iface, TcAttach::Auto(attach_type))?
         }
     };
 
@@ -168,15 +171,18 @@ fn attach_new_classifier(
         .program_mut(prog_name)
         .ok_or_else(|| format!("program {} not found", prog_name))?
         .try_into()?;
-    let id = match prog.attach_with_options(
-        iface,
-        attach_type,
-        TcAttachOptions::TcxOrder(LinkOrder::last()),
+    let c_iface = CString::new(iface)?;
+    let id = match prog.attach(
+        &c_iface,
+        TcAttach::Tcx {
+            attach_type,
+            order: LinkOrder::last(),
+        },
     ) {
         Ok(id) => id,
         Err(e) => {
             eprintln!("flowcone: TCX dispatcher attach fallback: {:?}", e);
-            prog.attach(iface, attach_type)?
+            prog.attach(&c_iface, TcAttach::Auto(attach_type))?
         }
     };
     Ok(id)
@@ -195,7 +201,8 @@ fn tcx_is_tail(
     attach_type: TcAttachType,
     prog_id: u32,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    let (_, programs) = SchedClassifier::query_tcx(iface, attach_type)?;
+    let c_iface = CString::new(iface)?;
+    let (_, programs) = SchedClassifier::query_tcx(&c_iface, attach_type)?;
     Ok(programs.last().map(|p| p.id() == prog_id).unwrap_or(false))
 }
 
@@ -328,7 +335,8 @@ impl DataPlane {
         log_success: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let iface = self.iface.clone();
-        let _ = qdisc_add_clsact(&iface);
+        let c_iface = CString::new(iface.as_str())?;
+        let _ = qdisc_add_clsact(&c_iface);
         let (in_name, out_name) = self.disp_names();
         attach_classifier(
             &mut self.bpf,
@@ -363,7 +371,8 @@ impl DataPlane {
         };
         let (old_in_name, old_out_name) = self.disp_names();
         let iface = self.iface.clone();
-        let _ = qdisc_add_clsact(&iface);
+        let c_iface = CString::new(iface.as_str())?;
+        let _ = qdisc_add_clsact(&c_iface);
 
         let new_in =
             attach_new_classifier(&mut self.bpf, new_in_name, &iface, TcAttachType::Ingress)?;
@@ -523,7 +532,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut bpf = {
         let mut loader = EbpfLoader::new();
         if let Some(ref b) = btf {
-            loader.btf(Some(b));
+            loader.btf(b);
         }
         loader.verifier_log_level(VerifierLogLevel::DISABLE);
         match loader.load(EBPF_BYTES) {
@@ -535,7 +544,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
                 let mut loader = EbpfLoader::new();
                 if let Some(ref b) = btf {
-                    loader.btf(Some(b));
+                    loader.btf(b);
                 }
                 loader.verifier_log_level(VerifierLogLevel::VERBOSE);
                 loader.load(EBPF_BYTES)?

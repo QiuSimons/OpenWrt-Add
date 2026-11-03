@@ -5,7 +5,7 @@ edition = "2024"
 license = "GPL-3.0-or-later"
 
 [dependencies]
-aya-ebpf = "0.2"
+aya-ebpf = "0.3.0"
 flowcone-common = { path = "../flowcone-common" }
 
 [[bin]]
