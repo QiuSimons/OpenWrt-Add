@@ -22,9 +22,12 @@ find "$REPO_ROOT" -type f -name "Makefile" ! -path "*/.*/*" ! -path "*/core/*" |
         fi
 
         if [[ "$new_val" != *"\$"* ]]; then
+            # 预处理：修复 Arch/上游常见的 .r[0-9]+ 格式 (如 1.0.5.r20241208 -> 1.0.5.20241208)
+            new_val=$(echo "$new_val" | sed -E 's/\.r([0-9]+)/.\1/g')
+
             if ! echo "$new_val" | grep -qE "$APK_VALID_REGEX"; then
                 s1=$(echo "$new_val" | sed 's/^[^0-9]*//')
-                s2=$(echo "$s1" | sed 's/[^0-9a-zA-Z.~]/./g')
+                s2=$(echo "$s1" | sed 's/[^0-9.]/./g')
                 final_static=$(echo "$s2" | sed 's/\.\{2,\}/./g' | sed 's/\.$//')
                 if [ -n "$final_static" ] && [ "$new_val" != "$final_static" ]; then
                     new_val="$final_static"
