@@ -27,8 +27,8 @@ define Package/honk
   TITLE:=honk - eBPF transparent proxy engine (dae-compatible)
   URL:=https://github.com/daeuniverse/honk
   DEPENDS:=$(HONK_RUST_ARCH_DEPENDS) \
-    +ca-bundle +ip-full \
-    +kmod-sched-core +kmod-sched-bpf +kmod-veth +kmod-nft-queue \
+    +ca-bundle \
+    +kmod-sched-core +kmod-sched-bpf +kmod-veth \
     +v2ray-geoip +v2ray-geosite \
     +@KERNEL_XDP_SOCKETS \
     +HONK_USE_VMLINUX_BTF:vmlinux-btf
