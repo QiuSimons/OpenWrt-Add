@@ -99,6 +99,23 @@ jobs:
           go-version: 'stable'
           cache: false
 
+      - name: Resolve honk toolchain pins
+        id: honk-pins
+        if: steps.prebuilt-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mk=apps/luci-app-honk/honk/Makefile
+          if [ -f "$mk" ] && grep -q '^HONK_SRC_VERSION:=' "$mk"; then
+            ./core/scripts/honk_toolchain.sh | tee "$RUNNER_TEMP/honk-toolchain.env"
+            . "$RUNNER_TEMP/honk-toolchain.env"
+            echo "zig_version=${ZIG_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "honk Makefile not on the native build model; skip toolchain pins"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install cross toolchain
         if: steps.prebuilt-cache.outputs.cache-hit != 'true'
         shell: bash
@@ -124,23 +141,23 @@ jobs:
             rustup target add x86_64-unknown-linux-musl
           fi
 
-          # bpf-linker 与 luci-app-honk CI 保持一致（上游 pins.env 的 0.11.0），禁止 latest 漂移
-          bpf_linker_version=0.11.0
-          bpf_linker_sha256=10f62ba9ab7e544d538370552660efcb4f1a19153d5752bbf0f6b51f3bada450
-          curl -fsSL --retry 3 -o /tmp/bpf-linker.tar.zst \
-            "https://github.com/aya-rs/bpf-linker/releases/download/v${bpf_linker_version}/bpf-linker-x86_64-unknown-linux-musl.tar.zst"
-          echo "${bpf_linker_sha256}  /tmp/bpf-linker.tar.zst" | sha256sum -c -
-          sudo tar --zstd -xf /tmp/bpf-linker.tar.zst -C /usr/local/bin
+          if [ -f "$RUNNER_TEMP/honk-toolchain.env" ]; then
+            . "$RUNNER_TEMP/honk-toolchain.env"
+            curl -fsSL --retry 3 -o /tmp/bpf-linker.tar.zst \
+              "https://github.com/aya-rs/bpf-linker/releases/download/v${BPF_LINKER_VERSION}/bpf-linker-x86_64-unknown-linux-musl.tar.zst"
+            echo "${BPF_LINKER_SHA256}  /tmp/bpf-linker.tar.zst" | sha256sum -c -
+            sudo tar --zstd -xf /tmp/bpf-linker.tar.zst -C /usr/local/bin
+            bpf-linker --version
+          fi
 
           clang --version | head -n 1
           llvm-strip --version | head -n 1
-          bpf-linker --version
 
       - name: Setup Zig for musl C/C++ cross-compilation
-        if: steps.prebuilt-cache.outputs.cache-hit != 'true'
+        if: steps.prebuilt-cache.outputs.cache-hit != 'true' && steps.honk-pins.outputs.available == 'true'
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.14.1
+          version: ${{ steps.honk-pins.outputs.zig_version }}
 
       - name: Cache Go module downloads
         if: steps.prebuilt-cache.outputs.cache-hit != 'true'
