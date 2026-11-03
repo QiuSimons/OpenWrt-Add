@@ -5,7 +5,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=honk
-PKG_VERSION:=2026.11.03~77176ff
+PKG_VERSION:=2026.11.03
 PKG_RELEASE:=1
 
 # 若 files/ 下无预编译二进制，才声明从 git 下载源码
