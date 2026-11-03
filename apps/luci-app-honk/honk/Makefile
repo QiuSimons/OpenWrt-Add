@@ -28,8 +28,8 @@ define Package/honk
   DEPENDS:=$(HONK_RUST_ARCH_DEPENDS) \
     +ca-bundle \
     +kmod-sched-core +kmod-sched-bpf +kmod-veth +kmod-nft-queue \
-    +v2ray-geoip +v2ray-geosite \
-    +HONK_USE_VMLINUX_BTF:vmlinux-btf
+    +HONK_USE_VMLINUX_BTF:vmlinux-btf \
+    +v2ray-geoip +v2ray-geosite
 endef
 
 define Package/honk/config
