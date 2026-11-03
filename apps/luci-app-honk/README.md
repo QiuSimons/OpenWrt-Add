@@ -16,6 +16,41 @@ OpenWrt 上的 honk（基于 eBPF 的高性能透明代理引擎，dae 兼容）
 
 ## 编译与安装
 
+### 1. 宿主机构建依赖 (以 Ubuntu 为例)
+
+编译 `honk-core` 核心二进制需在宿主机配置 Rust、bpf-linker 与 Zig（用于 BoringSSL musl 交叉编译）：
+
+```bash
+# 基础依赖与 LLVM/BPF 工具链
+sudo apt-get update
+sudo apt-get install -y clang llvm libbpf-dev cmake libclang-dev zstd
+
+# Rust 与 Target (以 x86_64 / aarch64 为例)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup target add x86_64-unknown-linux-musl
+rustup target add aarch64-unknown-linux-musl
+
+# bpf-linker (eBPF 字节码链接器)
+curl -sSfL https://github.com/aya-rs/bpf-linker/releases/latest/download/bpf-linker-x86_64-unknown-linux-musl.tar.zst | sudo tar --zstd -xf - -C /usr/local/bin
+
+# Zig (>= 0.13，用于 BoringSSL 跨平台 C 编译)
+# 从 https://ziglang.org/download/ 下载解压并加入 PATH
+```
+
+### 2. 预编译核心二进制
+
+在执行 OpenWrt 编译前，使用脚本生成对应架构的静态核心二进制：
+
+```bash
+# 编译 x86_64 二进制至 honk/files/honk-core.bin
+./scripts/build_honk_core.sh x86_64
+
+# 或编译 aarch64 二进制
+./scripts/build_honk_core.sh aarch64_generic
+```
+
+### 3. OpenWrt 软件包编译
+
 1. 拉取源码至 OpenWrt 源码树：
 
    ```bash
@@ -29,6 +64,7 @@ OpenWrt 上的 honk（基于 eBPF 的高性能透明代理引擎，dae 兼容）
    # 选择：Network -> Web Servers/Proxies -> luci-app-honk
 
    make package/honk/compile V=s
+   make package/luci-app-honk/compile V=s
    ```
 
 ## 配置文件结构

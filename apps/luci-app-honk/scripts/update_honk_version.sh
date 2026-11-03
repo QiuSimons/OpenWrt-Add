@@ -35,7 +35,7 @@ NEW_VERSION="$(date +%Y.%m.%d)~${SHORT_COMMIT}"
 echo "Resolved: ${NEW_VERSION} (${COMMIT})"
 
 sed -i -E "s|^PKG_VERSION:=.*|PKG_VERSION:=${NEW_VERSION}|" "$MAKEFILE"
-sed -i -E "s|^PKG_SOURCE_VERSION:=.*|PKG_SOURCE_VERSION:=${COMMIT}|" "$MAKEFILE"
-sed -i -E "s|^PKG_SOURCE_URL:=.*|PKG_SOURCE_URL:=https://github.com/${UPSTREAM_REPO}.git|" "$MAKEFILE"
+sed -i -E "s|^(HONK_SRC_VERSION|PKG_SOURCE_VERSION):=.*|\1:=${COMMIT}|" "$MAKEFILE"
+sed -i -E "s|^(HONK_SRC_URL|PKG_SOURCE_URL):=.*|\1:=https://github.com/${UPSTREAM_REPO}.git|" "$MAKEFILE"
 
 echo "Updated $MAKEFILE successfully."

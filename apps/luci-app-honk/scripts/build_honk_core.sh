@@ -46,8 +46,8 @@ if [ -z "$SRC_DIR" ]; then
   else
     MAKEFILE="$REPO_ROOT/honk/Makefile"
     [ -f "$MAKEFILE" ] || { echo "ERROR: Makefile not found at $MAKEFILE" >&2; exit 1; }
-    URL=$(grep -E '^[[:space:]]*PKG_SOURCE_URL:=' "$MAKEFILE" | head -n 1 | cut -d= -f2 | tr -d '[:space:]')
-    REV=$(grep -E '^[[:space:]]*PKG_SOURCE_VERSION:=' "$MAKEFILE" | head -n 1 | cut -d= -f2 | tr -d '[:space:]')
+    URL=$(grep -E '^[[:space:]]*(HONK_SRC_URL|PKG_SOURCE_URL):=' "$MAKEFILE" | head -n 1 | cut -d= -f2 | tr -d '[:space:]')
+    REV=$(grep -E '^[[:space:]]*(HONK_SRC_VERSION|PKG_SOURCE_VERSION):=' "$MAKEFILE" | head -n 1 | cut -d= -f2 | tr -d '[:space:]')
     SRC_DIR="$REPO_ROOT/honk-src"
     echo "==> Fetching honk source (${URL} @ ${REV})..."
     rm -rf "$SRC_DIR"

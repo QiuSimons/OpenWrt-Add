@@ -8,16 +8,9 @@ PKG_NAME:=honk
 PKG_VERSION:=2026.11.03~77176ff
 PKG_RELEASE:=1
 
-# 若 files/ 下无预编译二进制，才声明从 git 下载源码
-ifeq ($(wildcard $(CURDIR)/files/honk-core.bin),)
-PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL:=https://github.com/daeuniverse/honk.git
-PKG_SOURCE_VERSION:=77176ff8e8cc2b75385a7030dc376536c382574a
-PKG_MIRROR_HASH:=skip
-
-PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_VERSION)
-PKG_SOURCE:=$(PKG_SOURCE_SUBDIR)-$(PKG_SOURCE_VERSION).tar.gz
-endif
+# 源码仓库元数据（供 scripts/build_honk_core.sh 与 update_honk_version.sh 提取使用）
+HONK_SRC_URL:=https://github.com/daeuniverse/honk.git
+HONK_SRC_VERSION:=77176ff8e8cc2b75385a7030dc376536c382574a
 
 PKG_LICENSE:=AGPL-3.0-only
 PKG_LICENSE_FILES:=LICENSE

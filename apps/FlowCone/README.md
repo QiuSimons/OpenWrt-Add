@@ -89,36 +89,65 @@ FlowCone/
 
 ## 编译
 
-### 1. 本地独立编译
+### 1. 宿主机构建依赖 (以 Ubuntu 为例)
 
-编译 eBPF 模块需使用 Rust Nightly 工具链及 `bpfel-unknown-none` 目标：
+编译 FlowCone 守护进程需在宿主机配置 Rust (>= 1.98.0) 及目标架构的 musl 工具链：
 
 ```bash
-# 1. 安装 eBPF 目标架构组件
+# 基础构建与 musl 工具链
+sudo apt-get update
+sudo apt-get install -y musl-tools
+
+# 若需交叉编译 aarch64 架构：
+sudo apt-get install -y gcc-aarch64-linux-gnu
+
+# 安装 Rust 工具链及 musl 目标架构
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup target add x86_64-unknown-linux-musl
+rustup target add aarch64-unknown-linux-musl
+
+# （可选）若需重新编译 crates/flowcone-ebpf 数据面字节码：
+rustup toolchain install nightly
 rustup target add bpfel-unknown-none --toolchain nightly
 rustup component add rust-src --toolchain nightly
+```
 
-# 2. 编译 eBPF 数据面二进制
+> [!NOTE]
+> 仓库内已内置预编译好的 eBPF 字节码（`crates/flowcone-daemon/ebpf/flowcone-ebpf.bin`）。若未修改 eBPF 内核代码，直接使用稳定版 Rust 编译守护进程即可。
+
+### 2. 本地独立编译
+
+```bash
+# 编译当前主机架构二进制 (x86_64 musl)
+cargo build --release --locked -p flowcone-daemon --target x86_64-unknown-linux-musl
+
+# 或交叉编译 aarch64 musl
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc \
+cargo build --release --locked -p flowcone-daemon --target aarch64-unknown-linux-musl
+
+# 若修改了 eBPF 内核代码需重新生成字节码：
 cargo +nightly build --release \
   --target=bpfel-unknown-none \
   -Z build-std=core \
   --manifest-path crates/flowcone-ebpf/Cargo.toml
+cp target/bpfel-unknown-none/release/flowcone-ebpf crates/flowcone-daemon/ebpf/flowcone-ebpf.bin
 
-# 3. 编译用户态守护进程 (自动嵌入上一步生成的 eBPF 字节码)
-cargo build --release -p flowcone-daemon
-
-# 产物位于 target/release/flowcone
+# 产物位于 target/<target-triple>/release/flowcone
 ```
 
-### 2. OpenWrt 源码树编译
+### 3. OpenWrt 源码树编译
 
-将 `openwrt/flowcone` 和 `openwrt/luci-app-flowcone` 放入 OpenWrt 源码树的 `package/` 目录：
+在 OpenWrt 编译环境中，可将已生成的 `flowcone` 二进制置于 `openwrt/flowcone/files/flowcone.bin`（免宿主机重复编译），或由 Makefile 调用宿主机 Rust 构建：
 
 ```bash
-./scripts/feeds update -a && ./scripts/feeds install -a
+# 拷贝至 OpenWrt package 目录
+cp -r openwrt/flowcone package/flowcone
+cp -r openwrt/luci-app-flowcone package/luci-app-flowcone
+
 make menuconfig
 # Network -> Routing and Redirection -> 选择 flowcone
 # LuCI -> Applications -> 选择 luci-app-flowcone
+
 make package/flowcone/compile V=s
 make package/luci-app-flowcone/compile V=s
 ```
