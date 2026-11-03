@@ -29,8 +29,8 @@ define Package/honk
   DEPENDS:=$(HONK_RUST_ARCH_DEPENDS) \
     +ca-bundle \
     +kmod-sched-core +kmod-sched-bpf +kmod-veth \
+    +kmod-nft-core +kmod-nft-queue +kmod-nfnetlink-queue +kmod-nf-conntrack \
     +v2ray-geoip +v2ray-geosite \
-    +@KERNEL_XDP_SOCKETS \
     +HONK_USE_VMLINUX_BTF:vmlinux-btf
 endef
 
