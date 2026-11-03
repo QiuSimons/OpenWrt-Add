@@ -210,6 +210,26 @@ test('wired hosts: the path counts those downstream only; filters, search and so
 	assert.deepEqual([ self.ui.kind, self.ui.chip, self.ui.filter ], [ 'wired', 'port:lan1', '' ]);
 });
 
+test('health checks about clients: several weak open their list, unless the layout hides it', () => {
+	const self = Object.create(view);
+	const opened = [];
+	let shown = true;
+	self.el = { clients: { scrollIntoView() {}, getClientRects: () => shown ? [ {} ] : [] }, filter: {} };
+	self.paintClients = () => {};
+	self.openDrawer = (kind, id) => opened.push(kind + ':' + id);
+	self.ui = { kind: 'wired', chip: 'port:lan1', filter: 'x' };
+	const saved = global.window;
+	global.window = { matchMedia: () => ({ matches: true }) };
+	try {
+		self.openCheck({ client: 'aa', list: 'weak' });
+		assert.deepEqual([ self.ui.kind, self.ui.chip, self.ui.filter, opened.length ], [ 'wifi', 'weak', '', 0 ]);
+		shown = false;
+		self.openCheck({ client: 'aa', list: 'weak' });
+		self.openCheck({ client: 'bb', list: null });
+	} finally { global.window = saved; }
+	assert.deepEqual(opened, [ 'client:aa', 'client:bb' ]);
+});
+
 test('wired branch: each port node shows its traffic, all its hosts\' together', () => {
 	const self = Object.create(view);
 	const el = () => ({ textContent: '', attrs: {}, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }, setAttribute(k, v) { this.attrs[k] = v; } });

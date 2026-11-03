@@ -1377,12 +1377,9 @@ return view.extend({
 					E('span', { 'class': 'vt-chip-reason' }, [ c.reason ])
 				])
 			];
-			if (c.client)
+			if (c.client || c.list)
 				return E('button', { 'type': 'button', 'class': 'vt-chip vt-chip-' + c.level, 'role': 'listitem', 'title': c.detail || c.reason,
-					'click': function() { self.openDrawer('client', c.client); } }, body);
-			if (c.list)
-				return E('button', { 'type': 'button', 'class': 'vt-chip vt-chip-' + c.level, 'role': 'listitem', 'title': c.detail || c.reason,
-					'click': function() { self.showClients(c.list); } }, body);
+					'click': function() { self.openCheck(c); } }, body);
 			/* without its page (no block-mount), a check links to the status overview */
 			var to = hasPage(c.page) ? c.page : [ 'admin', 'status', 'overview' ];
 			return E('a', { 'class': 'vt-chip vt-chip-' + c.level, 'role': 'listitem', 'title': c.detail || c.reason, 'href': L.url.apply(L, to) }, body);
@@ -1441,6 +1438,14 @@ return view.extend({
 		this.ui.chip = port ? 'port:' + port : 'all';
 		this.setFilter('');
 		this.el.clients.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start' });
+	},
+
+	/* a health check about clients: several open their list, unless the
+	   layout hides the Clients tile; one (or a hidden list) its details */
+	openCheck: function(c) {
+		var tile = this.el.clients;
+		if (c.list && tile && tile.getClientRects().length) this.showClients(c.list);
+		else if (c.client) this.openDrawer('client', c.client);
 	},
 
 	/* the Clients tile on its Wi-Fi list, on one quick filter (weak signal) */

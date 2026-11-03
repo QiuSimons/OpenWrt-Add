@@ -6,7 +6,7 @@ Each release ships both packages, `luci-theme-vantage` and
 <https://github.com/anothaDev/luci-theme-vantage/releases> and in the
 [signed repositories](https://anothadev.github.io/luci-theme-vantage/).
 
-## Unreleased
+## 1.0.14 - 2026-11-03
 
 - **The spinner while changes are applied turns smoothly** (#71,
   [@HyperdrivzZ](https://github.com/HyperdrivzZ)). LuCI rebuilds the
@@ -28,6 +28,11 @@ Each release ships both packages, `luci-theme-vantage` and
 - **Dashboard: its stylesheet comes from the browser's cache** until a
   package changes, versioned the way LuCI versions its scripts, instead
   of being rechecked with the device on every page load.
+- **LuCI 25.12's apply warnings read again.** "Connectivity change",
+  "Configuration changes have been rolled back!" and "Device
+  unreachable!" put their title, text and any buttons side by side, the
+  text squeezed into a narrow column; they stack now, the buttons on the
+  right.
 
 ## 1.0.13 - 2026-11-02
 

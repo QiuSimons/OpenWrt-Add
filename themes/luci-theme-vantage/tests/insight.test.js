@@ -45,7 +45,7 @@ test('health: several weak clients open the list of them, the weakest first in t
 	assert.equal(s.value, '3 weak');
 	assert.match(s.reason, /Weaker · −84 dBm/);
 	assert.equal(s.list, 'weak');
-	assert.equal(s.client, null);
+	assert.equal(s.client, 'd', 'the weakest, for a layout without the list');
 });
 
 test('health: weak client, slow uplink, disabled radio, high memory', () => {

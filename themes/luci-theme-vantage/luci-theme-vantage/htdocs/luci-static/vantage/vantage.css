@@ -2216,6 +2216,12 @@ body.modal-overlay-active #modal_overlay { display: block; }
 #modal_overlay > .modal.alert-message > * { margin: 0; }
 #modal_overlay > .modal.alert-message .right, #modal_overlay > .modal.alert-message .button-row { margin: 0 0 0 auto; padding: 0; border: 0; background: none; }
 #modal_overlay > .modal.alert-message:has(> .right) { flex-wrap: wrap; }
+/* a warning with a title or buttons ("Connectivity change", "Configuration
+   changes have been rolled back!", "Device unreachable!" on 25.12, whose
+   buttons sit in a .button-row) stacks them, its buttons on the right;
+   side by side the text was a narrow column between title and buttons.
+   The one-line status keeps its spinner beside the text. */
+#modal_overlay > .modal.alert-message:has(> h4, > .button-row) { flex-direction: column; align-items: stretch; }
 
 /* changes dialog */
 .uci-dialog .uci-change-legend {

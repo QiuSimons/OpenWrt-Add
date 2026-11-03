@@ -50,7 +50,8 @@ without the app.
 **`luci-app-vantage`**, the dashboard at `admin/dashboard` (the landing page):
 
 - Health verdict with checks for uplink, CPU, memory, Wi-Fi, client signal
-  and storage, each with a one-line reason
+  and storage, each with a one-line reason; a check opens what it is
+  about (a weak client's details, or the list when several are weak)
 - Network path from gateway to access point, radios and SSIDs, and a
   Wired branch for the Ethernet ports; click any node for details. Behind
   it the login page's packets or starfield move with the live uplink
