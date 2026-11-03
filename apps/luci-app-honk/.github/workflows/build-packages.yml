@@ -14,6 +14,7 @@ on:
     paths:
       - 'honk/**'
       - 'luci-app-honk/**'
+      - 'scripts/**'
       - '.github/workflows/build-packages.yml'
 
 permissions:
@@ -44,7 +45,8 @@ jobs:
           pkg_release=$(grep '^PKG_RELEASE:=' honk/Makefile | head -n 1 | cut -d= -f2)
 
           version="${pkg_version}-r${pkg_release}"
-          release_tag="honk_${version}"
+          # git ref 不允许 '~'（PKG_VERSION 的 Debian 风格分隔符），只在 tag 里替换
+          release_tag="honk_$(printf '%s' "$version" | tr '~' '_')"
           release_name="honk_${version}"
 
           echo "version=${version}" >> "$GITHUB_OUTPUT"
@@ -92,8 +94,8 @@ jobs:
 
           echo "sdks=$(jq -nc --args '$ARGS.positional' -- "${sdks[@]}")" >> "$GITHUB_OUTPUT"
 
-  build:
-    name: Build ${{ matrix.arch }}-openwrt-${{ matrix.sdk }}
+  prebuild:
+    name: Prebuild honk-core ${{ matrix.arch }}
     runs-on: ubuntu-latest
     needs: prepare
     strategy:
@@ -102,13 +104,10 @@ jobs:
         arch:
           - aarch64_generic
           - x86_64
-        sdk: ${{ fromJson(needs.prepare.outputs.sdks) }}
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - name: Install host build tools
         shell: bash
@@ -128,10 +127,59 @@ jobs:
         shell: bash
         run: |
           ./scripts/build_honk_core.sh "${{ matrix.arch }}" honk/files/honk-core.bin
+          test -s honk/files/honk-core.bin
+
+      - name: Upload honk-core binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: honk-core-${{ matrix.arch }}
+          path: honk/files/honk-core.bin
+          if-no-files-found: error
+          retention-days: 1
+          # 静态二进制已压缩不动，artifact 再压一遍纯属浪费 runner 时间
+          compression-level: 0
+
+  build:
+    name: Build ${{ matrix.arch }}-openwrt-${{ matrix.sdk }}
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - prebuild
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - aarch64_generic
+          - x86_64
+        sdk: ${{ fromJson(needs.prepare.outputs.sdks) }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Download honk-core binary
+        uses: actions/download-artifact@v8
+        with:
+          name: honk-core-${{ matrix.arch }}
+          path: honk/files
+
+      - name: Verify honk-core binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s honk/files/honk-core.bin || { echo "::error::honk/files/honk-core.bin missing"; exit 1; }
+          file honk/files/honk-core.bin
+          case "$(file -b honk/files/honk-core.bin)" in
+            *"statically linked"*) echo "static binary OK" ;;
+            *) echo "::error::honk-core.bin is not statically linked"; exit 1 ;;
+          esac
 
       - name: Remove vmlinux-btf dependency for CI
         shell: bash
         run: |
+          # SDK 里没有 KERNEL_DEBUG_INFO_BTF，kconfig 会落到 vmlinux-btf 选项；
+          # 去掉该 depends 让 HONK_USE_KERNEL_BTF 成为默认，产物就不会带上
+          # 本仓库并不提供的 vmlinux-btf 依赖。
           sed -i '/depends on KERNEL_DEBUG_INFO_BTF/d' honk/Makefile
 
       - name: Build packages
@@ -206,6 +254,8 @@ jobs:
         with:
           path: release-dist
           merge-multiple: true
+          # 只取包产物，别把 prebuild 的 honk-core 二进制也发进 release
+          pattern: '*-openwrt-*'
 
       - name: Create or update GitHub release
         uses: softprops/action-gh-release@v3

@@ -39,20 +39,42 @@ if [ -z "$OUT_FILE" ]; then
   OUT_FILE="$REPO_ROOT/honk/files/honk-core.bin"
 fi
 
+# 相对输出路径必须在进入源码目录之前固化为绝对路径，否则会被解析到 $SRC_DIR 下，
+# 造成"脚本报成功、仓库里却没有产物"的假闭环。
+case "$OUT_FILE" in
+  /*) ;;
+  *) OUT_FILE="$PWD/$OUT_FILE" ;;
+esac
+
 # 2. 准备源码目录
+fetch_pinned_source() {
+  rm -rf "$3"
+  echo "==> Fetching honk source ($1 @ $2)..."
+  git init -q "$3"
+  git -C "$3" remote add origin "$1"
+  git -C "$3" fetch --depth 1 origin "$2"
+  git -C "$3" checkout -q --detach FETCH_HEAD
+}
+
 if [ -z "$SRC_DIR" ]; then
-  if [ -d "$REPO_ROOT/honk-src/crates/honk-core" ]; then
-    SRC_DIR="$REPO_ROOT/honk-src"
+  MAKEFILE="$REPO_ROOT/honk/Makefile"
+  [ -f "$MAKEFILE" ] || { echo "ERROR: Makefile not found at $MAKEFILE" >&2; exit 1; }
+  URL=$(grep -E '^[[:space:]]*(HONK_SRC_URL|PKG_SOURCE_URL):=' "$MAKEFILE" | head -n 1 | cut -d= -f2 | tr -d '[:space:]')
+  REV=$(grep -E '^[[:space:]]*(HONK_SRC_VERSION|PKG_SOURCE_VERSION):=' "$MAKEFILE" | head -n 1 | cut -d= -f2 | tr -d '[:space:]')
+  [ -n "$URL" ] && [ -n "$REV" ] || {
+    echo "ERROR: HONK_SRC_URL / HONK_SRC_VERSION missing in $MAKEFILE" >&2
+    exit 1
+  }
+
+  SRC_DIR="$REPO_ROOT/honk-src"
+  CACHED_REV=$(git -C "$SRC_DIR" rev-parse HEAD 2>/dev/null || true)
+  if [ -d "$SRC_DIR/crates/honk-core" ] && [ "$CACHED_REV" = "$REV" ]; then
+    echo "==> Reusing $SRC_DIR at ${REV}"
   else
-    MAKEFILE="$REPO_ROOT/honk/Makefile"
-    [ -f "$MAKEFILE" ] || { echo "ERROR: Makefile not found at $MAKEFILE" >&2; exit 1; }
-    URL=$(grep -E '^[[:space:]]*(HONK_SRC_URL|PKG_SOURCE_URL):=' "$MAKEFILE" | head -n 1 | cut -d= -f2 | tr -d '[:space:]')
-    REV=$(grep -E '^[[:space:]]*(HONK_SRC_VERSION|PKG_SOURCE_VERSION):=' "$MAKEFILE" | head -n 1 | cut -d= -f2 | tr -d '[:space:]')
-    SRC_DIR="$REPO_ROOT/honk-src"
-    echo "==> Fetching honk source (${URL} @ ${REV})..."
-    rm -rf "$SRC_DIR"
-    git clone --depth 1 "$URL" "$SRC_DIR"
-    ( cd "$SRC_DIR" && git fetch --depth 1 origin "$REV" && git checkout "$REV" ) 2>/dev/null || ( cd "$SRC_DIR" && git checkout "$REV" )
+    if [ -n "$CACHED_REV" ]; then
+      echo "==> honk-src is at ${CACHED_REV}, expected ${REV}; refetching..."
+    fi
+    fetch_pinned_source "$URL" "$REV" "$SRC_DIR"
   fi
 fi
 
@@ -80,18 +102,30 @@ if command -v rustup >/dev/null 2>&1; then
   echo "==> Ensuring target $RUST_TARGET is installed for workspace toolchain..."
   rustup target add "$RUST_TARGET"
 
-  EBPF_CHANNEL=$(grep -oP '^channel\s*=\s*"\K[^"]+' crates/honk-ebpf/rust-toolchain.toml 2>/dev/null || echo "nightly")
+  EBPF_CHANNEL=$(sed -n 's/^channel[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' crates/honk-ebpf/rust-toolchain.toml 2>/dev/null | head -n 1)
+  EBPF_CHANNEL="${EBPF_CHANNEL:-nightly}"
   echo "==> Ensuring eBPF toolchain ($EBPF_CHANNEL) has rust-src & llvm-tools..."
-  rustup toolchain install "$EBPF_CHANNEL" --component rust-src,llvm-tools 2>/dev/null || true
+  rustup toolchain install "$EBPF_CHANNEL" --component rust-src,llvm-tools
 fi
 
 # 5. 编译 eBPF 对象
 echo "==> Building honk-ebpf object..."
 (
   cd crates/honk-ebpf
-  EBPF_CHANNEL=$(grep -oP '^channel\s*=\s*"\K[^"]+' rust-toolchain.toml 2>/dev/null || echo "nightly")
+  EBPF_CHANNEL=$(sed -n 's/^channel[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' rust-toolchain.toml 2>/dev/null | head -n 1)
+  EBPF_CHANNEL="${EBPF_CHANNEL:-nightly}"
   cargo "+${EBPF_CHANNEL}" build --release -Zbuild-std=core --target bpfel-unknown-none
 )
+
+# aya 拒绝没有 BTF 的 eBPF 对象（运行时才报 "no BTF parsed for object"），在构建期就卡死
+EBPF_OBJ="crates/honk-ebpf/target/bpfel-unknown-none/release/honk-ebpf"
+[ -f "$EBPF_OBJ" ] || { echo "ERROR: eBPF object not found at $EBPF_OBJ" >&2; exit 1; }
+if command -v readelf >/dev/null 2>&1; then
+  readelf -S "$EBPF_OBJ" | grep -q '\.BTF' || {
+    echo "ERROR: $EBPF_OBJ has no .BTF section; aya will reject it at runtime" >&2
+    exit 1
+  }
+fi
 
 # 6. 配置 Zig 跨平台链接包装器与 bindgen 头文件
 export ZIGCC_TARGET="$ZIG_TARGET"
@@ -122,10 +156,24 @@ if [ ! -f "$BUILT_BIN" ]; then
   exit 1
 fi
 
+# 产物必须是目标架构的 ELF；musl 目标必须静态链接，否则 OpenWrt 打包会以
+# "missing dependencies for the following libraries: libc.so.6" 失败。
+# 先校验再落盘，避免把坏产物留在目标路径上。
+FILE_DESC=$(file -b "$BUILT_BIN")
+case "$FILE_DESC" in
+  ELF*) ;;
+  *) echo "ERROR: output is not an ELF binary: $FILE_DESC" >&2; exit 1 ;;
+esac
+if [[ "$RUST_TARGET" == *-musl ]] && [[ "$FILE_DESC" != *"statically linked"* ]]; then
+  echo "ERROR: $RUST_TARGET binary is not statically linked: $FILE_DESC" >&2
+  echo "       OpenWrt would reject it as depending on libc.so.6" >&2
+  exit 1
+fi
+
 mkdir -p "$(dirname "$OUT_FILE")"
 cp -f "$BUILT_BIN" "$OUT_FILE"
 chmod +x "$OUT_FILE"
 
 echo "==> Build succeeded: $OUT_FILE"
-file "$OUT_FILE"
+echo "==> $FILE_DESC"
 ls -lh "$OUT_FILE"
