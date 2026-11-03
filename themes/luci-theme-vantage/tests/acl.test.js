@@ -12,7 +12,7 @@ require('../security-tests/test_acl_policy.js');
 
 const APP = path.join(__dirname, '..', 'luci-app-vantage');
 const view = fs.readFileSync(path.join(APP, 'htdocs/luci-static/resources/view/vantage/overview.js'), 'utf8');
-const menu = JSON.parse(fs.readFileSync(path.join(APP, 'root/usr/share/luci/menu.d/luci-app-vantage.json'), 'utf8'));
+const menu = JSON.parse(fs.readFileSync(path.join(APP, 'root/usr/share/luci/menu.d/zz-luci-app-vantage.json'), 'utf8'));
 const makefile = fs.readFileSync(path.join(APP, 'Makefile'), 'utf8');
 const config = fs.readFileSync(path.join(APP, 'root/etc/config/vantage'), 'utf8');
 
@@ -21,6 +21,14 @@ test('menu: top-level dashboard, first by order, gated by the app ACL', () => {
 	assert.equal(d.order, 1);
 	assert.deepEqual(d.action, { type: 'view', path: 'vantage/overview' });
 	assert.deepEqual(d.depends.acl, [ 'luci-app-vantage' ]);
+});
+
+test('menu: loads after luci-mod-dashboard\'s, which claims admin/dashboard too (#77)', () => {
+	/* the dispatcher reads menu.d in glob order and the last file to name
+	   a path sets its view and ACL */
+	const files = fs.readdirSync(path.join(APP, 'root/usr/share/luci/menu.d'));
+	assert.deepEqual(files, [ 'zz-luci-app-vantage.json' ]);
+	assert.deepEqual([ 'luci-mod-dashboard.json', files[0] ].sort(), [ 'luci-mod-dashboard.json', files[0] ]);
 });
 
 test('view: no HTML sinks and no save/apply buttons', () => {

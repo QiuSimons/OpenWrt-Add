@@ -69,7 +69,7 @@ const path = require('path');
 const PKG = path.resolve(process.env.VANTAGE_APP_PKG || path.join(__dirname, '..', 'luci-app-vantage'));
 const HTDOCS = path.join(PKG, 'htdocs');
 const ACL_FILE = path.join(PKG, 'root/usr/share/rpcd/acl.d/luci-app-vantage.json');
-const MENU_FILE = path.join(PKG, 'root/usr/share/luci/menu.d/luci-app-vantage.json');
+const MENU_FILE = path.join(PKG, 'root/usr/share/luci/menu.d/zz-luci-app-vantage.json');
 const PLUGIN_FILE = path.join(PKG, 'root/usr/share/rpcd/ucode/luci.vantage');
 
 const READ_GROUP = 'luci-app-vantage';

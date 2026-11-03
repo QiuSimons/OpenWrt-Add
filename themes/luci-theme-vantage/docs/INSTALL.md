@@ -518,9 +518,9 @@ a new one, then log in). Two reasons:
 
 | | `luci-theme-vantage` | `luci-app-vantage` |
 |---|---|---|
-| Files | `/www/luci-static/vantage/` (CSS, icons, logo), `/www/luci-static/resources/menu-vantage.js`, `/www/luci-static/resources/vantage-theme/`, `/usr/share/ucode/luci/template/themes/vantage/` | `/www/luci-static/resources/view/vantage/`, `/www/luci-static/resources/vantage/`, `/usr/share/luci/menu.d/luci-app-vantage.json`, `/usr/share/rpcd/acl.d/luci-app-vantage.json`, `/etc/config/vantage` |
+| Files | `/www/luci-static/vantage/` (CSS, icons, logo), `/www/luci-static/resources/menu-vantage.js`, `/www/luci-static/resources/vantage-theme/`, `/usr/share/ucode/luci/template/themes/vantage/` | `/www/luci-static/resources/view/vantage/`, `/www/luci-static/resources/vantage/`, `/usr/share/luci/menu.d/zz-luci-app-vantage.json`, `/usr/share/rpcd/acl.d/luci-app-vantage.json`, `/etc/config/vantage` |
 | Configuration | Registers the theme as `luci.themes.Vantage`. Makes it the active theme (`luci.main.mediaurlbase=/luci-static/vantage`) **only on a first install**, never on an upgrade or reinstall. | None besides its own `/etc/config/vantage` (client names). |
-| Menu | – | Adds **Dashboard** (`admin/dashboard`) as the first menu entry, so it is the page LuCI opens after login. Status → Overview is unchanged. |
+| Menu | – | Adds **Dashboard** (`admin/dashboard`) as the first menu entry, so it is the page LuCI opens after login. Status → Overview is unchanged. With `luci-mod-dashboard` also installed, which uses the same entry, Dashboard opens Vantage's. |
 | After install | Clears LuCI's caches (`/tmp/luci-indexcache.*`, `/tmp/luci-modulecache/`) and reloads rpcd. | Same. |
 
 Nothing else changes. Neither package adds a service, cron job or init
