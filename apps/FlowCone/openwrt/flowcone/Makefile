@@ -119,11 +119,19 @@ define Build/Compile
 			--manifest-path $(PKG_BUILD_DIR)/Cargo.toml \
 			--target $(RUST_TARGET); \
 	fi
+	$(INSTALL_DIR) $(PKG_INSTALL_DIR)/bin
+	if [ -f $(CURDIR)/files/flowcone.bin ]; then \
+		$(INSTALL_BIN) $(CURDIR)/files/flowcone.bin $(PKG_INSTALL_DIR)/bin/flowcone; \
+	elif [ -f $(PKG_BUILD_DIR)/target/$(RUST_TARGET)/release/flowcone ]; then \
+		$(INSTALL_BIN) $(PKG_BUILD_DIR)/target/$(RUST_TARGET)/release/flowcone $(PKG_INSTALL_DIR)/bin/flowcone; \
+	fi
 endef
 
 define Package/flowcone/install
 	$(INSTALL_DIR) $(1)/usr/bin/
-	if [ -f $(CURDIR)/files/flowcone.bin ]; then \
+	if [ -f $(PKG_INSTALL_DIR)/bin/flowcone ]; then \
+		$(INSTALL_BIN) $(PKG_INSTALL_DIR)/bin/flowcone $(1)/usr/bin/flowcone; \
+	elif [ -f $(CURDIR)/files/flowcone.bin ]; then \
 		$(INSTALL_BIN) $(CURDIR)/files/flowcone.bin $(1)/usr/bin/flowcone; \
 	else \
 		$(INSTALL_BIN) $(PKG_BUILD_DIR)/target/$(RUST_TARGET)/release/flowcone $(1)/usr/bin/flowcone; \
