@@ -107,7 +107,7 @@ jobs:
           set -euo pipefail
           mk=apps/luci-app-honk/honk/Makefile
           if [ -f "$mk" ] && grep -q '^HONK_SRC_VERSION:=' "$mk"; then
-            ./core/scripts/honk_toolchain.sh | tee "$RUNNER_TEMP/honk-toolchain.env"
+            ./apps/luci-app-honk/honk/honk_toolchain.sh | tee "$RUNNER_TEMP/honk-toolchain.env"
             . "$RUNNER_TEMP/honk-toolchain.env"
             echo "zig_version=${ZIG_VERSION}" >> "$GITHUB_OUTPUT"
             echo "available=true" >> "$GITHUB_OUTPUT"

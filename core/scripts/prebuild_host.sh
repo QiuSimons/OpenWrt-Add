@@ -263,8 +263,6 @@ prebuild_honk() {
   [ -f "$mk" ] || { log "SKIP honk (包已移除)"; return 0; }
 
   local script="$REPO_ROOT/apps/luci-app-honk/honk/build_honk_core.sh"
-  # 同步前的旧布局；app 同步后走上面的包内脚本。
-  [ -x "$script" ] || script="$REPO_ROOT/apps/luci-app-honk/scripts/build_honk_core.sh"
   local out="$OUT/honk/bin"
   rm -rf "$out"; mkdir -p "$out"
 
@@ -274,7 +272,7 @@ prebuild_honk() {
   assert_elf "$out/honk-core"
 
   # 源码与 target 只在本次构建需要，清掉给后面的 Rust 包腾磁盘
-  rm -rf apps/luci-app-honk/honk/honk-src apps/luci-app-honk/honk-src
+  rm -rf apps/luci-app-honk/honk/honk-src
 }
 
 prebuild_dae() {
