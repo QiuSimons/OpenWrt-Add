@@ -31,6 +31,15 @@ test('menu: loads after luci-mod-dashboard\'s, which claims admin/dashboard too 
 	assert.deepEqual([ 'luci-mod-dashboard.json', files[0] ].sort(), [ 'luci-mod-dashboard.json', files[0] ]);
 });
 
+test('menu: luci-mod-dashboard\'s page stays reachable under Status, only where it is installed (#77)', () => {
+	const d = menu['admin/status/dashboard'];
+	assert.deepEqual(d.action, { type: 'view', path: 'dashboard/index' });
+	/* its own ACL group, and the view file: no entry without the package */
+	assert.deepEqual(d.depends, { acl: [ 'luci-mod-dashboard-index' ], fs: { '/www/luci-static/resources/view/dashboard/index.js': 'file' } });
+	/* after Overview (1), so Status still opens on Overview */
+	assert.ok(d.order > 1);
+});
+
 test('view: no HTML sinks and no save/apply buttons', () => {
 	assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(view));
 	for (const k of [ 'handleSave', 'handleSaveApply', 'handleReset' ]) assert.match(view, new RegExp(k + ': null'));

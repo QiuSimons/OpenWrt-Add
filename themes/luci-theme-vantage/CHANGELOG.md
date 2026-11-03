@@ -25,9 +25,11 @@ Each release ships both packages, `luci-theme-vantage` and
   past the card's edge on narrower desktop windows. The rate lines wrap
   when space runs short, and on 25.12 the card scrolls if it still
   doesn't fit.
-- **Dashboard opens Vantage's with `luci-mod-dashboard` installed too**
-  (#77, [@smallprogram](https://github.com/smallprogram)). Both use the
+- **Vantage's dashboard and `luci-mod-dashboard` side by side** (#77,
+  [@smallprogram](https://github.com/smallprogram)). Both use the
   `admin/dashboard` menu entry, and LuCI showed its own dashboard there.
+  Vantage's now opens after login, and LuCI's is under Status →
+  Dashboard.
 - **Dashboard: its stylesheet comes from the browser's cache** until a
   package changes, versioned the way LuCI versions its scripts, instead
   of being rechecked with the device on every page load.

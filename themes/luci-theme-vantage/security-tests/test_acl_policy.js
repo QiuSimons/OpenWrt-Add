@@ -578,7 +578,10 @@ test('the view probes the names and rdns groups; the menu is gated by the read g
 	const view = sources.find(s => s.file.endsWith('view/vantage/overview.js')).text;
 	const probes = [ ...view.matchAll(/callAccess\('access-group', '([^']+)', '(\w+)'\)/g) ].map(m => m[1] + ' ' + m[2]);
 	assert.deepEqual(probes, [ WRITE_GROUP + ' write', RDNS_GROUP + ' read' ]);
-	assert.deepEqual(Object.keys(menu), [ 'admin/dashboard', 'admin/network/firewall/overview' ]);
+	assert.deepEqual(Object.keys(menu), [ 'admin/dashboard', 'admin/status/dashboard', 'admin/network/firewall/overview' ]);
+	/* luci-mod-dashboard's page, behind that package's own group: Vantage grants nothing for it */
+	assert.deepEqual(menu['admin/status/dashboard'].depends.acl, [ 'luci-mod-dashboard-index' ]);
+	assert.ok(!('luci-mod-dashboard-index' in acl));
 	assert.deepEqual(menu['admin/dashboard'].depends.acl, [ READ_GROUP ]);
 });
 

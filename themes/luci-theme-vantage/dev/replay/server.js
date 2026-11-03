@@ -194,6 +194,18 @@ function readMenuDir(dir) {
 	}
 	return specs;
 }
+/* depends.fs on a page's files under /www, as the dispatcher checks it,
+   against the rootfs dump and the app packages' htdocs: an entry whose
+   view isn't there (luci-mod-dashboard's page) stays hidden. Other paths
+   (an add-on's binaries) count as present: fixtures stand in for them */
+function fsSatisfied(spec) {
+	const d = spec.depends && spec.depends.fs;
+	if (!d || typeof d !== 'object') return true;
+	const bases = [ rootfs, ...appDirs.map(a => path.join(a, 'htdocs')) ];
+	const present = p => bases.some((b, i) => fs.existsSync(path.join(b, i ? p.slice(4) : p)));
+	const holds = (p, kind) => !/^\/www\//.test(p) || p.split('/').includes('..') || (kind === 'absent' ? !present(p) : present(p));
+	return (Array.isArray(d) ? d : [ d ]).some(alt => alt && typeof alt === 'object' && Object.entries(alt).every(([ p, kind ]) => holds(p, kind)));
+}
 function mergeMenu(root, specs) {
 	for (const [ p, spec ] of Object.entries(specs)) {
 		if (!spec || typeof spec !== 'object' || !/^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)*$/.test(p)) continue;
@@ -202,7 +214,7 @@ function mergeMenu(root, specs) {
 		segs.forEach((seg, i) => {
 			node.children = node.children || {};
 			if (i === segs.length - 1)
-				node.children[seg] = Object.assign({ satisfied: true }, node.children[seg] && node.children[seg].children ? { children: node.children[seg].children } : {}, spec);
+				node.children[seg] = Object.assign({ satisfied: true }, node.children[seg] && node.children[seg].children ? { children: node.children[seg].children } : {}, spec, { satisfied: fsSatisfied(spec) });
 			else if (!node.children[seg] || typeof node.children[seg] !== 'object')
 				node.children[seg] = { satisfied: true, action: { type: 'firstchild' }, children: {} };
 			node = node.children[seg];
