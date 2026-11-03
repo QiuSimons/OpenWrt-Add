@@ -30,6 +30,22 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v7
 
+      - name: Verify feed signing key
+        env:
+          FEED_PRIVATE_KEY: ${{ secrets.FEED_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FEED_PRIVATE_KEY:-}" ]; then
+            echo "ERROR: FEED_KEY secret is not set" >&2
+            exit 1
+          fi
+          printf '%s\n' "$FEED_PRIVATE_KEY" | openssl rsa -pubout 2>/dev/null > /tmp/custom-feed.rsa.pub
+          cmp -s /tmp/custom-feed.rsa.pub certs/custom-feed.rsa.pub || {
+            echo "ERROR: FEED_KEY does not match certs/custom-feed.rsa.pub" >&2
+            exit 1
+          }
+          echo "feed signing key: ok"
+
       - name: Resolve Latest SDK Releases (No GitHub API)
         id: matrix
         shell: bash
