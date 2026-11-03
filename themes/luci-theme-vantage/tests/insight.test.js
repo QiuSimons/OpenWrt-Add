@@ -38,6 +38,16 @@ test('health: the CPU check adds the hottest sensor when there is one', () => {
 	assert.equal(byId(insight.health(baseModel(), { cpu: { pct: 7, cores: [ 1 ] }, temps: [] }), 'cpu').reason, 'Load 1.00 · 1 cores');
 });
 
+test('health: several weak clients open the list of them, the weakest first in the chip', () => {
+	const m = baseModel();
+	m.clients.push({ mac: 'c', name: 'Weak one', signal: -79 }, { mac: 'd', name: 'Weaker', signal: -84 }, { mac: 'e', name: 'Third', signal: -77 });
+	const s = byId(insight.health(m, { cpu: { pct: 7, cores: [ 1 ] } }), 'signal');
+	assert.equal(s.value, '3 weak');
+	assert.match(s.reason, /Weaker · −84 dBm/);
+	assert.equal(s.list, 'weak');
+	assert.equal(s.client, null);
+});
+
 test('health: weak client, slow uplink, disabled radio, high memory', () => {
 	const m = baseModel();
 	m.clients.push({ mac: 'c', name: 'Weak one', signal: -81 });
@@ -49,6 +59,7 @@ test('health: weak client, slow uplink, disabled radio, high memory', () => {
 	assert.match(byId(h, 'signal').reason, /Weak one · −81 dBm/);
 	assert.match(byId(h, 'signal').detail, /Weak one at −81 dBm; below −75 dBm/);
 	assert.equal(byId(h, 'signal').client, 'c');
+	assert.equal(byId(h, 'signal').list, null);
 	assert.equal(byId(h, 'uplink').level, 'warn');
 	assert.equal(byId(h, 'radios').level, 'warn');
 	assert.equal(byId(h, 'memory').level, 'err');

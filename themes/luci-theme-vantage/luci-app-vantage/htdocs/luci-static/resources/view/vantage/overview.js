@@ -1365,7 +1365,7 @@ return view.extend({
 	paintHealth: function() {
 		var self = this;
 		/* the same checks as last poll: leave the chips alone */
-		var sig = JSON.stringify(this.st.health.map(function(c) { return [ c.level, c.title, c.value, c.reason, c.detail, c.client, c.page ]; }));
+		var sig = JSON.stringify(this.st.health.map(function(c) { return [ c.level, c.title, c.value, c.reason, c.detail, c.client, c.list, c.page ]; }));
 		if (sig === this.healthSig) return;
 		this.healthSig = sig;
 		dom.content(this.el.health, this.st.health.map(function(c) {
@@ -1380,6 +1380,9 @@ return view.extend({
 			if (c.client)
 				return E('button', { 'type': 'button', 'class': 'vt-chip vt-chip-' + c.level, 'role': 'listitem', 'title': c.detail || c.reason,
 					'click': function() { self.openDrawer('client', c.client); } }, body);
+			if (c.list)
+				return E('button', { 'type': 'button', 'class': 'vt-chip vt-chip-' + c.level, 'role': 'listitem', 'title': c.detail || c.reason,
+					'click': function() { self.showClients(c.list); } }, body);
 			/* without its page (no block-mount), a check links to the status overview */
 			var to = hasPage(c.page) ? c.page : [ 'admin', 'status', 'overview' ];
 			return E('a', { 'class': 'vt-chip vt-chip-' + c.level, 'role': 'listitem', 'title': c.detail || c.reason, 'href': L.url.apply(L, to) }, body);
@@ -1436,6 +1439,14 @@ return view.extend({
 	showWired: function(port) {
 		this.ui.kind = 'wired';
 		this.ui.chip = port ? 'port:' + port : 'all';
+		this.setFilter('');
+		this.el.clients.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start' });
+	},
+
+	/* the Clients tile on its Wi-Fi list, on one quick filter (weak signal) */
+	showClients: function(chip) {
+		this.ui.kind = 'wifi';
+		this.ui.chip = chip;
 		this.setFilter('');
 		this.el.clients.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start' });
 	},

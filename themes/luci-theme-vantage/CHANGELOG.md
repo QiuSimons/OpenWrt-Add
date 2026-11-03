@@ -6,6 +6,29 @@ Each release ships both packages, `luci-theme-vantage` and
 <https://github.com/anothaDev/luci-theme-vantage/releases> and in the
 [signed repositories](https://anothadev.github.io/luci-theme-vantage/).
 
+## Unreleased
+
+- **The spinner while changes are applied turns smoothly** (#71,
+  [@HyperdrivzZ](https://github.com/HyperdrivzZ)). LuCI rebuilds the
+  "Applying configuration changes… 89s" notice every second, and the
+  spinner started over from the top each time.
+- **Software on a phone** (#71). The Actions buttons wrap instead of
+  running past the card, which made the page wider than the screen and
+  pushed its dialogs off the right edge, and a package's dependency tree
+  wraps inside its dialog instead of cutting off the status labels.
+- **"Signal · 3 weak" lists all three** (#71). With more than one weak
+  client, the dashboard's Signal check opens the clients list on its Weak
+  signal filter instead of only the weakest client's details.
+- **Wireless's Associated Stations stay in their card** (#74,
+  [@kylesean](https://github.com/kylesean)). LuCI 25.12 now puts the list
+  in a section of its own, and with names and addresses in Host it ran
+  past the card's edge on narrower desktop windows. The rate lines wrap
+  when space runs short, and on 25.12 the card scrolls if it still
+  doesn't fit.
+- **Dashboard: its stylesheet comes from the browser's cache** until a
+  package changes, versioned the way LuCI versions its scripts, instead
+  of being rechecked with the device on every page load.
+
 ## 1.0.13 - 2026-11-02
 
 - **Dashboard: a port's traffic on its node** (#67,
@@ -23,9 +46,6 @@ Each release ships both packages, `luci-theme-vantage` and
   that port's speed instead of the switch's link to the CPU. Which port
   each device is on stays unknown otherwise. The app's read permission
   gains `luci getSwconfigPortState`.
-- **Dashboard: its stylesheet comes from the browser's cache** until a
-  package changes, versioned the way LuCI versions its scripts, instead
-  of being rechecked with the device on every page load.
 
 ## 1.0.12 - 2026-11-01
 

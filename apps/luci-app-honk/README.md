@@ -31,10 +31,16 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add x86_64-unknown-linux-musl
 rustup target add aarch64-unknown-linux-musl
 
-# bpf-linker (eBPF 字节码链接器)
-curl -sSfL https://github.com/aya-rs/bpf-linker/releases/latest/download/bpf-linker-x86_64-unknown-linux-musl.tar.zst | sudo tar --zstd -xf - -C /usr/local/bin
+# 从 pinned honk commit 解析工具链版本
+eval "$(./scripts/honk_toolchain.sh)"
+echo "bpf-linker ${BPF_LINKER_VERSION}, zig ${ZIG_VERSION}"
 
-# Zig (>= 0.14，用于 BoringSSL 跨平台 C 编译；CI 固定 0.14.1)
+# bpf-linker (eBPF 字节码链接器)
+curl -fsSL -o /tmp/bpf-linker.tar.zst "https://github.com/aya-rs/bpf-linker/releases/download/v${BPF_LINKER_VERSION}/bpf-linker-x86_64-unknown-linux-musl.tar.zst"
+echo "${BPF_LINKER_SHA256}  /tmp/bpf-linker.tar.zst" | sha256sum -c -
+sudo tar --zstd -xf /tmp/bpf-linker.tar.zst -C /usr/local/bin
+
+# Zig ${ZIG_VERSION}（由 pinned commit 决定，构建脚本会校验）
 # 从 https://ziglang.org/download/ 下载解压并加入 PATH
 ```
 

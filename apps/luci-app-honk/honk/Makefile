@@ -8,7 +8,6 @@ PKG_NAME:=honk
 PKG_VERSION:=2026.11.03~77176ff
 PKG_RELEASE:=1
 
-# 源码仓库元数据（供 scripts/build_honk_core.sh 与 update_honk_version.sh 提取使用）
 HONK_SRC_URL:=https://github.com/daeuniverse/honk.git
 HONK_SRC_VERSION:=77176ff8e8cc2b75385a7030dc376536c382574a
 
@@ -60,11 +59,9 @@ define Build/Prepare
 endef
 
 define Build/Compile
-	$(INSTALL_DIR) $(PKG_INSTALL_DIR)/bin
 	@if [ -f $(CURDIR)/files/honk-core.bin ]; then \
+		$(INSTALL_DIR) $(PKG_INSTALL_DIR)/bin; \
 		$(INSTALL_BIN) $(CURDIR)/files/honk-core.bin $(PKG_INSTALL_DIR)/bin/honk-core; \
-	elif [ -f $(PKG_INSTALL_DIR)/bin/honk-core ]; then \
-		true; \
 	else \
 		echo "ERROR: $(CURDIR)/files/honk-core.bin missing!" >&2; \
 		echo "Compile it first via: ./scripts/build_honk_core.sh <arch>" >&2; \
