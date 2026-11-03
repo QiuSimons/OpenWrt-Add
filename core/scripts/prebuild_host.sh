@@ -47,7 +47,7 @@ path = sys.argv[1]
 text = open(path, encoding='utf-8').read()
 
 VARS = {}
-for m in re.finditer(r'^([A-Z0-9_]+)\s*:?=\s*(.*)$', text, re.M):
+for m in re.finditer(r'^[ \t]*([A-Z0-9_]+)\s*:?=\s*(.*)$', text, re.M):
     VARS.setdefault(m.group(1), m.group(2).strip())
 
 def expand(value, depth=0):
@@ -258,6 +258,51 @@ prebuild_flowcone() {
   assert_elf "$out/flowcone"
 }
 
+prebuild_honk() {
+  local mk=apps/luci-app-honk/honk/Makefile
+  [ -f "$mk" ] || { log "SKIP honk (包已移除)"; return 0; }
+
+  local src="$WORK/honk" out="$OUT/honk/bin"
+  fetch_source honk "$mk"
+  rm -rf "$out"; mkdir -p "$out"
+
+  command -v zig >/dev/null 2>&1 || die "zig is required for honk (BoringSSL musl cross-compilation)"
+  command -v bpf-linker >/dev/null 2>&1 || die "bpf-linker is required for honk-ebpf"
+
+  (
+    cd "$src"
+    rustup target add "$RUST_TARGET"
+
+    local ebpf_channel
+    ebpf_channel=$(grep -oP '^channel\s*=\s*"\K[^"]+' crates/honk-ebpf/rust-toolchain.toml 2>/dev/null || echo "nightly")
+    rustup toolchain install "$ebpf_channel" --component rust-src,llvm-tools 2>/dev/null || true
+
+    ( cd crates/honk-ebpf && cargo "+${ebpf_channel}" build --release -Zbuild-std=core --target bpfel-unknown-none ) \
+      || die "cargo build failed: honk-ebpf"
+
+    local T="$RUST_TARGET"
+    export ZIGCC_TARGET="${T/-unknown/}"
+    local L=$(printf '%s' "$T" | tr '-' '_')
+    local U=$(printf '%s' "$T" | tr 'a-z-' 'A-Z_')
+    export "CC_${L}=$src/ci/zigcc"
+    export "CXX_${L}=$src/ci/zigcxx"
+    export "CARGO_TARGET_${U}_LINKER=$src/ci/zigcc"
+    if [[ "$T" == *-musl ]]; then
+      export "CARGO_TARGET_${U}_RUSTFLAGS=-C link-self-contained=no"
+    fi
+
+    cargo build --release --locked \
+      -p honk-core \
+      --no-default-features \
+      --features ebpf,rprx,native-api,mimalloc \
+      --target "$T" \
+      || die "cargo build failed: honk-core"
+  )
+
+  cp "$src/target/$RUST_TARGET/release/honk-core" "$out/honk-core"
+  assert_elf "$out/honk-core"
+}
+
 prebuild_dae() {
   local mk=apps/luci-app-dae/dae/Makefile
   [ -f "$mk" ] || { log "SKIP dae (包已移除)"; return 0; }
@@ -327,6 +372,7 @@ main() {
   want sing-box && prebuild_singbox
   want einat    && prebuild_einat
   want flowcone && prebuild_flowcone
+  want honk     && prebuild_honk
   want dae      && prebuild_dae
   true
 

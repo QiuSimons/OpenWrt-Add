@@ -44,6 +44,7 @@ PACKAGES=(
   "luci-app-dae/dae|go||"
   "openwrt-einat-ebpf|rust|einat-ebpf|einat"
   "FlowCone/openwrt/flowcone|rust|flowcone|flowcone"
+  "luci-app-honk/honk|rust|honk|honk-core"
 )
 
 # 按 drop-packages.conf 移除互斥变体

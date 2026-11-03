@@ -1,44 +1,51 @@
 # SPDX-License-Identifier: GPL-2.0-only
+#
+# Copyright (C) 2026 QiuSimons <https://github.com/QiuSimons>
 
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=honk
-PKG_VERSION:=415.3_pre1
+PKG_VERSION:=2026.11.03~77176ff
 PKG_RELEASE:=1
 
-# Raw upstream release tag. It keeps the dots in qualifiers (e.g. v0.0.1.beta.49)
-# because that is what the GitHub release asset name uses.
-HONK_RELEASE_TAG:=debug-diag.issue-415.3
-HONK_ASSET_TAG:=debug
+# 若 files/ 下无预编译二进制，才声明从 git 下载源码
+ifeq ($(wildcard $(CURDIR)/files/honk-core.bin),)
+PKG_SOURCE_PROTO:=git
+PKG_SOURCE_URL:=https://github.com/daeuniverse/honk.git
+PKG_SOURCE_VERSION:=77176ff8e8cc2b75385a7030dc376536c382574a
+PKG_MIRROR_HASH:=skip
 
-# SHA256 of each release tarball, kept in sync by scripts/update_honk_version.sh.
-HONK_HASH_X86_64:=a40ff27b4a1d9b5aa8a76ed05c9def01f2e5612dde506f912dc9da6df8ccc1ca
-HONK_HASH_AARCH64:=8ffd3327d7039a430e0370a917fc4eaa75d85bb256f3d23753da0e1d06e57d72
+PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_VERSION)
+PKG_SOURCE:=$(PKG_SOURCE_SUBDIR)-$(PKG_SOURCE_VERSION).tar.gz
+endif
+PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 
 PKG_LICENSE:=AGPL-3.0-only
-PKG_LICENSE_FILE:=LICENSE
-PKG_MAINTAINER:=luci-app-honk maintainers
+PKG_LICENSE_FILES:=LICENSE
+PKG_MAINTAINER:=QiuSimons <https://github.com/QiuSimons>
 
-ifeq ($(ARCH),x86_64)
-  HONK_TARGET:=x86_64-unknown-linux-musl
-  HONK_HASH:=$(HONK_HASH_X86_64)
-else ifeq ($(ARCH),aarch64)
-  HONK_TARGET:=aarch64-unknown-linux-musl
-  HONK_HASH:=$(HONK_HASH_AARCH64)
-endif
+PKG_BUILD_PARALLEL:=1
+PKG_BUILD_FLAGS:=no-mips16
 
-# mimalloc build: faster QUIC. honk.init sets MIMALLOC_ARENA_RESERVE=0 so the
-# 1 GiB arena reservation stays out of VmSize. Use "-stock" to go back.
-HONK_SUFFIX:=
-# Upstream feature variant: -native-api (recommended for OpenWrt gateway), -full, or empty for legacy releases.
-HONK_VARIANT:=-native-api
-HONK_ASSET:=honk-core-$(HONK_ASSET_TAG)-$(HONK_TARGET)$(HONK_SUFFIX)$(HONK_VARIANT).tar.gz
-
-PKG_SOURCE:=$(HONK_ASSET)
-PKG_SOURCE_URL:=https://github.com/daeuniverse/honk/releases/download/$(HONK_RELEASE_TAG)/
-PKG_HASH:=$(HONK_HASH)
+# 本地源码开发树探测：指定 HONK_SRC_DIR，或位于 honk 源码树内/同级
+HONK_LOCAL_DIR := $(strip \
+  $(if $(HONK_SRC_DIR),\
+    $(HONK_SRC_DIR),\
+    $(if $(wildcard $(CURDIR)/crates/honk-core/Cargo.toml),\
+      $(CURDIR),\
+      $(if $(wildcard $(CURDIR)/../../crates/honk-core/Cargo.toml),\
+        $(CURDIR)/../..,\
+        $(if $(wildcard $(TOPDIR)/../../honk/crates/honk-core/Cargo.toml),\
+          $(TOPDIR)/../../honk,\
+        )\
+      )\
+    )\
+  )\
+)
 
 include $(INCLUDE_DIR)/package.mk
+
+HONK_RUST_ARCH_DEPENDS:=@(aarch64||x86_64)
 
 define Package/honk
   SECTION:=net
@@ -46,7 +53,7 @@ define Package/honk
   SUBMENU:=Web Servers/Proxies
   TITLE:=honk - eBPF transparent proxy engine (dae-compatible)
   URL:=https://github.com/daeuniverse/honk
-  DEPENDS:=@(x86_64||aarch64) \
+  DEPENDS:=$(HONK_RUST_ARCH_DEPENDS) \
     +ca-bundle +ip-full \
     +kmod-sched-core +kmod-sched-bpf +kmod-veth +kmod-nft-queue \
     +v2ray-geoip +v2ray-geosite \
@@ -76,18 +83,73 @@ define Package/honk/conffiles
 /etc/config/honk
 endef
 
+ifeq ($(ARCH),aarch64)
+  RUST_TARGET:=aarch64-unknown-linux-musl
+else ifeq ($(ARCH),x86_64)
+  RUST_TARGET:=x86_64-unknown-linux-musl
+else
+  RUST_TARGET:=$(ARCH)-unknown-linux-musl
+endif
+
+RUST_TARGET_UPPER:=$(shell echo $(RUST_TARGET) | tr 'a-z-' 'A-Z_')
+
+ifneq ($(wildcard $(CURDIR)/files/honk-core.bin),)
 define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
-	$(TAR) -xzf $(DL_DIR)/$(PKG_SOURCE) -C $(PKG_BUILD_DIR) --strip-components=1
 endef
 
 define Build/Compile
-	true
+	$(INSTALL_DIR) $(PKG_INSTALL_DIR)/bin
+	$(INSTALL_BIN) $(CURDIR)/files/honk-core.bin $(PKG_INSTALL_DIR)/bin/honk-core
 endef
+else
+ifneq ($(HONK_LOCAL_DIR),)
+define Build/Prepare
+	mkdir -p $(PKG_BUILD_DIR)
+	$(CP) $(HONK_LOCAL_DIR)/Cargo.toml $(PKG_BUILD_DIR)/
+	$(CP) $(HONK_LOCAL_DIR)/Cargo.lock $(PKG_BUILD_DIR)/
+	$(CP) $(HONK_LOCAL_DIR)/crates $(PKG_BUILD_DIR)/
+	$(CP) $(HONK_LOCAL_DIR)/rust-toolchain.toml $(PKG_BUILD_DIR)/ 2>/dev/null || true
+	$(CP) $(HONK_LOCAL_DIR)/LICENSE $(PKG_BUILD_DIR)/ 2>/dev/null || true
+endef
+endif
+
+define Build/Compile
+	export PATH="$(HOME)/.cargo/bin:$(PATH)"; \
+	export STAGING_DIR="$(STAGING_DIR)"; \
+	command -v cargo >/dev/null 2>&1 || { \
+		echo "ERROR: host cargo not found! Please install Rust via https://rustup.rs" >&2; \
+		exit 1; \
+	}; \
+	if command -v rustup >/dev/null 2>&1; then \
+		rustup target add $(RUST_TARGET) 2>/dev/null || true; \
+	fi; \
+	export CARGO_TARGET_$(RUST_TARGET_UPPER)_LINKER="$(TARGET_CC)"; \
+	export CC_$(RUST_TARGET_UPPER)="$(TARGET_CC)"; \
+	export CXX_$(RUST_TARGET_UPPER)="$(TARGET_CXX)"; \
+	export AR_$(RUST_TARGET_UPPER)="$(TARGET_AR)"; \
+	export CFLAGS_$(RUST_TARGET_UPPER)="$(TARGET_CFLAGS)"; \
+	export CARGO_BUILD_TARGET_DIR="$(PKG_BUILD_DIR)/target"; \
+	cargo build --release --locked \
+		-p honk-core \
+		--no-default-features \
+		--features ebpf,rprx,native-api,mimalloc \
+		--manifest-path $(PKG_BUILD_DIR)/Cargo.toml \
+		--target $(RUST_TARGET)
+	$(INSTALL_DIR) $(PKG_INSTALL_DIR)/bin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/target/$(RUST_TARGET)/release/honk-core $(PKG_INSTALL_DIR)/bin/honk-core
+endef
+endif
 
 define Package/honk/install
 	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/honk-core $(1)/usr/bin/honk-core
+	if [ -f $(PKG_INSTALL_DIR)/bin/honk-core ]; then \
+		$(INSTALL_BIN) $(PKG_INSTALL_DIR)/bin/honk-core $(1)/usr/bin/honk-core; \
+	elif [ -f $(CURDIR)/files/honk-core.bin ]; then \
+		$(INSTALL_BIN) $(CURDIR)/files/honk-core.bin $(1)/usr/bin/honk-core; \
+	else \
+		$(INSTALL_BIN) $(PKG_BUILD_DIR)/target/$(RUST_TARGET)/release/honk-core $(1)/usr/bin/honk-core; \
+	fi
 
 	$(INSTALL_DIR) $(1)/etc/honk/config.d
 	$(INSTALL_CONF) $(CURDIR)/files/config.dae $(1)/etc/honk/config.dae

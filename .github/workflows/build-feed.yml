@@ -111,6 +111,7 @@ jobs:
           }
           need clang clang
           need llvm-strip llvm
+          need zstd zstd
           if [ "${{ matrix.arch }}" = "aarch64_generic" ]; then
             need aarch64-linux-gnu-gcc gcc-aarch64-linux-gnu
             rustup target add aarch64-unknown-linux-musl
@@ -119,8 +120,18 @@ jobs:
             rustup target add x86_64-unknown-linux-musl
           fi
 
+          # 为 honk 提供 bpf-linker
+          curl -sSfL https://github.com/aya-rs/bpf-linker/releases/latest/download/bpf-linker-x86_64-unknown-linux-musl.tar.zst | sudo tar --zstd -xf - -C /usr/local/bin
+
           clang --version | head -n 1
           llvm-strip --version | head -n 1
+          bpf-linker --version
+
+      - name: Setup Zig for musl C/C++ cross-compilation
+        if: steps.prebuilt-cache.outputs.cache-hit != 'true'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
 
       - name: Cache Go module downloads
         if: steps.prebuilt-cache.outputs.cache-hit != 'true'
@@ -138,7 +149,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: prebuild-cargo-${{ matrix.arch }}-${{ hashFiles('apps/openwrt-einat-ebpf/Makefile') }}
+          key: prebuild-cargo-${{ matrix.arch }}-${{ hashFiles('apps/openwrt-einat-ebpf/Makefile', 'apps/luci-app-honk/honk/Makefile') }}
           restore-keys: |
             prebuild-cargo-${{ matrix.arch }}-
 

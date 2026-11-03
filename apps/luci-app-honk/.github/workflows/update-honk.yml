@@ -24,10 +24,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          persist-credentials: false
 
       - name: Update honk version
         env:
@@ -55,20 +54,16 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No version change."
           else
-            TAG="$(grep '^HONK_RELEASE_TAG:=' honk/Makefile | cut -d= -f2 || true)"
             VER="$(grep '^PKG_VERSION:=' honk/Makefile | cut -d= -f2 || true)"
-            git commit -m "auto: update honk ${TAG} (${VER}) and doona dashboard"
+            git commit -m "auto: update honk (${VER}) and doona dashboard"
 
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Push changes
         if: steps.commit.outputs.changed == 'true'
-        uses: ad-m/github-push-action@master
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: master
+        shell: bash
+        run: git push origin master
 
       - name: Trigger build packages
         if: steps.commit.outputs.changed == 'true'
