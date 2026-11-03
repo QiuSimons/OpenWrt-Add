@@ -1,0 +1,1 @@
+Three-tier diffserv shaper using cake: uses DSCP marks to prioritise latency-sensitive traffic. This needs DSCP marking upstream to be effective; otherwise all traffic lands in the best-effort tin.

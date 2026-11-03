@@ -1,0 +1,276 @@
+name: CI
+
+# Tests and security checks on every push and pull request; packages built
+# with the pinned OpenWrt SDK; releases published from v* tags only when the
+# CI build matches the hashes committed in .release-manifests/<tag>.sha256.
+#
+# Packages are built for OpenWrt 25.12 (apk) and 24.10 (ipk). Tag builds
+# sign the repository indexes with the project keys: packages.adb with the
+# VANTAGE_SIGN_KEY secret, Packages.sig with VANTAGE_USIGN_KEY. The
+# repositories published on GitHub Pages let users install and upgrade
+# without --allow-untrusted (apk) or with opkg's signature check on.
+#
+# Every action is pinned to a full commit SHA. The signing keys are secrets
+# of the release-signing environment, which only v* tags may use and whose
+# runs the maintainer approves; they reach only the tag build's signing
+# step. Write tokens go only to the release and Pages jobs.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # ucode as pinned by OpenWrt 25.12 (package/utils/ucode PKG_SOURCE_VERSION)
+  UCODE_REPO: https://github.com/jow-/ucode.git
+  UCODE_REV: 85922056ef7abeace3cca3ab28bc1ac2d88e31b1
+  # the SDK releases built (keep in step with the build matrix below)
+  SDK_APK: 25.12.4
+  SDK_IPK: 24.10.8
+
+jobs:
+  checks:
+    name: Tests and security checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Build ucode (for the rpcd plugin tests); install gettext
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake libjson-c-dev gettext
+          git init -q "$RUNNER_TEMP/ucode-src"
+          git -C "$RUNNER_TEMP/ucode-src" fetch -q --depth 1 "$UCODE_REPO" "$UCODE_REV"
+          git -C "$RUNNER_TEMP/ucode-src" checkout -q FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/ucode-src" rev-parse HEAD)" = "$UCODE_REV"
+          cmake -S "$RUNNER_TEMP/ucode-src" -B "$RUNNER_TEMP/ucode-build" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/ucode" \
+            -DCMAKE_C_FLAGS=-Wno-error=discarded-qualifiers \
+            -DUBUS_SUPPORT=OFF -DUCI_SUPPORT=OFF -DULOOP_SUPPORT=OFF -DRTNL_SUPPORT=OFF \
+            -DNL80211_SUPPORT=OFF -DRESOLV_SUPPORT=OFF -DDIGEST_SUPPORT=OFF \
+            -DLOG_SUPPORT=OFF -DSOCKET_SUPPORT=OFF -DZLIB_SUPPORT=OFF
+          cmake --build "$RUNNER_TEMP/ucode-build" -j"$(nproc)"
+          cmake --install "$RUNNER_TEMP/ucode-build"
+          echo "UCODE=$RUNNER_TEMP/ucode/bin/ucode" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/ucode/lib" >> "$GITHUB_ENV"
+
+      - name: Unit tests
+        env:
+          # the catalogue tests must not skip msgfmt here
+          VANTAGE_REQUIRE_GETTEXT: '1'
+        run: node --test tests/
+
+      - name: Translation templates and catalogues up to date
+        # LuCI's i18n-scan.pl / i18n-update.pl at the SDK's luci feed commit
+        run: dev/i18n/update.sh --check
+
+      - name: DOM sink check
+        run: node security-tests/check_dom_sinks.js
+
+      - name: Template security test
+        run: node security-tests/test_templates.js
+
+      - name: ACL policy test
+        run: node security-tests/test_acl_policy.js
+
+      - name: Private address check
+        run: node security-tests/check_private_addresses.js
+
+  build:
+    name: Build packages (OpenWrt ${{ matrix.sdk }})
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # a tag push builds in the release-signing environment (approved per
+    # run, v* tags only); everything else builds unsigned outside it
+    environment: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) && 'release-signing' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: 25.12.4
+            fmt: apk
+          - sdk: 24.10.8
+            fmt: ipk
+    env:
+      SDK_RELEASE: ${{ matrix.sdk }}
+      FMT: ${{ matrix.fmt }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Build with the pinned SDK (verifies every package)
+        if: ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) }}
+        run: |
+          podman --version
+          dev/build/sdk-build.sh "$SDK_RELEASE" HEAD
+
+      - name: Build and sign with the pinned SDK (tags only)
+        # a pushed tag only: a manual run on a tag ref never sees the keys
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          SIGN_KEY: ${{ matrix.fmt == 'apk' && secrets.VANTAGE_SIGN_KEY || secrets.VANTAGE_USIGN_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SIGN_KEY" || { echo "::error::the signing key secret for $FMT is not set"; exit 1; }
+          key="$RUNNER_TEMP/signing/key"
+          ( umask 077; mkdir -p "${key%/*}"; printf '%s\n' "$SIGN_KEY" > "$key" )
+          trap 'rm -f -- "$key"' EXIT
+          VANTAGE_SIGN_KEY="$key" dev/build/sdk-build.sh "$SDK_RELEASE" HEAD
+          # the secret must match the public key users are told to trust
+          out="dist/$SDK_RELEASE" ok=
+          if [ "$FMT" = apk ]; then
+            pub=keys/vantage-signing.pem
+            want=$(sha256sum < "$pub" | cut -d' ' -f1)
+            grep -qx "signing_public_key_sha256=$want" "$out/BUILDINFO" && ok=1
+          else
+            pub=keys/vantage-24.10.usign.pub usign="dist/.tools/$SDK_RELEASE/usign"
+            want=$("$usign" -F -p "$pub")
+            grep -qx "signing_key_fingerprint=$want" "$out/BUILDINFO" &&
+              "$usign" -V -m "$out/Packages" -p "$pub" && ok=1
+          fi
+          [ -n "$ok" ] || { echo "::error::signing key does not match $pub"; exit 1; }
+
+      - name: Check against the committed release manifest
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          manifest=".release-manifests/${TAG}.sha256"
+          test -f "$manifest" || { echo "::error::missing $manifest"; exit 1; }
+          # one manifest for both: this build's lines are the ones for its format
+          ! grep -vE '\.(apk|ipk)$' "$manifest" || { echo "::error::unexpected lines in $manifest"; exit 1; }
+          diff <(grep -E "\.$FMT\$" "$manifest" | sort) <(sort "dist/$SDK_RELEASE/SHA256SUMS") || {
+            echo "::error::CI build does not match $manifest"; exit 1; }
+
+      - name: Upload packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vantage-${{ env.SDK_RELEASE }}
+          path: |
+            dist/${{ env.SDK_RELEASE }}/*.apk
+            dist/${{ env.SDK_RELEASE }}/*.ipk
+            dist/${{ env.SDK_RELEASE }}/SHA256SUMS
+            dist/${{ env.SDK_RELEASE }}/BUILDINFO
+            dist/${{ env.SDK_RELEASE }}/packages.adb
+            dist/${{ env.SDK_RELEASE }}/Packages
+            dist/${{ env.SDK_RELEASE }}/Packages.gz
+            dist/${{ env.SDK_RELEASE }}/Packages.sig
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: vantage-*
+          path: release
+
+      - name: Create or complete the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          a="release/vantage-$SDK_APK" i="release/vantage-$SDK_IPK"
+          ( cd "$a" && sha256sum -c SHA256SUMS )
+          ( cd "$i" && sha256sum -c SHA256SUMS )
+          # 25.12 keeps the asset names it always had; 24.10's sums and
+          # build record get a suffix
+          mkdir assets
+          cp "$a"/*.apk "$a"/packages.adb "$a"/SHA256SUMS "$a"/BUILDINFO assets/
+          cp "$i"/*.ipk assets/
+          cp "$i"/SHA256SUMS assets/SHA256SUMS-24.10
+          cp "$i"/BUILDINFO assets/BUILDINFO-24.10
+          cd assets
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            # never replace assets of an existing release
+            for f in *; do
+              gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep -qx "$f" \
+                || gh release upload "$TAG" "$f" --repo "$REPO"
+            done
+          else
+            gh release create "$TAG" --repo "$REPO" --verify-tag --title "Vantage ${TAG#v}" \
+              --notes "Packages for OpenWrt ${SDK_APK} (apk) and ${SDK_IPK} (ipk), built by CI from ${GITHUB_SHA}. What changed: https://github.com/${REPO}/blob/${TAG}/CHANGELOG.md. See SHA256SUMS, SHA256SUMS-24.10, the BUILDINFO files and docs/INSTALL.md." \
+              *
+          fi
+
+  repository:
+    name: Publish signed package repositories
+    needs: release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout (public key and site page)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: vantage-*
+          path: release
+
+      - name: Assemble the site
+        run: |
+          set -euo pipefail
+          a="release/vantage-$SDK_APK" i="release/vantage-$SDK_IPK"
+          ( cd "$a" && sha256sum -c SHA256SUMS )
+          ( cd "$i" && sha256sum -c SHA256SUMS )
+          mkdir -p "site/${SDK_APK%.*}" "site/${SDK_IPK%.*}"
+          cp "$a"/*.apk "$a"/packages.adb "$a"/SHA256SUMS "site/${SDK_APK%.*}/"
+          cp "$i"/*.ipk "$i"/Packages "$i"/Packages.gz "$i"/Packages.sig "$i"/SHA256SUMS "site/${SDK_IPK%.*}/"
+          cp keys/vantage-signing.pem keys/vantage-24.10.usign.pub site/
+          cp dev/build/repo-index.html site/index.html
+          find site -type f | sort
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

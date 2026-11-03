@@ -1,0 +1,5 @@
+HTTP	tcp	80
+HTTPS	tcp	443
+DNS	udp	53
+SSH	tcp	22
+QUIC	udp	443

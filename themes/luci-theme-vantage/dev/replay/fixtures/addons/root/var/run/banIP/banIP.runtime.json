@@ -1,0 +1,42 @@
+{
+	"status": "active (nft: ✔, monitor: ✔)",
+	"frontend_ver": "1.6.1-r1",
+	"backend_ver": "1.6.1-r1",
+	"element_count": "64 211 (chains: 7, sets: 9, rules: 23)",
+	"active_feeds": [
+		"allowlist.v4",
+		"allowlist.v6",
+		"cinsscore.v4",
+		"debl.v4",
+		"debl.v6",
+		"firehol1.v4",
+		"threat.v4",
+		"country.v4",
+		"blocklist.v4"
+	],
+	"trigger_interfaces": [
+		"wan"
+	],
+	"wan_devices": [
+		"eth0"
+	],
+	"wan_interfaces": [
+		"wan",
+		"wan6"
+	],
+	"vlan_allow": [
+		"-"
+	],
+	"vlan_block": [
+		"-"
+	],
+	"active_uplink": [
+		"203.0.113.7",
+		"2001:db8:0:1::7"
+	],
+	"nft_info": "ver: 1.1.3-r1, priority: -100, policy: memory, loglevel: warn, expiry: -, limit (icmp/syn/udp): 25/10/100, loglimit (rate/burst): 10/5",
+	"run_info": "base: /tmp, backup: /tmp/banIP-backup, report: /tmp/banIP-report, error: /tmp/banIP-error",
+	"run_flags": "auto: ✔, proto (4/6): ✔/✔, bcp38: ✘, log (pre/in/out): ✘/✘/✘, count: ✔, dedup: ✔, split: ✘, custom feed: ✘, allowed only: ✘, debug: ✘",
+	"last_run": "mode: restart, date / time: 2026-10-13 08:13:02, duration: 0m 48s, memory: 198.07 MB available",
+	"system_info": "cores: 4, log: logread, fetch: uclient-fetch, Example AP, mediatek/filogic, OpenWrt 25.12.3 r32000-0000000000"
+}

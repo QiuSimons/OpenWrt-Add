@@ -1,0 +1,3 @@
+           CPU0       CPU1
+ 11:     123456     654321     GICv3  30 Level     arch_timer
+ 39:       4211       1029     GICv3 229 Level     ethernet

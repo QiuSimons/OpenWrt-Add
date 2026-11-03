@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest an improvement to the theme or dashboard
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like to do?
+      description: The problem or task, in your own words, before any solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea
+      description: Optional. How you imagine it working.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Theme
+        - Dashboard
+        - Install or packaging
+        - Other

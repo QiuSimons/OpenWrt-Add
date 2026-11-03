@@ -1,0 +1,20 @@
+# No line here may be flagged by check_private_addresses.js.
+documentation 192.0.2.1 198.51.100.200 203.0.113.9
+loopback 127.0.0.1 and 0.0.0.0/0
+version strings 25.12.3 1.0.0-r1 v6.6.88
+not an address 192.168.1 or 10.0.0 or 1.2.3.4.5
+ipv6 docs 2001:db8::1 2001:db8:1:2::abcd ::1 ::
+example prefixes fd00:: fe80::
+times 12:34:56 and ratios 16:9
+doc mac 00:00:5e:00:53:01 00-00-5E-00-53-FF 0000.5e00.53ab
+doc mac with varied first octet 02:00:5e:00:53:11 01:00:5E:00:53:01 06:00:5e:00:53:01 0e:00:5e:00:53:01
+doc multicast 01:00:5e:90:10:01
+fake bssid 02:00:5E:24:10:A0 02:00:5e:60:1f:c9
+zero and broadcast 00:00:00:00:00:00 ff:ff:ff:ff:ff:ff
+hash deadbeefcafe1234 not after the keyword
+public resolver 9.9.9.9
+a longer hostname example-host-12345 is not the mirror one
+id deadbeefcafe without the keyword
+textbook link-local gateway fe80::1 and fe80::ab
+short mirror name inside a word zedonk, in another case ZED
+a longer SSID Example Home Network and Pat's-APs

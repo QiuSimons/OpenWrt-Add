@@ -1,0 +1,53 @@
+name: Bug report
+description: Something in the theme or dashboard doesn't work or looks wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problem? Don't file it here; see the Security policy (SECURITY.md).
+        Please remove IP addresses, MAC addresses, SSIDs and device names from everything you paste or upload.
+  - type: dropdown
+    id: packages
+    attributes:
+      label: Installed packages
+      options:
+        - Theme and dashboard
+        - Theme only
+        - Dashboard only (other theme)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Vantage version
+      description: Output of `apk list --installed | grep vantage`
+    validations:
+      required: true
+  - type: textarea
+    id: openwrt
+    attributes:
+      label: OpenWrt version
+      description: Output of `cat /etc/openwrt_release`
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      placeholder: Firefox 131 on Linux
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Steps to reproduce, what you expected, and what happened instead. For a broken page, include the browser console output (F12).
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Optional. Taken with the replay's --demo mode, or with your network's details removed.

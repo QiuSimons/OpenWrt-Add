@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vantage package repositories</title>
+<style>
+body { font: 15px/1.55 system-ui, sans-serif; max-width: 46rem; margin: 3rem auto; padding: 0 1rem; color: #e8eaed; background: #0d0e10; }
+a { color: #c8f031; } code, pre { font-family: ui-monospace, monospace; }
+pre { background: #15171a; border: 1px solid #262a2f; border-radius: 8px; padding: 1rem; overflow-x: auto; }
+</style>
+</head>
+<body>
+<h1>Vantage package repositories</h1>
+<p>Signed package repositories for <a href="https://github.com/anothaDev/luci-theme-vantage">Vantage</a>,
+a LuCI theme and dashboard for OpenWrt 25.12 and 24.10.</p>
+<h2>OpenWrt 25.12 (apk)</h2>
+<p>One-time setup on the router, then install and upgrade with <code>apk</code>:</p>
+<pre>wget -O /etc/apk/keys/vantage-signing.pem https://anothadev.github.io/luci-theme-vantage/vantage-signing.pem
+sha256sum /etc/apk/keys/vantage-signing.pem
+# must print c8a6c83eeb49ca2407932fb5e95785776128cef87db75ebaea0fe4171eee2157
+echo 'https://anothadev.github.io/luci-theme-vantage/25.12/packages.adb' &gt;&gt; /etc/apk/repositories.d/customfeeds.list
+apk update
+apk add luci-theme-vantage luci-app-vantage</pre>
+<p>Translations, where available, are separate packages:
+<code>apk add luci-i18n-vantage-&lt;lang&gt; luci-i18n-vantage-theme-&lt;lang&gt;</code>
+(for example <code>zh-cn</code>); choose the language under System → System → Language and Style.</p>
+<h2>OpenWrt 24.10 (opkg)</h2>
+<p>One-time setup on the router, then install and upgrade with <code>opkg</code>:</p>
+<pre>wget -O /tmp/vantage-24.10.usign.pub https://anothadev.github.io/luci-theme-vantage/vantage-24.10.usign.pub
+usign -F -p /tmp/vantage-24.10.usign.pub
+# must print 297430484082d03d
+opkg-key add /tmp/vantage-24.10.usign.pub
+echo 'src/gz vantage https://anothadev.github.io/luci-theme-vantage/24.10' &gt;&gt; /etc/opkg/customfeeds.conf
+opkg update
+opkg install luci-theme-vantage luci-app-vantage</pre>
+<p>Translations: <code>opkg install luci-i18n-vantage-&lt;lang&gt;</code> (for example <code>zh-cn</code>).</p>
+<p>What changed in each release:
+<a href="https://github.com/anothaDev/luci-theme-vantage/blob/main/CHANGELOG.md">CHANGELOG.md</a>;
+the packages are also attached to the
+<a href="https://github.com/anothaDev/luci-theme-vantage/releases">releases</a>.</p>
+<p>Compare the key fingerprints with the ones in the project's
+<a href="https://github.com/anothaDev/luci-theme-vantage/blob/main/docs/INSTALL.md">install guide</a> before trusting it.</p>
+</body>
+</html>

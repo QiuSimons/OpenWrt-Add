@@ -1,0 +1,19 @@
+{
+	"adblock_status": "enabled",
+	"frontend_ver": "4.5.2-r1",
+	"backend_ver": "4.5.2-r1",
+	"blocked_domains": "182 941",
+	"backup_cnt": "4",
+	"active_feeds": [
+		"adguard",
+		"adguard_tracking",
+		"certpl",
+		"stevenblack"
+	],
+	"dns_backend": "dnsmasq (2.91-r1), /tmp/dnsmasq.d, 9.81 MB",
+	"run_ifaces": "trigger: wan, report: br-lan",
+	"run_information": "base: /tmp, dns: /tmp/dnsmasq.d, backup: /tmp/adblock-backup, report: /tmp/adblock-report, error: /tmp/adb_error.log",
+	"run_flags": "shift: ✘, custom feed: ✘, ext. DNS (std/prot/remote/bridge): ✘/✘/✘/✘, force: ✔, flush: ✘, tld: ✔, search: ✘, report: ✔, mail: ✘, jail: ✘, debug: ✘",
+	"last_run": "mode: restart, date / time: 2026-10-13 08:12:44, duration: 0m 21s, memory: 211.34 MB available",
+	"system_info": "cores: 4, fetch: uclient-fetch, Example AP, mediatek/filogic, OpenWrt 25.12.3 r32000-0000000000"
+}

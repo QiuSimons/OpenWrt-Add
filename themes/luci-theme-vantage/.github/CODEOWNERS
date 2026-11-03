@@ -1,0 +1,8 @@
+# Changes to these paths always request the maintainer's review.
+/.github/                                  @anothaDev
+/security-tests/                           @anothaDev
+/keys/                                     @anothaDev
+/dev/build/                                @anothaDev
+/.release-manifests/                       @anothaDev
+/luci-app-vantage/root/usr/share/rpcd/     @anothaDev
+/luci-theme-vantage/ucode/                 @anothaDev

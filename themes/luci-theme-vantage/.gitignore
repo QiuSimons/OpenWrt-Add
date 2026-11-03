@@ -1,0 +1,27 @@
+# private LuCI data mirror (never commit). Record into ../vantage-mirror,
+# outside the repository; these patterns only catch a recording that ended
+# up inside the tree by mistake.
+/mirror/
+/vantage-mirror/
+*.jsonl
+browser-[0-9][0-9][0-9][0-9]-*/
+ssh-[0-9][0-9][0-9][0-9]-*/
+blocked.log
+
+# the device recorder is a private tool kept next to the recordings, not
+# part of the repository
+/dev/mirror/
+
+# local SDK build output (packages, SHA256SUMS, BUILDINFO, dist/.tools/)
+/dist/
+# a build work directory, if TMPDIR points into the tree
+vantage-build.*/
+
+# package signing keys: keep them outside the repository
+*.pem
+# the project's PUBLIC signing key is published on purpose
+!/keys/vantage-signing.pem
+key-build*
+private-key*
+*.key
+*.sec

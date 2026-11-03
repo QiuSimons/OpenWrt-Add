@@ -1,0 +1,6 @@
+{
+	"name": "duckdns.org",
+	"ipv4": {
+		"url": "http://www.duckdns.org/update?domains=[USERNAME]&token=[PASSWORD]&ip=[IP]"
+	}
+}

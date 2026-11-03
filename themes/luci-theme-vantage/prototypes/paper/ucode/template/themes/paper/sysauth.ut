@@ -1,0 +1,74 @@
+{#
+ Vantage "paper" prototype - login page.
+ fuser is attacker-controlled (formvalue also reads the query string): it is
+ only tested for presence, never printed.
+-#}
+{%
+	const board = ubus.call('system', 'board') ?? {};
+	const hostname = board.hostname ?? 'OpenWrt';
+
+	let tls_ports = uci.get('uhttpd', 'main', 'listen_https') ?? [];
+	if (type(tls_ports) == 'string')
+		tls_ports = split(tls_ports, /\s+/);
+	tls_ports = uniq(filter(map(tls_ports, e => +(match(e, /\d+$/)?.[0] ?? -1)), p => (p > 0 && p <= 65535)));
+-%}
+<!DOCTYPE html>
+<html lang="{{ entityencode(dispatcher.lang, true) }}" data-darkmode="false">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<script>
+(function(d){var p='auto';try{p=localStorage.getItem('paper-theme')||'auto'}catch(e){}
+var m=window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches;
+d.setAttribute('data-darkmode',(p==='dark'||(p==='auto'&&m))?'true':'false')})(document.documentElement);
+</script>
+<title>{{ entityencode(`${_('Log in')} · ${hostname}`, true) }}</title>
+<link rel="stylesheet" href="{{ media }}/paper.css">
+<link rel="icon" href="{{ media }}/mark.svg" type="image/svg+xml">
+</head>
+<body class="login-page" data-page="{{ entityencode(join('-', ctx.request_path), true) }}">
+<main class="login" id="maincontent">
+	<form class="login-card" method="post" autocomplete="on">
+		<div class="login-mark" aria-hidden="true">
+			<svg viewBox="0 0 32 32" width="48" height="48"><rect width="32" height="32" rx="9" class="mark-bg"/><path d="M9.5 12.5l6.5 11 6.5-11" class="mark-v"/><circle cx="16" cy="8.6" r="1.9" class="mark-dot"/></svg>
+		</div>
+		<p class="login-eyebrow">Vantage</p>
+		<h1 class="login-title">{{ entityencode(hostname, true) }}</h1>
+		<p class="login-sub">{{ _('Sign in to manage this device.') }}</p>
+
+{% if (fuser): %}
+		<div class="login-error" role="alert">
+			<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5.5M12 16.2v.3"/></svg>
+			<span>{{ _('Invalid username and/or password! Please try again.') }}</span>
+		</div>
+{% endif %}
+
+		<label class="login-field">
+			<span>{{ _('Username') }}</span>
+			<input class="cbi-input-text" type="text" name="luci_username" autocomplete="username" autocapitalize="none" spellcheck="false" required value="{{ entityencode(duser ?? 'root', true) }}">
+		</label>
+		<label class="login-field">
+			<span>{{ _('Password') }}</span>
+			<input class="cbi-input-text" type="password" name="luci_password" autocomplete="current-password" autofocus>
+		</label>
+		<button type="submit" class="btn cbi-button cbi-button-apply important login-submit">{{ _('Log in') }}</button>
+	</form>
+	<p class="login-foot">{{ entityencode(board.model ?? '', true) }}</p>
+</main>
+<script>
+(function() {
+	var pw = document.querySelector('input[name="luci_password"]');
+	if (pw) pw.focus();
+	if (location.protocol === 'https:') return;
+	{{ sprintf('%J', tls_ports) }}.forEach(function(port) {
+		var probe = new Image(), target = 'https://' + location.hostname + ':' + port + location.pathname;
+		probe.onload = function() { location = target };
+		probe.src = 'https://' + location.hostname + ':' + port + '{{ resource }}/icons/loading.svg?' + Math.random();
+		setTimeout(function() { probe.src = '' }, 5000);
+	});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+	"name": "dyndns.org",
+	"ipv4": {
+		"url": "http://[USERNAME]:[PASSWORD]@members.dyndns.org/nic/update?hostname=[DOMAIN]&myip=[IP]"
+	},
+	"ipv6": {
+		"url": "http://[USERNAME]:[PASSWORD]@members.dyndns.org/nic/update?hostname=[DOMAIN]&myip=[IP]"
+	}
+}

@@ -1,0 +1,23 @@
+{#
+ Vantage "paper" prototype - page footer.
+-#}
+{% if (!blank_page): %}
+		</main>
+{% if (ctx.authsession): %}
+		<footer class="colophon">
+			<span>{{ entityencode(`${version?.distname ?? 'OpenWrt'} ${version?.distversion ?? ''}`, true) }}</span>
+			<span aria-hidden="true">·</span>
+			<span>{{ entityencode(`${version?.luciname ?? 'LuCI'} ${version?.luciversion ?? ''}`, true) }}</span>
+		</footer>
+{% endif %}
+	</div>
+</div>
+{% if (ctx.authsession): %}
+<div class="palette" id="palette" hidden></div>
+<script>L.require('menu-paper').catch(function(err) { console.error(err) })</script>
+{% endif %}
+{% else %}
+</main>
+{% endif %}
+</body>
+</html>

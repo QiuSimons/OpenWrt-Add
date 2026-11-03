@@ -1,0 +1,10 @@
+# Vantage dashboard settings.
+#
+# Station names given in the dashboard's inspector are stored here:
+#
+#   config client
+#   	option mac '00:00:5e:00:53:01'
+#   	option name 'Living room TV'
+#   	option icon 'tv'
+
+config vantage 'main'

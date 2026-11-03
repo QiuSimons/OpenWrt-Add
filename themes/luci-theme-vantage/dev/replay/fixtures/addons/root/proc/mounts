@@ -1,0 +1,3 @@
+/dev/root /rom squashfs ro,relatime 0 0
+tmpfs /tmp tmpfs rw,nosuid,nodev,noatime 0 0
+overlayfs:/overlay / overlay rw,noatime 0 0

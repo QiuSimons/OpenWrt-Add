@@ -1,0 +1,27 @@
+config main 'config'
+	option canary_domains_icloud '1'
+	option canary_domains_mozilla '1'
+	option dnsmasq_config_update '*'
+	option force_dns '1'
+	option notrack_dns '1'
+	list force_dns_port '53'
+	list force_dns_port '853'
+	list force_dns_src_interface 'lan'
+	option procd_trigger_wan6 '0'
+	option heartbeat_domain 'heartbeat.example.com'
+	option heartbeat_sleep_timeout '10'
+	option heartbeat_wait_timeout '10'
+	option user 'nobody'
+	option group 'nogroup'
+	option listen_addr '127.0.0.1'
+	option force_ip_family 'auto'
+
+config https-dns-proxy
+	option bootstrap_dns '203.0.113.1,203.0.113.2'
+	option resolver_url 'https://cloudflare-dns.com/dns-query'
+	option listen_port '5053'
+
+config https-dns-proxy
+	option bootstrap_dns '203.0.113.8,2001:db8::8888'
+	option resolver_url 'https://dns.google/dns-query'
+	option listen_port '5054'

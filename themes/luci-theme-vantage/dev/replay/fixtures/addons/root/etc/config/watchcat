@@ -1,0 +1,12 @@
+config watchcat
+	option period '6h'
+	option mode 'ping_reboot'
+	option pinghosts '203.0.113.53'
+	option forcedelay '30'
+
+config watchcat
+	option period '30m'
+	option mode 'restart_iface'
+	option pinghosts '198.51.100.1'
+	option interface 'wan'
+	option pingperiod '30s'

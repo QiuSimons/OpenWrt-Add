@@ -1,0 +1,20 @@
+config acme
+	option account_email 'admin@example.org'
+	option debug '0'
+
+config cert 'example_wildcard'
+	option enabled '1'
+	option staging '1'
+	list domains 'example.org'
+	list domains '*.example.org'
+	option validation_method 'dns'
+	option dns 'dns_freedns'
+	list credentials 'FREEDNS_User="admin@example.org"'
+	list credentials 'FREEDNS_Password="example"'
+
+config cert 'example_subdomain'
+	option enabled '0'
+	option staging '1'
+	list domains 'example.net'
+	list domains 'www.example.net'
+	option validation_method 'webroot'

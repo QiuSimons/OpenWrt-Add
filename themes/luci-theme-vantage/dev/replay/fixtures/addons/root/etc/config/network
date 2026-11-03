@@ -1,0 +1,22 @@
+# Added to the recorded network config (only sections it lacks)
+config interface 'wg0'
+	option proto 'wireguard'
+	option private_key 'DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD='
+	option listen_port '51820'
+	list addresses '192.0.2.199/24'
+	list addresses '2001:db8:2::1/64'
+
+config wireguard_wg0 'wg0_phone'
+	option description 'phone'
+	option public_key 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB='
+	option endpoint_host '198.51.100.20'
+	option endpoint_port '40321'
+	list allowed_ips '192.0.2.200/32'
+	list allowed_ips '2001:db8:2::200/128'
+	option route_allowed_ips '1'
+	option persistent_keepalive '25'
+
+config wireguard_wg0 'wg0_laptop'
+	option description 'laptop-with-a-long-peer-name'
+	option public_key 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC='
+	list allowed_ips '192.0.2.201/32'

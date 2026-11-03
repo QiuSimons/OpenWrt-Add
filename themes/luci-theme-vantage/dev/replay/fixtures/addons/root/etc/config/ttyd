@@ -1,0 +1,5 @@
+config ttyd
+	option interface '@lan'
+	option command '/bin/login'
+	option port '7681'
+	option ipv6 '1'

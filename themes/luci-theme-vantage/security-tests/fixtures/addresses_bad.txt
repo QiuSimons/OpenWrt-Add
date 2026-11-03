@@ -1,0 +1,34 @@
+# Every non-comment line must be flagged by check_private_addresses.js.
+# Generic textbook values only; nothing here comes from a real network.
+option ipaddr '192.168.1.1'
+gateway 10.0.0.1
+host_172.16.0.1
+172.31.255.254/24
+cgnat 100.64.0.1
+cgnat top 100.127.255.254
+link-local 169.254.10.20
+ula fd12:3456:789a::1
+link-local fe80::1234:5678:9abc:def0%br-lan
+global 2a00:1450:4001:80b::200e
+mapped ::ffff:192.168.1.2
+mac aa:bb:cc:dd:ee:ff
+MAC AA-BB-CC-DD-EE-FF
+dotted aabb.ccdd.eeff
+bssid aabbccddeeff
+locally administered 02:11:22:33:44:55
+private (randomised) da:a1:19:00:00:01
+documentation OUI but not the doc range 00:00:5e:00:54:01
+first octet outside 00-0f 12:00:5e:00:53:01
+mirror hostname Example-Host-1234.lan
+mirror public address 198.18.7.9
+link-local with a 32-bit identifier fe80::1:2
+mirror SSID with spaces Example Home Net
+mirror SSID with other whitespace Example	Home   Net
+mirror SSID JSON-escaped {"ssid":"Pat's-AP"}
+mirror SSID HTML-escaped Pat&#39;s-AP and Pat&#x27;s-AP
+mirror SSID URL-encoded ?ssid=Example%20Home%20Net
+mirror SSID form-encoded ssid=Example+Home+Net
+mirror name with a quote in JSON {"hostname":"Quote\"d Host"}
+mirror name with a quote in HTML Quote&quot;d Host
+mirror SSID with angle brackets in HTML Lab &lt;AP&gt;
+mirror short hostname zed.

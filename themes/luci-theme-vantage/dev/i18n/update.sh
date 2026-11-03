@@ -1,0 +1,269 @@
+#!/usr/bin/env bash
+# Translation catalogues of both packages, maintained with LuCI's own tools
+# (build/i18n-scan.pl and build/i18n-update.pl) from a pinned LuCI commit.
+#
+#   dev/i18n/update.sh                 regenerate po/templates/*.pot from the
+#                                      sources, merge them into every
+#                                      po/<lang>/*.po, refresh the language table
+#   dev/i18n/update.sh --check         change nothing; exit 1 when any of those
+#                                      is out of date (CI runs this)
+#   dev/i18n/update.sh --add <lang>... start catalogues for new languages
+#                                      (LuCI codes such as de, pt_BR, zh_Hans)
+#
+# Catalogues: luci-app-vantage/po/<lang>/vantage.po and
+# luci-theme-vantage/po/<lang>/vantage-theme.po, each with its template in
+# po/templates/. `#:` references are relative to the repository root.
+# dev/i18n/luci-languages.mk is luci.mk's language list and package-name
+# aliases, copied here so the tests and the package verifier can use it
+# offline.
+#
+# LuCI's tools come from $LUCI_SRC when set (a LuCI checkout), otherwise
+# from a sparse, shallow fetch of build/ and luci.mk at LUCI_REV below,
+# cached in ${XDG_CACHE_HOME:-~/.cache}/vantage/luci-<rev>.
+#
+# Needs git, perl and GNU gettext (xgettext, msguniq, msgmerge).
+set -euo pipefail
+
+# the luci feed commit of the pinned SDK (feed= line in dist/<release>/BUILDINFO);
+# update it together with the SDK pin in dev/build/sdk-build.sh
+LUCI_REV=e9ebca7598ce2f754b76267fd66bf2b85e6e4347
+LUCI_URL=https://github.com/openwrt/luci.git
+
+# package directory:catalogue name
+CATALOGS=(luci-app-vantage:vantage luci-theme-vantage:vantage-theme)
+
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$here/../.." && pwd)
+langfile=dev/i18n/luci-languages.mk
+
+die() { echo "update.sh: $*" >&2; exit 2; }
+
+usage() {
+	sed -n '2,/^set -euo/{/^set -euo/d;s/^# \{0,1\}//;p}' "$0" >&2
+	exit 2
+}
+
+mode=update
+add=()
+case ${1:-} in
+	'') ;;
+	--check) [ $# -eq 1 ] || usage; mode=check ;;
+	--add) shift; [ $# -ge 1 ] || usage; mode=add; add=("$@") ;;
+	-h|--help) usage ;;
+	*) usage ;;
+esac
+
+for tool in perl xgettext msguniq msgmerge; do
+	command -v "$tool" >/dev/null || die "$tool not found; install GNU gettext and perl (Debian/Ubuntu: apt install gettext perl; Fedora: dnf install gettext perl; Arch: pacman -S gettext perl; macOS: brew install gettext)"
+done
+perl -MText::Balanced -MIPC::Open2 -e1 2>/dev/null || die "perl lacks Text::Balanced/IPC::Open2 (Debian/Ubuntu: apt install perl)"
+
+tmp=
+cleanup() {
+	case $tmp in "${TMPDIR:-/tmp}"/vantage-i18n.?*) rm -rf -- "$tmp" ;; esac
+}
+trap cleanup EXIT
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/vantage-i18n.XXXXXX")
+
+# ------------------------------------------------------------ LuCI's tools
+
+luci_tree() {
+	if [ -n "${LUCI_SRC:-}" ]; then
+		luci=$(cd "$LUCI_SRC" 2>/dev/null && pwd) || die "LUCI_SRC: no such directory: $LUCI_SRC"
+		[ -f "$luci/build/i18n-scan.pl" ] && [ -f "$luci/build/i18n-update.pl" ] && [ -f "$luci/luci.mk" ] ||
+			die "LUCI_SRC ($luci) is not a LuCI source tree (no build/i18n-scan.pl, build/i18n-update.pl or luci.mk)"
+		local have
+		have=$(git -C "$luci" rev-parse HEAD 2>/dev/null || echo unknown)
+		[ "$have" = "$LUCI_REV" ] ||
+			echo "update.sh: warning: LUCI_SRC is at $have, not the pinned $LUCI_REV; results may differ from CI" >&2
+		return
+	fi
+	command -v git >/dev/null || die "git not found (needed to fetch LuCI's i18n tools; or set LUCI_SRC to a LuCI checkout)"
+	local cache=${XDG_CACHE_HOME:-$HOME/.cache}/vantage
+	luci=$cache/luci-$LUCI_REV
+	if [ ! -d "$luci" ]; then
+		echo "update.sh: fetching LuCI's i18n tools (openwrt/luci@${LUCI_REV:0:12}, build/ and luci.mk only)" >&2
+		mkdir -p "$cache"
+		local fetch
+		fetch=$(mktemp -d "$cache/luci-fetch.XXXXXX")
+		if ! {
+			git -c init.defaultBranch=main init -q "$fetch" &&
+			git -C "$fetch" remote add origin "$LUCI_URL" &&
+			git -C "$fetch" sparse-checkout set --no-cone /build/ /luci.mk &&
+			git -C "$fetch" fetch -q --depth 1 --filter=blob:none origin "$LUCI_REV" &&
+			git -C "$fetch" checkout -q --detach FETCH_HEAD
+		}; then
+			case $fetch in "$cache"/luci-fetch.?*) rm -rf -- "$fetch" ;; esac
+			die "could not fetch $LUCI_URL at $LUCI_REV (network?); or set LUCI_SRC to a LuCI checkout"
+		fi
+		mv -- "$fetch" "$luci"
+	fi
+	[ "$(git -C "$luci" rev-parse HEAD 2>/dev/null)" = "$LUCI_REV" ] && git -C "$luci" diff --quiet HEAD -- 2>/dev/null ||
+		die "$luci is not a clean checkout of $LUCI_REV; delete that directory and run again"
+	[ -f "$luci/build/i18n-scan.pl" ] && [ -f "$luci/build/i18n-update.pl" ] && [ -f "$luci/luci.mk" ] ||
+		die "$luci lacks build/i18n-scan.pl, build/i18n-update.pl or luci.mk; delete that directory and run again"
+}
+
+# luci.mk's LUCI_LANG.<lang>=<name> and LUCI_LC_ALIAS.<lang>=<suffix> lines
+language_table() {
+	echo "# luci.mk's language list and package-name aliases (openwrt/luci@$LUCI_REV)."
+	echo "# Generated by dev/i18n/update.sh; do not edit. Read by tests/i18n.test.js"
+	echo "# and security-tests/verify_built_apk.js."
+	grep -E '^LUCI_(LANG|LC_ALIAS)\.[A-Za-z_]+=' "$luci/luci.mk"
+}
+
+known_language() {
+	grep -Eq "^LUCI_LANG\\.$1=." "$luci/luci.mk"
+}
+
+# ------------------------------------------------------------- catalogues
+
+# the po/ tree of every package must hold only templates/ and language
+# directories with the package's own catalogue name
+check_layout() {
+	local root=$1 entry pkg cat lang f bad=0
+	for entry in "${CATALOGS[@]}"; do
+		pkg=${entry%%:*} cat=${entry#*:}
+		[ -d "$root/$pkg/po" ] || continue
+		for lang in "$root/$pkg/po"/* "$root/$pkg/po"/.[!.]*; do
+			[ -e "$lang" ] || continue
+			lang=${lang##*/}
+			[ "$lang" = templates ] && continue
+			if [ ! -d "$root/$pkg/po/$lang" ] || ! known_language "$lang"; then
+				echo "update.sh: $pkg/po/$lang: not a LuCI language directory (see LUCI_LANG in $langfile)" >&2; bad=1; continue
+			fi
+			for f in "$root/$pkg/po/$lang"/* "$root/$pkg/po/$lang"/.[!.]*; do
+				[ -e "$f" ] || continue
+				[ "${f##*/}" = "$cat.po" ] && [ -f "$f" ] ||
+					{ echo "update.sh: $pkg/po/$lang/${f##*/}: unexpected; the catalogue is $pkg/po/$lang/$cat.po" >&2; bad=1; }
+			done
+		done
+	done
+	[ "$bad" = 0 ] || exit 1
+}
+
+# po/templates/<cat>.pot of every package, scanned from the sources in the
+# repository (paths relative to its root), written below $1
+make_templates() {
+	local out=$1 entry pkg cat pot
+	for entry in "${CATALOGS[@]}"; do
+		pkg=${entry%%:*} cat=${entry#*:}
+		pot=$out/$pkg/po/templates/$cat.pot
+		mkdir -p "${pot%/*}"
+		( cd "$repo" && LC_ALL=C perl "$luci/build/i18n-scan.pl" "$pkg" ) > "$pot.new"
+		[ "$(head -n 1 "$pot.new")" = 'msgid ""' ] || die "i18n-scan.pl produced no template for $pkg"
+		mv -f -- "$pot.new" "$pot"
+	done
+}
+
+# msgmerge every po/<lang>/*.po below $1 with its template, as LuCI's
+# i18n-update.pl does (no fuzzy matching; the header is kept as it is;
+# VERSION_CONTROL=none: gettext would otherwise leave <file>.po~ backups)
+merge_catalogs() {
+	local root=$1 entry pkg log=$tmp/merge.log
+	for entry in "${CATALOGS[@]}"; do
+		pkg=${entry%%:*}
+		[ -d "$root/$pkg/po" ] || continue
+		if ! ( cd "$root" && VERSION_CONTROL=none perl "$luci/build/i18n-update.pl" "$pkg/po" ) > "$log" 2>&1; then
+			cat "$log" >&2; die "merging the $pkg catalogues failed"
+		fi
+		[ "$mode" = check ] || grep -o 'Updating [^ ]*\.po' "$log" | sed 's/^/update.sh: /' >&2 || true
+	done
+}
+
+# Plural-Forms of LuCI's own catalogue for this language
+plural_forms() {
+	local lang=$1 po=modules/luci-base/po/$1/base.po
+	{ if [ -f "$luci/$po" ]; then cat -- "$luci/$po"; else git -C "$luci" show "HEAD:$po" 2>/dev/null; fi; } |
+		perl -0777 -ne 'if (/^msgid ""\nmsgstr ((?:"[^\n]*"\n)+)/m) { my $h = join "", $1 =~ /"(.*)"/g; print $1 if $h =~ /Plural-Forms: *(.*?)\\n/ }'
+}
+
+add_language() {
+	local lang=$1 entry pkg cat po plural
+	plural=$(plural_forms "$lang")
+	[ -n "$plural" ] || die "cannot read Plural-Forms for $lang from LuCI's modules/luci-base/po/$lang/base.po"
+	for entry in "${CATALOGS[@]}"; do
+		pkg=${entry%%:*} cat=${entry#*:}
+		po=$repo/$pkg/po/$lang/$cat.po
+		if [ -e "$po" ]; then
+			echo "update.sh: $pkg/po/$lang/$cat.po exists, kept" >&2
+			continue
+		fi
+		mkdir -p "${po%/*}"
+		{
+			# the fields msgfmt -c expects, left empty where a translator
+			# (or a tool such as Weblate) fills them in
+			printf 'msgid ""\nmsgstr ""\n'
+			printf '"Project-Id-Version: %s\\n"\n' "$pkg"
+			printf '"PO-Revision-Date: \\n"\n"Last-Translator: \\n"\n"Language-Team: \\n"\n'
+			printf '"Language: %s\\n"\n' "$lang"
+			printf '"MIME-Version: 1.0\\n"\n'
+			printf '"Content-Type: text/plain; charset=UTF-8\\n"\n'
+			printf '"Content-Transfer-Encoding: 8bit\\n"\n'
+			printf '"Plural-Forms: %s\\n"\n' "$plural"
+			# then the template without its header
+			printf '\n'
+			sed '1,/^$/d' "$repo/$pkg/po/templates/$cat.pot"
+		} > "$po"
+		echo "update.sh: created $pkg/po/$lang/$cat.po" >&2
+	done
+}
+
+# -------------------------------------------------------------------- main
+
+luci_tree
+for lang in "${add[@]}"; do
+	[[ $lang =~ ^[A-Za-z_]+$ ]] && known_language "$lang" ||
+		die "$lang is not a LuCI language code; use one of: $(sed -n 's/^LUCI_LANG\.\([A-Za-z_]*\)=.*/\1/p' "$luci/luci.mk" | tr '\n' ' ')"
+done
+check_layout "$repo"
+
+case $mode in
+check)
+	for entry in "${CATALOGS[@]}"; do
+		pkg=${entry%%:*}
+		mkdir -p "$tmp/$pkg"
+		[ ! -d "$repo/$pkg/po" ] || cp -R -- "$repo/$pkg/po" "$tmp/$pkg/po"
+	done
+	make_templates "$tmp"
+	merge_catalogs "$tmp"
+	mkdir -p "$tmp/dev/i18n"
+	language_table > "$tmp/$langfile"
+	stale=0
+	for entry in "${CATALOGS[@]}"; do
+		pkg=${entry%%:*}
+		( cd "$tmp" && diff -ruN -- "$repo/$pkg/po" "$pkg/po" ) >&2 || stale=1
+	done
+	diff -uN -- "$repo/$langfile" "$tmp/$langfile" >&2 || stale=1
+	if [ "$stale" = 1 ]; then
+		echo "update.sh: translation templates or catalogues are out of date; run dev/i18n/update.sh and commit the result" >&2
+		exit 1
+	fi
+	echo "update.sh: templates, catalogues and language table are up to date"
+	;;
+update|add)
+	make_templates "$tmp"
+	for entry in "${CATALOGS[@]}"; do
+		pkg=${entry%%:*} cat=${entry#*:}
+		f=$pkg/po/templates/$cat.pot
+		if ! cmp -s -- "$tmp/$f" "$repo/$f"; then
+			mkdir -p "$repo/${f%/*}"
+			cp -- "$tmp/$f" "$repo/$f"
+			echo "update.sh: updated $f" >&2
+		fi
+	done
+	for lang in "${add[@]}"; do add_language "$lang"; done
+	merge_catalogs "$repo"
+	language_table > "$tmp/languages"
+	cmp -s -- "$tmp/languages" "$repo/$langfile" || { cp -- "$tmp/languages" "$repo/$langfile"; echo "update.sh: updated $langfile" >&2; }
+	for entry in "${CATALOGS[@]}"; do
+		pkg=${entry%%:*}
+		for f in "$repo/$pkg/po"/*/*.po; do
+			[ -f "$f" ] || continue
+			n=$(msgattrib --translated --no-fuzzy --no-obsolete "$f" 2>/dev/null | grep -c '^msgid ' || true)
+			t=$(msgattrib --no-obsolete "$f" 2>/dev/null | grep -c '^msgid ' || true)
+			[ -z "$n" ] || [ -z "$t" ] || echo "update.sh: ${f#"$repo"/}: $(( n > 0 ? n - 1 : 0 )) of $(( t > 0 ? t - 1 : 0 )) strings translated" >&2
+		done
+	done
+	;;
+esac

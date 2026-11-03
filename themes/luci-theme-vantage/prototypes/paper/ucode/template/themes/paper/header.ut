@@ -1,0 +1,85 @@
+{#
+ Vantage "paper" prototype - page header.
+ Everything request-derived is entity-encoded; system details are only
+ rendered for authenticated sessions (the menu script fetches them).
+-#}
+{%
+	const authed = !!ctx.authsession;
+	const page_title = dispatched?.title ? striptags(_(dispatched.title)) : '';
+-%}
+<!DOCTYPE html>
+<html lang="{{ entityencode(dispatcher.lang, true) }}" data-darkmode="false">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<script>
+(function(d){var p='auto';try{p=localStorage.getItem('paper-theme')||'auto'}catch(e){}
+var m=window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches;
+d.setAttribute('data-theme-pref',p);d.setAttribute('data-darkmode',(p==='dark'||(p==='auto'&&m))?'true':'false');
+try{if(localStorage.getItem('paper-rail')==='pinned')d.setAttribute('data-rail','pinned')}catch(e){}})(document.documentElement);
+</script>
+<title>{{ entityencode(page_title ? `${page_title} · Vantage` : 'Vantage', true) }}</title>
+<link rel="stylesheet" href="{{ media }}/paper.css">
+<link rel="stylesheet" href="{{ media }}/icons.css">
+<link rel="icon" href="{{ media }}/mark.svg" type="image/svg+xml">
+<script src="{{ dispatcher.build_url('admin/translations', dispatcher.lang) }}"></script>
+<script src="{{ resource }}/cbi.js"></script>
+</head>
+<body class="lang_{{ entityencode(dispatcher.lang, true) }}{{ authed ? ' is-authed' : '' }}{{ blank_page ? ' is-blank' : '' }}" data-page="{{ entityencode(join('-', ctx.request_path), true) }}">
+<a class="skip-link" href="#maincontent">{{ _('Skip to content') }}</a>
+{% if (!blank_page): %}
+<div class="shell">
+{% if (authed): %}
+	<nav class="rail" id="rail" aria-label="{{ entityencode(_('Main menu'), true) }}">
+		<a class="rail-brand" href="{{ dispatcher.build_url('admin') }}" aria-label="Vantage">
+			<svg viewBox="0 0 32 32" width="32" height="32" aria-hidden="true"><rect width="32" height="32" rx="9" class="mark-bg"/><path d="M9.5 12.5l6.5 11 6.5-11" class="mark-v"/><circle cx="16" cy="8.6" r="1.9" class="mark-dot"/></svg>
+		</a>
+		<ul class="rail-list" id="rail-list" role="list"></ul>
+		<div class="rail-foot">
+			<button type="button" class="rail-pin" id="rail-pin" aria-pressed="false" title="{{ entityencode(_('Pin navigation'), true) }}">
+				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h10M4 19h16"/></svg>
+				<span class="rail-label">{{ _('Collapse') }}</span>
+			</button>
+		</div>
+	</nav>
+	<div class="flyout" id="flyout" hidden></div>
+	<div class="scrim" id="scrim" hidden></div>
+{% endif %}
+	<div class="stage">
+		<header class="topbar">
+{% if (!authed): %}
+			<a class="topbar-brand" href="{{ dispatcher.build_url('admin') }}">
+				<svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect width="32" height="32" rx="9" class="mark-bg"/><path d="M9.5 12.5l6.5 11 6.5-11" class="mark-v"/><circle cx="16" cy="8.6" r="1.9" class="mark-dot"/></svg>
+				<span>Vantage</span>
+			</a>
+{% endif %}
+			<nav class="crumbs" id="crumbs" aria-label="{{ entityencode(_('Breadcrumb'), true) }}"></nav>
+			<div class="topbar-tools">
+{% if (authed): %}
+				<button type="button" class="search-trigger" id="palette-open" aria-haspopup="dialog" aria-keyshortcuts="Control+K /">
+					<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+					<span class="search-text">{{ _('Search pages') }}</span>
+					<kbd>Ctrl K</kbd>
+				</button>
+{% endif %}
+				<div id="indicators" class="indicators" aria-live="polite"></div>
+{% if (authed): %}
+				<span class="host-chip" id="host-chip" hidden></span>
+				<button type="button" class="icon-btn" id="theme-toggle" aria-label="{{ entityencode(_('Colour theme'), true) }}">
+					<svg class="i-auto" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" class="fill"/></svg>
+					<svg class="i-light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></svg>
+					<svg class="i-dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z"/></svg>
+				</button>
+				<a class="icon-btn" id="logout" href="{{ dispatcher.build_url('admin/logout') }}" aria-label="{{ entityencode(_('Log out'), true) }}" title="{{ entityencode(_('Log out'), true) }}">
+					<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4.5H6.5a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1H14M10.5 12H20M16.5 8.5 20 12l-3.5 3.5"/></svg>
+				</a>
+{% endif %}
+			</div>
+		</header>
+		<div class="page-tabs" id="tabmenu" hidden></div>
+		<main id="maincontent" class="content">
+{% else %}
+<div id="indicators" class="indicators"></div>
+<main id="maincontent" class="content is-blank">
+{% endif %}
