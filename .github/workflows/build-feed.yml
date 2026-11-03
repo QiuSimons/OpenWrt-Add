@@ -356,17 +356,19 @@ jobs:
         env:
           FEED_PRIVATE_KEY: ${{ secrets.FEED_KEY }}
         run: |
-          mkdir -p certs
-          if [ -n "$FEED_PRIVATE_KEY" ]; then
-            echo "$FEED_PRIVATE_KEY" > certs/feed-key.pem
-            chmod 600 certs/feed-key.pem
-            openssl rsa -in certs/feed-key.pem -pubout -out certs/custom-feed.rsa.pub
-          else
-            echo "[INFO] 未检测到 FEED_KEY Secret，生成构建期临时签名密钥对..."
-            openssl genrsa -out certs/feed-key.pem 2048
-            openssl rsa -in certs/feed-key.pem -pubout -out certs/custom-feed.rsa.pub
+          set -euo pipefail
+          if [ -z "${FEED_PRIVATE_KEY:-}" ]; then
+            echo "ERROR: FEED_KEY secret is not set; refusing to generate an ephemeral feed key" >&2
+            exit 1
           fi
-
+          mkdir -p certs
+          printf '%s\n' "$FEED_PRIVATE_KEY" > certs/feed-key.pem
+          chmod 600 certs/feed-key.pem
+          openssl rsa -in certs/feed-key.pem -pubout -out /tmp/custom-feed.rsa.pub
+          cmp -s /tmp/custom-feed.rsa.pub certs/custom-feed.rsa.pub || {
+            echo "ERROR: FEED_KEY does not match certs/custom-feed.rsa.pub" >&2
+            exit 1
+          }
           mkdir -p public/keys
           cp certs/custom-feed.rsa.pub public/keys/custom-feed.rsa.pub
 

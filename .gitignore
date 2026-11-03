@@ -6,3 +6,6 @@ __pycache__/
 # CI 工作目录（构建产物，不提交）
 prebuilt/
 staging_feed/
+
+# feed 签名私钥（CI 从 secret 生成，不提交）
+certs/feed-key.pem
