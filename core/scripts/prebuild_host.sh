@@ -270,6 +270,9 @@ prebuild_honk() {
   "$script" "$ARCH" "$out/honk-core" || die "honk prebuild failed via build_honk_core.sh"
 
   assert_elf "$out/honk-core"
+
+  # 源码与 target 只在本次构建需要，清掉给后面的 Rust 包腾磁盘
+  rm -rf apps/luci-app-honk/honk-src
 }
 
 prebuild_dae() {
@@ -335,13 +338,14 @@ want() {
 main() {
   log "repo=$REPO_ROOT out=$OUT goarch=$GOARCH rust_target=$RUST_TARGET"
 
+  # honk 先跑并立即清 target，避免和 FlowCone/einat 的 Rust 产物叠磁盘
+  want honk     && prebuild_honk
   want frp      && prebuild_frp
   want mosdns   && prebuild_mosdns
   want mihomo   && prebuild_mihomo
   want sing-box && prebuild_singbox
   want einat    && prebuild_einat
   want flowcone && prebuild_flowcone
-  want honk     && prebuild_honk
   want dae      && prebuild_dae
   true
 

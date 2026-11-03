@@ -88,7 +88,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: prebuilt
-          key: prebuilt-bin-${{ matrix.arch }}-${{ hashFiles('core/scripts/prebuild_host.sh', 'apps/**/Makefile', 'apps/FlowCone/Cargo.lock', 'apps/FlowCone/crates/**') }}
+          key: prebuilt-bin-${{ matrix.arch }}-${{ hashFiles('core/scripts/prebuild_host.sh', 'apps/**/Makefile', 'apps/luci-app-honk/scripts/build_honk_core.sh', 'apps/FlowCone/Cargo.lock', 'apps/FlowCone/crates/**') }}
           restore-keys: |
             prebuilt-bin-${{ matrix.arch }}-
 
@@ -112,6 +112,10 @@ jobs:
           need clang clang
           need llvm-strip llvm
           need zstd zstd
+          need cmake cmake
+          need readelf binutils
+          # honk-core 的 BoringSSL/bindgen 依赖
+          sudo apt-get install -y -qq --no-install-recommends libclang-dev libbpf-dev
           if [ "${{ matrix.arch }}" = "aarch64_generic" ]; then
             need aarch64-linux-gnu-gcc gcc-aarch64-linux-gnu
             rustup target add aarch64-unknown-linux-musl
@@ -120,8 +124,13 @@ jobs:
             rustup target add x86_64-unknown-linux-musl
           fi
 
-          # 为 honk 提供 bpf-linker
-          curl -sSfL https://github.com/aya-rs/bpf-linker/releases/latest/download/bpf-linker-x86_64-unknown-linux-musl.tar.zst | sudo tar --zstd -xf - -C /usr/local/bin
+          # bpf-linker 与 luci-app-honk CI 保持一致（上游 pins.env 的 0.11.0），禁止 latest 漂移
+          bpf_linker_version=0.11.0
+          bpf_linker_sha256=10f62ba9ab7e544d538370552660efcb4f1a19153d5752bbf0f6b51f3bada450
+          curl -fsSL --retry 3 -o /tmp/bpf-linker.tar.zst \
+            "https://github.com/aya-rs/bpf-linker/releases/download/v${bpf_linker_version}/bpf-linker-x86_64-unknown-linux-musl.tar.zst"
+          echo "${bpf_linker_sha256}  /tmp/bpf-linker.tar.zst" | sha256sum -c -
+          sudo tar --zstd -xf /tmp/bpf-linker.tar.zst -C /usr/local/bin
 
           clang --version | head -n 1
           llvm-strip --version | head -n 1
