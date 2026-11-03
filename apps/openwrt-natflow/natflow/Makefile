@@ -9,7 +9,7 @@ include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=natflow
-PKG_VERSION:=2026.10.31
+PKG_VERSION:=2026.10.31~4766e98
 PKG_REAL_VERSION:=4766e98
 PKG_RELEASE:=1
 
