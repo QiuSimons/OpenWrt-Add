@@ -4,7 +4,7 @@
 # r8125 is the Linux device driver released for Realtek 2.5 Gigabit Ethernet
 # controllers with PCI-Express interface.
 #
-# Copyright(c) 2025 Realtek Semiconductor Corp. All rights reserved.
+# Copyright(c) 2026 Realtek Semiconductor Corp. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the Free
@@ -45,8 +45,6 @@ rtl8125_fiber_set_mdc_gpio_c45(struct rtl8125_private *tp, bool pu)
                 rtl8125_set_mac_ocp_bit(tp, 0xDC52, BIT_7);
         else
                 rtl8125_clear_mac_ocp_bit(tp, 0xDC52, BIT_7);
-
-        //RtPciCommittp);
 }
 
 static void
@@ -71,8 +69,6 @@ rtl8125_fiber_set_mdio_bit_gpio_c45(struct rtl8125_private *tp, bool pu)
                 rtl8125_set_mac_ocp_bit(tp, 0xDC52, BIT_2);
         else
                 rtl8125_clear_mac_ocp_bit(tp, 0xDC52, BIT_2);
-
-        //RtPciCommittp);
 
         rtl8125_fiber_set_mdcDownUp(tp);
 }
@@ -113,7 +109,7 @@ rtl8125_fiber_shift_bit_out(struct rtl8125_private *tp)
         int i;
 
         for (i = 15; i >= 0; i--)
-                data += (rtl8125_fiber_get_mdio_bit(tp) << i);
+                data |= (rtl8125_fiber_get_mdio_bit(tp) << i);
 
         return data;
 }
@@ -228,9 +224,11 @@ rtl8125_fiber_mdio_write_gpio_c45(
         u16 val,
         u8 phy_addr)
 {
+        u8 dev_addr;
+
         /* opcode write */
-        reg = rtl8125_fiber_cmdAddr(tp, phy_addr, reg);
-        rtl8125_fiber_cmd(tp, R8125_FIBER_C45_OP_W, phy_addr, reg);
+        dev_addr = rtl8125_fiber_cmdAddr(tp, phy_addr, reg);
+        rtl8125_fiber_cmd(tp, R8125_FIBER_C45_OP_W, phy_addr, dev_addr);
 
         rtl8125_fiber_write_common(tp, val);
 }
@@ -260,8 +258,10 @@ rtl8125_fiber_mdio_read_gpio_c45(
         u32 reg,
         u8 phy_addr)
 {
-        reg = rtl8125_fiber_cmdAddr(tp, phy_addr, reg);
-        rtl8125_fiber_cmd(tp, R8125_FIBER_C45_OP_R, phy_addr, reg);
+        u8 dev_addr;
+
+        dev_addr = rtl8125_fiber_cmdAddr(tp, phy_addr, reg);
+        rtl8125_fiber_cmd(tp, R8125_FIBER_C45_OP_R, phy_addr, dev_addr);
 
         return rtl8125_fiber_read_common(tp);
 }
@@ -316,7 +316,7 @@ rtl8125_fiber_set_phy_bit(struct rtl8125_private *tp, u32 addr, u16 mask)
         rtl8125_fiber_clear_and_set_phy_bit(tp, addr, 0, mask);
 }
 
-#define R8125_MAKE_C45_ADDR(_mmd, _addr) (_mmd << 16 | _addr)
+#define R8125_MAKE_C45_ADDR(_mmd, _addr) (((_mmd) << 16) | (_addr))
 
 static void
 rtl8125_fiber_phy_reset_8221d(struct rtl8125_private *tp)
@@ -432,7 +432,8 @@ rtl8125_check_fiber_mode_support(struct rtl8125_private *tp)
 {
         switch(tp->mcfg) {
         case CFG_METHOD_10:
-        case CFG_METHOD_11: {
+        case CFG_METHOD_11:
+        case CFG_METHOD_17: {
                 u8 tmp = (u8)rtl8125_mac_ocp_read(tp, 0xD006);
                 if (tmp == 0x03)
                         tp->HwFiberModeVer = FIBER_MODE_RTL8125D_RTL8221D;
@@ -457,7 +458,6 @@ rtl8125_fiber_link_ok(struct net_device *dev)
                         return 1;
                 else
                         return 0;
-                break;
         default:
                 return 0;
         }

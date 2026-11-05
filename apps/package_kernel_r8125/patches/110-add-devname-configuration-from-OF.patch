@@ -1,6 +1,6 @@
 --- a/r8125_n.c
 +++ b/r8125_n.c
-@@ -16328,6 +16328,7 @@ rtl8125_init_board(struct pci_dev *pdev,
+@@ -16950,6 +16950,7 @@ rtl8125_init_board(struct pci_dev *pdev,
          void __iomem *ioaddr;
          struct net_device *dev;
          struct rtl8125_private *tp;
@@ -8,7 +8,7 @@
          int rc = -ENOMEM, i, pm_cap;
  
          assert(ioaddr_out != NULL);
-@@ -16342,6 +16343,9 @@ rtl8125_init_board(struct pci_dev *pdev,
+@@ -16964,6 +16965,9 @@ rtl8125_init_board(struct pci_dev *pdev,
                  goto err_out;
          }
  

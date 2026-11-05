@@ -83,7 +83,7 @@ test('form chrome: never stands between LuCI nodes, never changes their text', (
 	};
 	const field = part('\taddFieldHelp(desc) {', '\taddIntroHelp(desc) {');
 	const intro = part('\taddIntroHelp(desc) {', '\thelpToggle(desc, holder, label) {');
-	const toggle = part('\thelpToggle(desc, holder, label) {', '\tfitHelp(desc) {');
+	const toggle = part('\thelpToggle(desc, holder, label) {', '\tfitHelps(descs) {');
 	const placing = /insertBefore|insertAdjacent|appendChild|\.before\(|\.after\(|\.prepend\(|\.append\(/g;
 	/* field help goes after the field: LuCI's label click finds its widget
 	   through nextElementSibling */
@@ -100,6 +100,96 @@ test('form chrome: never stands between LuCI nodes, never changes their text', (
 	/* a heading that holds a control (Overview's Hide/Show label) is never hidden */
 	const repeats = src.slice(src.indexOf('\tmarkRepeats() {'));
 	assert.match(repeats, /h\.querySelector\('a, button, input, select, \[data-clickable\], \[tabindex\]'\)\) return;/);
+});
+
+/* a top-level function of menu-vantage.js, with the ones it calls */
+function fn(name, ...deps) {
+	const body = [ name ].concat(deps).map(n => {
+		const start = src.indexOf('function ' + n + '(');
+		assert.ok(start >= 0, 'found ' + n);
+		return src.slice(start, src.indexOf('\n}\n', start) + 3);
+	}).join('\n');
+	return new Function(body + '\nreturn ' + name + ';')();
+}
+
+test('crumbs: one that repeats the crumb before it takes its place, with the deeper link and level', () => {
+	const mergeCrumbs = fn('mergeCrumbs', 'headingKey');
+	const c = (title, level) => ({ title, level, segs: [ 'admin', 'x' + level ] });
+	/* Status › System Log › System Log (its first tab) */
+	assert.deepEqual(mergeCrumbs([ c('Status', 1), c('System Log', 2), c('System Log', 3) ]), [ c('Status', 1), c('System Log', 3) ]);
+	/* System › System; case and a trailing colon do not count */
+	assert.deepEqual(mergeCrumbs([ c('System', 1), c('system:', 2) ]), [ c('system:', 2) ]);
+	assert.deepEqual(mergeCrumbs([ c('Network', 1), c('Firewall', 2), c('General Settings', 3) ]).map(p => p.level), [ 1, 2, 3 ]);
+	assert.deepEqual(mergeCrumbs([]), []);
+	/* the heading trail still sees every level (markRepeats) */
+	assert.match(src, /this\.pageTitle = parts\[parts\.length - 1\]\.title;\n\t\tparts\.forEach\(\(p, i\) => \{/);
+	assert.match(src, /const crumbs = mergeCrumbs\(parts\);/);
+});
+
+test('404: LuCI hands over a category or a node without an action', () => {
+	const notFound = fn('notFound');
+	assert.equal(notFound({ title: 'Administration', action: { type: 'firstchild' } }), true);
+	assert.equal(notFound({ title: 'Status' }), true);
+	assert.equal(notFound({ title: 'Overview', action: { type: 'template', path: 'admin_status/index' } }), false);
+	assert.equal(notFound({ title: 'Wireless', action: { type: 'view', path: 'network/wireless' } }), false);
+	assert.equal(notFound(undefined), false, 'no nodespec (older LuCI): a page');
+	assert.equal(notFound(null), false);
+});
+
+test('palette: a path matches only as a substring or by word starts', () => {
+	const pathScore = fn('pathScore');
+	assert.equal(pathScore('wire', 'Network › Firewall'), null, 'no letters scattered over the path');
+	assert.equal(pathScore('fire', 'Network › Firewall'), 10, 'a word start');
+	assert.equal(pathScore('wall', 'Network › Firewall'), 6, 'inside a word');
+	assert.equal(pathScore('net fire', 'Network › Firewall'), 4, 'each word starts one');
+	assert.equal(pathScore('net wall', 'Network › Firewall'), null);
+	assert.equal(pathScore('x', ''), null);
+	assert.equal(pathScore('x', undefined), null);
+	assert.equal(pathScore('  ', 'Status'), null);
+});
+
+test('palette ranking: titles first, path-only hits only without one, shallower pages win ties', () => {
+	require('./luci-stub');
+	const rank = fn('rankPalette', 'fuzzy', 'pathScore');
+	const e = (title, path, segs) => ({ title, path, segs });
+	const pool = [
+		e('Wireless', 'Status › Realtime Graphs', [ 'admin', 'status', 'realtime', 'wireless' ]),
+		e('Port Forwards', 'Network › Firewall', [ 'admin', 'network', 'firewall', 'forwards' ]),
+		e('Traffic Rules', 'Network › Firewall', [ 'admin', 'network', 'firewall', 'rules' ]),
+		e('Wireless', 'Network', [ 'admin', 'network', 'wireless' ]),
+		e('Firewall', 'Network', [ 'admin', 'network', 'firewall' ]),
+		e('Use dark theme', 'Appearance')
+	];
+	const titles = r => r.map(x => x.e.title + ' (' + x.e.path + ')');
+	/* "wire": the two Wireless pages, Network's first; nothing from Firewall */
+	assert.deepEqual(titles(rank('wire', pool)), [ 'Wireless (Network)', 'Wireless (Status › Realtime Graphs)' ]);
+	/* "firewall": the page, not its tabs (they match on their path only) */
+	assert.deepEqual(titles(rank('firewall', pool)), [ 'Firewall (Network)' ]);
+	/* no title matches: the path decides */
+	assert.deepEqual(titles(rank('appear', pool)), [ 'Use dark theme (Appearance)' ]);
+	assert.deepEqual(rank('zzz', pool), []);
+	assert.ok(rank('wire', pool)[0].idx.length, 'title matches carry their highlight');
+});
+
+test('palette layout without a query: headers only over categories of several rows, paths without the header', () => {
+	const layout = fn('paletteLayout');
+	const r = (title, path, group) => ({ e: { title, path, group }, idx: [] });
+	const rows = layout([
+		r('Dashboard', '', 'Dashboard'),
+		r('Overview', 'Status', 'Status'),
+		r('Kernel Log', 'Status › System Log', 'Status'),
+		r('WireGuard', 'VPN', 'VPN'),
+		r('Use dark theme', 'Appearance', 'Actions'),
+		r('Log out', 'Session', 'Actions')
+	]);
+	assert.deepEqual(rows.map(x => [ x.head, x.r.e.title, x.path ]), [
+		[ null, 'Dashboard', '' ],
+		[ 'Status', 'Overview', '' ],
+		[ null, 'Kernel Log', 'System Log' ],
+		[ null, 'WireGuard', 'VPN' ],          /* one row: no header, its path stays */
+		[ 'Actions', 'Use dark theme', 'Appearance' ],
+		[ null, 'Log out', 'Session' ]
+	]);
 });
 
 test('channel analysis: a row or hump is ours by BSSID only', () => {

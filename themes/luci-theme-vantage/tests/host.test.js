@@ -63,3 +63,24 @@ test('reference detection', () => {
 	for (const m of [ 'Zyxel NWA50BE', 'TP-Link Archer C7 v5', 'Raspberry Pi 4 Model B Rev 1.4', 'GL.iNet GL-MT3000' ])
 		assert.equal(host.looksLikeReference(m), false, m);
 });
+
+test('host chip: a name the other one contains is left out (case and punctuation do not count)', () => {
+	/* the same name twice: the hostname stays */
+	assert.deepEqual(host.chipNames('Cudy-WR-3000', 'Cudy WR3000'), [ 'Cudy-WR-3000' ]);
+	assert.deepEqual(host.chipNames('cudy_wr3000', 'Cudy WR3000'), [ 'cudy_wr3000' ]);
+	/* the product inside the hostname */
+	assert.deepEqual(host.chipNames('office-cudy-wr3000', 'Cudy WR3000'), [ 'office-cudy-wr3000' ]);
+	/* the hostname inside the product */
+	assert.deepEqual(host.chipNames('OpenWrt', 'OpenWrt One'), [ 'OpenWrt One' ]);
+	/* different names: both, hostname first */
+	assert.deepEqual(host.chipNames('ap-office', 'Cudy WR3000'), [ 'ap-office', 'Cudy WR3000' ]);
+	assert.deepEqual(host.chipNames('cudy-lab', 'Cudy WR3000-V1'), [ 'cudy-lab', 'Cudy WR3000-V1' ]);
+	/* letters other than a-z count too; a name of punctuation only never swallows the other */
+	assert.deepEqual(host.chipNames('Точка', 'Точка-2'), [ 'Точка-2' ]);
+	assert.deepEqual(host.chipNames('---', 'Cudy WR3000'), [ '---', 'Cudy WR3000' ]);
+	assert.deepEqual(host.chipNames('ap-office', '---'), [ 'ap-office', '---' ]);
+	/* missing names */
+	assert.deepEqual(host.chipNames('ap-office', ''), [ 'ap-office' ]);
+	assert.deepEqual(host.chipNames('', 'Cudy WR3000'), [ 'Cudy WR3000' ]);
+	assert.deepEqual(host.chipNames(null, undefined), []);
+});

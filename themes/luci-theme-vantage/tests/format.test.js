@@ -15,8 +15,18 @@ test('fmt: bits, bytes, PHY rates, durations, placeholders for junk', () => {
 	assert.equal(fmt.bits(0), '0 bit/s');
 	assert.equal(fmt.bits(-1), '—');
 	assert.equal(fmt.bits('x'), '—');
-	assert.equal(fmt.bitsShort(400e6), '400M');
-	assert.equal(fmt.bitsShort(1.5e9), '1.5G');
+	/* a row's download and upload: one unit where both read in it */
+	assert.equal(fmt.rates(376e6, 3.4e6), '↓ 376  ↑ 3.4 Mbit/s');
+	assert.equal(fmt.rates(12.3e6, 800), '↓ 12.3 Mbit/s  ↑ 800 bit/s');
+	assert.equal(fmt.rates(0, 0), 'idle');
+	assert.equal(fmt.rates(null, 2e3), '↓ —  ↑ 2 kbit/s');
+	assert.deepEqual(fmt.rateParts(400e6, 1.5e9), { dn: '400 Mbit/s', up: '1.5 Gbit/s', unit: '' });
+	/* counts: thousands apart from five digits on */
+	assert.equal(fmt.count(20224239), '20\u202f224\u202f239');
+	assert.equal(fmt.count(1234), '1234');
+	assert.equal(fmt.count(12345), '12\u202f345');
+	assert.equal(fmt.count(-12345), '−12\u202f345');
+	assert.equal(fmt.count('x'), '—');
 	assert.equal(fmt.bytes(897781760), '856 MiB');
 	assert.equal(fmt.bytes(null), '—');
 	assert.equal(fmt.phyRate(576400), '576 Mbit/s');
@@ -29,7 +39,8 @@ test('fmt: bits, bytes, PHY rates, durations, placeholders for junk', () => {
 	assert.equal(fmt.dbm(0), '—');
 	assert.equal(fmt.load(26048), '0.40');
 	assert.equal(fmt.mac('02-00-5e-00-53-0f'), '02:00:5E:00:53:0F');
-	assert.equal(fmt.macTail('00:00:5e:00:53:c1'), '…00:53:C1');
+	assert.equal(fmt.macTail('00:00:5e:00:53:c1'), '53:C1');
+	assert.equal(fmt.macTail('nonsense'), '');
 });
 
 test('fmt.safeText: neutralises reordering characters, cuts by code point', () => {
@@ -104,14 +115,13 @@ test('series.valid: stored data is validated', () => {
 });
 
 test('series: nice axis maximum and path geometry with gaps', () => {
-	assert.equal(series.niceMax(372e6), 500e6);
-	assert.equal(series.niceMax(0.3), 0.5);
-	assert.equal(series.niceMax(0), 1);
 	assert.equal(series.niceCeil(392e6), 400e6);
 	assert.equal(series.niceCeil(418e6), 500e6);
 	assert.equal(series.niceCeil(1000), 1000);
 	assert.equal(series.niceCeil(1100), 1500);
 	assert.equal(series.niceCeil(NaN), 1);
+	assert.equal(series.niceCeil(0), 1);
+	assert.equal(series.niceCeil(-5), 1);
 	const data = [ [ 0, 0 ], [ 1000, 50 ], [ 2000, 100 ], [ 20000, 50 ] ];
 	const segs = series.segments(data, 1, 0, 20000, 100, 200, 100, 5000);
 	assert.equal(segs.length, 2, 'a gap longer than maxGap breaks the line');

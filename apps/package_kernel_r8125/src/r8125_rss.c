@@ -5,7 +5,7 @@
 # r8125 is the Linux device driver released for Realtek 2.5 Gigabit Ethernet
 # controllers with PCI-Express interface.
 #
-# Copyright(c) 2025 Realtek Semiconductor Corp. All rights reserved.
+# Copyright(c) 2026 Realtek Semiconductor Corp. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the Free
@@ -123,8 +123,15 @@ static int _rtl8125_set_rss_hash_opt(struct rtl8125_private *tp)
         u32 rss_flags = tp->rss_flags;
         u32 hash_mask_len;
         u32 rss_ctrl;
+        u32 rx_rings = rtl8125_tot_rx_rings(tp);
+        u32 indir_entries = rtl8125_rss_indir_tbl_entries(tp);
 
-        rss_ctrl = ilog2(rtl8125_tot_rx_rings(tp));
+        if (rx_rings == 0)
+                rx_rings = 1;
+        if (indir_entries == 0)
+                indir_entries = 1;
+
+        rss_ctrl = ilog2(rx_rings);
         rss_ctrl &= (BIT_0 | BIT_1 | BIT_2);
         rss_ctrl <<= RSS_CPU_NUM_OFFSET;
 
@@ -143,7 +150,7 @@ static int _rtl8125_set_rss_hash_opt(struct rtl8125_private *tp)
                 rss_ctrl |= RSS_CTRL_UDP_IPV6_SUPP |
                             RSS_CTRL_UDP_IPV6_EXT_SUPP;
 
-        hash_mask_len = ilog2(rtl8125_rss_indir_tbl_entries(tp));
+        hash_mask_len = ilog2(indir_entries);
         hash_mask_len &= (BIT_0 | BIT_1 | BIT_2);
         rss_ctrl |= hash_mask_len << RSS_MASK_BITS_OFFSET;
 
@@ -220,7 +227,6 @@ static int rtl8125_set_rss_hash_opt(struct rtl8125_private *tp,
                         return -EINVAL;
                 }
                 return 0;
-                break;
         default:
                 return -EINVAL;
         }
@@ -308,7 +314,7 @@ u32 rtl8125_rss_indir_size(struct net_device *dev)
 
 static void rtl8125_get_reta(struct rtl8125_private *tp, u32 *indir)
 {
-        int i, reta_size = rtl8125_rss_indir_tbl_entries(tp);
+        u32 i, reta_size = rtl8125_rss_indir_tbl_entries(tp);
 
         for (i = 0; i < reta_size; i++)
                 indir[i] = tp->rss_indir_tbl[i];
@@ -333,7 +339,7 @@ static void rtl8125_store_reta(struct rtl8125_private *tp)
 
         /* Write redirection table to HW */
         for (i = 0; i < reta_entries; i++) {
-                reta |= indir_tbl[i] << (i & 0x3) * 8;
+                reta |= indir_tbl[i] << ((i & 0x3) * 8);
                 if ((i & 3) == 3) {
                         RTL_W32(tp, indir_tbl_reg, reta);
 
@@ -347,11 +353,15 @@ static void rtl8125_store_rss_key(struct rtl8125_private *tp)
 {
         const u16 rss_key_reg = rtl8125_rss_key_reg(tp);
         u32 i, rss_key_size = _rtl8125_get_rxfh_key_size(tp);
-        u32 *rss_key = (u32*)tp->rss_key;
 
-        /* Write redirection table to HW */
-        for (i = 0; i < rss_key_size; i+=4)
-                RTL_W32(tp, rss_key_reg + i, *rss_key++);
+        /* Write RSS hash key to HW */
+        for (i = 0; i < rss_key_size; i += 4) {
+                u32 key_val = tp->rss_key[i] |
+                              (tp->rss_key[i + 1] << 8) |
+                              (tp->rss_key[i + 2] << 16) |
+                              (tp->rss_key[i + 3] << 24);
+                RTL_W32(tp, rss_key_reg + i, key_val);
+        }
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,8,0)
@@ -377,7 +387,7 @@ int rtl8125_set_rxfh(struct net_device *dev, struct ethtool_rxfh_param *rxfh,
                      struct netlink_ext_ack *extack)
 {
         struct rtl8125_private *tp = netdev_priv(dev);
-        int i;
+        u32 i;
         u32 reta_entries = rtl8125_rss_indir_tbl_entries(tp);
 
         /* We require at least one supported parameter to be changed and no
@@ -434,7 +444,7 @@ int rtl8125_set_rxfh(struct net_device *dev, const u32 *indir,
                      const u8 *key, const u8 hfunc)
 {
         struct rtl8125_private *tp = netdev_priv(dev);
-        int i;
+        u32 i;
         u32 reta_entries = rtl8125_rss_indir_tbl_entries(tp);
 
         /* We require at least one supported parameter to be changed and no
@@ -574,7 +584,9 @@ void rtl8125_config_rss(struct rtl8125_private *tp)
 
 void rtl8125_init_rss(struct rtl8125_private *tp)
 {
-        int i;
+        u32 i;
+
+        tp->rss_flags = RTL8125_UDP_RSS_FLAGS;
 
         for (i = 0; i < rtl8125_rss_indir_tbl_entries(tp); i++)
                 tp->rss_indir_tbl[i] = ethtool_rxfh_indir_default(i, tp->num_rx_rings);

@@ -55,7 +55,7 @@ without the app.
 - Network path from gateway to access point, radios and SSIDs, and a
   Wired branch for the Ethernet ports; click any node for details. Behind
   it the login page's packets or starfield move with the live uplink
-  rate (or nothing, as picked under Customize)
+  rate (or nothing, as picked under Appearance)
 - Live throughput for the uplink and every radio (last 5 minutes), in the
   chart style you pick under Customize (overlaid, log scale, mirrored or
   separate lanes),

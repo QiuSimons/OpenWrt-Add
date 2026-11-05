@@ -2,7 +2,9 @@
 /* The page switcher in the top bar (menu-vantage.js), run against a small
    fake DOM: its button is a disclosure (no aria-haspopup), a rail timer
    left pending does not close it, passing over the rail leaves it open,
-   and the keyboard can open it, walk into it and leave it. */
+   and the keyboard can open it, walk into it and leave it. Also what the
+   shell lists: crumbs (a repeated one merged, a 404), flyouts and the
+   palette's rows. */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -82,7 +84,7 @@ class El {
 	getClientRects() { let n = this; for (; n && n.tagName; n = n.parentNode) if (n.hidden) return []; return [ 1 ]; }
 }
 
-function setup(dispatchpath) {
+function setup(dispatchpath, nodespec) {
 	const timers = [];
 	let now = 0, seq = 0;
 	const window = {
@@ -136,7 +138,8 @@ function setup(dispatchpath) {
 	const tree = { children: { admin: { children: {
 		status: page('Status', {
 			overview: page('Overview'),
-			realtime: page('Realtime Graphs', { load: page('Load'), bandwidth: page('Bandwidth'), connections: page('Connections') })
+			realtime: page('Realtime Graphs', { load: page('Load'), bandwidth: page('Bandwidth'), connections: page('Connections') }),
+			syslog: page('System Log', { syslog: page('System Log'), dmesg: page('Kernel Log') })
 		}),
 		system: page('System', { system: page('System'), flash: page('Backup / Flash Firmware') }),
 		logout: page('Log out')
@@ -145,7 +148,7 @@ function setup(dispatchpath) {
 		load: () => ({ then() {} }),
 		getChildren: node => Object.keys((node && node.children) || {}).map(name => Object.assign({ name }, node.children[name]))
 	} };
-	const L = { url: (...a) => '/' + a.join('/'), env: { dispatchpath }, bind: (f, o) => f.bind(o) };
+	const L = { url: (...a) => '/' + a.join('/'), env: { dispatchpath, nodespec }, bind: (f, o) => f.bind(o) };
 	const rpc = { declare: () => () => Promise.resolve({}) };
 	const baseclass = { extend: proto => proto };
 
@@ -266,4 +269,100 @@ test('palette opened from inside the switcher returns focus to the crumb', () =>
 	assert.ok(s.fly.hidden);
 	s.shell.closePalette();
 	assert.equal(s.document.activeElement, s.btn);
+});
+
+/* what a crumb bar or a list says: [ tag, text ] per child */
+const said = el => el.children.filter(c => c.tagName).map(c => [ c.tagName.toLowerCase(), c.textContent ]);
+
+test('crumbs: a crumb that repeats the one before it shows once, with the deeper link and the switch', () => {
+	/* Status › System Log › System Log (the page's first tab) */
+	let s = setup([ 'admin', 'status', 'syslog', 'syslog' ]);
+	const nav = s.document.getElementById('vt-crumbs');
+	assert.deepEqual(said(nav), [ [ 'a', 'Status' ], [ 'span', '›' ], [ 'button', 'System Log' ] ]);
+	assert.ok(s.btn, 'the merged crumb keeps the switch to the other tabs');
+	/* its caret is a down chevron (the separators are right chevrons) */
+	assert.equal(s.btn.querySelector('path').getAttribute('d'), 'm6 9 6 6 6-6');
+	s.btn.click();
+	assert.deepEqual(s.fly.querySelectorAll('a').map(a => a.textContent), [ 'System Log', 'Kernel Log' ]);
+	/* the heading trail still has every level, so "System Log" headings are repeats */
+	assert.ok(s.shell.trail.page.has('system log'));
+	assert.equal(s.shell.pageTitle, 'System Log');
+
+	/* System › System: one crumb, the page */
+	s = setup([ 'admin', 'system', 'system' ]);
+	assert.deepEqual(said(s.document.getElementById('vt-crumbs')), [ [ 'span', 'System' ] ]);
+	assert.ok(s.shell.trail.all.has('system') && s.shell.trail.page.has('system'));
+
+	/* nothing to merge */
+	s = setup([ 'admin', 'status', 'realtime', 'load' ]);
+	assert.deepEqual(said(s.document.getElementById('vt-crumbs')).map(c => c[1]), [ 'Status', '›', 'Realtime Graphs', '›', 'Load' ]);
+});
+
+test('crumbs on a 404: the category LuCI resolved, then "Not found"; no page tabs', () => {
+	let s = setup([ 'admin', 'status' ], { title: 'Status', action: { type: 'firstchild' } });
+	assert.deepEqual(said(s.document.getElementById('vt-crumbs')), [ [ 'a', 'Status' ], [ 'span', '›' ], [ 'span', 'Not found' ] ]);
+	assert.equal(s.shell.pageTitle, 'Not found');
+	/* /admin/nonexistent: LuCI resolves "admin" only */
+	s = setup([ 'admin' ], { title: 'Administration', action: { type: 'firstchild' } });
+	assert.deepEqual(said(s.document.getElementById('vt-crumbs')), [ [ 'span', 'Not found' ] ]);
+	/* a page with tabs that has no such tab: no tab bar, no switch */
+	s = setup([ 'admin', 'status', 'realtime' ], { title: 'Realtime Graphs', action: { type: 'firstchild' } });
+	assert.ok(s.document.getElementById('vt-tabs').hidden);
+	assert.equal(s.btn, null);
+	/* a page LuCI found */
+	s = setup([ 'admin', 'status', 'overview' ], { title: 'Overview', action: { type: 'template', path: 'admin_status/index' } });
+	assert.deepEqual(said(s.document.getElementById('vt-crumbs')).map(c => c[1]), [ 'Status', '›', 'Overview' ]);
+});
+
+test('flyouts: the title and the links, nothing that counts or repeats them', () => {
+	const s = setup([ 'admin', 'status', 'realtime', 'load' ]);
+	s.rail.querySelector('button').click();
+	const head = s.fly.querySelector('.vt-fly-head');
+	assert.deepEqual(said(head), [ [ 'span', 'Status' ] ], 'no icon, no page count');
+	assert.equal(s.fly.querySelector('.vt-fly-meta'), null);
+	assert.equal(s.fly.querySelector('.vt-fly-foot'), null);
+	assert.equal(s.fly.querySelector('kbd'), null);
+	assert.deepEqual(s.fly.querySelectorAll('.vt-fly-link').map(a => a.textContent), [ 'Overview', 'Realtime Graphs', 'System Log' ]);
+	/* the page switcher's panel too */
+	s.btn.click();
+	assert.deepEqual(said(s.fly.querySelector('.vt-fly-head')), [ [ 'span', 'Realtime Graphs' ] ]);
+});
+
+test('palette: grouped rows say their category once; icons only on actions; hints and count', () => {
+	const s = setup([ 'admin', 'status', 'overview' ]);
+	s.shell.openPalette();
+	const pal = s.shell.pal;
+	const rows = () => pal.list.children.map(li => li.classList.contains('vt-pal-group') ? '# ' + li.textContent
+		: li.classList.contains('vt-pal-empty') ? '! ' + li.textContent
+		: [ li.querySelector('svg') ? '*' : '', li.querySelector('.vt-pal-title').textContent, (li.querySelector('.vt-pal-path') || { textContent: '' }).textContent ].join('|'));
+	assert.deepEqual(rows(), [
+		'# Status',
+		'|Overview|', '|Realtime Graphs|', '|Load|Realtime Graphs', '|Bandwidth|Realtime Graphs', '|Connections|Realtime Graphs',
+		'|System Log|', '|Kernel Log|System Log',             /* the "System Log" tab is the page's entry */
+		'# System',
+		'|System|', '|Backup / Flash Firmware|',
+		'# Actions',
+		'*|Use dark theme|Appearance', '*|Use light theme|Appearance',
+		'*|Login background: Starfield|Appearance', '*|Login background: None|Appearance',
+		'*|Log out|Session'
+	]);
+	/* Esc once, in the footer; no count without a query */
+	assert.equal(pal.overlay.querySelector('.vt-pal-field').querySelector('kbd'), null);
+	assert.equal(pal.overlay.querySelector('.vt-pal-foot').querySelectorAll('kbd').filter(k => k.textContent === 'Esc').length, 1);
+	assert.equal(pal.count.textContent, '');
+
+	/* a query: the path in full, a pluralised count of every match */
+	pal.input.value = 'kernel';
+	s.shell.filterPalette();
+	assert.deepEqual(rows(), [ '|Kernel Log|Status › System Log' ]);
+	assert.equal(pal.count.textContent, '1 result');
+	/* titles that start with it first; System Log and Kernel Log score the same, the page wins */
+	pal.input.value = 'log';
+	s.shell.filterPalette();
+	assert.deepEqual(rows(), [ '*|Log out|Session', '*|Login background: None|Appearance', '*|Login background: Starfield|Appearance',
+		'|System Log|Status', '|Kernel Log|Status › System Log' ]);
+	assert.equal(pal.count.textContent, '5 results');
+	pal.input.value = 'zzz';
+	s.shell.filterPalette();
+	assert.equal(pal.count.textContent, '0 results');
 });

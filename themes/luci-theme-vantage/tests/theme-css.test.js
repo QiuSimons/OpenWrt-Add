@@ -2,9 +2,9 @@
 /* vantage.css rules that broke once and are easy to break again: a class
    the theme styles that the dashboard also uses (rule 7: the theme does
    not style app internals), centring that hides the start of a scrolling
-   list, a breakpoint pair with a gap between them, pulse rings that cover
-   their dot, hit targets under the control height, and phone table cards
-   that only half apply. */
+   list, a breakpoint pair with a gap between them, endless pulses, a
+   reset that outweighed the button rule, hit targets under the control
+   height, and phone table cards that only half apply. */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -120,18 +120,45 @@ test('720px: phone rules and desktop rules split without a gap, and the menu scr
 	assert.match(menuJs, /this\.mqMobile = window\.matchMedia\('\(max-width: 720px\)'\);/);
 });
 
-test('pulse rings sit behind their dot and stay invisible unless animated', () => {
-	const rings = themeRules.filter(r => r.sel.some(s => /::after$/.test(s)) && /animation:[^;]*infinite/.test(r.body));
-	assert.ok(rings.length >= 2, 'found the poll and login rings');
-	for (const r of rings) {
-		/* reduced motion runs the animation once, near-instantly, and the
-		   ring falls back to these base values */
-		assert.match(r.body, /(^|[;\s])opacity:\s*0\s*;/, r.sel.join(','));
-		assert.match(r.body, /z-index:\s*-1/, r.sel.join(','));
-	}
-	/* the stacking context that keeps z-index -1 above the pill and card */
-	assert.match(themeCss, /\[data-indicator="poll-status"\]\[data-style="active"\] \{ position: relative; isolation: isolate; \}/);
-	assert.match(themeCss, /\.vt-login-sub \{ isolation: isolate; \}/);
+test('nothing pulses: the only endless animations are spinners; the compact poll pill is a pause / play button', () => {
+	const endless = themeRules.filter(r => /animation(-iteration-count)?:[^;]*infinite/.test(r.body));
+	assert.ok(endless.length >= 2, 'found the spinners');
+	for (const r of endless)
+		for (const s of r.sel) assert.match(s, /spinning|^#modal_overlay > \.modal/, 'endless animation on ' + s);
+	assert.doesNotMatch(themeCss, /@keyframes vt-live\b/);
+	assert.doesNotMatch(themeCss, /vt-login-dot/);
+	/* the dot is a status colour, never the accent */
+	const dot = themeRules.find(r => !r.media && r.sel.includes('#indicators > span[data-indicator="poll-status"][data-style="active"]::before'));
+	assert.match(dot.body, /background:\s*var\(--ok\)/);
+	/* at 900 px and below the label goes: a pause sign while refreshing, play while paused */
+	const narrow = sel => themeRules.find(r => /max-width: 900px/.test(r.media) && r.sel.includes(sel));
+	assert.match(narrow('#indicators > span[data-indicator="poll-status"][data-style="active"]::before').body, /border-inline:\s*3px solid currentColor/);
+	assert.match(narrow('#indicators > span[data-indicator="poll-status"][data-style="inactive"]::before').body, /border-left:\s*9px solid currentColor/);
+});
+
+test('buttons: the input reset has zero specificity, so the theme\'s button rule sets their font', () => {
+	const reset = themeRules.find(r => !r.media && /font:\s*inherit;\s*color:\s*inherit/.test(r.body) && r.sel.some(s => /button/.test(s)));
+	assert.deepEqual(reset.sel, [ ':where(input, select, textarea, button)' ]);
+	/* (the rule splitter cuts this :where() at its inner commas) */
+	const btn = themeRules.find(r => !r.media && r.sel[0] === ':where(.btn' && /font:\s*500/.test(r.body));
+	assert.ok(btn, 'found the button rule');
+	assert.ok(themeRules.indexOf(btn) > themeRules.indexOf(reset), 'the button rule comes after the reset');
+});
+
+test('Status -> Overview: an up box draws no dot; a down one a hollow ring, never the accent', () => {
+	const own = sel => themeRules.filter(r => !r.media && r.sel.includes(sel)).map(r => r.body).join(';');
+	assert.match(own('.network-status-table .ifacebox-head.active::before'), /content:\s*none/);
+	assert.match(own('.network-status-table .ifacebox-head::before'), /box-shadow:\s*inset 0 0 0 1\.5px var\(--text-3\)/);
+	assert.match(own('.ifacebox:has(> .ifacebox-body > img[src$="_up.svg"]) > .ifacebox-head:first-child::before'), /content:\s*none/);
+	for (const r of themeRules)
+		if (r.sel.some(s => /ifacebox-head[^,]*::before/.test(s))) assert.doesNotMatch(r.body, /--accent|--v-chart-1/, r.sel.join(','));
+});
+
+test('one definition of LuCI\'s progress bar (a superseded copy lingered above it)', () => {
+	const plain = themeRules.filter(r => !r.media && r.sel.some(s => /^\.cbi-progressbar(\s*>\s*div|::before|::after)?$/.test(s)));
+	assert.deepEqual(plain.map(r => r.sel.join(',')), [ '.cbi-progressbar', '.cbi-progressbar > div', '.cbi-progressbar::before', '.cbi-progressbar::after' ]);
+	assert.match(plain[1].body, /transition:\s*width/);
+	assert.match(plain[2].body, /content:\s*attr\(title\)/);
 });
 
 test('hit targets: tabs, the crumb switch, its links and touch top-bar buttons are a control high', () => {
@@ -173,16 +200,18 @@ test('firewall: verdicts and policies are coloured by their raw value, off rules
 	assert.match(body((s) => /var\[data-tooltip="ACCEPT"\]/.test(s)), /--ok/);
 	assert.match(body((s) => /\[data-tooltip="REJECT"\]/.test(s) && /\[data-tooltip="DROP"\]/.test(s) && !/ACCEPT/.test(s)), /--err/);
 	assert.match(body((s) => /\[data-tooltip="DNAT"\]/.test(s) && !/ACCEPT/.test(s)), /--info/);
-	/* policies: by the selected option's value, live */
-	assert.match(body((s) => /select\[id\^="widget\.cbid\.firewall\."\]:has\(> option:checked:is\(\[value="REJECT"\], \[value="DROP"\]\)\)/.test(s)), /--err/);
-	assert.match(body((s) => /select\[id\^="widget\.cbid\.firewall\."\]:has\(> option:checked\[value="ACCEPT"\]\)/.test(s)), /--ok/);
+	/* policies stay plain (reject and drop are the safe values); only the
+	   internet-facing zone accepting input is coloured, in the error
+	   colours, by the selected option's value, live */
+	assert.ok(!themeRules.some((r) => r.sel.some((s) => /^select\[id\^="widget\.cbid\.firewall\."\]:has/.test(s))), 'no colour for every policy select');
+	assert.match(body((s) => /\.masq"\]:checked\) > \.td\[data-name="input"\] select:has\(> option:checked\[value="ACCEPT"\]\)$/.test(s)), /color: var\(--err-text\)[^]*border-color: var\(--err\)/);
 	/* a rule unticked looks off, but its switch and buttons stay as they are */
 	const off = themeRules.find((r) => r.sel.some((s) => /enabled"\]:not\(:checked\)\) > \.td:not\(\.cbi-section-actions\):not\(:has/.test(s)));
 	assert.ok(off && /color:\s*var\(--text-3\)/.test(off.body));
 	assert.ok(off.sel.every((s) => /:not\(\.cbi-section-actions\)/.test(s) && /:not\(:has\(input\[data-widget-id\$="\.enabled"\]\)\)/.test(s)));
 	/* accept is the risk on the masquerading (internet-facing) zone: input accept and its forwardings warn */
 	const risk = themeRules.filter((r) => r.sel.some((s) => /input\[data-widget-id\$="\.masq"\]:checked/.test(s)));
-	assert.ok(risk.some((r) => r.sel.some((s) => /data-name="input"\] select:has\(> option:checked\[value="ACCEPT"\]\)/.test(s)) && /--warn/.test(r.body)));
+	assert.ok(risk.some((r) => r.sel.some((s) => /data-name="input"\] select:has\(> option:checked\[value="ACCEPT"\]\)/.test(s)) && /--err-text/.test(r.body)));
 	assert.ok(risk.some((r) => r.sel.some((s) => /\.zone-dest > \.zonebadge:not\(\.zonebadge-empty\)/.test(s)) && /--warn/.test(r.body)));
 	/* the muted first line of a match only on firewall pages: other tables use <small><br> too */
 	for (const r of themeRules)
@@ -244,7 +273,7 @@ test('firewall colours keep 4.5:1 on a hovered row, light and dark (badges, the 
 	const body = (pred) => themeRules.filter((r) => r.sel.some(pred)).map((r) => r.body).join(';');
 	assert.match(body((s) => /\[data-tooltip="REJECT"\]/.test(s) && /\[data-tooltip="DROP"\]/.test(s) && !/ACCEPT/.test(s)), /color:\s*var\(--err-text\)/);
 	assert.match(body((s) => /\[data-tooltip="DNAT"\]/.test(s) && !/ACCEPT/.test(s)), /color:\s*var\(--info-text\)/);
-	assert.match(body((s) => /\.td\[data-name="input"\] select:has/.test(s)), /color:\s*var\(--warn-text\)/);
+	assert.match(body((s) => /\.td\[data-name="input"\] select:has/.test(s)), /color:\s*var\(--err-text\)/);
 	/* the row hover: --s3 at 55% over the card (--s1), as in the .tr:hover rule */
 	assert.match(themeCss, /:hover > \.td \{ background: color-mix\(in srgb, var\(--s3\) 55%, transparent\); \}/);
 	for (const [ scheme, t ] of [ [ 'light', light ], [ 'dark', dark ] ]) {
@@ -256,6 +285,16 @@ test('firewall colours keep 4.5:1 on a hovered row, light and dark (badges, the 
 				assert.ok(r >= 4.5, scheme + ' ' + fg + ' on ' + bg + ' ' + where + ': ' + r.toFixed(2));
 			}
 	}
+});
+
+test('ink on the status and accent fills keeps 4.5:1, light and dark (counts, warning tooltips, primary buttons)', () => {
+	assert.match(themeCss, /\.cbi-tooltip\.warning \{[^}]*color: var\(--warn-ink\)/);
+	assert.doesNotMatch(themeCss, /(?<!-)color:\s*#1a1200/, 'the warning ink is a token, not a literal');
+	for (const [ scheme, t ] of [ [ 'light', light ], [ 'dark', dark ] ])
+		for (const [ ink, fill ] of [ [ '--warn-ink', '--warn' ], [ '--err-ink', '--err' ], [ '--info-ink', '--info' ], [ '--accent-ink', '--accent' ], [ '--accent-ink', '--accent-hover' ] ]) {
+			const r = ratio(rgba(t, 'var(' + ink + ')'), rgba(t, 'var(' + fill + ')'));
+			assert.ok(r >= 4.5, scheme + ' ' + ink + ' on ' + fill + ': ' + r.toFixed(2));
+		}
 });
 
 test('switched-off rules are greyed, not faded: the name and match keep 4.5:1', () => {
@@ -418,6 +457,22 @@ test('touch: short row buttons are at least a touch target wide (Processes Kill 
 	const r = themeRules.find((x) => x.media === '(pointer: coarse)' && x.sel.includes('.td.cbi-section-actions :is(.btn, .cbi-button):not(.drag-handle)'));
 	assert.ok(r, 'rule present');
 	assert.match(r.body, /min-width:\s*var\(--ctl-h\)/);
+});
+
+test('File Manager: the app\'s own light palette is repainted on its page only, from tokens', () => {
+	/* luci-app-filemanager injects a <style> of its own (#f9f9f9 status bar,
+	   #f0f0f0 row hover, #ccc rules). On the dark scheme that is a white band
+	   under the theme's light ink; the fix may not leak to other pages that
+	   happen to use the same ids, and it may not hard-code a colour. */
+	const own = themeRules.filter((r) => r.sel.some((s) => /#status-bar/.test(s)));
+	assert.ok(own.length, 'the status bar is repainted');
+	for (const r of own) {
+		for (const s of r.sel)
+			assert.match(s, /^body\[data-page="admin-system-filemanager"\] /, 'scoped to the page: ' + s);
+		assert.doesNotMatch(r.body, /#[0-9a-f]{3,8}\b/i, 'theme tokens, not literals: ' + r.sel.join(','));
+	}
+	/* the row hover is the app's !important fill: the theme takes it back */
+	assert.ok(themeRules.some((r) => r.sel.some((s) => /admin-system-filemanager"\] #file-table tr:hover/.test(s)) && /background:\s*none !important/.test(r.body)));
 });
 
 test('Interfaces: an open device tooltip escapes the scrolling table card (last row was clipped by 43 px)', () => {

@@ -5,7 +5,7 @@
 # r8125 is the Linux device driver released for Realtek 2.5 Gigabit Ethernet
 # controllers with PCI-Express interface.
 #
-# Copyright(c) 2025 Realtek Semiconductor Corp. All rights reserved.
+# Copyright(c) 2026 Realtek Semiconductor Corp. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the Free
@@ -32,8 +32,8 @@
  *  US6,570,884, US6,115,776, and US6,327,625.
  ***********************************************************************************/
 
-#ifndef _LINUX_rtl8125_RSS_H
-#define _LINUX_rtl8125_RSS_H
+#ifndef _LINUX_R8125_RSS_H
+#define _LINUX_R8125_RSS_H
 
 #include <linux/netdevice.h>
 #include <linux/types.h>
@@ -73,4 +73,4 @@ void rtl8125_init_rss(struct rtl8125_private *tp);
 u32 rtl8125_rss_indir_tbl_entries(struct rtl8125_private *tp);
 void rtl8125_disable_rss(struct rtl8125_private *tp);
 
-#endif /* _LINUX_rtl8125_RSS_H */
+#endif /* _LINUX_R8125_RSS_H */

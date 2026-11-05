@@ -146,11 +146,16 @@ test('resolve: fixed order alias > dns > dhcp > mdns > wps > vendor', () => {
 	   anyone on the LAN, so they rank below */
 	const order = [];
 	const s = Object.assign({}, ALL);
-	const steps = [ [ 'alias', 'My Laptop' ], [ 'dns', 'laptop-dns' ], [ 'dhcp', 'laptop-dhcp' ], [ 'mdns', 'laptop-mdns' ], [ 'wps', 'Laptop WPS' ], [ 'vendor', 'Example Vendor device · …00:53:10' ], [ 'mac', 'Device · …00:53:10' ] ];
+	/* [ source, one-line name, plain name ]: a name made up from the MAC
+	   carries its last two octets on one line, none where the MAC is
+	   shown beside it */
+	const steps = [ [ 'alias', 'My Laptop', 'My Laptop' ], [ 'dns', 'laptop-dns', 'laptop-dns' ], [ 'dhcp', 'laptop-dhcp', 'laptop-dhcp' ],
+		[ 'mdns', 'laptop-mdns', 'laptop-mdns' ], [ 'wps', 'Laptop WPS', 'Laptop WPS' ],
+		[ 'vendor', 'Example Vendor device 53:10', 'Example Vendor device' ], [ 'mac', 'Unknown device 53:10', 'Unknown device' ] ];
 	const drop = [ 'alias', 'rdns', 'hint', 'mdns', 'wps', 'vendor' ];
 	for (let i = 0; i < steps.length; i++) {
 		const r = names.resolve(s);
-		assert.deepEqual([ r.source, r.name ], steps[i]);
+		assert.deepEqual([ r.source, r.name, r.plain ], steps[i]);
 		order.push(r.source);
 		if (drop[i]) delete s[drop[i]];
 	}
@@ -160,12 +165,16 @@ test('resolve: fixed order alias > dns > dhcp > mdns > wps > vendor', () => {
 test('resolve: private MAC says so instead of a vendor, never "?"', () => {
 	const r = names.resolve({ mac: PMAC, vendor: 'Should Not Show' });
 	assert.equal(r.source, 'private');
-	assert.equal(r.name, 'Private device · …00:53:11');
+	assert.equal(r.name, 'Private device 53:11');
+	assert.equal(r.plain, 'Private device');
 	assert.equal(r.isPrivate, true);
 	assert.equal(r.secondary, '02:00:5E:00:53:11');
+	/* the word appears once in the name, not again as a tail or a dot */
+	assert.equal(r.name.split(/private/i).length - 1, 1);
 	for (const junk of [ {}, { mac: 'nonsense' }, { mac: null } ]) {
 		const j = names.resolve(junk);
 		assert.ok(j.name && !/\?/.test(j.name));
+		assert.equal(j.name, j.plain, 'no MAC: no octets to add');
 	}
 });
 

@@ -10,6 +10,8 @@ const path = require('path');
 const { load, RES } = require('./luci-stub');
 
 const REPLIES = {};
+/* the view's `ui`: tests set ui.menu */
+const UI = {};
 
 function loadView() {
 	const src = fs.readFileSync(path.join(RES, 'view/vantage/overview.js'), 'utf8');
@@ -17,7 +19,7 @@ function loadView() {
 		view: { extend: p => p },
 		/* replies come from REPLIES['object method'](...args) when set */
 		rpc: { declare: o => function(...args) { const f = REPLIES[o.object + ' ' + o.method]; return f ? f(...args) : Promise.resolve(null); } },
-		poll: {}, ui: {}, dom: {}
+		poll: {}, ui: UI, dom: {}
 	};
 	const params = [], values = [];
 	for (const m of src.matchAll(/^'require ([\w.-]+)(?: as (\w+))?';$/gm)) {
@@ -178,8 +180,11 @@ test('wired hosts: the path counts those downstream only; filters, search and so
 	self.ui = { kind: 'wired', chip: 'all', filter: '' };
 
 	assert.deepEqual(self.wiredPorts(), [ 'lan1', 'lan2' ], 'the uplink\'s port leads to the gateway');
-	const kpi = self.kpiSpecs()[0];
-	assert.deepEqual([ kpi.value, kpi.sub ], [ '3', '3 wired' ]);
+	/* the path's Wired branch: a node per downstream port, their hosts counted */
+	const stub = () => ({ textContent: '', getAttribute() { return null; }, setAttribute() {} });
+	const branch = { ssids: self.wiredPorts().map(port => ({ port, el: stub(), name: stub(), count: stub(), rate: stub() })), title: stub(), sub: stub() };
+	self.updateWiredBranch(branch);
+	assert.equal(branch.title.textContent, '3 devices');
 	/* a bridge with several ports, the gateway's port unknown: the
 	   counters' port is a guess, so only the gateway is left out */
 	self.m.uplink = { dev: 'lan1', statsDev: 'lan1', port: null };
@@ -244,7 +249,8 @@ test('wired branch: each port node shows its traffic, all its hosts\' together',
 	const b = { ssids: [ node('lan5'), node('lan6') ], title: el(), sub: el() };
 	self.updateWiredBranch(b);
 	const [ shared, alone ] = b.ssids;
-	assert.deepEqual([ shared.name.textContent, shared.count.textContent, shared.rate.textContent ], [ 'lan5', '2 devices', '↓ 12M  ↑ 3k' ]);
+	/* full units: each its own where they differ */
+	assert.deepEqual([ shared.name.textContent, shared.count.textContent, shared.rate.textContent ], [ 'lan5', '2 devices', '↓ 12.3 Mbit/s  ↑ 3 kbit/s' ]);
 	assert.equal(shared.el.attrs.title, 'Show the devices on lan5\nPort total: ↓ 12.3 Mbit/s · ↑ 3 kbit/s');
 	assert.deepEqual([ alone.name.textContent, alone.rate.textContent, alone.el.attrs.title ], [ 'lan6 · h03', '—', 'Show the devices on lan6' ], 'no counters yet: a dash, no total');
 	assert.equal(b.sub.textContent, '↓ 12.3 Mbit/s');
@@ -348,4 +354,214 @@ test('switch ports: LuCI is asked on the side for a switch with hosts behind it,
 		delete REPLIES['luci getSwconfigPortState'];
 		delete REPLIES['system info'];
 	}
+});
+
+/* #83: with the Vantage theme installed but another one selected, the
+   dashboard makes way for LuCI's own landing page. The dashboard alone
+   (no theme package) works under any theme. */
+test('another theme: the dashboard steps aside only when the Vantage theme is installed', () => {
+	const DASH = [ 'admin', 'status', 'dashboard' ], OVERVIEW = [ 'admin', 'status', 'overview' ];
+	/* Vantage is the theme in use */
+	assert.equal(view.asidePage('/luci-static/vantage', true, true, true), null);
+	assert.equal(view.asidePage('/luci-static/vantage/', true, false, true), null, 'a trailing slash');
+	/* another theme, Vantage's installed: LuCI's dashboard, else Status -> Overview */
+	assert.deepEqual(view.asidePage('/luci-static/argon', true, true, true), DASH);
+	assert.deepEqual(view.asidePage('/luci-static/argon', true, true, false), DASH);
+	assert.deepEqual(view.asidePage('/luci-static/argon', true, false, true), OVERVIEW);
+	assert.deepEqual(view.asidePage('/luci-static/bootstrap-dark', true, false, true), OVERVIEW);
+	assert.deepEqual(view.asidePage('/luci-static/vantage-old', true, false, true), OVERVIEW, 'another name is another theme');
+	/* neither page for this user: the dashboard, not an access error */
+	assert.equal(view.asidePage('/luci-static/argon', true, false, false), null);
+	/* the dashboard only: stays under any theme */
+	assert.equal(view.asidePage('/luci-static/argon', false, true, true), null);
+	assert.equal(view.asidePage('/luci-static/bootstrap', false, false, true), null);
+	assert.equal(view.asidePage('/luci-static/argon', 'yes', true, true), null, 'only a yes from the probe counts');
+	/* LuCI named no theme: no decision, as before */
+	for (const media of [ undefined, null, '', '/', 42 ])
+		assert.equal(view.asidePage(media, true, true, true), null, String(media));
+	const a = view.asidePage('/luci-static/argon', true, true, true);
+	a.push('x');
+	assert.deepEqual(view.asidePage('/luci-static/argon', true, true, true), DASH, 'a fresh path each time');
+});
+
+const node = (satisfied, children) => Object.assign({ satisfied }, children ? { children } : {});
+const menuWith = (dashboard, overview = node(true)) => ({ children: { admin: node(true, { status: node(true, Object.assign({ overview }, dashboard ? { dashboard } : {})) }) } });
+const SCRIPT = { ok: true, status: 200, headers: { get: h => /^content-type$/i.test(h) ? 'application/javascript; charset=UTF-8' : null } };
+const NOT_FOUND = { ok: false, status: 404, headers: { get: h => /^content-type$/i.test(h) ? 'text/html' : null } };
+const HTML_200 = { ok: true, status: 200, headers: { get: h => /^content-type$/i.test(h) ? 'text/html; charset=UTF-8' : null } };
+
+/* load() with media as L.env.media; theme: the reply to the theme probe
+   (an object, or an Error to reject); menu: the menu tree, or null for a
+   failed load. 'dashboard' when load() resolved, 'waiting' when it is
+   still pending (it never resolves after location.replace) */
+async function openDashboard(media, theme, menu) {
+	const replaced = [], probes = [], asked = [];
+	const saved = { L: global.L, fetch: global.fetch, window: global.window, menu: UI.menu };
+	global.L = {
+		env: { media, resource_version: '25.12-1' },
+		resource: p => '/luci-static/resources/' + p,
+		url: (...a) => '/cgi-bin/luci/' + a.join('/'),
+		resolveDefault: (p, d) => Promise.resolve(p).catch(() => d)
+	};
+	global.fetch = (url, opts) => {
+		if (url !== '/luci-static/resources/menu-vantage.js') return Promise.resolve({ ok: false, text: () => Promise.resolve('') });
+		probes.push((opts && opts.method) || 'GET');
+		return theme instanceof Error ? Promise.reject(theme) : Promise.resolve(theme);
+	};
+	global.window = { location: { replace: url => replaced.push(url) } };
+	UI.menu = { load: () => menu ? Promise.resolve(menu) : Promise.reject(new Error('menu failed')) };
+	REPLIES['system board'] = () => { asked.push('board'); return Promise.resolve({}); };
+	try {
+		const out = await Promise.race([ Object.create(view).load().then(() => 'dashboard'), new Promise(r => setTimeout(() => r('waiting'), 100)) ]);
+		return { out, replaced, probes, asked };
+	} finally {
+		global.L = saved.L;
+		global.fetch = saved.fetch;
+		if (saved.window === undefined) delete global.window; else global.window = saved.window;
+		UI.menu = saved.menu;
+		delete REPLIES['system board'];
+	}
+}
+
+test('another theme: load() decides before the dashboard asks for anything', async () => {
+	const stays = { out: 'dashboard', replaced: [], asked: [ 'board' ] };
+	const pick = r => ({ out: r.out, replaced: r.replaced, asked: r.asked });
+
+	/* Vantage in use: no probe at all */
+	let r = await openDashboard('/luci-static/vantage', SCRIPT, menuWith(node(true)));
+	assert.deepEqual(pick(r), stays);
+	assert.deepEqual(r.probes, [], 'nothing asked under Vantage');
+
+	/* another theme with Vantage's installed: replaced, nothing of the dashboard loaded */
+	r = await openDashboard('/luci-static/argon', SCRIPT, menuWith(node(true)));
+	assert.deepEqual(pick(r), { out: 'waiting', replaced: [ '/cgi-bin/luci/admin/status/dashboard' ], asked: [] });
+	assert.deepEqual(r.probes, [ 'HEAD' ]);
+	r = await openDashboard('/luci-static/argon', SCRIPT, menuWith(null));
+	assert.deepEqual(pick(r), { out: 'waiting', replaced: [ '/cgi-bin/luci/admin/status/overview' ], asked: [] }, 'no luci-mod-dashboard');
+	r = await openDashboard('/luci-static/argon', SCRIPT, menuWith(node(false)));
+	assert.deepEqual(r.replaced, [ '/cgi-bin/luci/admin/status/overview' ], 'luci-mod-dashboard, but not for this user');
+	r = await openDashboard('/luci-static/argon', SCRIPT, null);
+	assert.deepEqual(r.replaced, [ '/cgi-bin/luci/admin/status/overview' ], 'no menu: the page every LuCI has');
+	assert.deepEqual(pick(await openDashboard('/luci-static/argon', SCRIPT, menuWith(null, node(false)))), stays, 'a user without Status -> Overview');
+
+	/* the dashboard only, or no clear answer: the dashboard, as before */
+	assert.deepEqual(pick(await openDashboard('/luci-static/argon', NOT_FOUND, menuWith(node(true)))), stays, '404');
+	assert.deepEqual(pick(await openDashboard('/luci-static/bootstrap', HTML_200, menuWith(node(true)))), stays, 'an error page with 200');
+	assert.deepEqual(pick(await openDashboard('/luci-static/argon', new TypeError('Failed to fetch'), menuWith(node(true)))), stays, 'no answer');
+	r = await openDashboard(undefined, SCRIPT, menuWith(node(true)));
+	assert.deepEqual([ pick(r), r.probes ], [ stays, [] ], 'no media');
+});
+
+test('another theme: the probed file is the theme package\'s alone, the target the app\'s menu entry', () => {
+	const ROOT = path.join(__dirname, '..');
+	const src = fs.readFileSync(path.join(RES, 'view/vantage/overview.js'), 'utf8');
+	assert.match(src, /fetch\(L\.resource\('menu-vantage\.js'\)/);
+	assert.ok(fs.existsSync(path.join(ROOT, 'luci-theme-vantage/htdocs/luci-static/resources/menu-vantage.js')), 'luci-theme-vantage ships it');
+	assert.ok(!fs.existsSync(path.join(RES, 'menu-vantage.js')), 'luci-app-vantage must not');
+	const menu = JSON.parse(fs.readFileSync(path.join(ROOT, 'luci-app-vantage/root/usr/share/luci/menu.d/zz-luci-app-vantage.json'), 'utf8'));
+	assert.match(src, /var LUCI_DASHBOARD = \[ 'admin', 'status', 'dashboard' \];/);
+	assert.equal(menu['admin/status/dashboard'].action.path, 'dashboard/index', 'luci-mod-dashboard\'s page');
+	assert.equal(menu['admin/dashboard'].action.path, 'vantage/overview');
+});
+
+test('header: model and hostname once each, one of them when it holds the other', () => {
+	const id = d => view.identity(d);
+	assert.deepEqual(id({ model: 'Example AX3000', hostname: 'example-ax3000' }), [ 'Example AX3000' ]);
+	assert.deepEqual(id({ model: 'Example AX3000', hostname: 'AX3000' }), [ 'Example AX3000' ], 'the model holds the hostname');
+	assert.deepEqual(id({ model: 'AX3000', hostname: 'ax3000-attic' }), [ 'ax3000-attic' ], 'the hostname holds the model');
+	assert.deepEqual(id({ model: 'Example AX3000', hostname: 'attic' }), [ 'Example AX3000', 'attic' ]);
+	assert.deepEqual(id({ model: 'Example AX3000', hostname: null }), [ 'Example AX3000' ]);
+	assert.deepEqual(id({ model: 'Example AX3000', hostname: '--' }), [ 'Example AX3000', '--' ], 'nothing to compare: both');
+});
+
+test('live pill: under the Vantage theme only when not live; under another theme always', () => {
+	const saved = { L: global.L, document: global.document };
+	const pill = () => ({ className: '', hidden: false, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } });
+	const run = (media, st) => {
+		global.L = { env: { media } };
+		global.document = { hidden: false };
+		const self = Object.create(view);
+		self.st = Object.assign({ paused: false, lastErr: null, lastOk: Date.now() }, st);
+		self.el = { live: pill(), liveText: { textContent: '' } };
+		self.paintLive();
+		return [ self.el.live.hidden, self.el.live.className ];
+	};
+	try {
+		assert.deepEqual(run('/luci-static/vantage', {}), [ true, 'vt-livepill vt-live-ok' ], 'the theme\'s poll indicator says it');
+		assert.deepEqual(run('/luci-static/vantage', { lastErr: new Error('x') }), [ false, 'vt-livepill vt-live-err' ]);
+		assert.deepEqual(run('/luci-static/vantage/', { paused: true }), [ false, 'vt-livepill vt-live-paused' ]);
+		assert.deepEqual(run('/luci-static/bootstrap', {}), [ false, 'vt-livepill vt-live-ok' ]);
+	} finally {
+		global.L = saved.L;
+		if (saved.document === undefined) delete global.document; else global.document = saved.document;
+	}
+});
+
+test('clients: a pick (filter, quick filter, Wi-Fi or wired) shows the new height at once; a poll keeps the hold', () => {
+	const self = Object.create(view);
+	let laid = 0;
+	self.held = { clients: { h: 6000, since: 1 }, chart: { h: 300, since: 1 } };
+	self.paintClients = () => {};
+	self.scheduleLayout = () => { laid++; };
+	self.el = { filter: { value: '' } };
+	self.ui = { kind: 'wired', chip: 'all', filter: '' };
+	self.setFilter('phone');
+	assert.equal(self.held.clients, undefined, 'released');
+	assert.ok(self.held.chart, 'other tiles keep theirs');
+	assert.equal(laid, 1);
+	self.held.clients = { h: 6000, since: 1 };
+	self.pickClients();
+	assert.equal(self.held.clients, undefined);
+	/* the Wi-Fi/Wired switch and the quick filters go through pickClients */
+	const src = fs.readFileSync(path.join(RES, 'view/vantage/overview.js'), 'utf8');
+	assert.match(src, /ui\.kind = k\[0\]; ui\.chip = 'all'; self\.pickClients\(\);/);
+	assert.match(src, /ui\.chip = d\[0\]; self\.filterMenu\(false\); self\.pickClients\(\);/);
+	assert.match(src, /'input': function\(ev\) \{ self\.ui\.filter = ev\.target\.value; self\.pickClients\(\); \}/);
+});
+
+test('deep links: moving from an open drawer to a client names the client', () => {
+	const self = Object.create(view);
+	self.ui = { drawer: { kind: 'radio', id: 'radio1' } };
+	self.el = { drawer: { hidden: false } };
+	let painted = 0;
+	self.paintDrawer = () => { painted++; };
+	self.paintClients = () => {};
+	const cleared = withLocation('#radio=radio1', c => { self.openDrawer('client', '00:00:5e:00:53:21'); return c; });
+	assert.deepEqual(cleared, [ '#client=00%3A00%3A5e%3A00%3A53%3A21' ]);
+	assert.deepEqual(self.ui.drawer, { kind: 'client', id: '00:00:5e:00:53:21' });
+	assert.equal(painted, 1);
+});
+
+/* a tree of { tag, attrs, children } from E() stubs, as text and classes */
+function withDom(fn) {
+	const saved = { E: global.E, document: global.document };
+	const node = () => ({ setAttribute() {}, appendChild() {}, style: { setProperty() {} } });
+	global.document = { createElementNS: node };
+	global.E = (tag, attrs, children) => ({ tag, attrs: attrs || {}, children: [].concat(children == null ? [] : children), style: { setProperty() {} } });
+	try { return fn(); }
+	finally {
+		if (saved.E === undefined) delete global.E; else global.E = saved.E;
+		if (saved.document === undefined) delete global.document; else global.document = saved.document;
+	}
+}
+const texts = n => n == null || n === '' ? [] : typeof n === 'string' ? [ n ] : n.children ? n.children.flatMap(texts) : [];
+const classes = n => n && typeof n === 'object' && n.children ? [ n.attrs && n.attrs['class'] ].concat(n.children.flatMap(classes)).filter(Boolean) : [];
+
+test('names made up from the MAC: the plain name beside the MAC, no source badge; one line keeps the octets', () => {
+	const self = Object.create(view);
+	const priv = { mac: '02:00:5e:00:53:11', macLabel: '02:00:5E:00:53:11', name: 'Private device 53:11', plainName: 'Private device',
+		nameSource: 'private', nameSourceLabel: 'Private', secondary: '02:00:5E:00:53:11', icon: 'phone' };
+	const named = Object.assign({}, priv, { name: 'phone', plainName: 'phone', nameSource: 'dhcp', nameSourceLabel: 'DHCP', secondary: '192.0.2.44' });
+	withDom(() => {
+		const row = self.whoCell(priv, []);
+		assert.deepEqual(texts(row), [ 'Private device', '02:00:5E:00:53:11' ]);
+		assert.ok(!classes(row).some(c => /vt-src/.test(c)), 'no PRIVATE badge');
+		/* an address as the second line: the octets stay to tell it apart */
+		assert.deepEqual(texts(self.whoCell(Object.assign({}, priv, { secondary: '192.0.2.50' }), [])), [ 'Private device 53:11', '192.0.2.50' ]);
+		const who = self.drawerWho(priv);
+		assert.deepEqual(texts(who[1]), [ 'Private device', '02:00:5E:00:53:11' ]);
+		/* a real name keeps its source */
+		assert.deepEqual(texts(self.whoCell(named, [])), [ 'phone', 'DHCP', '192.0.2.44' ]);
+		assert.deepEqual(texts(self.drawerWho(named)[1]), [ 'phone', 'DHCP', '192.0.2.44' ]);
+	});
 });

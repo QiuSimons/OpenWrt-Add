@@ -5,7 +5,7 @@
 # r8125 is the Linux device driver released for Realtek 2.5 Gigabit Ethernet
 # controllers with PCI-Express interface.
 #
-# Copyright(c) 2025 Realtek Semiconductor Corp. All rights reserved.
+# Copyright(c) 2026 Realtek Semiconductor Corp. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the Free
@@ -32,8 +32,8 @@
  *  US6,570,884, US6,115,776, and US6,327,625.
  ***********************************************************************************/
 
-#ifndef __R8125_H
-#define __R8125_H
+#ifndef _R8125_H
+#define _R8125_H
 
 //#include <linux/pci.h>
 #include <linux/ethtool.h>
@@ -409,6 +409,13 @@ do { \
 
 #if !defined(HAVE_FREE_NETDEV) && (LINUX_VERSION_CODE < KERNEL_VERSION(3,1,0))
 #define free_netdev(x)  kfree(x)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27)
+#define RTL_NAPI_DEL(priv)
+#else
+#define RTL_NAPI_DEL(priv)   netif_napi_del(&priv->napi)
+#endif //LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27)
+#else
+#define RTL_NAPI_DEL(priv)
 #endif
 
 #ifndef SET_NETDEV_DEV
@@ -588,12 +595,12 @@ static inline u32 rtl8125_ethtool_adv_to_mmd_eee_adv_cap2_t(u32 adv)
 #define RSS_SUFFIX ""
 #endif
 
-#define RTL8125_VERSION "9.016.01" NAPI_SUFFIX DASH_SUFFIX REALWOW_SUFFIX PTP_SUFFIX RSS_SUFFIX
+#define RTL8125_VERSION "9.018.00" NAPI_SUFFIX DASH_SUFFIX REALWOW_SUFFIX PTP_SUFFIX RSS_SUFFIX
 #define MODULENAME "r8125"
 #define PFX MODULENAME ": "
 
 #define GPL_CLAIM "\
-r8125  Copyright (C) 2025 Realtek NIC software team <nicfae@realtek.com> \n \
+r8125  Copyright (C) 2026 Realtek NIC software team <nicfae@realtek.com> \n \
 This program comes with ABSOLUTELY NO WARRANTY; for details, please see <http://www.gnu.org/licenses/>. \n \
 This is free software, and you are welcome to redistribute it under certain conditions; see <http://www.gnu.org/licenses/>. \n"
 
@@ -668,6 +675,7 @@ This is free software, and you are welcome to redistribute it under certain cond
 #define Jumbo_Frame_7k  (7*1024 - ETH_HLEN - VLAN_HLEN - ETH_FCS_LEN)
 #define Jumbo_Frame_8k  (8*1024 - ETH_HLEN - VLAN_HLEN - ETH_FCS_LEN)
 #define Jumbo_Frame_9k  (9*1024 - ETH_HLEN - VLAN_HLEN - ETH_FCS_LEN)
+#define Jumbo_Frame_16k (16*1024 - ETH_HLEN - VLAN_HLEN - ETH_FCS_LEN)
 #define InterFrameGap   0x03    /* 3 means InterFrameGap = the shortest one */
 #define RxEarly_off_V1 (0x07 << 11)
 #define RxEarly_off_V2 (1 << 11)
@@ -689,7 +697,7 @@ This is free software, and you are welcome to redistribute it under certain cond
 #define R8125_MAX_MSIX_VEC_8125D   32
 #define R8125_MIN_MSIX_VEC_8125B   22
 #define R8125_MIN_MSIX_VEC_8125BP  32
-#define R8125_MIN_MSIX_VEC_8125CP  31
+#define R8125_MIN_MSIX_VEC_8125CP  49
 #define R8125_MIN_MSIX_VEC_8125D   20
 #define R8125_MAX_MSIX_VEC   32
 #define R8125_MAX_RX_QUEUES_VEC_V3 (16)
@@ -768,7 +776,7 @@ This is free software, and you are welcome to redistribute it under certain cond
 #endif
 
 #ifndef NETDEV_TX_LOCKED
-#define NETDEV_TX_LOCKED -1t /* driver tx lock was already taken */
+#define NETDEV_TX_LOCKED -1 /* driver tx lock was already taken */
 #endif
 
 #ifndef ADVERTISED_Pause
@@ -861,7 +869,7 @@ static inline void *netdev_priv(struct net_device *dev)
                                + NETDEV_ALIGN_CONST)
                               & ~NETDEV_ALIGN_CONST);
 }
-#endif  //LINUX_VERSION_CODE < KERNEL_VERSION(2,6,3)
+#endif  /* LINUX_VERSION_CODE < KERNEL_VERSION(2,4,27) || (2.6.0 <= LINUX_VERSION_CODE < 2.6.3) */
 
 /*****************************************************************************/
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,22)
@@ -879,7 +887,7 @@ typedef int *napi_budget;
 #define RTL_NAPI_CONFIG(ndev, priv, function, weig) ndev->poll=function;    \
                                 ndev->weight=weig;
 #define RTL_NAPI_QUOTA(budget, ndev)            min(*budget, ndev->quota)
-#define RTL_GET_PRIV(stuct_ptr, priv_struct)        netdev_priv(stuct_ptr)
+#define RTL_GET_PRIV(struct_ptr, priv_struct)        netdev_priv(struct_ptr)
 #define RTL_GET_NETDEV(priv_ptr)
 #define RTL_RX_QUOTA(budget)          *budget
 #define RTL_NAPI_QUOTA_UPDATE(ndev, work_done, budget)  *budget -= work_done;   \
@@ -901,7 +909,7 @@ typedef int napi_budget;
 #define RTL_NAPI_CONFIG(ndev, priv, function, weight)   netif_napi_add(ndev, &priv->napi, function, weight)
 #endif //LINUX_VERSION_CODE >= KERNEL_VERSION(6,1,0)
 #define RTL_NAPI_QUOTA(budget, ndev)            min(budget, budget)
-#define RTL_GET_PRIV(stuct_ptr, priv_struct)        container_of(stuct_ptr, priv_struct, stuct_ptr)
+#define RTL_GET_PRIV(struct_ptr, priv_struct)        container_of(struct_ptr, priv_struct, struct_ptr)
 #define RTL_GET_NETDEV(priv_ptr)            struct net_device *dev = priv_ptr->dev;
 #define RTL_RX_QUOTA(budget)          budget
 #define RTL_NAPI_QUOTA_UPDATE(ndev, work_done, budget)
@@ -928,12 +936,6 @@ typedef int napi_budget;
 #define RTL_NAPI_ENABLE(dev, napi)          napi_enable(napi)
 #define RTL_NAPI_DISABLE(dev, napi)         napi_disable(napi)
 #endif  //LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24)
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27)
-#define RTL_NAPI_DEL(priv)
-#else
-#define RTL_NAPI_DEL(priv)   netif_napi_del(&priv->napi)
-#endif //LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27)
 
 /*****************************************************************************/
 #ifdef CONFIG_R8125_NAPI
@@ -1480,7 +1482,7 @@ enum RTL8125_registers {
         IMR3_8125          = 0x808,
         ISR3_8125          = 0x80A,
         BACKUP_ADDR0_8125  = 0x19E0,
-        BACKUP_ADDR1_8125  = 0X19E4,
+        BACKUP_ADDR1_8125  = 0x19E4,
         TCTR0_8125         = 0x0048,
         TCTR1_8125         = 0x004C,
         TCTR2_8125         = 0x0088,
@@ -1520,23 +1522,8 @@ enum RTL8125_registers {
         RSS_KEY_8125       = 0x4600,
         RSS_INDIRECTION_TBL_8125_V2 = 0x4700,
         EEE_TXIDLE_TIMER_8125   = 0x6048,
-        /* mac ptp */
-        PTP_CTRL_8125      = 0x6800,
-        PTP_STATUS_8125    = 0x6802,
-        PTP_ISR_8125       = 0x6804,
-        PTP_IMR_8125       = 0x6805,
-        PTP_TIME_CORRECT_CMD_8125    = 0x6806,
-        PTP_SOFT_CONFIG_Time_NS_8125 = 0x6808,
-        PTP_SOFT_CONFIG_Time_S_8125  = 0x680C,
-        PTP_SOFT_CONFIG_Time_Sign    = 0x6812,
-        PTP_LOCAL_Time_SUB_NS_8125   = 0x6814,
-        PTP_LOCAL_Time_NS_8125       = 0x6818,
-        PTP_LOCAL_Time_S_8125        = 0x681C,
-        PTP_Time_SHIFTER_S_8125      = 0x6856,
-        PPS_RISE_TIME_NS_8125        = 0x68A0,
-        PPS_RISE_TIME_S_8125         = 0x68A4,
-        PTP_EGRESS_TIME_BASE_NS_8125 = 0XCF20,
-        PTP_EGRESS_TIME_BASE_S_8125  = 0XCF24,
+        /* 9151 */
+        TxConfigV2         = 0x60B0,
         /* phy ptp */
         PTP_CTL                 = 0xE400,
         PTP_INER                = 0xE402,
@@ -1575,6 +1562,9 @@ enum RTL8125_registers {
         IB2SOC_DATA    = 0x0014,
         IB2SOC_CMD     = 0x0018,
         IB2SOC_IMR     = 0x001C,
+
+        RADMFIFO_PROTECT    = 0x0402,
+        USE_OLD_RADMFIFO_PROTECT = 0x0404,
 
         RISC_IMR_8125BP     = 0x0D20,
         RISC_ISR_8125BP     = 0x0D22,
@@ -1817,9 +1807,7 @@ enum RTL8125_register_content {
         PTP_ISR_TER = (1 << 2),
         PTP_EXEC_CMD = (1 << 7),
         PTP_ADJUST_TIME_NS_NEGATIVE = (1 << 30),
-        PTP_ADJUST_TIME_S_NEGATIVE = (1ULL << 48),
         PTP_SOFT_CONFIG_TIME_NS_NEGATIVE = (1 << 30),
-        PTP_SOFT_CONFIG_TIME_S_NEGATIVE = (1ULL << 48),
 
         /* New Interrupt Bits */
         INT_CFG0_ENABLE_8125 = (1 << 0),
@@ -1851,10 +1839,14 @@ enum RTL8125_register_content {
 
         /* IPC2 */
         RISC_IPC2_INTR    = (1 << 1),
-
-        /* Magic Number */
-        RTL8125_MAGIC_NUMBER = 0x0badbadbadbadbadull,
 };
+
+/* PTP: bitmask selects bits */
+#define PTP_ADJUST_TIME_S_NEGATIVE      (1ULL << 48)
+#define PTP_SOFT_CONFIG_TIME_S_NEGATIVE (1ULL << 48)
+
+/* Magic number */
+#define RTL8125_MAGIC_NUMBER            0x0badbadbadbadbadull
 
 enum _DescStatusBit {
         DescOwn     = (1 << 31), /* Descriptor is owned by NIC */
@@ -2182,6 +2174,8 @@ enum r8125_flag {
         R8125_FLAG_TASK_LINKCHG_CHECK_PENDING,
         R8125_FLAG_TASK_LINK_CHECK_PENDING,
         R8125_FLAG_TASK_DASH_CHECK_PENDING,
+        R8125_FLAG_SHUTDOWN,
+        R8125_FLAG_SUSPEND,
         R8125_FLAG_MAX
 };
 
@@ -2687,6 +2681,8 @@ struct rtl8125_private {
 
         u8 ring_lib_enabled;
 
+        u8 recheck_desc_ownbit;
+
         const char *fw_name;
         struct rtl8125_fw *rtl_fw;
         u32 ocp_base;
@@ -2757,7 +2753,6 @@ struct rtl8125_private {
 
         u8 HwSuppPtpVer;
         u8 EnablePtp;
-        u8 ptp_master_mode;
 #ifdef ENABLE_PTP_SUPPORT
         u32 tx_hwtstamp_timeouts;
         u32 tx_hwtstamp_skipped;
@@ -2787,6 +2782,7 @@ struct rtl8125_private {
         u16 MacMcuPageSize;
         u64 hw_mcu_patch_code_ver;
         u64 bin_mcu_patch_code_ver;
+        u8 hw_has_mac_mcu_patch_code;
 
         u8 HwSuppTcamVer;
 
@@ -2878,6 +2874,10 @@ enum mcfg {
         CFG_METHOD_11,
         CFG_METHOD_12,
         CFG_METHOD_13,
+        CFG_METHOD_14,
+        CFG_METHOD_15,
+        CFG_METHOD_16,
+        CFG_METHOD_17,
         CFG_METHOD_DEFAULT,
         CFG_METHOD_MAX
 };
@@ -2915,8 +2915,10 @@ enum mcfg {
 #define NIC_RAMCODE_VERSION_CFG_METHOD_8 (0x0013)
 #define NIC_RAMCODE_VERSION_CFG_METHOD_9 (0x0001)
 #define NIC_RAMCODE_VERSION_CFG_METHOD_10 (0x0027)
-#define NIC_RAMCODE_VERSION_CFG_METHOD_11 (0x0031)
-#define NIC_RAMCODE_VERSION_CFG_METHOD_12 (0x0010)
+#define NIC_RAMCODE_VERSION_CFG_METHOD_11 (0x0034)
+#define NIC_RAMCODE_VERSION_CFG_METHOD_12 (0x0035)
+#define NIC_RAMCODE_VERSION_CFG_METHOD_14 (0x0017)
+#define NIC_RAMCODE_VERSION_CFG_METHOD_15 (0x0001)
 
 //hwoptimize
 #define HW_PATCH_SOC_LAN (BIT_0)
@@ -2992,7 +2994,10 @@ static inline void
 rtl8125_disable_hw_interrupt_v2(struct rtl8125_private *tp,
                                 u32 message_id)
 {
-        RTL_W32(tp, IMR_V2_CLEAR_REG_8125, BIT(message_id));
+        if (message_id < 32)
+                RTL_W32(tp, IMR_V2_CLEAR_REG_8125, BIT(message_id));
+        else
+                RTL_W32(tp, IMR_V4_L2_CLEAR_REG_8125, BIT(message_id - 32));
 }
 
 static inline void
@@ -3049,4 +3054,4 @@ static inline void rtl8125_lib_reset_complete(struct rtl8125_private *tp) { }
     for (mclist = dev->mc_list; mclist; mclist = mclist->next)
 #endif
 
-#endif /* __R8125_H */
+#endif /* _R8125_H */

@@ -346,7 +346,9 @@ test('build: radios, SSIDs and stations with names, bands and generations', () =
 	assert.equal(printer.gen, 'Wi-Fi 4');
 	assert.equal(printer.legacyOnRadio, true);
 	assert.equal(m.radios[0].legacy, 1);
-	assert.equal(phone.name, 'Private device · …00:53:02');
+	assert.equal(phone.name, 'Private device 53:02');
+	assert.equal(phone.plainName, 'Private device', 'for where the MAC is shown beside it');
+	assert.equal(printer.plainName, printer.name);
 	assert.equal(phone.isPrivate, true);
 	assert.equal(phone.secondary, '02:00:5E:00:53:02');
 	assert.equal(phone.gen, 'Wi-Fi 7');
@@ -467,10 +469,11 @@ test('build: wired hosts from luci.vantage wired, one per MAC, Wi-Fi ports and s
 	});
 	assert.deepEqual(m.wiredHosts.map(h => [ h.mac, h.name, h.port, h.network, h.vlan, h.seen, h.peers, h.shared, h.speed && h.speed.mbps, h.gateway ]), [
 		[ '00:00:5e:00:53:01', 'desk', 'lan1', 'lan', null, 3, 1, false, 1000, false ],
-		[ '00:00:5e:00:53:02', 'Device · …00:53:02', 'lan2', 'lan', 10, 2, 2, true, 2500, false ],
+		[ '00:00:5e:00:53:02', 'Unknown device 53:02', 'lan2', 'lan', 10, 2, 2, true, 2500, false ],
 		[ '00:00:5e:00:53:03', 'NAS', 'lan2', 'lan', null, 40, 2, true, 2500, false ],
-		[ '00:00:5e:00:53:09', 'Device · …00:53:09', 'wan', null, null, 5, 1, false, 1000, true ]
+		[ '00:00:5e:00:53:09', 'Unknown device 53:09', 'wan', null, null, 5, 1, false, 1000, true ]
 	], 'the latest entry per MAC, a learned one before a static one; Wi-Fi ports and stations left out');
+	assert.deepEqual(m.wiredHosts.map(h => h.plainName), [ 'desk', 'Unknown device', 'NAS', 'Unknown device' ]);
 	assert.deepEqual(m.wiredHosts[0].ips, [ '192.0.2.10' ], 'addresses in the subnets of the bridge\'s network');
 	assert.deepEqual(m.wiredHosts[3].ips, [ '198.51.100.1' ], 'a host off any bridge network: the uplink\'s subnets');
 	assert.equal(m.clients.length, 1);

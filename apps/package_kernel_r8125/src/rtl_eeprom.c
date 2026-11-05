@@ -5,7 +5,7 @@
 # r8125 is the Linux device driver released for Realtek 2.5 Gigabit Ethernet
 # controllers with PCI-Express interface.
 #
-# Copyright(c) 2025 Realtek Semiconductor Corp. All rights reserved.
+# Copyright(c) 2026 Realtek Semiconductor Corp. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the Free
@@ -47,9 +47,6 @@
 //-------------------------------------------------------------------
 //rtl8125_eeprom_type():
 //  tell the eeprom type
-//return value:
-//  0: the eeprom type is 93C46
-//  1: the eeprom type is 93C56 or 93C66
 //-------------------------------------------------------------------
 void rtl8125_eeprom_type(struct rtl8125_private *tp)
 {
@@ -123,12 +120,12 @@ u16 rtl8125_eeprom_read_sc(struct rtl8125_private *tp, u16 reg)
         u8 x;
         u16 data;
 
-        if(tp->eeprom_type == EEPROM_TYPE_NONE)
-                return -1;
+        if (tp->eeprom_type == EEPROM_TYPE_NONE)
+                return 0xffff;
 
-        if (tp->eeprom_type==EEPROM_TYPE_93C46)
+        if (tp->eeprom_type == EEPROM_TYPE_93C46)
                 addr_sz = 6;
-        else if (tp->eeprom_type==EEPROM_TYPE_93C56)
+        else if (tp->eeprom_type == EEPROM_TYPE_93C56)
                 addr_sz = 8;
 
         x = Cfg9346_EEM1 | Cfg9346_EECS;
@@ -156,13 +153,13 @@ void rtl8125_eeprom_write_sc(struct rtl8125_private *tp, u16 reg, u16 data)
         int addr_sz = 6;
         int w_dummy_addr = 4;
 
-        if(tp->eeprom_type == EEPROM_TYPE_NONE)
+        if (tp->eeprom_type == EEPROM_TYPE_NONE)
                 return;
 
-        if (tp->eeprom_type==EEPROM_TYPE_93C46) {
+        if (tp->eeprom_type == EEPROM_TYPE_93C46) {
                 addr_sz = 6;
                 w_dummy_addr = 4;
-        } else if (tp->eeprom_type==EEPROM_TYPE_93C56) {
+        } else if (tp->eeprom_type == EEPROM_TYPE_93C56) {
                 addr_sz = 8;
                 w_dummy_addr = 6;
         }
@@ -177,19 +174,20 @@ void rtl8125_eeprom_write_sc(struct rtl8125_private *tp, u16 reg, u16 data)
         rtl8125_shift_out_bits(tp, RTL_EEPROM_ERASE_OPCODE, 3);
         rtl8125_shift_out_bits(tp, reg, addr_sz);
         if (rtl8125_eeprom_cmd_done(tp) < 0)
-                return;
+                goto cleanup;
         rtl8125_stand_by(tp);
 
         rtl8125_shift_out_bits(tp, RTL_EEPROM_WRITE_OPCODE, 3);
         rtl8125_shift_out_bits(tp, reg, addr_sz);
         rtl8125_shift_out_bits(tp, data, 16);
         if (rtl8125_eeprom_cmd_done(tp) < 0)
-                return;
+                goto cleanup;
         rtl8125_stand_by(tp);
 
         rtl8125_shift_out_bits(tp, RTL_EEPROM_EWDS_OPCODE, 5);
         rtl8125_shift_out_bits(tp, reg, w_dummy_addr);
 
+cleanup:
         rtl8125_eeprom_cleanup(tp);
         RTL_W8(tp, Cfg9346, 0);
 }
@@ -228,7 +226,7 @@ void rtl8125_shift_out_bits(struct rtl8125_private *tp, int data, int count)
                 rtl8125_raise_clock(tp, &x);
                 rtl8125_lower_clock(tp, &x);
                 mask = mask >> 1;
-        } while(mask);
+        } while (mask);
 
         x &= ~Cfg9346_EEDI;
         RTL_W8(tp, Cfg9346, x);

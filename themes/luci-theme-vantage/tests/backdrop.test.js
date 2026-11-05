@@ -256,3 +256,40 @@ test('packets: a rate that keeps changing while nothing moves never grows the li
 	assert.ok(sc.size() <= 30, `${sc.size()} packets`);
 	assert.equal(sc.items().filter(p => !p.retire).length, 4);
 });
+
+/* the network path starts open on phones; choices saved before (v1, which
+   kept it folded) carry over without that one */
+test('folds: the network path starts open, older choices keep everything but the path', () => {
+	const view = loadView();
+	withStorage({}, () => {
+		const self = Object.create(view);
+		self.initState({});
+		assert.equal(self.folds.hero, false);
+		assert.equal(self.folds.radios, true);
+	});
+	withStorage({ 'vantage.fold.v1': JSON.stringify({ hero: true, radios: false, chart: true }) }, () => {
+		const self = Object.create(view);
+		self.initState({});
+		assert.deepEqual([ self.folds.hero, self.folds.radios, self.folds.chart ], [ false, false, true ]);
+	});
+	withStorage({ 'vantage.fold.v2': JSON.stringify({ hero: true }), 'vantage.fold.v1': JSON.stringify({ hero: false }) }, () => {
+		const self = Object.create(view);
+		self.initState({});
+		assert.equal(self.folds.hero, true, 'a choice made since is kept');
+	});
+});
+
+/* uplink and CPU have a 2 s lane of their own; the full poll takes them
+   back when that lane stops answering */
+test('fast lane: live for three of its periods, then the full poll samples again', () => {
+	const view = loadView();
+	withStorage({}, () => {
+		const self = Object.create(view);
+		self.initState({});
+		assert.equal(self.fastLive(), false, 'not before its first answer');
+		self.st.fastAt = Date.now() - 1000;
+		assert.equal(self.fastLive(), true);
+		self.st.fastAt = Date.now() - 7000;
+		assert.equal(self.fastLive(), false, 'stopped answering');
+	});
+});

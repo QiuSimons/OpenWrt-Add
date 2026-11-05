@@ -133,6 +133,29 @@ function readJsonl(file) {
 
 const clone = v => (v === undefined) ? undefined : JSON.parse(JSON.stringify(v));
 
+/* Counters between two recorded samples, f of the way (0..1): numbers
+   that grew, also inside text with the same shape (/proc/stat), so a
+   poller faster than the recording sees them move as on the device.
+   Anything else keeps the earlier sample's value. */
+function lerpCounters(a, b, f) {
+	if (typeof a === 'number' && typeof b === 'number')
+		return b >= a ? Math.round(a + (b - a) * f) : a;
+	if (typeof a === 'string' && typeof b === 'string') {
+		const pa = a.split(/(\d+)/), pb = b.split(/(\d+)/);
+		if (pa.length !== pb.length || pa.some((t, i) => i % 2 === 0 && t !== pb[i])) return a;
+		return pa.map((t, i) => i % 2 ? String(lerpCounters(+t, +pb[i], f)) : t).join('');
+	}
+	if (Array.isArray(a) && Array.isArray(b) && a.length === b.length) return a.map((v, i) => lerpCounters(v, b[i], f));
+	if (a && b && typeof a === 'object' && typeof b === 'object' && !Array.isArray(a)) {
+		const o = {};
+		for (const k of Object.keys(a)) o[k] = Object.prototype.hasOwnProperty.call(b, k) ? lerpCounters(a[k], b[k], f) : a[k];
+		return o;
+	}
+	return a;
+}
+/* the series whose counters move between samples: device counters, CPU time */
+const COUNTER_KEY = /^(network\.device\0status\0|file\0read\0\{"path":"\/proc\/stat"\})/;
+
 class Store {
 	constructor(mirror, opts) {
 		this.opts = opts || {};
@@ -220,8 +243,11 @@ class Store {
 	   forward across wrap-arounds */
 	sample(key) {
 		const rows = this.series.get(key);
-		const tick = Math.floor((Date.now() - this.t0) / this.interval);
-		const data = clone(rows[tick % rows.length]);
+		const pos = (Date.now() - this.t0) / this.interval, tick = Math.floor(pos);
+		let data = clone(rows[tick % rows.length]);
+		/* between two samples (not across the wrap to the first) */
+		if (rows.length > 1 && (tick + 1) % rows.length && COUNTER_KEY.test(key))
+			data = lerpCounters(data, rows[(tick + 1) % rows.length], pos - tick);
 		const lap = Math.floor(tick / rows.length);
 		if (lap && key.startsWith('system\0info\0') && data) {
 			const add = Math.round(lap * rows.length * this.interval / 1000);

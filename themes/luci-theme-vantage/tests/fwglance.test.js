@@ -404,6 +404,11 @@ test('A5: all-address and negated sources are not restrictions; genuine allowlis
 
 test('A5: port lists with exclusions and ranges are read as fw4 matches them', () => {
 	assert.deepEqual(codes(wanRule({ proto: 'tcp', dest_port: '!22' })), [ 'admin-open:R' ], 'everything but 22 still has 80 and 443');
+	/* the warning names the admin ports it opens, Telnet's too */
+	assert.deepEqual(wanRule({ proto: 'tcp', dest_port: '!22' }).warnings[0].admin, [ 23, 80, 443 ]);
+	assert.deepEqual(wanRule({ proto: 'tcp', dest_port: '22' }).warnings[0].admin, [ 22 ]);
+	assert.deepEqual(wanRule({ proto: 'all' }).warnings.find(w => w.code === 'admin-open').admin, [ 22, 23, 80, 443 ]);
+	assert.deepEqual(wanRedirect({ src_dport: '2222', dest_port: '22' }).warnings[0].admin, [ 22 ], 'the port on the router');
 	assert.deepEqual(wanRule({ proto: 'tcp', dest_port: '!22 !23 !80 !443' }).warnings, []);
 	assert.deepEqual(codes(wanRule({ proto: 'tcp', dest_port: '1:1024' })), [ 'admin-open:R' ]);
 	assert.deepEqual(wanRule({ proto: 'tcp', dest_port: '1-1024 !1-1024' }).warnings, []);
@@ -973,6 +978,32 @@ test('overview: Codex\'s reproductions no longer read "Nothing is open"', async 
 	assert.match(ssh, /Router admin open: Router SSH/);
 	assert.match(await page(cfg(cases.fallbackRedirectTarget)), /192\.0\.2\.10:443/);
 	assert.match(await page(cfg(cases.disabledWanWithDefaultAccept)), /wan is in no zone and accepts every connection/);
+});
+
+test('overview: an admin warning names the service by port and says what the firewall allows (O28)', async () => {
+	const ssh = await page(cfg(BASE.concat([ [ 'redirect', { name: 'Router SSH', src: 'wan', proto: 'tcp', src_dport: '2222', dest_port: '22' } ] ])));
+	assert.match(ssh, /The firewall lets any address on the internet reach SSH \(port 22\)\. Limit the rule/);
+	const two = await page(cfg(BASE.concat([ [ 'rule', { name: 'T', src: 'wan', proto: 'tcp', dest_port: '23 443', target: 'ACCEPT' } ] ])));
+	assert.match(two, /reach Telnet \(port 23\), HTTPS \(port 443\)\./);
+	assert.doesNotMatch(ssh + two, /answers/, 'no claim that a service listens');
+	const unsure = await page(cfg(BASE.concat([ [ 'redirect', { name: 'Web server', src: 'wan', proto: 'tcp', src_dport: '443', dest_ip: '192.0.2.20' } ] ])));
+	assert.match(unsure, /It forwards HTTPS \(port 443\) from any address on the internet to 192\.0\.2\.20\./);
+});
+
+test('overview: input policies are neutral; red only where an internet zone accepts', async () => {
+	const pols = node => {
+		const out = [];
+		(function walk(n) {
+			if (!n || typeof n !== 'object') return;
+			if (/(^| )vt-fg-pol( |$)/.test(n.attrs && n.attrs['class'] || '')) out.push(n.attrs['class'] + ':' + text(n));
+			(n.children || []).forEach(walk);
+		})(node);
+		return out;
+	};
+	/* wan rejects, lan accepts: both plain */
+	assert.deepEqual(pols(await pageNode(cfg(BASE))), [ 'vt-fg-pol:reject', 'vt-fg-pol:accept' ]);
+	const open = BASE.map(([ t, o ]) => [ t, t === 'zone' && o.name === 'wan' ? Object.assign({}, o, { input: 'ACCEPT' }) : o ]);
+	assert.deepEqual(pols(await pageNode(cfg(open))), [ 'vt-fg-pol is-risk:accept', 'vt-fg-pol:accept' ]);
 });
 
 test('overview: descriptions carry the family, exceptions and configured includes (B20, B21)', async () => {

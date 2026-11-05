@@ -36,9 +36,15 @@ port in one click, finding anything by typing — not from their look.
 | `luci-theme-vantage` | ucode templates, CSS, icons, `menu-vantage.js` (shell: rail, top bar, palette, tabs, indicators), login page | `+luci-base` |
 | `luci-app-vantage` | dashboard + inspector views under `admin/dashboard` (landing page), its rpcd ACL (reads + its own config only), its rpcd ucode plugin `luci.vantage` (key-free wireless status, temperatures, the bridges' wired hosts, validated alias writes), `/etc/config/vantage` | `+luci-base +rpcd +rpcd-mod-iwinfo +rpcd-mod-ucode +ucode-mod-uci +ucode-mod-ubus +ucode-mod-fs +ucode-mod-rtnl` (rpcd-mod-iwinfo, ucode-mod-fs and ucode-mod-rtnl beyond luci-base; Wi-Fi images already have rtnl, as wifi-scripts needs it); reverse DNS (`rpcd-mod-rrdns`), mDNS (`umdns`) and hostapd's ubus objects are optional and degrade |
 
-The theme is useful alone; the app works under any theme but is designed
-for Vantage. Names used everywhere: theme dir `vantage`, media URL
-`/luci-static/vantage`, uci `luci.themes.Vantage`, config `/etc/config/vantage`.
+The theme is useful alone; the app alone works under any theme but is
+designed for Vantage. With both installed and another theme selected, the
+dashboard steps aside: `admin/dashboard` opens LuCI's own landing page
+instead (`luci-mod-dashboard`'s Status → Dashboard, else Status →
+Overview). The view decides this in the browser, because LuCI caches the
+menu tree across theme switches; a HEAD request for the theme's
+`menu-vantage.js` tells whether the theme is installed. Names used
+everywhere: theme dir `vantage`, media URL `/luci-static/vantage`, uci
+`luci.themes.Vantage`, config `/etc/config/vantage`.
 
 ## 3. Theme v1
 
@@ -47,15 +53,20 @@ for Vantage. Names used everywhere: theme dir `vantage`, media URL
 - **Icon rail** (left, 56 px) with the top-level categories from
   `ui.menu`; hover/click opens a **flyout** of that category's pages;
   the rail can be pinned open with labels (remembered per browser).
-- **Top bar**: breadcrumb (Category › Page › Tab), **command palette**
+- **Top bar**: breadcrumb (Category › Page › Tab; a crumb that only
+  repeats the one before it, "System › System", is shown once, with the
+  deeper link), **command palette**
   (Ctrl+K or `/`): fuzzy search over every menu page, recent pages first;
   later the app registers entities (clients, interfaces, radios) into it.
 - **Indicators** as pills; the unsaved-changes count is prominent and
   opens the changes dialog. When the bar runs short of room the host
-  chip gives way first, and at 900 px and below the pills shrink to a
-  dot and a count, so the breadcrumb is cut last.
+  chip gives way first, and at 900 px and below the pills shrink (the
+  auto-refresh pill to a pause or play sign, the changes pill to its
+  count), so the breadcrumb is cut last. Nothing in the shell pulses.
 - **Host chip**: hostname · model (board name when the model string is a
-  placeholder), from `system board` via rpc in the menu script.
+  placeholder), from `system board` via rpc in the menu script; a name
+  the other contains (compared without case and punctuation) is left
+  out.
 - **Theme toggle**: auto / light / dark, stored in `localStorage`, applied
   in `<head>` before CSS (no flash), exposed as `html[data-darkmode]`.
 - **Tabs**: one segmented control for every level: the menu's page tabs
@@ -95,8 +106,9 @@ for Vantage. Names used everywhere: theme dir `vantage`, media URL
 
 ### Pages
 
-- Own **login** (`sysauth.ut`): brand, hostname, generic error, contract-
-  correct form. No system information for unauthenticated visitors.
+- Own **login** (`sysauth.ut`): the mark and an "Authorization Required"
+  heading, generic error, contract-correct form. No system information
+  (no hostname, model or version) for unauthenticated visitors.
 - All core widgets per contract §5 (dropdown state machine, tabs, modals
   incl. apply countdown, tooltips, dynlist, progress bars, file browser,
   notifications with real fade-out transition, changes dialog).
@@ -125,7 +137,8 @@ for Vantage. Names used everywhere: theme dir `vantage`, media URL
   (header row, memory and storage meters) and named table sections whose
   name is only the row's `data-title` (drawn as the name cell, the card
   title on phones). These rules match nothing on 25.12.
-- 404 / CSRF pages render in the theme without leaking anything.
+- 404 / CSRF pages render in the theme without leaking anything. A
+  logged-in 404 is titled "Not found", in the crumbs and the page title.
 - Focused fields show a 2 px `--focus` outline (border plus ring, at
   least 3:1 against field and card in both modes); text on coloured
   fills (danger buttons, error and info tooltips) uses an ink colour that
@@ -147,12 +160,14 @@ for Vantage. Names used everywhere: theme dir `vantage`, media URL
   when the screen or the phone bar leaves no room below, and on the
   roomier side, scrolling, when neither side fits.
 - **Firewall**: a rule's or forward's verdict is a coloured badge (accept
-  green, reject and drop red, forward and NAT blue) and zone or default
-  policies are coloured in their dropdowns, both keyed on LuCI's raw
+  green, reject and drop red, forward and NAT blue), keyed on LuCI's raw
   target values, never on the translated labels; badge and warning text
-  keeps 4.5:1 on a hovered row too. Green means "passes", not "safe": on
-  the masquerading (internet-facing) zone, an accepting input policy and
-  any forwarding into another zone get the warning colour instead. A
+  keeps 4.5:1 on a hovered row too. Zone and default policies stay plain
+  (reject and drop are the safe values, accept between your own zones is
+  normal), except the one that is a risk: the masquerading
+  (internet-facing) zone accepting input, in the error colours, as on
+  the Overview tab; a forwarding from it into another zone is outlined
+  in the warning colour. A
   rule that is switched off is greyed (not faded, so its name and match
   keep 4.5:1) from the moment it is unticked. The match reads From/To
   first, the family/protocol line quieter. The zones table's long
@@ -225,7 +240,12 @@ text around it so it looks the same size.
   command palette.
 - **Health**: simple, explainable scores (e.g. signal < −75 dBm, uplink
   down, memory > 90 %, radio disabled) each with a one-line reason and a
-  link to the page that fixes it.
+  link to the page that fixes it. Each card carries its own icon (port,
+  CPU, memory, Wi-Fi, signal, storage), plain while all is well and in
+  the level's colour when it needs attention, and a small picture on its
+  bottom edge: the last five minutes of uplink traffic and CPU, how full
+  memory (in use, then cache) and storage are, each radio's airtime where
+  the driver reports it, and the clients by signal class.
 - **Layout**: tiles are packed into columns (four, two or one by width);
   each tile has a column, a width and a place in the order, and stacks
   under the earlier tiles in its columns. "Customize" lets the viewer drag
@@ -246,7 +266,9 @@ text around it so it looks the same size.
   The pick is saved in `localStorage`, validated on read; the tile's size
   and place don't change with it.
 - **Network path background**: behind the path, on its dot grid, one
-  canvas in the style picked under "Customize", the login page's two:
+  canvas in the style picked under the theme's Appearance (or under
+  "Customize" when the dashboard runs without the Vantage theme), the
+  login page's two:
   grid packets (the default; downloads run from the gateway's side,
   uploads back, more and faster with the uplink's live rate, from a
   couple at idle to 36 at 1 Gbit/s) or a starfield streaming out of this
@@ -326,6 +348,11 @@ text around it so it looks the same size.
   intended, since the dashboard only gets about 600–700 px there and its
   two-column tiles clip below that (measured).
 - Polling via `poll.add` with sane intervals; pauses when the tab is hidden.
+  The full poll runs every 5 s; uplink traffic and CPU have a lane of
+  their own every 2 s (`/proc/stat` and the uplink device's counters,
+  about 3 KB a reply), with their own previous samples. While that lane
+  answers, the full poll leaves both to it; if it stops, the full poll
+  samples them again.
   A poll updates only what changed and lays nothing out unless a tile
   changes size. Idle animations (the Live beat, the flow on busy wires)
   use transform and opacity only, so the compositor runs them; with

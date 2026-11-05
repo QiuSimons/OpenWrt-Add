@@ -6,6 +6,81 @@ Each release ships both packages, `luci-theme-vantage` and
 <https://github.com/anothaDev/luci-theme-vantage/releases> and in the
 [signed repositories](https://anothadev.github.io/luci-theme-vantage/).
 
+## 1.0.15 - 2026-11-04
+
+- **The dashboard and LuCI's pages look like one product.** The dashboard
+  takes the theme's buttons, focus ring, tabs (the Wi-Fi/Wired switch),
+  tables, menus and phone sheet, the same status colours on every
+  Firewall tab and one blue meter for memory and storage, with one scale
+  of weights and corners in both packages.
+- **Vantage's dashboard goes with Vantage's theme** (#83,
+  [@smallprogram](https://github.com/smallprogram)). With both packages
+  installed and another theme selected, such as Argon, the dashboard
+  still opened after login and looked broken in that theme. Dashboard
+  and the page after login now open LuCI's own: Status → Dashboard when
+  `luci-mod-dashboard` is installed, otherwise Status → Overview.
+  Installed without the theme, the dashboard still works under any
+  theme.
+- **Health cards with their own icons and a picture each.** The six
+  cards above the network path all carried the same check mark. Each now
+  has its own icon in the corner (port, CPU, memory, Wi-Fi, signal,
+  storage), coloured only when it needs attention, and a picture along
+  its bottom edge: the last minutes of download and CPU, how full memory
+  and storage are, the Wi-Fi clients by band (or each radio's airtime
+  where the driver reports it), and how the clients' signals spread.
+  Signal shows the weakest client instead of "All good".
+- **Uplink traffic and CPU update every 2 seconds** instead of every 5,
+  on the cards, the network path and the throughput chart. They are two
+  small reads of their own (CPU times and the uplink's counters); the
+  rest of the dashboard still refreshes every 5 seconds, and nothing
+  polls while the tab is hidden.
+- **The throughput chart's minute labels stay put** (#71,
+  [@HyperdrivzZ](https://github.com/HyperdrivzZ)). While the five minutes
+  of history filled, the time axis stretched with it and "−2 min" slid
+  into "3 min ago" on a phone. The axis is now always five minutes, and
+  the lines start part way across until the history is full.
+- **The network path's background is under Appearance**, next to the
+  login page's, instead of in the dashboard's Customize bar. A dashboard
+  installed without the theme keeps it under Customize.
+- **Less repetition on the dashboard.** The four numbers under the network
+  path, which repeated the cards, are gone, and so are the hints and the
+  "which is fine" notes. A device without a name is "Private device" next
+  to its MAC address and "Private device 53:0F" where it has one line.
+  Rates in rows carry their unit, link speeds read "2.5 Gbit/s" on the
+  cards and in the details, and only open or weak networks show a lock. Noise and
+  airtime rows appear only where the driver reports them. Nothing pulses
+  while everything is fine, and under the Vantage theme the dashboard's
+  own Live pill shows only when updates pause or fail.
+- **The network path is open on phones.** It used to start folded, with
+  the four numbers that are now gone as its summary. I'd like feedback on
+  this one: tell me in an
+  [issue](https://github.com/anothaDev/luci-theme-vantage/issues) if
+  you'd rather it started folded. A fold you choose is still remembered.
+- **Firewall:** reject and drop are no longer painted red, on Overview or
+  in General Settings' policies; only an internet zone that accepts input
+  is, in red on both. Overview's admin warning names the service and port
+  it lets in (SSH, Telnet, HTTP, HTTPS), and addresses wrap instead of
+  losing their port on a phone.
+- **Less repetition in the shell.** A breadcrumb title shows once
+  ("System", not "System › System"), the palette names each category
+  once and "wire" finds the Wireless pages rather than eight firewall
+  pages, the rail's flyouts drop their counts and Ctrl K footer, the host
+  chip leaves out a name the other contains, and the word "Vantage" is
+  gone from the rail and the login page. Storage bars label their total.
+- **The shell's dots stay still.** The auto-refresh pill has a still
+  dot (a pause or play sign on narrow screens), and Status → Overview
+  marks only boxes that are down, not every one that is up.
+- **File Manager in dark mode** (#84, [@QiuSimons](https://github.com/QiuSimons)).
+  `luci-app-filemanager` brings a light palette of its own, so its status
+  bar was a white band with unreadable text and a hovered row washed out;
+  they take the theme's colours now.
+- **Fixes:** theme buttons render at their intended weight, pages before
+  login are titled "LuCI" instead of "LuCI · LuCI", a page that does not
+  exist says "Not found" instead of "Administration", the memory bar
+  clears when memory stops being reported, switching Clients between
+  Wi-Fi and Wired no longer leaves a tall empty tile for 30 s, and the
+  address follows when you open a client from a radio's details.
+
 ## 1.0.14 - 2026-11-03
 
 - **The spinner while changes are applied turns smoothly** (#71,

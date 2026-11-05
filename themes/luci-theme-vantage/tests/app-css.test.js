@@ -37,6 +37,17 @@ test('the Live beat: behind its dot, invisible unless it animates', () => {
 	assert.match(css, /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*animation: none !important/);
 });
 
+test('nothing pulses while all is fine: the orb on warn and err, the Live beat while reconnecting', () => {
+	const animated = rules.filter(r => /(?:^|;|\s)animation\s*:\s*vt-(ring|beat)\b/.test(r.body)).map(r => r.sel).sort();
+	assert.deepEqual(animated, [ '.vt-app .vt-live-err .vt-live-beat::after', '.vt-app .vt-orb-warn::after, .vt-app .vt-orb-err::after' ]);
+});
+
+test('a band and a name source keep their case inside upper-case labels ("2.4 GHz", "mDNS")', () => {
+	for (const sel of [ '.vt-app .vt-band', '.vt-app .vt-src' ])
+		assert.match(rules.find(r => r.sel === sel).body, /text-transform:\s*none/, sel);
+	assert.ok(!/\.vt-kpi/.test(css), 'the number strip under the path is gone');
+});
+
 test('reduced motion: no moving flow dots, the static dotted wire instead', () => {
 	const rm = /@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?)\n\}/.exec(css);
 	assert.ok(rm);

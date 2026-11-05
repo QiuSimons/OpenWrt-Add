@@ -573,6 +573,13 @@ function ubusReply(msg) {
 		if (object === 'session' && method === 'access')
 			return Object.assign(reply, { result: [ 0, { access: !!(args && args.scope === 'ubus' && anonAllowed(args.object, args.function)) } ] });
 	}
+	/* one device by name, as netifd answers it: that device's entry in
+	   the (transformed) dump, which is what the recording has */
+	if (object === 'network.device' && method === 'status' && args && typeof args.name === 'string' && Object.keys(args).length === 1) {
+		const all = ubusReply({ jsonrpc: '2.0', id: reply.id, method: 'call', params: [ sid, object, method, {} ] }).result;
+		const devs = Array.isArray(all) && all[0] === 0 && all[1] && typeof all[1] === 'object' ? all[1] : null;
+		return Object.assign(reply, { result: devs && Object.prototype.hasOwnProperty.call(devs, args.name) ? [ 0, devs[args.name] ] : [ 4 ] });
+	}
 	const r = store.call(object, method, args || {});
 	return Object.assign(reply, opts.wired ? wired.transform(object, method, args, r) : opts.big ? big.transform(object, method, args, r) : r);
 }

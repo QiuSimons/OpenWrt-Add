@@ -126,7 +126,8 @@ function environment(o) {
 			rollback_pending: () => false
 		},
 		media: '/luci-static/vantage', theme: 'vantage', resource: '/luci-static/resources',
-		dispatched: { title: o.hostile ? SECRET.title + HOSTILE : SECRET.title },
+		/* o.missing: LuCI's 404 hands over the category it resolved */
+		dispatched: { title: o.hostile ? SECRET.title + HOSTILE : SECRET.title, action: o.missing ? { type: 'firstchild' } : { type: 'view', path: 'status/index' } },
 		_: s => s
 	};
 	return { env, calls };
@@ -236,6 +237,7 @@ test('header/footer (logged in): hostile inputs change no markup and are encoded
 				assert.ok(!s.includes(p), `inline script carries data: ${p}`);
 	}
 	const page = renderPage({ authed: true, path: EVIL_PATH, hostile: true }).html;
+	assert.match(renderPage({ authed: true, path: ADMIN }).html, /<title>SECRET-PAGE-TITLE · LuCI<\/title>/, 'the page title, then LuCI');
 	const body = tokenize(page).tags.find(t => t.name === 'body');
 	assert.equal(decode(body.attrs.find(a => a[0] === 'data-page')[1]), EVIL_PATH.join('-'), 'data-page round-trips through entity encoding');
 	/* the version footer is for sessions, trimmed to its leading token, and encoded */
@@ -255,7 +257,7 @@ test('header/footer (not logged in: 404, CSRF): no menu, no host, no version, no
 		assert.deepEqual(calls.uci, [], `${what}: uci read for an anonymous visitor`);
 		for (const bad of [ 'vt-rail', 'vt-flyout', 'vt-host', 'vt-search', 'menu-vantage', 'admin/logout', 'L.require' ])
 			assert.ok(!html.includes(bad), `${what}: ${bad} rendered for an anonymous visitor`);
-		assert.match(html, /<title>LuCI · LuCI<\/title>/, `${what}: generic title`);
+		assert.match(html, /<title>LuCI<\/title>/, `${what}: generic title`);
 		assert.match(html, /id="maincontent"/, `${what}: #maincontent is required`);
 		assert.match(html, /id="indicators"/, `${what}: #indicators is required`);
 		assert.ok(!/<footer class="vt-foot">[^<]*<span/.test(html), `${what}: version footer for an anonymous visitor`);
@@ -264,6 +266,15 @@ test('header/footer (not logged in: 404, CSRF): no menu, no host, no version, no
 	const evil = renderPage({ authed: false, path: EVIL_PATH, hostile: true }).html;
 	assert.deepEqual(skeleton(evil), skeleton(good), 'anonymous markup skeleton changed');
 	assert.deepEqual(inlineScripts(evil), inlineScripts(good), 'anonymous inline scripts depend on input');
+});
+
+test('header (logged in, 404): titled "Not found", not after the category LuCI resolved', () => {
+	for (const hostile of [ false, true ]) {
+		const html = renderPage({ authed: true, path: [ 'admin', 'nonexistent' ], missing: true, hostile }).html;
+		assert.match(html, /<title>Not found · LuCI<\/title>/);
+		assert.match(html, /<span class="vt-crumb vt-crumb-current">Not found<\/span>/);
+		assert.ok(!html.includes(SECRET.title), 'the resolved node\'s title');
+	}
 });
 
 test('header: the contract hooks and script order are in place', () => {

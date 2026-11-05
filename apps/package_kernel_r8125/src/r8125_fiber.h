@@ -5,7 +5,7 @@
 # r8125 is the Linux device driver released for Realtek 2.5 Gigabit Ethernet
 # controllers with PCI-Express interface.
 #
-# Copyright(c) 2025 Realtek Semiconductor Corp. All rights reserved.
+# Copyright(c) 2026 Realtek Semiconductor Corp. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the Free
@@ -49,14 +49,14 @@ enum {
 };
 
 #define HW_FIBER_MODE_ENABLED(_M)        ((_M)->HwFiberModeVer > 0)
-#define HW_FIBER_STATUS_CONNECTED(_M)        (((_M)->HwFiberStat == FIBER_STAT_CONNECT_GPO_C45))
+#define HW_FIBER_STATUS_CONNECTED(_M)        ((_M)->HwFiberStat == FIBER_STAT_CONNECT_GPO_C45)
 #define HW_FIBER_STATUS_DISCONNECTED(_M)        ((_M)->HwFiberStat == FIBER_STAT_DISCONNECT)
 
 struct rtl8125_private;
 
 void rtl8125_hw_fiber_phy_config(struct rtl8125_private *tp);
 void rtl8125_check_fiber_mode_support(struct rtl8125_private *tp);
-void rtl8125_fiber_mdio_write( struct rtl8125_private *tp, u32 reg, u16 val);
+void rtl8125_fiber_mdio_write(struct rtl8125_private *tp, u32 reg, u16 val);
 u16 rtl8125_fiber_mdio_read(struct rtl8125_private *tp, u32 reg);
 unsigned int rtl8125_fiber_link_ok(struct net_device *dev);
 

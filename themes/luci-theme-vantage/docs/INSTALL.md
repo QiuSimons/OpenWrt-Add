@@ -467,7 +467,8 @@ Theme only:
 apk add --no-network --allow-untrusted /tmp/luci-theme-vantage-*.apk
 ```
 
-Dashboard only (works under Bootstrap or any other theme):
+Dashboard only (works under Bootstrap or any other theme; installed with
+the theme, the dashboard shows only while Vantage is the selected theme):
 
 ```sh
 apk add --no-network --allow-untrusted /tmp/luci-app-vantage-*.apk
@@ -520,7 +521,7 @@ a new one, then log in). Two reasons:
 |---|---|---|
 | Files | `/www/luci-static/vantage/` (CSS, icons, logo), `/www/luci-static/resources/menu-vantage.js`, `/www/luci-static/resources/vantage-theme/`, `/usr/share/ucode/luci/template/themes/vantage/` | `/www/luci-static/resources/view/vantage/`, `/www/luci-static/resources/vantage/`, `/usr/share/luci/menu.d/zz-luci-app-vantage.json`, `/usr/share/rpcd/acl.d/luci-app-vantage.json`, `/etc/config/vantage` |
 | Configuration | Registers the theme as `luci.themes.Vantage`. Makes it the active theme (`luci.main.mediaurlbase=/luci-static/vantage`) **only on a first install**, never on an upgrade or reinstall. | None besides its own `/etc/config/vantage` (client names). |
-| Menu | – | Adds **Dashboard** (`admin/dashboard`) as the first menu entry, so it is the page LuCI opens after login. Status → Overview is unchanged. With `luci-mod-dashboard` also installed, which uses the same entry, Dashboard opens Vantage's and LuCI's moves to Status → Dashboard. |
+| Menu | – | Adds **Dashboard** (`admin/dashboard`) as the first menu entry, so it is the page LuCI opens after login. Status → Overview is unchanged. With `luci-mod-dashboard` also installed, which uses the same entry, Dashboard opens Vantage's and LuCI's moves to Status → Dashboard. With the Vantage theme installed but not selected, Dashboard opens LuCI's own page instead (see [Switch themes](#switch-themes)). |
 | After install | Clears LuCI's caches (`/tmp/luci-indexcache.*`, `/tmp/luci-modulecache/`) and reloads rpcd. | Same. |
 
 Nothing else changes. Neither package adds a service, cron job or init
@@ -546,6 +547,12 @@ uci commit luci
 ```
 
 Reload the page afterwards. No service needs a restart.
+
+With both packages installed, the Vantage dashboard goes with the Vantage
+theme. Under another theme, Dashboard and the page after login open
+LuCI's own instead: Status → Dashboard when `luci-mod-dashboard` is
+installed, otherwise Status → Overview. Without the theme package, the
+dashboard shows under any theme.
 
 ## Languages
 
@@ -779,6 +786,9 @@ uci commit luci
 ### The Dashboard is missing, or says permission denied
 
 - Log out and in again. Permissions are fixed when a session starts.
+- Dashboard opens Status → Overview or LuCI's Status → Dashboard: the
+  Vantage theme is installed but not selected, see
+  [Switch themes](#switch-themes).
 - Check that `/usr/share/rpcd/acl.d/luci-app-vantage.json` exists, then run
   `/etc/init.d/rpcd reload`.
 - `root` may use everything. Other LuCI users (set up in `/etc/config/rpcd`)

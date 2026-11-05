@@ -5,7 +5,7 @@
 # r8125 is the Linux device driver released for Realtek 2.5 Gigabit Ethernet
 # controllers with PCI-Express interface.
 #
-# Copyright(c) 2025 Realtek Semiconductor Corp. All rights reserved.
+# Copyright(c) 2026 Realtek Semiconductor Corp. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the Free
@@ -37,7 +37,7 @@
 
 #include <linux/if.h>
 
-#define SIOCDEVPRIVATE_RTLDASH   SIOCDEVPRIVATE+2
+#define SIOCDEVPRIVATE_RTLDASH   (SIOCDEVPRIVATE+2)
 
 enum rtl_dash_cmd {
         RTL_DASH_ARP_NS_OFFLOAD = 0,
@@ -62,7 +62,7 @@ enum rtl_dash_cmd {
         RTL_FW_GET_WAKEUP_PATTERN,
         RTL_FW_DEL_WAKEUP_PATTERN,
 
-        RTLT_DASH_COMMAND_INVALID,
+        RTL_DASH_COMMAND_INVALID,
 };
 
 struct rtl_dash_ip_mac {
@@ -92,7 +92,7 @@ OSOOBHdr, *POSOOBHdr;
 
 typedef struct _RX_DASH_BUFFER_TYPE_2 {
         OSOOBHdr oobhdr;
-        u8 RxDataBuffer[0];
+        u8 RxDataBuffer[];
 }
 RX_DASH_BUFFER_TYPE_2, *PRX_DASH_BUFFER_TYPE_2;
 
@@ -119,7 +119,7 @@ RX_DASH_BUFFER_TYPE_2, *PRX_DASH_BUFFER_TYPE_2;
 #define RECV_FROM_FW_BUF_SIZE (1520)
 #define SEND_TO_FW_BUF_SIZE (1520)
 
-#define TXS_CC3_0       (BIT_0|BIT_1|BIT_2|BIT_3)
+#define TXS_CC3_0       (BIT_0 | BIT_1 | BIT_2 | BIT_3)
 #define TXS_EXC         BIT_4
 #define TXS_LNKF        BIT_5
 #define TXS_OWC         BIT_6
@@ -184,7 +184,7 @@ RX_DASH_BUFFER_TYPE_2, *PRX_DASH_BUFFER_TYPE_2;
 #define DASH_OOB_HDR_TYPE_REQ 0x91
 #define DASH_OOB_HDR_TYPE_ACK 0x92
 
-struct  rtl8125_private;
+struct rtl8125_private;
 
 int rtl8125_dash_ioctl(struct net_device *dev, struct ifreq *ifr);
 bool rtl8125_check_dash_interrupt(struct rtl8125_private *tp);

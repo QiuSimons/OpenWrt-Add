@@ -5,7 +5,7 @@
 # r8125 is the Linux device driver released for Realtek 2.5 Gigabit Ethernet
 # controllers with PCI-Express interface.
 #
-# Copyright(c) 2025 Realtek Semiconductor Corp. All rights reserved.
+# Copyright(c) 2026 Realtek Semiconductor Corp. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the Free
@@ -32,9 +32,11 @@
  *  US6,570,884, US6,115,776, and US6,327,625.
  ***********************************************************************************/
 
-#ifndef _LINUX_rtl8125_PTP_H
-#define _LINUX_rtl8125_PTP_H
+#ifndef _LINUX_R8125_PTP_H
+#define _LINUX_R8125_PTP_H
 
+#include <linux/types.h>
+#include <linux/version.h>
 #include <linux/ktime.h>
 #include <linux/timecounter.h>
 #include <linux/net_tstamp.h>
@@ -113,7 +115,7 @@ enum PTP_INSR_TYPE {
         EVENT_CAP_INTR   = (1 << 0),
         TRIG_GEN_INTR    = (1 << 1),
         RX_TS_INTR       = (1 << 2),
-        TX_TX_INTR       = (1 << 3),
+        TX_TS_INTR       = (1 << 3),
 };
 
 enum PTP_TRX_TS_STA_REG {
@@ -132,7 +134,6 @@ enum PTP_TRX_TS_STA_REG {
 #define RTL_FLAG_RX_HWTSTAMP_ENABLED BIT_0
 
 struct rtl8125_private;
-struct RxDescV3;
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6,11,0)
 int rtl8125_get_ts_info(struct net_device *netdev,
@@ -149,11 +150,8 @@ void rtl8125_ptp_stop(struct rtl8125_private *tp);
 
 int rtl8125_ptp_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd);
 
-void rtl8125_rx_mac_ptp_pktstamp(struct rtl8125_private *tp, struct sk_buff *skb,
-                                 struct RxDescV3 *descv3);
-
 void rtl8125_set_phy_local_time(struct rtl8125_private *tp);
 
 void rtl8125_rx_phy_ptp_timestamp(struct rtl8125_private *tp, struct sk_buff *skb);
 
-#endif /* _LINUX_rtl8125_PTP_H */
+#endif /* _LINUX_R8125_PTP_H */

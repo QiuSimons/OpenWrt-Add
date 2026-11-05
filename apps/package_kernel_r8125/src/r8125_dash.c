@@ -4,7 +4,7 @@
 # r8125 is the Linux device driver released for Realtek 2.5 Gigabit Ethernet
 # controllers with PCI-Express interface.
 #
-# Copyright(c) 2025 Realtek Semiconductor Corp. All rights reserved.
+# Copyright(c) 2026 Realtek Semiconductor Corp. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the Free
@@ -113,6 +113,9 @@ static u8 rtl8125_copy_from_ipc2(struct rtl8125_private *tp, u8 *dest, u32 len)
         if (len == 0)
                 goto exit;
 
+        if (len > IPC2_BUFFER_LENGTH)
+                len = IPC2_BUFFER_LENGTH;
+
         pDword = (u32*)dest;
         while (len > 3 && offset < (IPC2_BUFFER_LENGTH - 4)) {
                 *pDword++ = RTL_DASH_IPC2_R32(tp, data_reg + offset);
@@ -154,7 +157,7 @@ static void RecvFromDashFwComplete(struct rtl8125_private *tp)
                                             sizeof(rxDashBufferType2)))
                         goto exit;
 
-                dataLen = (u16)rxDashBufferType2.oobhdr.len;
+                dataLen = le32_to_cpu(rxDashBufferType2.oobhdr.len);
 
                 tp->AfterRecvFromFwBufLen = dataLen + sizeof(OSOOBHdr);
                 if (tp->AfterRecvFromFwBufLen > tp->SizeOfRecvFromFwBuffer) {
@@ -209,6 +212,9 @@ static u32 rtl8125_copy_to_ipc2(struct rtl8125_private *tp, u8 *src, u32 len)
         if (len == 0)
                 goto exit;
 
+        if (len > IPC2_BUFFER_LENGTH)
+                len = IPC2_BUFFER_LENGTH;
+
         pDword = (u32*)src;
         while (len > 3 && offset < (IPC2_BUFFER_LENGTH - 4)) {
                 RTL_DASH_IPC2_W32(tp, data_reg + offset, *pDword++);
@@ -232,7 +238,7 @@ exit:
 static int SendToDashFw(struct rtl8125_private *tp, u8 *src, u16 len)
 {
         POSOOBHdr pOobHdr;
-        int rc = -1;
+        int rc = -EINVAL;
 
         if (!tp->DASH)
                 goto exit;
@@ -328,7 +334,7 @@ bool rtl8125_check_dash_interrupt(struct rtl8125_private *tp)
         bool rc = false;
         u32 isr;
 
-        if(!tp->DASH)
+        if (!tp->DASH)
                 goto exit;
 
         if (FALSE == HW_DASH_SUPPORT_IPC2(tp))
@@ -346,6 +352,8 @@ bool rtl8125_check_dash_interrupt(struct rtl8125_private *tp)
 
         rtl8125_set_ipc2_isr(tp, isr);
 
+        rc = true;
+
 exit:
         return rc;
 }
@@ -354,7 +362,7 @@ void rtl8125_handle_dash_interrupt(struct net_device *dev)
 {
         struct rtl8125_private *tp = netdev_priv(dev);
 
-        if(!tp->DASH)
+        if (!tp->DASH)
                 return;
 
         if (test_and_clear_bit(R8125_RCV_REQ_DASH_OK, tp->dash_req_flags))
@@ -402,7 +410,7 @@ static int DashIoctlGetRcvFromFwData(struct net_device *dev, struct rtl_dash_ioc
         pByte = (u8*)pWord;
         memcpy(pByte, pInfo, tp->AfterRecvFromFwBufLen);
         pWord = (u16*)(pByte + tp->AfterRecvFromFwBufLen);
-        *pWord= tp->DashReqRegValue;
+        *pWord = tp->DashReqRegValue;
         tp->AfterRecvFromFwBufLen = 0;
         if (copy_to_user(InformationBuffer, tmpBuf, ulInfoLen)) {
                 kfree(tmpBuf);

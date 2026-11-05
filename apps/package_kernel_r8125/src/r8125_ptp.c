@@ -5,7 +5,7 @@
 # r8125 is the Linux device driver released for Realtek 2.5 Gigabit Ethernet
 # controllers with PCI-Express interface.
 #
-# Copyright(c) 2025 Realtek Semiconductor Corp. All rights reserved.
+# Copyright(c) 2026 Realtek Semiconductor Corp. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the Free
@@ -45,36 +45,6 @@
 
 #include "r8125.h"
 #include "r8125_ptp.h"
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,6,0)
-static inline struct timespec timespec64_to_timespec(const struct timespec64 ts64)
-{
-        return *(const struct timespec *)&ts64;
-}
-
-static inline struct timespec64 timespec_to_timespec64(const struct timespec ts)
-{
-        return *(const struct timespec64 *)&ts;
-}
-#endif
-
-static int _rtl8125_mac_phc_gettime(struct rtl8125_private *tp, struct timespec64 *ts64)
-{
-        //get local time
-        RTL_W16(tp, PTP_TIME_CORRECT_CMD_8125, (PTP_CMD_LATCHED_LOCAL_TIME | PTP_EXEC_CMD));
-
-        /* nanoseconds */
-        //0x6808[29:0]
-        ts64->tv_nsec = (RTL_R32(tp, PTP_SOFT_CONFIG_Time_NS_8125) & 0x3fffffff);
-
-        /* seconds */
-        //0x680C[47:0]
-        ts64->tv_sec = RTL_R16(tp, PTP_SOFT_CONFIG_Time_S_8125 + 4);
-        ts64->tv_sec <<= 32;
-        ts64->tv_sec |= RTL_R32(tp, PTP_SOFT_CONFIG_Time_S_8125);
-
-        return 0;
-}
 
 static void rtl8125_wait_phy_clkadj_ready(struct rtl8125_private *tp)
 {
@@ -138,23 +108,6 @@ static int _rtl8125_phy_phc_gettime(struct rtl8125_private *tp, struct timespec6
         return 0;
 }
 
-static int _rtl8125_mac_phc_settime(struct rtl8125_private *tp, const struct timespec64 *ts64)
-{
-        /* nanoseconds */
-        //0x6808[29:0]
-        RTL_W32(tp, PTP_SOFT_CONFIG_Time_NS_8125, (ts64->tv_nsec & 0x3fffffff));
-
-        /* seconds */
-        //0x680C[47:0]
-        RTL_W32(tp, PTP_SOFT_CONFIG_Time_S_8125, ts64->tv_sec);
-        RTL_W16(tp, PTP_SOFT_CONFIG_Time_S_8125 + 4, (ts64->tv_sec >> 32));
-
-        //set local time
-        RTL_W16(tp, PTP_TIME_CORRECT_CMD_8125, (PTP_CMD_SET_LOCAL_TIME | PTP_EXEC_CMD));
-
-        return 0;
-}
-
 static int _rtl8125_phy_phc_settime(struct rtl8125_private *tp, const struct timespec64 *ts64)
 {
         unsigned long flags;
@@ -192,69 +145,6 @@ static int _rtl8125_phy_phc_settime(struct rtl8125_private *tp, const struct tim
         r8125_spin_unlock(&tp->phy_lock, flags);
 
         return 0;
-}
-
-static int _rtl8125_mac_phc_adjtime(struct rtl8125_private *tp, s64 delta)
-{
-        struct timespec64 d;
-        bool negative = false;
-        u64 tohw;
-        u32 nsec;
-        u64 sec;
-
-        if (delta < 0) {
-                negative = true;
-                tohw = -delta;
-        } else {
-                tohw = delta;
-        }
-
-        d = ns_to_timespec64(tohw);
-
-        nsec = d.tv_nsec;
-        sec = d.tv_sec;
-
-        if (negative) {
-                nsec = -nsec;
-                sec = -sec;
-        }
-
-        nsec &= 0x3fffffff;
-        sec &= 0x0000ffffffffffff;
-
-        if (negative) {
-                nsec |= PTP_SOFT_CONFIG_TIME_NS_NEGATIVE;
-                sec |= PTP_SOFT_CONFIG_TIME_S_NEGATIVE;
-        }
-
-        /* nanoseconds */
-        //0x6808[29:0]
-        RTL_W32(tp, PTP_SOFT_CONFIG_Time_NS_8125, nsec);
-
-        /* seconds */
-        //0x680C[47:0]
-        RTL_W32(tp, PTP_SOFT_CONFIG_Time_S_8125, sec);
-        RTL_W16(tp, PTP_SOFT_CONFIG_Time_S_8125 + 4, (sec >> 32));
-
-        //adjust local time
-        //RTL_W16(tp, PTP_TIME_CORRECT_CMD_8125, (PTP_CMD_DRIFT_LOCAL_TIME | PTP_EXEC_CMD));
-        RTL_W16(tp, PTP_TIME_CORRECT_CMD_8125, (PTP_CMD_SET_LOCAL_TIME | PTP_EXEC_CMD));
-
-        return 0;
-}
-
-static int rtl8125_mac_phc_adjtime(struct ptp_clock_info *ptp, s64 delta)
-{
-        struct rtl8125_private *tp = container_of(ptp, struct rtl8125_private, ptp_clock_info);
-        int ret;
-
-        //netif_info(tp, drv, tp->dev, "phc adjust time\n");
-
-        rtnl_lock();
-        ret = _rtl8125_mac_phc_adjtime(tp, delta);
-        rtnl_unlock();
-
-        return ret;
 }
 
 static int _rtl8125_phy_phc_adjtime(struct rtl8125_private *tp, s64 delta)
@@ -324,52 +214,10 @@ static int _rtl8125_phy_phc_adjtime(struct rtl8125_private *tp, s64 delta)
 static int rtl8125_phy_phc_adjtime(struct ptp_clock_info *ptp, s64 delta)
 {
         struct rtl8125_private *tp = container_of(ptp, struct rtl8125_private, ptp_clock_info);
-        int ret;
 
         //netif_info(tp, drv, tp->dev, "phc adjust time\n");
 
-        ret = _rtl8125_phy_phc_adjtime(tp, delta);
-
-        return ret;
-}
-
-/*
- * 1ppm means every 125MHz plus 125Hz. It also means every 8ns minus 8ns*10^(-6)
- * 1ns=2^30 sub_ns
- * 8ns*10^(-6) = 8 * 2^30 sub_ns * 10^(-6) = 2^33 sub_ns * 10^(-6) = 8590 = 0x218E sub_ns
- *
- * 1ppb means every 125MHz plus 0.125Hz. It also means every 8ns minus 8ns*10^(-9)
- * 1ns=2^30 sub_ns
- * 8ns*10^(-9) = 8 * 2^30 sub_ns * 10^(-9) = 2^33 sub_ns * 10^(-9) = 8.59 sub_ns = 9 sub_ns
- */
-static int _rtl8125_mac_phc_adjfreq(struct ptp_clock_info *ptp, s32 ppb)
-{
-        struct rtl8125_private *tp = container_of(ptp, struct rtl8125_private, ptp_clock_info);
-        bool negative = false;
-        u32 sub_ns;
-
-        if (ppb < 0) {
-                negative = true;
-                ppb = -ppb;
-        }
-
-        sub_ns = ppb * 9;
-        if (negative) {
-                sub_ns = -sub_ns;
-                sub_ns &= 0x3fffffff;
-                sub_ns |= PTP_ADJUST_TIME_NS_NEGATIVE;
-        } else
-                sub_ns &= 0x3fffffff;
-
-        /* nanoseconds */
-        //0x6808[29:0]
-        RTL_W32(tp, PTP_SOFT_CONFIG_Time_NS_8125, sub_ns);
-
-        //adjust local time
-        RTL_W16(tp, PTP_TIME_CORRECT_CMD_8125, (PTP_CMD_DRIFT_LOCAL_TIME | PTP_EXEC_CMD));
-        //RTL_W16(tp, PTP_TIME_CORRECT_CMD_8125, (PTP_CMD_SET_LOCAL_TIME | PTP_EXEC_CMD));
-
-        return 0;
+        return _rtl8125_phy_phc_adjtime(tp, delta);
 }
 
 /*
@@ -387,7 +235,7 @@ static int _rtl8125_phy_phc_adjfreq(struct ptp_clock_info *ptp, s32 ppb)
         u32 rate_value;
 
         if (ppb < 0) {
-                rate_value = ((u64)-ppb << 32) / 1000000000;
+                rate_value = ((u64)(-(s64)ppb) << 32) / 1000000000;
                 rate_value = ~rate_value + 1;
         } else
                 rate_value = ((u64)ppb << 32) / 1000000000;
@@ -406,71 +254,6 @@ static int _rtl8125_phy_phc_adjfreq(struct ptp_clock_info *ptp, s32 ppb)
 
         return 0;
 }
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,2,0)
-static int rtl8125_mac_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
-{
-        s32 ppb = scaled_ppm_to_ppb(scaled_ppm);
-
-        if (ppb > ptp->max_adj || ppb < -ptp->max_adj)
-                return -EINVAL;
-
-        rtnl_lock();
-        _rtl8125_mac_phc_adjfreq(ptp, ppb);
-        rtnl_unlock();
-
-        return 0;
-}
-#else
-static int rtl8125_mac_phc_adjfreq(struct ptp_clock_info *ptp, s32 delta)
-{
-        //struct rtl8125_private *tp = container_of(ptp, struct rtl8125_private, ptp_clock_info);
-
-        //netif_info(tp, drv, tp->dev, "phc adjust freq\n");
-
-        if (delta > ptp->max_adj || delta < -ptp->max_adj)
-                return -EINVAL;
-
-        rtnl_lock();
-        _rtl8125_mac_phc_adjfreq(ptp, delta);
-        rtnl_unlock();
-
-        return 0;
-}
-#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(6,2,0) */
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0)
-static int rtl8125_mac_phc_gettime(struct ptp_clock_info *ptp, struct timespec64 *ts64,
-                                   struct ptp_system_timestamp *sts)
-{
-        struct rtl8125_private *tp = container_of(ptp, struct rtl8125_private, ptp_clock_info);
-        int ret;
-
-        //netif_info(tp, drv, tp->dev, "phc get ts\n");
-
-        rtnl_lock();
-        ptp_read_system_prets(sts);
-        ret = _rtl8125_mac_phc_gettime(tp, ts64);
-        ptp_read_system_postts(sts);
-        rtnl_unlock();
-
-        return ret;
-}
-#else
-static int rtl8125_mac_phc_gettime(struct ptp_clock_info *ptp, struct timespec64 *ts64)
-{
-        struct rtl8125_private *tp = container_of(ptp, struct rtl8125_private, ptp_clock_info);
-        int ret;
-
-        //netif_info(tp, drv, tp->dev, "phc get ts\n");
-
-        rtnl_lock();
-        ret = _rtl8125_mac_phc_gettime(tp, ts64);
-        rtnl_unlock();
-
-        return ret;
-}
-#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0) */
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,2,0)
 static int rtl8125_phy_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
@@ -528,21 +311,6 @@ static int rtl8125_phy_phc_gettime(struct ptp_clock_info *ptp, struct timespec64
 }
 #endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0) */
 
-static int rtl8125_mac_phc_settime(struct ptp_clock_info *ptp,
-                                   const struct timespec64 *ts64)
-{
-        struct rtl8125_private *tp = container_of(ptp, struct rtl8125_private, ptp_clock_info);
-        int ret;
-
-        //netif_info(tp, drv, tp->dev, "phc set ts\n");
-
-        rtnl_lock();
-        ret = _rtl8125_mac_phc_settime(tp, ts64);
-        rtnl_unlock();
-
-        return ret;
-}
-
 static int rtl8125_phy_phc_settime(struct ptp_clock_info *ptp,
                                    const struct timespec64 *ts64)
 {
@@ -556,30 +324,7 @@ static int rtl8125_phy_phc_settime(struct ptp_clock_info *ptp,
         return ret;
 }
 
-static int rtl8125_mac_phc_enable(struct ptp_clock_info *ptp,
-                                  struct ptp_clock_request *rq, int on)
-{
-        struct rtl8125_private *tp = container_of(ptp, struct rtl8125_private, ptp_clock_info);
-        u16 ptp_ctrl;
-
-        //netif_info(tp, drv, tp->dev, "phc enable type %x on %d\n", rq->type, on);
-
-        switch (rq->type) {
-        case PTP_CLK_REQ_PPS:
-                rtnl_lock();
-                ptp_ctrl = RTL_R16(tp, PTP_CTRL_8125);
-                ptp_ctrl &= ~BIT_15;
-                if (on)
-                        ptp_ctrl |= BIT_14;
-                else
-                        ptp_ctrl &= ~BIT_14;
-                RTL_W16(tp, PTP_CTRL_8125, ptp_ctrl);
-                rtnl_unlock();
-                return 0;
-        default:
-                return -EOPNOTSUPP;
-        }
-}
+#define R8125_PPS_TIMER_INTERVAL 1000000000
 
 static int rtl8125_phy_phc_enable(struct ptp_clock_info *ptp,
                                   struct ptp_clock_request *rq, int on)
@@ -618,9 +363,11 @@ static int rtl8125_phy_phc_enable(struct ptp_clock_info *ptp,
                         r8125_spin_unlock(&tp->phy_lock, flags);
 
                         /* start hrtimer */
-                        hrtimer_start(&tp->pps_timer, 1000000000, HRTIMER_MODE_REL);
-                } else
+                        hrtimer_start(&tp->pps_timer, ktime_set(0, R8125_PPS_TIMER_INTERVAL), HRTIMER_MODE_REL);
+                } else {
                         tp->pps_enable = 0;
+                        hrtimer_cancel(&tp->pps_timer);
+                }
                 rtnl_unlock();
                 return 0;
         default:
@@ -637,6 +384,7 @@ static void rtl8125_phy_ptp_enable_config(struct rtl8125_private *tp)
         else
                 rtl8125_clear_eth_phy_ocp_bit(tp, PTP_SYNCE_CTL, BIT_0);
 
+        /* RTL8125B doesn't support vlan (bit 13) and 802.3 (bit 14) */
         ptp_ctrl = BIT_0 | BIT_1 | BIT_2 | BIT_3 | BIT_4 | BIT_5 | BIT_6 | BIT_7 | BIT_12;
         rtl8125_mdio_direct_write_phy_ocp(tp, PTP_CTL, ptp_ctrl);
 
@@ -684,28 +432,6 @@ int rtl8125_get_ts_info(struct net_device *netdev,
         return 0;
 }
 
-static const struct ptp_clock_info rtl8125_mac_ptp_clock_info = {
-        .owner      = THIS_MODULE,
-        .n_alarm    = 0,
-        .n_ext_ts   = 0,
-        .n_per_out  = 0,
-        .n_pins     = 0,
-        .pps        = 1,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,2,0)
-        .adjfine   = rtl8125_mac_ptp_adjfine,
-#else
-        .adjfreq    = rtl8125_mac_phc_adjfreq,
-#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(6,2,0) */
-        .adjtime    = rtl8125_mac_phc_adjtime,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0)
-        .gettimex64  = rtl8125_mac_phc_gettime,
-#else
-        .gettime64  = rtl8125_mac_phc_gettime,
-#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0) */
-        .settime64  = rtl8125_mac_phc_settime,
-        .enable     = rtl8125_mac_phc_enable,
-};
-
 static const struct ptp_clock_info rtl8125_phy_ptp_clock_info = {
         .owner      = THIS_MODULE,
         .n_alarm    = 0,
@@ -728,25 +454,6 @@ static const struct ptp_clock_info rtl8125_phy_ptp_clock_info = {
         .settime64  = rtl8125_phy_phc_settime,
         .enable     = rtl8125_phy_phc_enable,
 };
-
-static void rtl8125_mac_ptp_egresstime(struct rtl8125_private *tp, struct timespec64 *ts64, u32 regnum)
-{
-        /* nanoseconds */
-        //[29:0]
-        ts64->tv_nsec = rtl8125_mac_ocp_read(tp, PTP_EGRESS_TIME_BASE_NS_8125 + regnum * 16 + 2);
-        ts64->tv_nsec <<= 16;
-        ts64->tv_nsec |= rtl8125_mac_ocp_read(tp, PTP_EGRESS_TIME_BASE_NS_8125 + regnum * 16);
-        ts64->tv_nsec &= 0x3fffffff;
-
-        /* seconds */
-        //[47:0]
-        ts64->tv_sec = rtl8125_mac_ocp_read(tp, PTP_EGRESS_TIME_BASE_S_8125 + regnum * 16 + 4);
-        ts64->tv_sec <<= 16;
-        ts64->tv_sec |= rtl8125_mac_ocp_read(tp, PTP_EGRESS_TIME_BASE_S_8125 + regnum * 16 + 2);
-        ts64->tv_sec <<= 16;
-        ts64->tv_sec |= rtl8125_mac_ocp_read(tp, PTP_EGRESS_TIME_BASE_S_8125 + regnum * 16);
-        ts64->tv_sec &= 0x0000ffffffffffff;
-}
 
 static u16 rtl8125_phy_ptp_get_tx_msgtype(struct rtl8125_private *tp)
 {
@@ -844,6 +551,7 @@ static void rtl8125_phy_ptp_egresstime(struct rtl8125_private *tp, struct timesp
         //S[15:0]  E44A[15:0]
         ts64->tv_sec |= rtl8125_mdio_direct_read_phy_ocp(tp, PTP_TRX_TS_S_LO);
 }
+
 static void rtl8125_phy_ptp_ingresstime(struct rtl8125_private *tp, struct timespec64 *ts64, u8 type)
 {
         u16 msgtype;
@@ -879,48 +587,13 @@ static void rtl8125_phy_ptp_ingresstime(struct rtl8125_private *tp, struct times
         ts64->tv_sec |= rtl8125_mdio_direct_read_phy_ocp(tp, PTP_TRX_TS_S_LO);
 }
 
-static void rtl8125_mac_ptp_tx_hwtstamp(struct rtl8125_private *tp)
-{
-        struct sk_buff *skb = tp->ptp_tx_skb;
-        struct skb_shared_hwtstamps shhwtstamps = {0};
-        struct timespec64 ts64;
-        u32 regnum;
-
-        RTL_W8(tp, PTP_ISR_8125, PTP_ISR_TOK | PTP_ISR_TER);
-
-        //IO 0x2302 bit 10~11 WR_PTR
-        regnum = RTL_R16(tp, 0x2032) & 0x0C00;
-        regnum >>= 10;
-        regnum = (regnum + 3) % 4;
-
-        rtnl_lock();
-        rtl8125_mac_ptp_egresstime(tp, &ts64, regnum);
-        rtnl_unlock();
-
-        /* Upper 32 bits contain s, lower 32 bits contain ns. */
-        shhwtstamps.hwtstamp = ktime_set(ts64.tv_sec,
-                                         ts64.tv_nsec);
-
-        /* Clear the lock early before calling skb_tstamp_tx so that
-         * applications are not woken up before the lock bit is clear. We use
-         * a copy of the skb pointer to ensure other threads can't change it
-         * while we're notifying the stack.
-         */
-        tp->ptp_tx_skb = NULL;
-        clear_bit_unlock(__RTL8125_PTP_TX_IN_PROGRESS, &tp->state);
-
-        /* Notify the stack and free the skb after we've unlocked */
-        skb_tstamp_tx(skb, &shhwtstamps);
-        dev_kfree_skb_any(skb);
-}
-
 static void rtl8125_phy_ptp_tx_hwtstamp(struct rtl8125_private *tp)
 {
         struct sk_buff *skb = tp->ptp_tx_skb;
         struct skb_shared_hwtstamps shhwtstamps = { 0 };
         struct timespec64 ts64;
 
-        rtl8125_mdio_direct_write_phy_ocp(tp, PTP_INSR, TX_TX_INTR);
+        rtl8125_mdio_direct_write_phy_ocp(tp, PTP_INSR, TX_TS_INTR);
 
         rtl8125_phy_ptp_egresstime(tp, &ts64);
 
@@ -942,34 +615,6 @@ static void rtl8125_phy_ptp_tx_hwtstamp(struct rtl8125_private *tp)
 }
 
 #define RTL8125_PTP_TX_TIMEOUT      (HZ * 15)
-static void rtl8125_mac_ptp_tx_work(struct work_struct *work)
-{
-        struct rtl8125_private *tp = container_of(work, struct rtl8125_private,
-                                     ptp_tx_work);
-
-        if (!tp->ptp_tx_skb)
-                return;
-
-        if (time_is_before_jiffies(tp->ptp_tx_start +
-                                   RTL8125_PTP_TX_TIMEOUT)) {
-                dev_kfree_skb_any(tp->ptp_tx_skb);
-                tp->ptp_tx_skb = NULL;
-                clear_bit_unlock(__RTL8125_PTP_TX_IN_PROGRESS, &tp->state);
-                tp->tx_hwtstamp_timeouts++;
-                /* Clear the tx valid bit in TSYNCTXCTL register to enable
-                 * interrupt
-                 */
-                RTL_W8(tp, PTP_ISR_8125, PTP_ISR_TOK | PTP_ISR_TER);
-                return;
-        }
-
-        if (RTL_R8(tp, PTP_ISR_8125) & (PTP_ISR_TOK))
-                rtl8125_mac_ptp_tx_hwtstamp(tp);
-        else
-                /* reschedule to check later */
-                schedule_work(&tp->ptp_tx_work);
-}
-
 static void rtl8125_phy_ptp_tx_work(struct work_struct *work)
 {
         struct rtl8125_private *tp = container_of(work, struct rtl8125_private,
@@ -990,13 +635,13 @@ static void rtl8125_phy_ptp_tx_work(struct work_struct *work)
                  * interrupt
                  */
                 r8125_spin_lock(&tp->phy_lock, flags);
-                rtl8125_mdio_direct_write_phy_ocp(tp, PTP_INSR, TX_TX_INTR);
+                rtl8125_mdio_direct_write_phy_ocp(tp, PTP_INSR, TX_TS_INTR);
                 r8125_spin_unlock(&tp->phy_lock, flags);
                 return;
         }
 
         r8125_spin_lock(&tp->phy_lock, flags);
-        if (rtl8125_mdio_direct_read_phy_ocp(tp, PTP_INSR) & TX_TX_INTR) {
+        if (rtl8125_mdio_direct_read_phy_ocp(tp, PTP_INSR) & TX_TS_INTR) {
                 tx_intr = true;
                 rtl8125_phy_ptp_tx_hwtstamp(tp);
         } else {
@@ -1010,35 +655,6 @@ static void rtl8125_phy_ptp_tx_work(struct work_struct *work)
         }
 }
 
-static int rtl8125_mac_hwtstamp_enable(struct rtl8125_private *tp, bool enable)
-{
-        RTL_W16(tp, PTP_CTRL_8125, 0);
-        if (enable) {
-                u16 ptp_ctrl;
-                struct timespec64 ts64;
-
-                //clear ptp isr
-                RTL_W8(tp, PTP_ISR_8125, 0xff);
-                //ptp source 0:gphy 1:mac
-                rtl8125_mac_ocp_write(tp, 0xDC00, rtl8125_mac_ocp_read(tp, 0xDC00) | BIT_6);
-                //enable ptp
-                ptp_ctrl = (BIT_0 | BIT_3 | BIT_4 | BIT_6 | BIT_10 | BIT_12);
-                if (tp->ptp_master_mode)
-                        ptp_ctrl |= BIT_1;
-                RTL_W16(tp, PTP_CTRL_8125, ptp_ctrl);
-
-                //set system time
-                /*
-                if (ktime_to_timespec64_cond(ktime_get_real(), &ts64))
-                _rtl8125_mac_phc_settime(tp, timespec64_to_timespec(ts64));
-                */
-                ktime_get_real_ts64(&ts64);
-                _rtl8125_mac_phc_settime(tp, &ts64);
-        }
-
-        return 0;
-}
-
 static int rtl8125_phy_hwtstamp_enable(struct rtl8125_private *tp, bool enable)
 {
         unsigned long flags;
@@ -1046,8 +662,8 @@ static int rtl8125_phy_hwtstamp_enable(struct rtl8125_private *tp, bool enable)
         r8125_spin_lock(&tp->phy_lock, flags);
 
         if (enable) {
-                //trx timestamp interrupt enable
-                rtl8125_set_eth_phy_ocp_bit(tp, PTP_INER, BIT_2 | BIT_3);
+                //tx timestamp interrupt enable
+                rtl8125_set_eth_phy_ocp_bit(tp, PTP_INER, BIT_3);
 
                 //set isr clear mode
                 rtl8125_set_eth_phy_ocp_bit(tp, PTP_GEN_CFG, BIT_0);
@@ -1096,13 +712,15 @@ static long rtl8125_ptp_create_clock(struct rtl8125_private *tp)
         }
 
         switch (tp->HwSuppPtpVer) {
-        case 1:
-                tp->ptp_clock_info = rtl8125_mac_ptp_clock_info;
-                tp->ptp_clock_info.max_adj = 119304647;
-                break;
         case 3:
                 tp->ptp_clock_info = rtl8125_phy_ptp_clock_info;
                 tp->ptp_clock_info.max_adj = 488281;//0x1FFFFF * 10^9 / 2^32
+
+                /* RTL8125B doesn't support pps*/
+                if (tp->mcfg <= CFG_METHOD_5) {
+                        tp->ptp_clock_info.pps = 0;
+                        tp->ptp_clock_info.enable = NULL;
+                }
                 break;
         default:
                 break;
@@ -1130,9 +748,6 @@ void rtl8125_ptp_reset(struct rtl8125_private *tp)
         netif_info(tp, drv, tp->dev, "reset PHC clock\n");
 
         switch (tp->HwSuppPtpVer) {
-        case 1:
-                rtl8125_mac_hwtstamp_enable(tp, false);
-                break;
         case 3:
                 rtl8125_phy_hwtstamp_enable(tp, false);
                 break;
@@ -1141,15 +756,14 @@ void rtl8125_ptp_reset(struct rtl8125_private *tp)
         }
 }
 
-static enum hrtimer_restart
-rtl8125_phy_hrtimer_for_pps(struct hrtimer *timer) {
+static enum hrtimer_restart rtl8125_phy_hrtimer_for_pps(struct hrtimer *timer)
+{
         struct rtl8125_private *tp = container_of(timer, struct rtl8125_private, pps_timer);
         s64 pps_sec;
-        u16 tai_cfg;
+        u16 tai_cfg = 0;
         int i;
 
-        if (tp->pps_enable)
-        {
+        if (tp->pps_enable) {
                 switch (tp->HwSuppPtpVer) {
                 case 3:
                         tai_cfg = BIT_8 | BIT_5 | BIT_1 | BIT_0;
@@ -1185,7 +799,7 @@ rtl8125_phy_hrtimer_for_pps(struct hrtimer *timer) {
                 //Periodic Tai start
                 rtl8125_mdio_direct_write_phy_ocp(tp, PTP_TAI_CFG, tai_cfg);
 
-                hrtimer_forward_now(&tp->pps_timer, 1000000000); //rekick
+                hrtimer_forward_now(&tp->pps_timer, ktime_set(0, R8125_PPS_TIMER_INTERVAL)); //rekick
                 return HRTIMER_RESTART;
         } else
                 return HRTIMER_NORESTART;
@@ -1199,9 +813,6 @@ void rtl8125_ptp_init(struct rtl8125_private *tp)
 
         /* we have a clock so we can initialize work now */
         switch (tp->HwSuppPtpVer) {
-        case 1:
-                INIT_WORK(&tp->ptp_tx_work, rtl8125_mac_ptp_tx_work);
-                break;
         case 3:
                 INIT_WORK(&tp->ptp_tx_work, rtl8125_phy_ptp_tx_work);
                 break;
@@ -1213,12 +824,20 @@ void rtl8125_ptp_init(struct rtl8125_private *tp)
         switch (tp->HwSuppPtpVer) {
         case 3:
                 tp->pps_enable = 0;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,13,0)
                 hrtimer_init(&tp->pps_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
                 tp->pps_timer.function = rtl8125_phy_hrtimer_for_pps;
+#else
+                hrtimer_setup(&tp->pps_timer, rtl8125_phy_hrtimer_for_pps, CLOCK_MONOTONIC,
+                              HRTIMER_MODE_REL);
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(6,13,0) */
                 break;
         default:
                 break;
         }
+
+        tp->hwtstamp_config.rx_filter = HWTSTAMP_FILTER_NONE;
+        tp->hwtstamp_config.tx_type = HWTSTAMP_TX_OFF;
 
         /* reset the PTP related hardware bits */
         rtl8125_ptp_reset(tp);
@@ -1234,9 +853,6 @@ void rtl8125_ptp_suspend(struct rtl8125_private *tp)
         netif_info(tp, drv, tp->dev, "suspend PHC clock\n");
 
         switch (tp->HwSuppPtpVer) {
-        case 1:
-                rtl8125_mac_hwtstamp_enable(tp, false);
-                break;
         case 3:
                 rtl8125_phy_hwtstamp_enable(tp, false);
                 break;
@@ -1326,9 +942,6 @@ static int rtl8125_set_tstamp(struct net_device *netdev, struct ifreq *ifr)
                 tp->hwtstamp_config = config;
 
                 switch (tp->HwSuppPtpVer) {
-                case 1:
-                        rtl8125_mac_hwtstamp_enable(tp, hwtstamp);
-                        break;
                 case 3:
                         rtl8125_phy_hwtstamp_enable(tp, hwtstamp);
                         break;
@@ -1372,19 +985,6 @@ int rtl8125_ptp_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
         }
 
         return ret;
-}
-
-void rtl8125_rx_mac_ptp_pktstamp(struct rtl8125_private *tp, struct sk_buff *skb,
-                                 struct RxDescV3 *descv3)
-{
-        time64_t tv_sec;
-        long tv_nsec;
-
-        tv_sec = le32_to_cpu(descv3->RxDescTimeStamp.TimeStampHigh) +
-                 ((u64)le32_to_cpu(descv3->RxDescPTPDDWord4.TimeStampHHigh) << 32);
-        tv_nsec = le32_to_cpu(descv3->RxDescTimeStamp.TimeStampLow);
-
-        skb_hwtstamps(skb)->hwtstamp = ktime_set(tv_sec, tv_nsec);
 }
 
 static void rtl8125_rx_phy_ptp_pktstamp(struct rtl8125_private *tp, struct sk_buff *skb, u8 type)

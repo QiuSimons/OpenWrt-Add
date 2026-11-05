@@ -5,7 +5,7 @@
 # r8125 is the Linux device driver released for Realtek 2.5 Gigabit Ethernet
 # controllers with PCI-Express interface.
 #
-# Copyright(c) 2025 Realtek Semiconductor Corp. All rights reserved.
+# Copyright(c) 2026 Realtek Semiconductor Corp. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the Free
@@ -32,10 +32,13 @@
  *  US6,570,884, US6,115,776, and US6,327,625.
  ***********************************************************************************/
 
-//EEPROM opcodes
-#define RTL_EEPROM_READ_OPCODE      06
-#define RTL_EEPROM_WRITE_OPCODE     05
-#define RTL_EEPROM_ERASE_OPCODE     07
+#ifndef _LINUX_RTL_EEPROM_H
+#define _LINUX_RTL_EEPROM_H
+
+/* EEPROM opcodes */
+#define RTL_EEPROM_READ_OPCODE      6
+#define RTL_EEPROM_WRITE_OPCODE     5
+#define RTL_EEPROM_ERASE_OPCODE     7
 #define RTL_EEPROM_EWEN_OPCODE      19
 #define RTL_EEPROM_EWDS_OPCODE      16
 
@@ -51,3 +54,5 @@ void rtl8125_raise_clock(struct rtl8125_private *tp, u8 *x);
 void rtl8125_lower_clock(struct rtl8125_private *tp, u8 *x);
 void rtl8125_stand_by(struct rtl8125_private *tp);
 void rtl8125_set_eeprom_sel_low(struct rtl8125_private *tp);
+
+#endif /* _LINUX_RTL_EEPROM_H */
