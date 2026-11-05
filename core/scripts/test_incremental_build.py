@@ -114,7 +114,7 @@ Version: 1.10.0-1
         # -------------------------------------------------------------
         print("\n--- [Scenario 1] 首次冷构建测试 ---")
         cmd_plan = (
-            f"python3 {script_path} plan "
+            f'"{sys.executable}" {script_path} plan '
             f"--package-dir {pkg_feed_dir} "
             f"--packageinfo {pkginfo_file} "
             f"--manifest {manifest_file} "
@@ -140,7 +140,7 @@ Version: 1.10.0-1
 
         # 执行 save
         cmd_save = (
-            f"python3 {script_path} save "
+            f'"{sys.executable}" {script_path} save '
             f"--package-dir {pkg_feed_dir} "
             f"--packageinfo {pkginfo_file} "
             f"--manifest {manifest_file} "
@@ -176,7 +176,7 @@ Version: 1.10.0-1
 
         # 运行 verify_manifest.py 验证闸门
         cmd_verify = (
-            f"python3 {manifest_checker} "
+            f'"{sys.executable}" {manifest_checker} '
             f"--expected {manifest_file} "
             f"--apk-dir {artifacts_bin} "
             f"--allow-missing /dev/null"

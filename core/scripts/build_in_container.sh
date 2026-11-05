@@ -200,8 +200,9 @@ fi
 cp /tmp/build.log /artifacts/logs/00-build.log
 
 # Collect built APKs into /artifacts/bin
+# 1. 收集 custom feed 下的应用和主题包
 find bin/packages/ -path '*/custom/*' -name '*.apk' -exec cp {} /artifacts/bin/ \; 2>/dev/null || true
-find bin/targets/ -name '*.apk' -exec cp -u {} /artifacts/bin/ \; 2>/dev/null || true
+# 2. 从 bin/ 中按清单精准收集目标包（涵盖输出在 bin/targets/ 的内核模块如 kmod-r8168、kmod-natflow 等，避免拷贝 SDK 内置的无关 kmod）
 if [ -f /artifacts/manifest/expected.txt ]; then
     while IFS= read -r pkg || [ -n "$pkg" ]; do
         [ -n "$pkg" ] || continue
