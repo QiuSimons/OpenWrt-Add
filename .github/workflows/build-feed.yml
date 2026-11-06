@@ -283,6 +283,7 @@ jobs:
 
           docker run --rm \
             --user root \
+            -e UPSTREAM_URL="https://downloads.openwrt.org" \
             -v "${{ github.workspace }}/staging_feed:/feed:ro" \
             -v "${{ github.workspace }}/artifacts:/artifacts" \
             -v "${{ github.workspace }}/dl:/builder/dl" \

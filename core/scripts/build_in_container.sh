@@ -36,6 +36,14 @@ set -e
 # Clear CI environment variables
 export CI=""
 export GITHUB_ACTIONS=""
+export UPSTREAM_URL="${UPSTREAM_URL:-https://downloads.openwrt.org}"
+
+cat << 'WGETRC_EOF' > ~/.wgetrc
+connect_timeout = 15
+read_timeout = 30
+tries = 3
+retry_connrefused = on
+WGETRC_EOF
 
 [ ! -f setup.sh ] || bash setup.sh
 
@@ -223,4 +231,4 @@ fi
 INNER_EOF
 
 chmod 755 /tmp/inner.sh
-su -s /bin/bash buildbot -c 'bash /tmp/inner.sh'
+su -s /bin/bash buildbot -c "UPSTREAM_URL='${UPSTREAM_URL:-https://downloads.openwrt.org}' bash /tmp/inner.sh"
