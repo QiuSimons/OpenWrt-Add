@@ -360,7 +360,7 @@ text around it so it looks the same size.
 - ACL: three groups. `luci-app-vantage` (read): `system info/board`,
   `network.interface dump`, `network.device status`, `iwinfo
   info/assoclist`, `hostapd.* get_status/get_clients`, `luci-rpc
-  getHostHints`, `luci.vantage wireless/thermal/wired`, `umdns hosts`, `file read` of
+  getHostHints`, `luci.vantage wireless/thermal/wired/routes`, `umdns hosts`, `file read` of
   `/proc/stat`, `uci get` for `vantage`, and LuCI's own `luci
   getSwconfigPortState` (the link state of a swconfig switch's ports: LuCI
   runs `swconfig dev <switch> show`, the switch name quoted; the view asks
@@ -396,7 +396,18 @@ text around it so it looks the same size.
   no more than 4,096 records in all, and dumps nothing (`crowded: true`)
   when they hold that many between them: a flood of made-up addresses
   must not make rpcd build the whole table. The bridge forgets a host after about five
-  minutes without traffic. Where `network.wireless status` answers with
+  minutes without traffic.
+  `routes` returns the default route the kernel takes to the internet,
+  for IPv4 and IPv6 (family, device and metric; no gateways): one
+  read-only lookup a family (RTM_GETROUTE with RTM_F_FIB_MATCH, as `ip
+  route get fibmatch`) of a documentation address no network uses, kept
+  when the answer is a unicast default route in the main table; the work
+  does not grow with the routing table. `routes` is null when a lookup
+  could not be sent. netifd's interface dump lists the routes it asked
+  for; of two with the same metric the kernel keeps the one added last,
+  and a VPN daemon may add its own: the network path needs the kernel's
+  answer to tell whether a full-tunnel VPN or its line carries ordinary
+  traffic. Where `network.wireless status` answers with
   no radios at all, `wireless` reads the configuration too.
   `set_alias({mac, name, icon})`
   re-applies the view's rules on the device (unicast MAC, name of at most

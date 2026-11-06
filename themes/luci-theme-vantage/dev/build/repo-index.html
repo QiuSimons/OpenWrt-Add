@@ -3,43 +3,446 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Vantage package repositories</title>
+<meta name="color-scheme" content="light dark">
+<title>Vantage · LuCI theme and dashboard for OpenWrt</title>
+<meta name="description" content="Vantage is a LuCI theme and live network dashboard for OpenWrt 25.12 and 24.10, with signed apk and opkg package repositories.">
+<meta property="og:title" content="Vantage · LuCI theme and dashboard for OpenWrt">
+<meta property="og:description" content="A theme for LuCI and a dashboard that opens when you log in, for OpenWrt 25.12 and 24.10.">
+<meta property="og:image" content="https://anothadev.github.io/luci-theme-vantage/screenshots/dashboard-dark.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='1' y='1' width='30' height='30' rx='7' fill='%2316181b' stroke='%233a3e44'/%3E%3Cpath d='M9 10.5 16 22' fill='none' stroke='%23e7e9ec' stroke-width='2.6' stroke-linecap='round'/%3E%3Cpath d='M16 22 23 10.5' fill='none' stroke='%23c8f031' stroke-width='2.6' stroke-linecap='round'/%3E%3Ccircle cx='23' cy='10.5' r='1.9' fill='%23c8f031'/%3E%3C/svg%3E">
 <style>
-body { font: 15px/1.55 system-ui, sans-serif; max-width: 46rem; margin: 3rem auto; padding: 0 1rem; color: #e8eaed; background: #0d0e10; }
-a { color: #c8f031; } code, pre { font-family: ui-monospace, monospace; }
-pre { background: #15171a; border: 1px solid #262a2f; border-radius: 8px; padding: 1rem; overflow-x: auto; }
+/* Vantage's own tokens (luci-theme-vantage/htdocs/luci-static/vantage/vantage.css) */
+:root {
+	color-scheme: light;
+	--font: system-ui, -apple-system, "Segoe UI", Roboto, Inter, "Helvetica Neue", Arial, sans-serif;
+	--mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", "Cascadia Mono", Menlo, Consolas, monospace;
+	--r-sm: 4px; --r: 6px; --r-lg: 8px; --r-xl: 12px;
+	--bg: #e9ecef; --s1: #f8f9fa; --s2: #ffffff; --s3: #eef0f3;
+	--line: #d6dade; --line-2: #c1c7ce;
+	--text: #14171a; --text-2: #4a515a; --text-3: #5f666f;
+	--accent: #c8f031; --accent-hover: #b9e421; --accent-ink: #151b00;
+	--accent-text: #4b6600; --accent-soft: rgba(122, 163, 0, .13); --accent-line: #8db20f;
+	--focus: #4b6600;
+	--ok: #0b7f6c; --info: #1c64c4;
+	--grid: rgba(20, 23, 26, .04);
+	--shot-shadow: 0 18px 48px rgba(20, 23, 26, .16), 0 2px 6px rgba(20, 23, 26, .08);
+}
+@media (prefers-color-scheme: dark) {
+	:root {
+		color-scheme: dark;
+		--bg: #0d0e10; --s1: #15171a; --s2: #1b1d21; --s3: #22252a;
+		--line: #262a2f; --line-2: #353a41;
+		--text: #e8eaed; --text-2: #a9afb7; --text-3: #8a9099;
+		--accent-hover: #d6fb4c; --accent-ink: #141a00;
+		--accent-text: #c8f031; --accent-soft: rgba(200, 240, 49, .1); --accent-line: rgba(200, 240, 49, .5);
+		--focus: #c8f031;
+		--ok: #2dd4bf; --info: #6cb4ff;
+		--grid: rgba(255, 255, 255, .025);
+		--shot-shadow: 0 24px 64px rgba(0, 0, 0, .6), 0 0 0 1px rgba(255, 255, 255, .03);
+	}
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; background: var(--bg); }
+body {
+	margin: 0; background: var(--bg); color: var(--text);
+	font: 400 16px/1.6 var(--font);
+	-webkit-font-smoothing: antialiased;
+	overflow-wrap: break-word;
+}
+img { display: block; max-width: 100%; height: auto; }
+a { color: var(--accent-text); text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-sm); }
+code, pre, kbd { font-family: var(--mono); font-variant-ligatures: none; }
+code { font-size: .9em; overflow-wrap: anywhere; }
+kbd {
+	display: inline-block; min-width: 1.6em; padding: 0 .4em;
+	font-size: .8em; line-height: 1.6; text-align: center;
+	color: var(--text-2); background: var(--s3);
+	border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: var(--r-sm);
+}
+h1, h2, h3 { margin: 0; line-height: 1.2; letter-spacing: -.015em; }
+h2 { font-size: clamp(26px, 4vw, 34px); font-weight: 700; }
+h3 { font-size: 17px; font-weight: 600; }
+p { margin: 0; }
+
+.wrap { width: min(1180px, 100% - 32px); margin-inline: auto; }
+.skip { position: absolute; left: 16px; top: -48px; z-index: 10; padding: 8px 12px; background: var(--accent); color: var(--accent-ink); border-radius: var(--r); font-weight: 600; }
+.skip:focus { top: 12px; }
+.keys { white-space: nowrap; }
+
+/* ------------------------------------------------------------- top bar */
+.top { position: relative; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--line); }
+.top .wrap { display: flex; align-items: center; gap: 16px; min-height: 64px; flex-wrap: wrap; }
+.brand { display: inline-flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; font-weight: 700; font-size: 17px; letter-spacing: -.01em; }
+.brand svg { flex: none; }
+.nav { display: flex; gap: 4px 20px; margin-left: auto; flex-wrap: wrap; font-size: 14px; }
+.nav a { color: var(--text-2); text-decoration: none; }
+.nav a:hover { color: var(--text); }
+
+/* ---------------------------------------------------------------- hero */
+.hero { position: relative; overflow: hidden; color: var(--text); padding-bottom: 0; }
+.hero {
+	background:
+		radial-gradient(700px 480px at 80% 30%, var(--accent-soft), transparent 65%),
+		linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 32px 32px,
+		linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 32px 32px,
+		var(--bg);
+	border-bottom: 1px solid var(--line);
+}
+
+.split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(32px, 5vw, 64px); align-items: center; padding: clamp(48px, 8vw, 96px) 0; }
+.hero-copy { position: relative; z-index: 1; }
+.eyebrow {
+	display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
+	padding: 4px 12px; border: 1px solid var(--line-2); border-radius: 999px;
+	background: color-mix(in srgb, var(--s1) 80%, transparent);
+	color: var(--text-2); font-size: 13px;
+}
+.eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px rgba(200, 240, 49, .18); }
+.hero h1 {
+	margin: 20px 0 0; text-wrap: balance;
+	font-size: clamp(36px, 5.2vw, 60px); font-weight: 700; letter-spacing: -.03em; line-height: 1.04;
+}
+.hero h1 em { white-space: nowrap; }
+.hero h1 em { font-style: normal; color: var(--accent-text); }
+.lead { margin: 20px 0 0; max-width: 34rem; color: var(--text-2); font-size: clamp(17px, 2.1vw, 19px); }
+.cta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 32px; }
+.btn {
+	display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 20px;
+	border-radius: var(--r); font-weight: 600; font-size: 15px; text-decoration: none;
+	border: 1px solid var(--line-2); color: var(--text); background: var(--s2);
+}
+.btn:hover { background: var(--s3); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.facts { margin: 22px 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--text-3); font-size: 14px; }
+.facts li { display: inline-flex; align-items: center; gap: 6px; }
+.facts svg { color: var(--accent-text); flex: none; }
+
+.hero-shot { position: relative; z-index: 1; }
+.hero-shot::before {
+	content: ""; position: absolute; inset: 8% 10% auto; height: 60%;
+	background: radial-gradient(closest-side, rgba(200, 240, 49, .16), transparent);
+	filter: blur(30px); z-index: -1;
+}
+.frame {
+	margin: 0; border: 1px solid var(--line-2); border-radius: var(--r-xl); overflow: hidden;
+	background: var(--s1); box-shadow: var(--shot-shadow);
+}
+.caption { margin-top: 10px; color: var(--text-3); font-size: 13px; text-align: center; }
+
+/* ----------------------------------------------------------- sections */
+section { padding: clamp(56px, 9vw, 104px) 0 0; }
+.sec-head { max-width: 44rem; margin-bottom: 32px; }
+.sec-head p { margin-top: 12px; color: var(--text-2); font-size: 17px; }
+.hero + .after { padding-top: 0; }
+.after .caption { margin-top: 12px; text-align: left; }
+
+.highlights { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 16px; margin: 0; padding: 0; list-style: none; }
+.card { padding: 22px 22px 24px; background: var(--s1); border: 1px solid var(--line); border-radius: var(--r-lg); }
+.card .ico { width: 40px; height: 40px; display: grid; place-items: center; border-radius: var(--r); background: var(--accent-soft); color: var(--accent-text); margin-bottom: 16px; }
+.card p { margin-top: 8px; color: var(--text-2); font-size: 15px; }
+
+.feature { display: grid; gap: clamp(24px, 4vw, 56px); align-items: center; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); }
+.feature + .feature { margin-top: clamp(48px, 7vw, 88px); }
+.feature.flip > .copy { order: 2; }
+.feature .copy p { margin-top: 12px; color: var(--text-2); font-size: 17px; }
+.feature .copy ul { margin: 14px 0 0; padding-left: 20px; color: var(--text-2); }
+.feature .copy li + li { margin-top: 4px; }
+.feature figcaption, .pair figcaption { padding: 10px 14px; border-top: 1px solid var(--line); color: var(--text-3); font-size: 13px; }
+.pair { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+.phone { display: grid; gap: clamp(24px, 4vw, 56px); grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; }
+.phone .frame { max-width: 340px; justify-self: center; border-radius: 22px; }
+
+.trust { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); margin: 0; padding: 0; list-style: none; }
+.trust li { padding: 18px 20px; border: 1px solid var(--line); border-left: 3px solid var(--accent-line); border-radius: var(--r-lg); background: var(--s1); color: var(--text-2); font-size: 15px; }
+.trust strong { color: var(--text); }
+
+/* -------------------------------------------------------------- install */
+.repos { display: grid; gap: 16px; }
+.repo { min-width: 0; padding: 24px; background: var(--s1); border: 1px solid var(--line); border-radius: var(--r-lg); }
+.repo h3 { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 20px; }
+.repo h3 span { color: var(--text-3); font-size: 14px; font-weight: 500; }
+.repo p { margin-top: 10px; color: var(--text-2); font-size: 15px; }
+pre {
+	margin: 14px 0 0; padding: 14px 16px; overflow-x: auto;
+	background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-lg);
+	font-size: 13px; line-height: 1.7; color: var(--text); tab-size: 4;
+}
+.note { margin-top: 20px; color: var(--text-2); font-size: 15px; }
+.note + .note { margin-top: 8px; }
+
+footer { margin-top: clamp(64px, 10vw, 112px); border-top: 1px solid var(--line); padding: 28px 0 40px; color: var(--text-3); font-size: 14px; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between; }
+footer nav { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+footer a { color: var(--text-2); }
+
+.copy-p { margin-top: 12px; color: var(--text-2); font-size: 17px; }
+
+@media (max-width: 1000px) {
+	.split { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 860px) {
+	.feature, .phone { grid-template-columns: minmax(0, 1fr); }
+	.feature.flip > .copy { order: 0; }
+	.pair { grid-template-columns: minmax(0, 1fr); }
+	.phone .frame { max-width: 300px; }
+}
+@media (max-width: 520px) {
+	.nav { margin-left: 0; width: 100%; }
+	.repo { padding: 18px 16px; }
+	pre { font-size: 12px; padding: 12px; }
+}
 </style>
 </head>
 <body>
-<h1>Vantage package repositories</h1>
-<p>Signed package repositories for <a href="https://github.com/anothaDev/luci-theme-vantage">Vantage</a>,
-a LuCI theme and dashboard for OpenWrt 25.12 and 24.10.</p>
-<h2>OpenWrt 25.12 (apk)</h2>
-<p>One-time setup on the router, then install and upgrade with <code>apk</code>:</p>
-<pre>wget -O /etc/apk/keys/vantage-signing.pem https://anothadev.github.io/luci-theme-vantage/vantage-signing.pem
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+	<div class="wrap">
+		<a class="brand" href="./">
+			<svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect x="1" y="1" width="30" height="30" rx="7" fill="#16181b" stroke="#3a3e44"/><path d="M9 10.5 16 22" fill="none" stroke="#e7e9ec" stroke-width="2.6" stroke-linecap="round"/><path d="M16 22 23 10.5" fill="none" stroke="#c8f031" stroke-width="2.6" stroke-linecap="round"/><circle cx="23" cy="10.5" r="1.9" fill="#c8f031"/></svg>
+			Vantage
+		</a>
+		<nav class="nav" aria-label="Page">
+			<a href="#features">Features</a>
+			<a href="#install">Install</a>
+			<a href="https://github.com/anothaDev/luci-theme-vantage/blob/main/CHANGELOG.md">Changelog</a>
+			<a href="https://github.com/anothaDev/luci-theme-vantage">GitHub</a>
+		</nav>
+	</div>
+</header>
+
+<main id="main">
+<div class="hero">
+	<div class="wrap split">
+	<div class="hero-copy">
+		<p class="eyebrow"><span class="dot" aria-hidden="true"></span>For OpenWrt 25.12 and 24.10</p>
+		<h1>See what your router <em>is doing.</em></h1>
+		<p class="lead">Vantage is a theme for LuCI, OpenWrt's web interface, plus a dashboard that opens when you log in: who's connected, how busy the uplink is, and what needs fixing. Every other LuCI page gets the same look.</p>
+		<div class="cta">
+			<a class="btn btn-primary" href="#install">Install from the signed repository</a>
+			<a class="btn" href="https://github.com/anothaDev/luci-theme-vantage">Source on GitHub</a>
+		</div>
+		<ul class="facts">
+			<li><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Free software, GPL-3.0-or-later</li>
+			<li><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Any target: architecture-independent</li>
+			<li><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>No CDNs or web fonts</li>
+		</ul>
+	</div>
+
+	<div class="hero-shot">
+		<figure class="frame">
+			<picture>
+				<source media="(prefers-color-scheme: dark)" srcset="screenshots/dashboard-dark.png" width="1920" height="1333">
+				<img src="screenshots/dashboard-light.png" width="1920" height="1333" alt="The Vantage dashboard: six health cards (uplink, CPU, memory, Wi-Fi, signal, storage) with one flagging a weak client, the network path from the gateway through the access point to its radios and SSIDs, live throughput charts and radio cards" fetchpriority="high">
+			</picture>
+		</figure>
+	</div>
+	</div>
+</div>
+
+	<div class="wrap after">
+		<p class="caption">Recorded data from a real access point, pseudonymised: documentation addresses and MACs, neutral names.</p>
+	</div>
+
+	<section id="features" aria-labelledby="features-h">
+		<div class="wrap">
+			<div class="sec-head">
+				<h2 id="features-h">What you get</h2>
+				<p>Two packages. Installed on its own, the dashboard works under any LuCI theme; with both, it goes with the Vantage theme. The theme is useful without the dashboard.</p>
+			</div>
+			<ul class="highlights">
+				<li class="card">
+					<div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+					<h3>Health at a glance</h3>
+					<p>Six checks: uplink, CPU, memory, Wi-Fi, client signal and storage. Each has its own icon, a one-line reason and a picture along its edge, and opens what it is about.</p>
+				</li>
+				<li class="card">
+					<div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="19" cy="6" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="19" cy="18" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7.2 12H11m0 0c2 0 2-6 5.8-6M11 12c2 0 2 6 5.8 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
+					<h3>The network path, live</h3>
+					<p>Gateway, access point, radios and SSIDs, plus a Wired branch per port. Packets cross its grid with the live uplink rate; click any node for details.</p>
+				</li>
+				<li class="card">
+					<div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 19c.8-3.4 3.2-5 6-5s5.2 1.6 6 5M16 5.2a3 3 0 0 1 0 5.6M18 14.2c1.6.6 2.6 2 3 4.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
+					<h3>Every client, by name</h3>
+					<p>Your alias, reverse DNS, mDNS, DHCP and WPS names or the vendor. Signal, link rate, Wi-Fi generation, live traffic and an experience score that says why. Wired devices too.</p>
+				</li>
+				<li class="card">
+					<div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 4v16" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 9h5.5M12 13h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
+					<h3>LuCI, restyled</h3>
+					<p>An icon rail, breadcrumbs and page tabs, a <span class="keys"><kbd>Ctrl</kbd>+<kbd>K</kbd></span> palette over every page you can open, and light, dark or auto mode without a flash. Tables become cards on phones.</p>
+				</li>
+				<li class="card">
+					<div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5.5c0 4.3 3 7.7 7 9.5 4-1.8 7-5.2 7-9.5V6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m9 12 2.2 2.2L15.5 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+					<h3>Read-only by design</h3>
+					<p>Apart from device names, which the router validates, the dashboard's permissions grant read methods only: no <code>file.exec</code>, and never Wi-Fi keys.</p>
+				</li>
+				<li class="card">
+					<div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M4 7.5 12 12l8-4.5M12 12v9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></div>
+					<h3>Small and self-contained</h3>
+					<p>System fonts and self-drawn icons; nothing loads from the internet, so the UI works offline. Two architecture-independent packages for every target, from signed apk and opkg repositories.</p>
+				</li>
+			</ul>
+		</div>
+	</section>
+
+	<section aria-labelledby="tour-h">
+		<div class="wrap">
+			<div class="sec-head">
+				<h2 id="tour-h">A closer look</h2>
+			</div>
+
+			<div class="feature">
+				<div class="copy">
+					<h3>Dark, light or auto</h3>
+					<p>The mode is applied before the first paint, so pages never flash. The dashboard takes the theme's buttons, tabs, tables and status colours, so LuCI and the dashboard read as one product.</p>
+				</div>
+				<figure class="frame">
+					<picture>
+						<source media="(prefers-color-scheme: dark)" srcset="screenshots/dashboard-light.png" width="1920" height="1333">
+						<img src="screenshots/dashboard-dark.png" width="1920" height="1333" loading="lazy" decoding="async" alt="The dashboard in the other colour mode: health cards, the network path and live throughput">
+					</picture>
+				</figure>
+			</div>
+
+			<div class="feature flip">
+				<div class="copy">
+					<h3>Every client, up close</h3>
+					<p>Open a client for its experience score and the reason for it, signal history, link rates both ways, capabilities, traffic and retries. Rename the device in place.</p>
+				</div>
+				<figure class="frame">
+					<img src="screenshots/client-drawer.png" width="1920" height="1333" loading="lazy" decoding="async" alt="The client inspector drawer open over the clients table, with an experience score, signal and throughput charts and link details">
+				</figure>
+			</div>
+
+			<div class="feature">
+				<div class="copy">
+					<h3>Every page, one keystroke away</h3>
+					<p><span class="keys"><kbd>Ctrl</kbd>+<kbd>K</kbd></span> or <kbd>/</kbd> opens a palette with fuzzy search over every page you can open, each named with its place in the menu, and the Appearance choices too.</p>
+				</div>
+				<figure class="frame">
+					<img src="screenshots/palette.png" width="1920" height="1333" loading="lazy" decoding="async" alt="The command palette open over the dashboard, listing the Wireless pages that match a search">
+				</figure>
+			</div>
+
+			<div class="feature flip">
+				<div class="copy">
+					<h3>Room for a bigger network</h3>
+					<p>Four radios, ten networks, 74 clients and six wired ports, each port with its live traffic, on one network path. Shown with the larger access point that the development replay generates.</p>
+				</div>
+				<figure class="frame">
+					<img src="screenshots/network-path.png" width="1792" height="1511" loading="lazy" decoding="async" alt="The network path of a quad-radio access point: the gateway and access point on the left, four radios with ten SSIDs and their clients, and a Wired branch with six ports">
+				</figure>
+			</div>
+
+			<div class="phone" style="margin-top: clamp(48px, 7vw, 88px)">
+				<div class="copy">
+					<h3>Made for phones too</h3>
+					<p class="copy-p">On a phone the rail becomes a bottom bar and sheet, controls grow for touch, tables turn into cards, and the clients list switches between Wi-Fi and Wired.</p>
+				</div>
+				<figure class="frame">
+					<img src="screenshots/mobile.png" width="780" height="1688" loading="lazy" decoding="async" alt="The dashboard on a phone: health cards in two columns, the clients list as cards and the bottom bar">
+				</figure>
+			</div>
+
+			<div class="sec-head" style="margin-top: clamp(56px, 8vw, 96px); margin-bottom: 24px">
+				<h3>LuCI's own pages, in the same style</h3>
+				<p style="font-size: 16px">Stock pages, forms, tables, charts and status icons; a table row's extra actions fold into a ⋯ menu, and tables become cards on phones.</p>
+			</div>
+			<div class="pair">
+				<figure class="frame">
+					<img src="screenshots/status-overview.png" width="1920" height="1333" loading="lazy" decoding="async" alt="LuCI's Status Overview page under the theme: system details, a memory bar and storage bars">
+					<figcaption>Status → Overview</figcaption>
+				</figure>
+				<figure class="frame">
+					<img src="screenshots/channel-analysis.png" width="1920" height="1333" loading="lazy" decoding="async" alt="LuCI's Channel Analysis page under the theme: overlapping channel curves of neighbouring networks and their table">
+					<figcaption>Status → Channel Analysis (the neighbouring networks are generated)</figcaption>
+				</figure>
+			</div>
+
+			<div class="feature" style="margin-top: clamp(48px, 7vw, 88px)">
+				<div class="copy">
+					<h3>A login page of its own</h3>
+					<p>A quiet card on the grid, with packets moving behind it, a starfield, or nothing, as picked under Appearance. The theme adds nothing about the device to it.</p>
+				</div>
+				<figure class="frame">
+					<img src="screenshots/login.png" width="1920" height="1000" loading="lazy" decoding="async" alt="The theme's login page: a login card on a dark grid with moving packet traces">
+				</figure>
+			</div>
+		</div>
+	</section>
+
+	<section aria-labelledby="trust-h">
+		<div class="wrap">
+			<div class="sec-head">
+				<h2 id="trust-h">Built to be trusted on your router</h2>
+				<p>CI runs the tests and security checks on every push and pull request, and publishes a release only when its build matches the hashes I committed. The details are in the <a href="https://github.com/anothaDev/luci-theme-vantage#security">README</a> and <a href="https://github.com/anothaDev/luci-theme-vantage/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+			</div>
+			<ul class="trust">
+				<li><strong>Least privilege.</strong> The dashboard's ACL grants exactly the methods it calls. Reverse DNS and device names each sit in a group of their own, and no group grants uci writes.</li>
+				<li><strong>No markup from data.</strong> Every element is built with LuCI's <code>E()</code> and text nodes; a check rejects <code>innerHTML</code> and other HTML sinks.</li>
+				<li><strong>Reproducible packages.</strong> The same commit, SDK release and pinned image always give byte-identical packages, checked against the commit's source.</li>
+				<li><strong>Signed repositories.</strong> apk and opkg check the index signature against the project key and each package against its hash.</li>
+			</ul>
+		</div>
+	</section>
+
+	<section id="install" aria-labelledby="install-h">
+		<div class="wrap">
+			<div class="sec-head">
+				<h2 id="install-h">Package repositories</h2>
+				<p>Signed package repositories for <a href="https://github.com/anothaDev/luci-theme-vantage">Vantage</a>, a LuCI theme and dashboard for OpenWrt 25.12 and 24.10. On the router, over SSH:</p>
+			</div>
+			<div class="repos">
+				<div class="repo">
+					<h3>OpenWrt 25.12 <span>apk</span></h3>
+					<p>One-time setup on the router, then install and upgrade with <code>apk</code>:</p>
+<pre tabindex="0" role="region" aria-label="OpenWrt 25.12 setup commands">wget -O /etc/apk/keys/vantage-signing.pem https://anothadev.github.io/luci-theme-vantage/vantage-signing.pem
 sha256sum /etc/apk/keys/vantage-signing.pem
 # must print c8a6c83eeb49ca2407932fb5e95785776128cef87db75ebaea0fe4171eee2157
 echo 'https://anothadev.github.io/luci-theme-vantage/25.12/packages.adb' &gt;&gt; /etc/apk/repositories.d/customfeeds.list
 apk update
 apk add luci-theme-vantage luci-app-vantage</pre>
-<p>Translations, where available, are separate packages:
-<code>apk add luci-i18n-vantage-&lt;lang&gt; luci-i18n-vantage-theme-&lt;lang&gt;</code>
-(for example <code>zh-cn</code>); choose the language under System → System → Language and Style.</p>
-<h2>OpenWrt 24.10 (opkg)</h2>
-<p>One-time setup on the router, then install and upgrade with <code>opkg</code>:</p>
-<pre>wget -O /tmp/vantage-24.10.usign.pub https://anothadev.github.io/luci-theme-vantage/vantage-24.10.usign.pub
+					<p>Translations, where available, are separate packages:
+					<code>apk add luci-i18n-vantage-&lt;lang&gt; luci-i18n-vantage-theme-&lt;lang&gt;</code>
+					(for example <code>zh-cn</code>); choose the language under System → System → Language and Style.</p>
+				</div>
+				<div class="repo">
+					<h3>OpenWrt 24.10 <span>opkg</span></h3>
+					<p>One-time setup on the router, then install and upgrade with <code>opkg</code>:</p>
+<pre tabindex="0" role="region" aria-label="OpenWrt 24.10 setup commands">wget -O /tmp/vantage-24.10.usign.pub https://anothadev.github.io/luci-theme-vantage/vantage-24.10.usign.pub
 usign -F -p /tmp/vantage-24.10.usign.pub
 # must print 297430484082d03d
 opkg-key add /tmp/vantage-24.10.usign.pub
 echo 'src/gz vantage https://anothadev.github.io/luci-theme-vantage/24.10' &gt;&gt; /etc/opkg/customfeeds.conf
 opkg update
 opkg install luci-theme-vantage luci-app-vantage</pre>
-<p>Translations: <code>opkg install luci-i18n-vantage-&lt;lang&gt;</code> (for example <code>zh-cn</code>).</p>
-<p>What changed in each release:
-<a href="https://github.com/anothaDev/luci-theme-vantage/blob/main/CHANGELOG.md">CHANGELOG.md</a>;
-the packages are also attached to the
-<a href="https://github.com/anothaDev/luci-theme-vantage/releases">releases</a>.</p>
-<p>Compare the key fingerprints with the ones in the project's
-<a href="https://github.com/anothaDev/luci-theme-vantage/blob/main/docs/INSTALL.md">install guide</a> before trusting it.</p>
+					<p>Translations: <code>opkg install luci-i18n-vantage-&lt;lang&gt;</code> (for example <code>zh-cn</code>).</p>
+				</div>
+			</div>
+			<p class="note">Then log out of LuCI and back in; the dashboard is the first page after login. What changed in each release:
+			<a href="https://github.com/anothaDev/luci-theme-vantage/blob/main/CHANGELOG.md">CHANGELOG.md</a>;
+			the packages are also attached to the
+			<a href="https://github.com/anothaDev/luci-theme-vantage/releases">releases</a>.</p>
+			<p class="note">Compare the key fingerprints with the ones in the project's
+			<a href="https://github.com/anothaDev/luci-theme-vantage/blob/main/docs/INSTALL.md">install guide</a> before trusting it.</p>
+		</div>
+	</section>
+</main>
+
+<footer>
+	<div class="wrap">
+		<p>Vantage is free software under the GPL-3.0-or-later. Report security problems privately, as described in <a href="https://github.com/anothaDev/luci-theme-vantage/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+		<nav aria-label="Project">
+			<a href="https://github.com/anothaDev/luci-theme-vantage">GitHub</a>
+			<a href="https://github.com/anothaDev/luci-theme-vantage/blob/main/docs/INSTALL.md">Install guide</a>
+			<a href="https://github.com/anothaDev/luci-theme-vantage/releases">Releases</a>
+			<a href="https://github.com/anothaDev/luci-theme-vantage/blob/main/CONTRIBUTING.md">Contributing</a>
+		</nav>
+	</div>
+</footer>
 </body>
 </html>

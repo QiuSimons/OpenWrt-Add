@@ -105,6 +105,7 @@ function runShim(cases) {
 		const reply = c.method === 'wireless'
 			? shim.wirelessReply((c.ubus || {})['network.wireless status'] ?? null, c.wireless_uci ?? null)
 			: c.method === 'wired' ? { hosts: shim.wired(c.fdb ?? null) }
+			: c.method === 'routes' ? { routes: shim.routes(c.lookup ?? null) }
 			: shim.setAlias(cursor, c.args || {});
 		return { status: 0, reply, sections: committed ? sections : orig, reverted };
 	});
@@ -206,6 +207,24 @@ const BOOLS = [
 	dev('r_no', '2g', '6', 'EHT20', { disabled: 'false' })
 ];
 
+/* a route lookup's answer as ucode's rtnl gives it (RTM_GETROUTE with
+   RTM_F_FIB_MATCH, one a family): the route that matched, no dst on a
+   default, priority its metric; false is the kernel's error (no route),
+   null a request not sent */
+const rt = (family, oif, priority, extra) => Object.assign({ family, tos: 0, protocol: 4, scope: 0, type: 1, flags: 0, table: 254 },
+	oif == null ? {} : { oif }, priority == null ? {} : { priority }, extra);
+const LOOKUPS = {
+	both: { 2: rt(2, 'eth0', null, { gateway: '192.0.2.1' }), 10: rt(10, 'eth0', 1024, { gateway: 'fe80::1' }) },
+	tunnel: { 2: rt(2, 'wg0', 0), 10: false },
+	def1: { 2: rt(2, 'tun0', 0, { dst: '128.0.0.0/1' }), 10: false },     /* OpenVPN's redirect-gateway def1: not a default */
+	ownTable: { 2: rt(2, 'wg1', 0, { table: 100 }), 10: false },
+	blackhole: { 2: rt(2, 'lo', 0, { type: 6 }), 10: false },
+	multipath: { 2: rt(2, null, 5, { multipath: [ { dev: 'eth0' }, { dev: 'eth9' } ] }), 10: false },
+	oddDev: { 2: rt(2, 'bad name!', -3), 10: false },
+	notSent: { 2: rt(2, 'eth0', 0), 10: null },
+	junk: { 2: 'x', 10: 7 }
+};
+
 /* the bridge forwarding database as ucode's rtnl dumps it (RTM_GETNEIGH,
    AF_BRIDGE): learned hosts are kept, everything else is left out */
 const fdb = (lladdr, dev, extra) => Object.assign({ family: 7, dev, master: 'br-lan', lladdr, state: 0x02, flags: 0,
@@ -274,7 +293,18 @@ const BEHAVIOUR = [
 	/* netifd answers but skipped every radio: the config as well */
 	{ method: 'wireless', ubus: { 'network.wireless status': {} }, wireless_uci: MTK },
 	/* the uplink's port full of upstream hosts leaves room for the others */
-	{ method: 'wired', fdb: FDB_UPLINK }
+	{ method: 'wired', fdb: FDB_UPLINK },
+	/* routes: the route lookups' answers */
+	{ method: 'routes', lookup: LOOKUPS.both },
+	{ method: 'routes', lookup: LOOKUPS.tunnel },
+	{ method: 'routes', lookup: LOOKUPS.def1 },
+	{ method: 'routes', lookup: LOOKUPS.ownTable },
+	{ method: 'routes', lookup: LOOKUPS.blackhole },
+	{ method: 'routes', lookup: LOOKUPS.multipath },
+	{ method: 'routes', lookup: LOOKUPS.oddDev },
+	{ method: 'routes', lookup: LOOKUPS.notSent },
+	{ method: 'routes', lookup: LOOKUPS.junk },
+	{ method: 'routes', lookup: LOOKUPS.both, args: { table: 100 } }
 ];
 
 const NAME_CASES = NAMES.map(([ n ]) => ({ method: 'set_alias', args: { mac: MAC, name: n } }));
@@ -404,9 +434,31 @@ test('stand-in: wired keeps the hosts the bridges learned, with port, VLAN and s
 	assert.deepEqual(none.reply, { hosts: [] });
 	assert.equal(many.reply.hosts.length, 128, 'at most 128 on one port');
 	assert.equal(bad.status, 2);
-	const [ up ] = runShim([ BEHAVIOUR[BEHAVIOUR.length - 1] ]);
+	const [ up ] = runShim([ BEHAVIOUR.find(c => c.fdb === FDB_UPLINK) ]);
 	assert.deepEqual(up.reply.hosts.slice(-2).map(h => h.port), [ 'lan1', 'lan2' ], 'the downstream ports still listed');
 	assert.equal(up.reply.hosts.filter(h => h.port === 'eth0').length, 128);
+});
+
+test('stand-in: routes keeps the lookups\' default routes in the main table, device and metric only', () => {
+	const R = k => shim.routes(LOOKUPS[k]);
+	assert.deepEqual(R('both'), [ { family: 4, dev: 'eth0', metric: 0 }, { family: 6, dev: 'eth0', metric: 1024 } ]);
+	assert.deepEqual(R('tunnel'), [ { family: 4, dev: 'wg0', metric: 0 } ], 'no IPv6 route: left out');
+	for (const k of [ 'def1', 'ownTable', 'blackhole', 'junk' ]) assert.deepEqual(R(k), [], k);
+	assert.deepEqual(R('multipath'), [ { family: 4, dev: null, metric: 5 } ], 'several next hops still count');
+	assert.deepEqual(R('oddDev'), [ { family: 4, dev: null, metric: 0 } ]);
+	assert.equal(R('notSent'), null, 'a lookup not sent: no answer at all');
+	assert.equal(shim.routes(null), null);
+	/* the replay's kernel: netifd's routes, the lowest metric; of a
+	   tunnel's and its line's, the tunnel's */
+	const wan = { interface: 'wan', up: true, proto: 'dhcp', l3_device: 'eth0', metric: 0, route: [ { target: '0.0.0.0', mask: 0, nexthop: '192.0.2.1' } ] };
+	const vpn = { interface: 'vpn', up: true, proto: 'wireguard', l3_device: 'wg0', route: [ { target: '0.0.0.0', mask: 0, nexthop: '0.0.0.0' } ] };
+	const wanb = { interface: 'wanb', up: true, proto: 'dhcp', l3_device: 'eth9', metric: 20, route: [ { target: '0.0.0.0', mask: 0, nexthop: '203.0.113.201' } ] };
+	const pbr = { interface: 'vpn2', up: true, proto: 'wireguard', l3_device: 'wg1', ip4table: '100', route: [ { target: '0.0.0.0', mask: 0, nexthop: '0.0.0.0' } ] };
+	const wan6 = { interface: 'wan6', up: true, proto: 'dhcpv6', l3_device: 'eth0', route: [ { target: '::', mask: 0, nexthop: 'fe80::1' } ] };
+	assert.deepEqual(shim.routes(shim.kernelLookup([ vpn, wan, wanb, pbr ])), [ { family: 4, dev: 'wg0', metric: 0 } ]);
+	assert.deepEqual(shim.routes(shim.kernelLookup([ wan, wanb, wan6 ])), [ { family: 4, dev: 'eth0', metric: 0 }, { family: 6, dev: 'eth0', metric: 1024 } ]);
+	assert.deepEqual(shim.routes(shim.kernelLookup([ Object.assign({}, vpn, { metric: 5 }), wan ])), [ { family: 4, dev: 'eth0', metric: 0 } ]);
+	assert.deepEqual(shim.routes(shim.kernelLookup([])), []);
 });
 
 test('ucode plugin: crowded bridges are counted, not dumped', { skip: NO_UCODE }, () => {

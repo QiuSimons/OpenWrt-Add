@@ -8,7 +8,7 @@ Nothing is forwarded anywhere; there is no upstream.
         [--theme-dir <pkg>/htdocs/luci-static/<name>] [--theme <name>] \
         [--templates <pkg>/ucode/template] [--rootfs <device rootfs dump>] \
         [--app-dir <luci-app package dir>]... [--keep-uniwrt] [--no-synthetic] \
-        [--demo] [--wired | --big] [--lang <lang>] [--fixtures <dir>]...
+        [--demo] [--wired | --big] [--multiwan] [--fullvpn] [--lang <lang>] [--fixtures <dir>]...
 
 Open <http://127.0.0.1:8025/>. Any username/password logs in; the session
 lasts until the replay restarts (log in again after a restart).
@@ -227,6 +227,27 @@ total). Addresses take the recorded LAN's first three octets, so use it
 with `--demo`; MACs are documentation values. Only the dashboard's calls
 are rewritten: LuCI's own wireless pages still show the recording. It
 cannot be combined with `--wired`.
+
+## A second line to the internet (`--multiwan`)
+
+Adds a backup WAN beside the uplink, to work on the network path's other
+lines (`multiwan.js`): `wanb` (DHCP, on a synthetic `eth9` at 1 Gbit/s, a
+device none of the other modes uses) with an IPv4 default route of metric
+20, above the recorded uplink's, and `wanb6` (DHCPv6) on the same device,
+which stays part of that line. Its counters grow with the clock, about
+30 Mbit/s down and 4 Mbit/s up. Combine it with `--wired` (a router
+without Wi-Fi) or `--big`; addresses are documentation values.
+
+## A full-tunnel VPN (`--fullvpn`)
+
+Gives the `vpn` WireGuard interface an IPv4 default route at the uplink's
+metric (0), as `route_allowed_ips` with `0.0.0.0/0` leaves it, to work on
+the network path's tunnel over the line (`fullvpn.js`). `--wired` has a
+`vpn` on `wg0`; without it a synthetic one is added, with counters of
+about 40 Mbit/s down and 3 Mbit/s up. The stand-in for `luci.vantage
+routes` answers its lookups as the kernel would from netifd's routes: the
+lowest metric, and of a tunnel's and its line's the tunnel's. Combine it with
+`--wired`, `--big` and `--multiwan`; addresses are documentation values.
 
 ## Translation preview (`--lang`)
 

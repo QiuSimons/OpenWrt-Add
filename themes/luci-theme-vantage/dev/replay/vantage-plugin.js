@@ -14,6 +14,11 @@
      luci.vantage wired      the hosts of a bridge forwarding database
                              dump shaped as rtnl's: synthetic.js invents
                              one, wired.js replaces the reply in --wired
+     luci.vantage routes     the route lookups' answers, shaped as rtnl's:
+                             kernelLookup() makes them from the interface
+                             dump the dashboard gets (server.js passes it,
+                             after --wired, --multiwan and --fullvpn
+                             rewrote it)
      luci.vantage set_alias  { mac, name, icon } -> uci vantage in the
                              store's overlay, committed at once
    tests/plugin.test.js checks this file, the real plugin (when a host
@@ -36,6 +41,7 @@ const MAX_HOSTS = 512;
 const MAX_PER_PORT = 128;
 /* the kernel's numbers, as rtnl.const */
 const NUD_NOARP = 0x40, NUD_PERMANENT = 0x80, NTF_SELF = 0x02;
+const AF_INET = 2, AF_INET6 = 10, RT_TABLE_MAIN = 254, RTN_UNICAST = 1;
 
 /* rpcd ubus status codes */
 const INVALID_ARGUMENT = 2;
@@ -46,6 +52,7 @@ const POLICY = {
 	wireless: {},
 	thermal: {},
 	wired: {},
+	routes: {},
 	set_alias: { mac: 'string', name: 'string', icon: 'string' }
 };
 
@@ -292,6 +299,54 @@ function wired(fdb) {
 	return out;
 }
 
+/* routes: [ { family, dev, metric } ] from the two lookups' answers as
+   rtnl gives them, { 2: IPv4's, 10: IPv6's } (a route, false for the
+   kernel's error, which for a lookup is no route, null when not sent), as
+   the plugin's routes(): a unicast default route in the main table (no
+   dst) is kept, IPv4 then IPv6, dev null over several next hops; null
+   when a lookup was not sent */
+function routes(answers) {
+	const out = [];
+	const netdev = v => typeof v === 'string' && /^[A-Za-z0-9_.-]{1,15}$/.test(v) ? v : null;
+	for (const fam of [ AF_INET, AF_INET6 ]) {
+		const r = answers && typeof answers === 'object' ? answers[fam] : null;
+		if (r === null || r === undefined) return null;
+		if (typeof r !== 'object' || Array.isArray(r) || r.family !== fam || r.dst != null || r.table !== RT_TABLE_MAIN || r.type !== RTN_UNICAST) continue;
+		const m = r.priority ?? 0;
+		out.push({ family: fam === AF_INET ? 4 : 6, dev: netdev(r.oif), metric: Number.isInteger(m) && m >= 0 ? m : 0 });
+	}
+	return out;
+}
+
+/* The replay's kernel: the lookups' answers (for routes()) from netifd's
+   routes as the kernel keeps them. netifd adds a route replacing one of
+   the same family and metric, so of a tunnel's and its line's the
+   tunnel's is kept, added later (a tunnel waits for a route to its
+   endpoint); a lookup answers with the lowest metric left, or false
+   when the family has none. Invented here; the device answers from its
+   own table. */
+const TUNNEL_PROTO = /^(wireguard|openvpn|gre|vti|xfrm|ipip|6in4)$/;
+function kernelLookup(ifaces) {
+	const best = { [AF_INET]: null, [AF_INET6]: null };
+	for (const i of Array.isArray(ifaces) ? ifaces : []) {
+		if (!i || !i.up) continue;
+		for (const r of Array.isArray(i.route) ? i.route : []) {
+			if (!r || +r.mask !== 0 || (r.target !== '0.0.0.0' && r.target !== '::')) continue;
+			const v6 = r.target === '::', fam = v6 ? AF_INET6 : AF_INET;
+			const t = r.table != null ? r.table : i[v6 ? 'ip6table' : 'ip4table'];
+			if (!(t == null || t === '' || t === 'main' || +t === 254)) continue;
+			let m = r.metric != null ? +r.metric : +i.metric;
+			m = isFinite(m) ? m : 0;
+			if (v6 && m === 0) m = 1024;
+			const tun = TUNNEL_PROTO.test(i.proto || ''), b = best[fam];
+			if (!b || m < b.priority || (m === b.priority && tun && !b.tun))
+				best[fam] = { tun, family: fam, table: RT_TABLE_MAIN, type: RTN_UNICAST, oif: i.l3_device || i.device, priority: m };
+		}
+	}
+	const answer = b => b ? { family: b.family, table: b.table, type: b.type, oif: b.oif, priority: b.priority } : false;
+	return { [AF_INET]: answer(best[AF_INET]), [AF_INET6]: answer(best[AF_INET6]) };
+}
+
 /* a uci cursor on the replay store's overlay for one config */
 function storeCursor(store) {
 	const u = (method, a) => store.uci(method, Object.assign({ config: CONFIG }, a));
@@ -320,8 +375,12 @@ function call(store, method, args) {
 	}
 	if (method === 'thermal') return { result: [ 0, { zones: thermal(store.fixtures) } ] };
 	if (method === 'wired') return { result: [ 0, { hosts: wired(store.synthetic && store.synthetic.fdb ? store.synthetic.fdb() : null) } ] };
+	if (method === 'routes') {
+		const dump = typeof store.ifaceDump === 'function' ? store.ifaceDump() : ((store.data('network.interface', 'dump', {}) || {}).interface || null);
+		return { result: [ 0, { routes: routes(kernelLookup(dump)) } ] };
+	}
 	if (store.uciSeed) store.uciSeed(CONFIG, { main: { '.anonymous': false, '.type': 'vantage', '.name': 'main' } });
 	return { result: [ 0, setAlias(storeCursor(store), args) ] };
 }
 
-module.exports = { OBJECT, POLICY, MAX_ALIASES, NAME_MAX, ICONS, normMac, validateName, reduceWireless, wirelessFromConfig, wirelessReply, thermal, wired, setAlias, argsOk, call };
+module.exports = { OBJECT, POLICY, MAX_ALIASES, NAME_MAX, ICONS, normMac, validateName, reduceWireless, wirelessFromConfig, wirelessReply, thermal, wired, routes, kernelLookup, setAlias, argsOk, call };

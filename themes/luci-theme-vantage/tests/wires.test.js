@@ -32,6 +32,36 @@ test('curve: stacked, an elbow down the left side; a straight drop when there is
 	assert.deepEqual(drop.pts, [ [ 18, 40 ], [ 18, 100 ] ]);
 });
 
+test('line: another line below the device runs along its middle and up into the device\'s bottom, each further one further in', () => {
+	const dev = box(400, 0, 300, 90);
+	const c = wires.line(box(0, 120, 240, 60), dev, 0);
+	assert.equal(c.d, 'M240.0 150.0H410.0Q418.0 150.0 418.0 142.0V90.0');
+	assert.deepEqual(c.pts[0], [ 240, 150 ]);
+	assert.deepEqual(c.pts[c.pts.length - 1], [ 418, 90 ]);
+	/* the next line in: 14 px further right, so the wires nest */
+	const next = wires.line(box(0, 200, 240, 60), dev, 1);
+	assert.equal(next.d, 'M240.0 230.0H424.0Q432.0 230.0 432.0 222.0V90.0');
+	/* never past the device's middle */
+	assert.match(wires.line(box(0, 200, 240, 60), box(400, 0, 40, 90), 5).d, /V90\.0$/);
+	assert.equal(wires.line(box(0, 200, 240, 60), box(400, 0, 40, 90), 5).pts.slice(-1)[0][0], 420);
+	/* level with the device: the S-curve as for the main line */
+	assert.deepEqual(wires.line(box(0, 20, 240, 60), dev, 0), wires.curve(box(0, 20, 240, 60), dev));
+});
+
+test('line: stacked (a phone), from the line\'s left edge down a lane of its own beside the main line\'s drop', () => {
+	const dev = box(0, 300, 260, 90);
+	const c = wires.line(box(34, 200, 220, 60), dev, 0);
+	/* 10 px right of the main line's drop (x 18): never inside its wire or a tunnel's pipe */
+	assert.equal(c.d, 'M34.0 230.0H34.0Q28.0 230.0 28.0 236.0V300.0');
+	assert.deepEqual(c.pts[0], [ 34, 230 ]);
+	assert.deepEqual(c.pts[c.pts.length - 1], [ 28, 300 ]);
+	/* not set in: the elbow of curve() */
+	assert.deepEqual(wires.line(box(0, 200, 220, 60), dev, 0), wires.curve(box(0, 200, 220, 60), dev));
+	/* the points follow the path without a jump */
+	const rs = wires.resample(c.pts, 4);
+	for (let i = 1; i < rs.pts.length; i++) assert.ok(Math.hypot(rs.pts[i][0] - rs.pts[i - 1][0], rs.pts[i][1] - rs.pts[i - 1][1]) <= 4.01, 'step ' + i);
+});
+
 test('resample: equal steps along the curve, direction of travel without jumps', () => {
 	const c = wires.curve(box(0, 0, 200, 40), box(60, 100, 150, 40));
 	const r = wires.resample(c.pts, 8);

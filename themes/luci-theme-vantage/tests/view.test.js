@@ -55,7 +55,8 @@ test('deep links: a station MAC or a known radio opens its drawer', () => {
 	assert.deepEqual(openFor('#client=00-00-5E-00-53-21').opened, [ [ 'client', '00:00:5e:00:53:21' ] ]);
 	assert.deepEqual(openFor('#client=00%3A00%3A5e%3A00%3A53%3A21').opened, [ [ 'client', '00:00:5e:00:53:21' ] ]);
 	assert.deepEqual(openFor('#radio=radio1').opened, [ [ 'radio', 'radio1' ] ]);
-	assert.deepEqual(openFor('#uplink=anything').opened, [ [ 'uplink', 'uplink' ] ], 'uplink takes no id');
+	assert.deepEqual(openFor('#uplink=anything').opened, [ [ 'uplink', '' ] ], 'a name the device has no line of: the main line');
+	assert.deepEqual(openFor('#uplink').opened, [ [ 'uplink', '' ] ], 'the main line, whichever it is');
 	assert.deepEqual(openFor('#device=%3Cb%3E').opened, [ [ 'device', 'device' ] ], 'device takes no id');
 });
 
@@ -537,7 +538,8 @@ function withDom(fn) {
 	const saved = { E: global.E, document: global.document };
 	const node = () => ({ setAttribute() {}, appendChild() {}, style: { setProperty() {} } });
 	global.document = { createElementNS: node };
-	global.E = (tag, attrs, children) => ({ tag, attrs: attrs || {}, children: [].concat(children == null ? [] : children), style: { setProperty() {} } });
+	global.E = (tag, attrs, children) => ({ tag, attrs: attrs || {}, children: [].concat(children == null ? [] : children), style: { setProperty() {} },
+		classList: { add() {}, remove() {}, toggle() {} }, appendChild(c) { this.children.push(c); return c; } });
 	try { return fn(); }
 	finally {
 		if (saved.E === undefined) delete global.E; else global.E = saved.E;
@@ -564,4 +566,159 @@ test('names made up from the MAC: the plain name beside the MAC, no source badge
 		assert.deepEqual(texts(self.whoCell(named, [])), [ 'phone', 'DHCP', '192.0.2.44' ]);
 		assert.deepEqual(texts(self.drawerWho(named)[1]), [ 'phone', 'DHCP', '192.0.2.44' ]);
 	});
+});
+
+/* other lines to the internet (#88): failover and mwan3 lines beside the main one */
+const LINE = (iface, dev, metric) => ({ iface, l3dev: dev, dev, statsDev: dev, port: dev, proto: 'dhcp', up: true, carrier: true, speed: { mbps: 1000, duplex: 'full' },
+	ipv4: [ '203.0.113.' + (metric + 2) + '/29' ], ipv6: [], gateway: '203.0.113.' + (metric + 1), defaultRoute: true, metric, dns: [], stats: { rx_bytes: 10, tx_bytes: 20 }, isWan: true, uptime: 60 });
+
+test('other lines: in the path\'s key, one chart row each, every line\'s history by its interface', () => {
+	const self = Object.create(view);
+	const wan = LINE('wan', 'eth1', 10);
+	self.m = { wired: true, networks: [ { name: 'lan', up: true } ], radios: [ { id: 'radio0', bandLabel: '5 GHz' } ], ssids: [], wiredHosts: [], uplink: wan, uplinks: [ wan ] };
+	const one = self.heroKey();
+	assert.deepEqual(self.extraLines(), []);
+	assert.deepEqual(self.chartSeries().map(s => s.key), [ 'up:wan', 'radio0' ]);
+	self.m.uplinks = [ wan, LINE('wanb', 'eth2', 20) ];
+	assert.notEqual(self.heroKey(), one, 'a line that comes or goes rebuilds the path');
+	assert.deepEqual(self.chartSeries().map(s => [ s.key, s.label, s.dn, s.up ]), [
+		[ 'up:wan', 'Uplink eth1', 1, 2 ], [ 'up:wanb', 'Uplink eth2', 1, 2 ], [ 'radio0', '5 GHz radio', 2, 1 ] ]);
+	self.m.wired = false;
+	assert.match(self.heroKey(), /lines=wanb$/);
+	/* the model caps the lines (model.MAX_LINES); no line: an empty row */
+	assert.deepEqual(self.extraLines({ uplinks: null }), []);
+	self.m.uplink = null;
+	self.m.uplinks = [];
+	assert.deepEqual(self.chartSeries().map(s => s.key), [ 'uplink', 'radio0' ]);
+});
+
+test('other lines: a deep link opens a line the device has, the main one by its name too; any other name opens the main one', () => {
+	const at = (hash, uplinks) => {
+		const self = Object.create(view);
+		self.m = { radios: [], uplinks };
+		self.opened = [];
+		self.openDrawer = function(kind, id) { this.opened.push([ kind, id ]); };
+		withLocation(hash, () => self.openFromHash());
+		return self.opened;
+	};
+	const lines = [ LINE('wan', 'eth1', 10), LINE('wanb', 'eth2', 20) ];
+	assert.deepEqual(at('#uplink=wanb', lines), [ [ 'uplink', 'wanb' ] ]);
+	assert.deepEqual(at('#uplink=wan', lines), [ [ 'uplink', 'wan' ] ], 'the main line by its own name: that interface');
+	assert.deepEqual(at('#uplink', lines), [ [ 'uplink', '' ] ]);
+	assert.deepEqual(at('#uplink=%3Cb%3Ewanb', lines), [ [ 'uplink', '' ] ]);
+	assert.deepEqual(at('#uplink=wanb', lines.slice(0, 1)), [ [ 'uplink', '' ] ], 'a line that is gone');
+	/* the main line has an id no interface can have */
+	const self = Object.create(view);
+	self.ui = {};
+	self.el = { drawer: { hidden: false } };
+	self.paintDrawer = () => {};
+	self.paintClients = () => {};
+	assert.deepEqual(withLocation('', c => { self.openDrawer('uplink', ''); self.openDrawer('uplink', 'uplink'); return c; }), [ '#uplink', '#uplink=uplink' ]);
+});
+
+test('other lines: each node shows its name, gateway and live rates, wired into the device; the main one is marked', () => {
+	const self = Object.create(view);
+	const el = () => ({ textContent: '', attrs: {}, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }, setAttribute(k, v) { this.attrs[k] = v; } });
+	const ln = id => ({ id, el: el(), kicker: el(), title: el(), dn: el(), up: el() });
+	const wan = LINE('wan', 'eth1', 10), wanb = LINE('wanb', 'eth2', 20), lte = Object.assign(LINE('lte', 'wwan0', 30), { gateway: null, carrier: false, speed: null });
+	const h = new Proxy({ lines: [ ln('wanb'), ln('lte'), ln('gone') ], radios: [] }, { get: (t, k) => k in t ? t[k] : (t[k] = el()) });
+	self.hero = h;
+	self.m = { wired: true, networks: [], radios: [], ssids: [], wiredHosts: [], device: { model: 'Router', uptime: 1 }, uplink: wan, uplinks: [ wan, wanb, lte ] };
+	self.st = { uplinkRate: { rx: 2e6, tx: 1e5 }, devRates: { eth2: { rx: 12345678, tx: 3000 }, wwan0: { rx: 0, tx: 0 } } };
+	self.updateHero();
+	assert.equal(h.gwKicker.textContent, 'wan', 'beside other lines the main one goes by its name');
+	const [ b, l ] = h.lines;
+	assert.deepEqual([ b.kicker.textContent, b.title.textContent, b.dn.textContent, b.up.textContent ], [ 'wanb', '203.0.113.21', '↓ 12.3 Mbit/s', '↑ 3 kbit/s' ]);
+	assert.equal(b.el.attrs.title, 'wanb · eth2 · 1 Gbit/s · full duplex');
+	assert.equal(b.el.attrs['class'], 'vt-node vt-node-gw vt-node-line');
+	assert.deepEqual([ l.title.textContent, l.dn.textContent, l.up.textContent ], [ 'wwan0', 'idle', '' ], 'no gateway address: the device; nothing moving: idle');
+	assert.equal(l.el.attrs['class'], 'vt-node vt-node-gw vt-node-line vt-node-off', 'no carrier');
+	assert.deepEqual([ b.active, l.active ], [ true, false ]);
+	/* one wire per line into the device, numbered for nesting */
+	assert.deepEqual(self.wireList().filter(w => w.line != null).map(w => [ w.key, w.from === h.lines[w.line].el, w.to === h.ap, w.speed ]),
+		[ [ 'l:wanb', true, true, 2 ], [ 'l:lte', true, true, 1 ], [ 'l:gone', true, true, 1 ] ]);
+	/* one line: the gateway's own kicker */
+	h.lines = [];
+	self.m.uplinks = [ wan ];
+	self.updateHero();
+	assert.equal(h.gwKicker.textContent, 'Internet');
+});
+
+test('other lines: the uplink drawer shows the line asked for, its rates and route metric', () => {
+	const self = Object.create(view);
+	const wan = LINE('wan', 'eth1', 10), wanb = LINE('wanb', 'eth2', 20);
+	self.m = { uplink: wan, uplinks: [ wan, wanb ] };
+	self.st = { uplinkRate: { rx: 1e6, tx: 2e6 }, devRates: { eth2: { rx: 3e6, tx: 4e6 } }, hist: { net: { uplink: [], 'up:wanb': [] } } };
+	withDom(() => {
+		const d = self.drawerUplink('wanb'), all = texts({ children: d.title.concat(d.body) });
+		assert.ok(all.includes('Uplink · wanb'));
+		assert.ok(all.includes('3 Mbit/s') && all.includes('4 Mbit/s'), 'its own rates');
+		assert.deepEqual(all.slice(all.indexOf('Route metric'), all.indexOf('Route metric') + 2), [ 'Route metric', '20' ]);
+		const main = texts({ children: [].concat(self.drawerUplink('').title, self.drawerUplink('').body) });
+		assert.ok(main.includes('Uplink · wan') && main.includes('1 Mbit/s') && main.includes('10'));
+		/* a backup named "uplink" is that backup, not the main line */
+		const named = LINE('uplink', 'eth3', 30);
+		self.m.uplinks = [ wan, named ];
+		assert.ok(texts({ children: self.drawerUplink('uplink').title }).includes('Uplink · uplink'));
+		assert.ok(texts({ children: self.drawerUplink('').title }).includes('Uplink · wan'));
+		/* failover: wanb is the main line now, its drawer still wanb's, at the fast lane's rate */
+		self.m = { uplink: wanb, uplinks: [ wanb ] };
+		const now = texts({ children: [].concat(self.drawerUplink('wanb').title, self.drawerUplink('wanb').body) });
+		assert.ok(now.includes('Uplink · wanb') && now.includes('1 Mbit/s'));
+		/* wan is down: said so under its own name, not wanb's details */
+		const gone = texts({ children: [].concat(self.drawerUplink('wan').title, self.drawerUplink('wan').body) });
+		assert.deepEqual(gone.filter(t => /Uplink|down/.test(t)), [ 'Uplink · wan', 'This line is down or has no default route now.' ]);
+		assert.ok(!gone.some(t => /wanb|eth2/.test(t)));
+		/* one line: no metric row */
+		self.m.uplinks = [ wanb ];
+		assert.ok(!texts({ children: self.drawerUplink('').body }).includes('Route metric'));
+	});
+});
+
+test('other lines: a failover starts the new main line on its own history; a restored "uplink" of nobody is dropped', () => {
+	const saved = global.window;
+	const box = {};
+	global.window = {
+		sessionStorage: { getItem: () => box.v || null, setItem(k, v) { box.v = v; } },
+		localStorage: { getItem: () => null, setItem() {} }
+	};
+	const wan = { interface: 'wan', up: true, proto: 'dhcp', device: 'eth1', l3_device: 'eth1', metric: 10, route: [ { target: '0.0.0.0', mask: 0, nexthop: '203.0.113.1' } ] };
+	const wanb = { ...wan, interface: 'wanb', device: 'eth2', l3_device: 'eth2', metric: 20, route: [ { target: '0.0.0.0', mask: 0, nexthop: '203.0.113.9' } ] };
+	const raw = (t, ifaces) => ({ at: t, info: { localtime: t / 1000 }, stat: '', ifaces, wifi: null, hints: {}, thermal: [], fdb: [], assoc: {}, hapd: {}, hapdStatus: {}, iwinfo: {},
+		devs: { eth1: { statistics: { rx_bytes: t * 10, tx_bytes: t } }, eth2: { statistics: { rx_bytes: t * 3, tx_bytes: t } } } });
+	try {
+		box.v = JSON.stringify({ net: { uplink: [ [ 1, 2, 3 ] ], 'up:wan': [ [ 1, 2, 3 ] ] } });
+		const self = Object.create(view);
+		self.initState({ board: {}, canWrite: false, canRdns: false, mdns: null });
+		assert.deepEqual(Object.keys(self.st.hist.net), [ 'up:wan' ], 'whose "uplink" it was is unknown');
+		self.st.hist.net['up:wan'] = [];
+		const t0 = 1.8e12;
+		for (let k = 0; k < 4; k++) self.ingest(raw(t0 + k * 5000, [ wan, wanb ]));
+		const net = self.st.hist.net;
+		assert.deepEqual([ net['up:wan'].length, net['up:wanb'].length ], [ 3, 3 ]);
+		assert.equal(net['up:wan'][2][1], 5000 * 10 * 8 / 5, 'wan\'s own rate');
+		/* wan fails: wanb is the main line and goes on in its own history */
+		for (let k = 4; k < 6; k++) self.ingest(raw(t0 + k * 5000, [ wanb ]));
+		assert.equal(self.m.uplink.iface, 'wanb');
+		assert.deepEqual([ net['up:wan'].length, net['up:wanb'].length ], [ 3, 5 ]);
+		assert.ok(net['up:wanb'].every(p => p[1] === 5000 * 3 * 8 / 5), 'wanb\'s rate only');
+		assert.deepEqual(self.chartSeries().map(s => s.key), [ 'up:wanb' ]);
+		/* gone longer than the chart shows: no history left */
+		self.ingest(raw(t0 + 6 * 5000 + 5 * 60 * 1000, [ wanb ]));
+		assert.ok(!('up:wan' in net));
+		assert.ok(!('uplink' in JSON.parse(box.v).net));
+	} finally {
+		global.window = saved;
+	}
+});
+
+test('other lines: hosts on a backup line\'s port are the way to its gateway, not wired clients', () => {
+	const self = Object.create(view);
+	const wan = LINE('wan', 'eth1', 10), wanb = Object.assign(LINE('wanb', 'br-lan.20', 20), { dev: 'lan4', statsDev: 'lan4', port: 'lan4' });
+	self.m = { uplink: wan, uplinks: [ wan, wanb ], wiredHosts: [ { mac: '00:00:5e:00:53:c9', port: 'lan4' }, { mac: '00:00:5e:00:53:c1', port: 'lan1' } ] };
+	assert.deepEqual(self.wiredPorts(), [ 'lan1' ]);
+	assert.deepEqual([ self.linePort('lan4'), self.linePort('lan1'), self.linePort(null) ], [ true, false, false ]);
+	/* the backup's port unknown (the VLAN's own counters): nothing left out */
+	wanb.port = null;
+	assert.deepEqual(self.wiredPorts(), [ 'lan1', 'lan4' ]);
 });

@@ -73,3 +73,22 @@ test('found on a real router: links to absent pages, a wrapping handle bar, clip
 	/* text-only node sub-lines are blocks, so their ellipsis shows */
 	assert.ok(rules.some((r) => r.sel === '.vt-app .vt-node-sub:not(:has(> *))' && /display:\s*block/.test(r.body)));
 });
+
+test('other lines to the internet (#88): the main row as with one line, the others under it; on a phone one column again', () => {
+	const rule = sel => rules.find(r => r.sel === sel);
+	/* a tall branch column grows the outer rows, not the gap between the lines */
+	assert.match(rule('.vt-app .vt-path-lines').body, /grid-template-rows:\s*1fr auto auto 1fr/);
+	for (const [ sel, area ] of [ [ '.vt-node-gw', '2 / 1' ], [ '.vt-link-label', '2 / 2' ], [ '.vt-node-ap', '2 / 3' ], [ '.vt-branches', '1 / 4 / -1 / 5' ] ])
+		assert.match(rule('.vt-app .vt-path-lines > ' + sel).body, new RegExp('grid-area:\\s*' + area.replace(/ /g, '\\s*') + '\\s*;'), sel);
+	assert.match(rule('.vt-app .vt-lines').body, /grid-area:\s*3\s*\/\s*1\s*;/);
+	/* a narrow node: the tag under the name, a long name ellipsized */
+	assert.match(rule('.vt-app .vt-node-kicker-tag').body, /flex-wrap:\s*wrap/);
+	assert.match(rule('.vt-app .vt-node-name').body, /text-overflow:\s*ellipsis/);
+	/* the phone layout puts every part back in the one column */
+	const phone = /@container vthero \(max-width: 700px\) \{([\s\S]*?)\n\}/.exec(css)[1];
+	assert.match(phone, /\.vt-path-lines \{ grid-template-rows: none; \}/);
+	assert.match(phone, /\.vt-path-lines > \.vt-node-gw, [^{]*\.vt-path-lines > \.vt-branches, \.vt-app \.vt-lines \{ grid-area: auto; \}/);
+	/* "default route" keeps its case in the upper-case kicker */
+	assert.match(rule('.vt-app .vt-node-tag').body, /text-transform:\s*none/);
+	assert.match(rule('.vt-app .vt-node-rates').body, /flex-wrap:\s*wrap/, 'a narrow node wraps its rates');
+});

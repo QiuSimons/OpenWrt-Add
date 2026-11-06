@@ -32,8 +32,9 @@
  *   imports nothing but uci, ubus, fs's lsdir and readfile, which it
  *   calls on paths under /sys/class/thermal (luci.vantage thermal), on
  *   the bridges' brforward and on /etc/board.json only, and rtnl for one
- *   read-only dump of the bridge forwarding
- *   database (luci.vantage wired); no other file access, no other
+ *   read-only dump of the bridge forwarding database (luci.vantage wired)
+ *   and one route lookup a family, IPv4 and IPv6, of a documentation
+ *   address (luci.vantage routes); no other file access, no other
  *   netlink request, no process execution, and no module, cursor or
  *   connection passed on under another name; altered copies of the
  *   plugin check that these rules catch each breach;
@@ -87,7 +88,7 @@ const READ_UBUS = {
 	'luci-rpc': [ 'getHostHints' ],
 	/* LuCI's own: swconfig dev <switch> show, the switch name quoted */
 	'luci': [ 'getSwconfigPortState' ],
-	'luci.vantage': [ 'thermal', 'wired', 'wireless' ],
+	'luci.vantage': [ 'routes', 'thermal', 'wired', 'wireless' ],
 	'iwinfo': [ 'assoclist', 'info' ],
 	'hostapd.*': [ 'get_clients', 'get_status' ],
 	'umdns': [ 'hosts' ],
@@ -230,7 +231,7 @@ test('the plugin registers exactly the granted luci.vantage methods, writes conf
 	for (const g of Object.values(acl)) for (const kind of [ 'read', 'write' ])
 		for (const m of ((g[kind] || {}).ubus || {})[PLUGIN_OBJECT] || []) granted.add(m);
 	assert.deepEqual(methods, [ ...granted ].sort());
-	assert.deepEqual(methods, [ 'set_alias', 'thermal', 'wired', 'wireless' ]);
+	assert.deepEqual(methods, [ 'routes', 'set_alias', 'thermal', 'wired', 'wireless' ]);
 	assert.ok(pairs(acl[READ_GROUP].read.ubus).has(PLUGIN_OBJECT + ' wireless'));
 	assert.ok(pairs(acl[READ_GROUP].read.ubus).has(PLUGIN_OBJECT + ' thermal'));
 	assert.ok(pairs(acl[WRITE_GROUP].write.ubus).has(PLUGIN_OBJECT + ' set_alias'));
@@ -306,13 +307,29 @@ function checkPluginSource(src) {
 		`"connect" may appear only on its import and the network.wireless status call${REWORD}`);
 	assert.equal([ ...src.matchAll(/\.\s*call\b/g) ].length, 1, 'one .call');
 
-	/* rtnl: one request, the read-only dump of the bridge forwarding
-	   database; otherwise only constants are read */
+	/* rtnl: two requests, the read-only dump of the bridge forwarding
+	   database and a route lookup (RTM_GETROUTE without a dump: the one
+	   route the kernel takes, never a write, as `ip route get`) of the two
+	   documentation addresses only; otherwise only constants are read */
 	const dump = 'let fdb = rtnl.request(rtnl.const.RTM_GETNEIGH, rtnl.const.NLM_F_DUMP, { family: rtnl.const.AF_BRIDGE });';
-	assert.deepEqual([ ...src.matchAll(/^.*\brtnl\.request\b.*$/gm) ].map(m => m[0].trim()), [ dump ], `"rtnl.request" may appear only as the one dump${REWORD}`);
-	const rest = src.replace(/^import \* as rtnl from 'rtnl';$/m, '').replace(dump, '');
+	const lookup = 'let r = rtnl.request(rtnl.const.RTM_GETROUTE, 0, { family: q.family, dst: q.dst, flags: rtnl.const.RTM_F_FIB_MATCH });';
+	assert.deepEqual([ ...src.matchAll(/^.*\brtnl\.request\b.*$/gm) ].map(m => m[0].trim()), [ dump, lookup ], `"rtnl.request" may appear only as the dump and the lookup${REWORD}`);
+	/* the lookup's family and address: the two literals, read, never assigned */
+	assert.deepEqual([ ...src.matchAll(/^.*\bq\b.*$/gm) ].map(m => m[0].trim()), [
+		'for (let q in [ { family: rtnl.const.AF_INET, dst: PROBE4 }, { family: rtnl.const.AF_INET6, dst: PROBE6 } ]) {',
+		lookup,
+		"if (type(r) != 'object' || r.family != q.family || r.dst != null || r.table != rtnl.const.RT_TABLE_MAIN || r.type != rtnl.const.RTN_UNICAST)",
+		"push(out, { family: (q.family == rtnl.const.AF_INET) ? 4 : 6, dev: netdev(r.oif), metric: (type(m) == 'int' && m >= 0) ? m : 0 });"
+	], `"q" may appear only on the lookup's lines${REWORD}`);
+	assert.deepEqual([ ...src.matchAll(/^.*\bPROBE[46]\b.*$/gm) ].map(m => m[0].trim()), [
+		'const PROBE4 = \'198.51.100.1\';    // routes: looked up, never sent to (documentation ranges)',
+		'const PROBE6 = \'2001:db8::1\';',
+		'for (let q in [ { family: rtnl.const.AF_INET, dst: PROBE4 }, { family: rtnl.const.AF_INET6, dst: PROBE6 } ]) {'
+	], `the looked-up addresses are the two documentation constants${REWORD}`);
+	const rest = src.replace(/^import \* as rtnl from 'rtnl';$/m, '').replace(dump, '').replace(lookup, '');
+	const CONSTS = [ 'NUD_PERMANENT', 'NUD_NOARP', 'NTF_SELF', 'AF_INET', 'AF_INET6', 'RT_TABLE_MAIN', 'RTN_UNICAST' ];
 	for (const m of rest.matchAll(/\brtnl\b(?:\.const\.(\w+))?/g))
-		assert.ok([ 'NUD_PERMANENT', 'NUD_NOARP', 'NTF_SELF' ].includes(m[1]), `"${m[0]}": "rtnl" may appear only as rtnl.const.NUD_PERMANENT, NUD_NOARP or NTF_SELF${REWORD}`);
+		assert.ok(CONSTS.includes(m[1]), `"${m[0]}": "rtnl" may appear only as rtnl.const.${CONSTS.join(', ')}${REWORD}`);
 }
 
 test('the plugin source rules catch writes, other configs and calls, and names passed on', () => {
@@ -347,6 +364,12 @@ test('the plugin source rules catch writes, other configs and calls, and names p
 		'builtin by name': add('global[\'sys\' + \'tem\'](\'reboot\');'),
 		'netlink write': plugin.replace('rtnl.const.RTM_GETNEIGH, rtnl.const.NLM_F_DUMP', 'rtnl.const.RTM_DELNEIGH, rtnl.const.NLM_F_DUMP'),
 		'second netlink request': add('rtnl.request(rtnl.const.RTM_NEWNEIGH, 0, {});'),
+		'route write': plugin.replace('rtnl.const.RTM_GETROUTE, 0,', 'rtnl.const.RTM_NEWROUTE, 0,'),
+		'route dump': plugin.replace('rtnl.const.RTM_GETROUTE, 0,', 'rtnl.const.RTM_GETROUTE, rtnl.const.NLM_F_DUMP,'),
+		'another address looked up': plugin.replace('dst: PROBE4 }', 'dst: \'192.0.2.1\' }'),
+		'family reassigned': plugin.replace('\t\tlet r = rtnl.request(rtnl.const.RTM_GETROUTE', '\t\tq.family = rtnl.const.AF_BRIDGE;\n\t\tlet r = rtnl.request(rtnl.const.RTM_GETROUTE'),
+		'family changed in place': plugin.replace('\t\tlet r = rtnl.request(rtnl.const.RTM_GETROUTE', '\t\tq.family -= q.family;\n\t\tlet r = rtnl.request(rtnl.const.RTM_GETROUTE'),
+		'probe changed': plugin.replace("const PROBE4 = '198.51.100.1';", "const PROBE4 = '203.0.113.7';"),
 		'rtnl by reference': add('let nl = rtnl;'),
 		'other rtnl member': add('let e = rtnl.error();')
 	};

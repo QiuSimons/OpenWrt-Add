@@ -142,7 +142,8 @@ fonts, scripts or CDNs are loaded, so the UI works without internet access.
 You need three files: `luci-theme-vantage-<version>.apk`,
 `luci-app-vantage-<version>.apk` and `SHA256SUMS`. Install either package
 on its own or both together; the theme doesn't need the app, and the app
-works under any LuCI theme. For a translation, add its language packages
+on its own works under any LuCI theme (with both, see
+[Switch themes](#switch-themes)). For a translation, add its language packages
 (see [Languages](#languages)).
 
 ### From a GitHub release
@@ -862,7 +863,8 @@ Then reload the page. To remove Vantage entirely, see
 
 - **What the dashboard may do.** Its rpcd permissions (ACL) are read-only:
   system, network, radio and station status, host hints, mDNS,
-  `/proc/stat` and the link state of a swconfig switch's ports. It cannot
+  `/proc/stat`, the kernel's route to the internet and the link state of a
+  swconfig switch's ports. It cannot
   run commands; for that link state LuCI's own method runs `swconfig dev
   <switch> show`, read-only. Its only write permission, in a
   separate group (`luci-app-vantage-names`), is the plugin method

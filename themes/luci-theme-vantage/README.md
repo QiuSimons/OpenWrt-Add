@@ -4,108 +4,41 @@
 
 # Vantage
 
-**A LuCI theme and live network dashboard for OpenWrt 25.12 and 24.10, built from scratch.**
+**A theme for LuCI, OpenWrt's web interface, plus a dashboard that opens when you log in: who's connected, how busy the uplink is, and what needs fixing. Every other LuCI page gets the same look. For OpenWrt 25.12 and 24.10.**
 
 ![OpenWrt 25.12 and 24.10](https://img.shields.io/badge/OpenWrt-25.12%20%7C%2024.10-00B5E2?style=flat-square) ![LuCI theme + app](https://img.shields.io/badge/LuCI-theme%20%2B%20app-5a6472?style=flat-square) ![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-3d8b40?style=flat-square)
+
+[Website](https://anothadev.github.io/luci-theme-vantage/) · [Install](#install) · [Screenshots](#screenshots) · [Changelog](CHANGELOG.md)
 
 </div>
 
 <br>
 
 <p align="center">
-  <img src="docs/screenshots/dashboard-dark.png" alt="The Vantage dashboard in dark mode: health strip flagging a weak client, network path from gateway to access point, radios and SSIDs with packets moving on its grid, live throughput with download and upload in their own colours, and radio cards" width="100%">
+  <img src="docs/screenshots/dashboard-dark.png" alt="The Vantage dashboard in dark mode: six health cards with their own icons and edge charts, the signal card flagging a weak client, the network path from the gateway through the access point to its radios and SSIDs, live throughput in download and upload colours, and radio cards" width="100%">
 </p>
 
 <p align="center"><sub>Screenshots show recorded data from a real access point, pseudonymised
-(documentation addresses and MACs, neutral names). See <a href="#develop">Develop</a>.</sub></p>
+(documentation addresses and MACs, neutral names); the larger access point
+below is generated. See <a href="#develop">Develop</a>.</sub></p>
 
-## What you get
+## Highlights
 
-Two packages. The app works under any LuCI theme; the theme is useful
-without the app.
-
-**`luci-theme-vantage`**, the shell:
-
-- Icon rail with a flyout per category; a bottom bar and sheet on phones
-- Breadcrumb, page tabs (the current crumb also switches between them),
-  and a <kbd>Ctrl</kbd>+<kbd>K</kbd> / <kbd>/</kbd> command palette with
-  fuzzy search over every page you can open
-- Light, dark and auto modes, applied before first paint (no flash)
-- Host chip (hostname and model), LuCI's indicators (including the unsaved
-  changes count) as keyboard-accessible pills
-- Its own login page, and restyled stock pages, forms, tables, charts and
-  status icons; tables become cards on small screens
-- Tidier stock pages: a table row with a main action (Edit, else the
-  highlighted one) and two or more others shows the main one and folds
-  the others into a ⋯ menu; Add, highlighted and an app's own buttons
-  stay visible, and rows of equal actions (Startup, Processes) stay as
-  LuCI drew them; firewall verdicts are coloured badges, with a warning
-  colour where the internet-facing zone lets traffic in; the nftables
-  chains are cards, and tooltips are never cut off
-- One control size (bigger on touch screens) for fields, buttons and
-  every tab, one tab style at every level, and field help folded to its
-  first line
-- System fonts, self-drawn SVG icons, no CDNs or frameworks
-
-**`luci-app-vantage`**, the dashboard at `admin/dashboard` (the landing page):
-
-- Health verdict with checks for uplink, CPU, memory, Wi-Fi, client signal
-  and storage, each with a one-line reason; a check opens what it is
-  about (a weak client's details, or the list when several are weak)
-- Network path from gateway to access point, radios and SSIDs, and a
-  Wired branch for the Ethernet ports; click any node for details. Behind
-  it the login page's packets or starfield move with the live uplink
-  rate (or nothing, as picked under Appearance)
-- Live throughput for the uplink and every radio (last 5 minutes), in the
-  chart style you pick under Customize (overlaid, log scale, mirrored or
-  separate lanes),
-  radio cards with channel, width, TX power and noise
-- Clients with human names (your alias, reverse DNS, mDNS, DHCP hints, WPS
-  device name, vendor, or "Private device" for randomised MACs), signal,
-  link rate, Wi-Fi generation, live traffic and an experience score with
-  its reason; filters by band, activity, weak signal and new clients.
-  Wired devices too, from the bridge's table: port, link speed, traffic
-  when a device has its port to itself (else the port's total), the ports
-  of a swconfig switch behind a VLAN port, and when each was last heard
-- Client inspector: signal history, link rates, capabilities, traffic,
-  retries; rename a device in place
-- Top talkers, wireless networks, system tile (CPU per core, memory,
-  storage, firmware)
-- Firewall overview (Network → Firewall → Overview): what is open from the
-  internet, which zone reaches which, what is switched off or ignored, and
-  warnings for the risky cases, read the way firewall4 reads the config;
-  every item links to the LuCI page that changes it
-- Your own layout: drag tiles, change their width or hide them; saved in
-  the browser for each screen size, with a reset to the default
-
-## Screenshots
-
-<table>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/dashboard-light.png" alt="Dashboard in light mode with every check passing"></td>
-    <td width="50%"><img src="docs/screenshots/client-drawer.png" alt="Client inspector drawer open over the clients table"></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>Light mode: health checks, network path and live throughput</sub></td>
-    <td align="center"><sub>Client inspector with experience score, signal and link details</sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/palette.png" alt="Command palette searching pages"></td>
-    <td width="50%"><img src="docs/screenshots/status-overview.png" alt="LuCI Status Overview page restyled by the theme"></td>
-  </tr>
-  <tr>
-    <td align="center"><sub><kbd>Ctrl</kbd>+<kbd>K</kbd> palette: every page, fuzzy matched</sub></td>
-    <td align="center"><sub>Stock Status page under the theme, with a combined memory bar</sub></td>
-  </tr>
-  <tr>
-    <td width="50%" valign="middle"><img src="docs/screenshots/channel-analysis.png" alt="Channel Analysis page showing neighbouring networks"></td>
-    <td width="50%" align="center"><img src="docs/screenshots/mobile.png" alt="Dashboard on a phone-sized screen" width="40%"></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>Stock Channel Analysis (neighbour networks are generated)</sub></td>
-    <td align="center"><sub>Phone layout with the bottom bar and the Wi-Fi/Wired switch</sub></td>
-  </tr>
-</table>
+- **Health at a glance.** Six checks (uplink, CPU, memory, Wi-Fi, client
+  signal, storage), each with a one-line reason and a picture along its
+  edge; click one to open what it is about.
+- **A live network path.** Gateway, access point, radios and SSIDs, plus a
+  Wired branch per port, with packets that move with the uplink rate.
+  Click any node for details.
+- **Every client, by name.** Your alias, reverse DNS, mDNS, DHCP or WPS
+  names, or the vendor; signal, link rate, Wi-Fi generation, live traffic
+  and an experience score that says why. Wired devices too.
+- **LuCI, restyled.** Icon rail, breadcrumbs, a <kbd>Ctrl</kbd>+<kbd>K</kbd>
+  palette over every page, light, dark or auto without a flash, and tables
+  that become cards on phones.
+- **Read-only and self-contained.** The dashboard's only write is device
+  names and it never reads Wi-Fi keys; no CDNs or web fonts, nothing loads
+  from the internet.
 
 ## Install
 
@@ -144,6 +77,106 @@ the packages, installing only one of them, upgrades, uninstalling,
 building Vantage into your own firmware, troubleshooting, and a
 ready-made prompt for installing with a coding agent.
 
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/dashboard-light.png" alt="Dashboard in light mode with every check passing"></td>
+    <td width="50%"><img src="docs/screenshots/client-drawer.png" alt="Client inspector drawer open over the clients table"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Light mode: health checks, network path and live throughput</sub></td>
+    <td align="center"><sub>Client inspector with experience score, signal and link details</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/palette.png" alt="Command palette listing pages and Appearance actions that match a search"></td>
+    <td width="50%"><img src="docs/screenshots/network-path.png" alt="Network path of a quad-radio access point with ten SSIDs and a Wired branch of six ports"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><kbd>Ctrl</kbd>+<kbd>K</kbd> palette: pages and Appearance actions, fuzzy matched</sub></td>
+    <td align="center"><sub>A larger access point (generated): four radios, ten networks, six wired ports</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/status-overview.png" alt="LuCI Status Overview page restyled by the theme"></td>
+    <td width="50%"><img src="docs/screenshots/channel-analysis.png" alt="Channel Analysis page showing neighbouring networks"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Stock Status page under the theme, with a combined memory bar</sub></td>
+    <td align="center"><sub>Stock Channel Analysis (neighbour networks are generated)</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="middle"><img src="docs/screenshots/login.png" alt="The theme's login page with moving packet traces on a dark grid"></td>
+    <td width="50%" align="center"><img src="docs/screenshots/mobile.png" alt="Dashboard on a phone-sized screen" width="40%"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Login page with grid packets (or a starfield, or nothing)</sub></td>
+    <td align="center"><sub>Phone layout with the bottom bar and the Wi-Fi/Wired switch</sub></td>
+  </tr>
+</table>
+
+## What you get
+
+Two packages. Installed on its own, the app works under any LuCI theme;
+with both installed, the dashboard goes with the Vantage theme and LuCI's
+own page opens under another one. The theme is useful without the app.
+
+**`luci-theme-vantage`**, the shell:
+
+- Icon rail with a flyout per category; a bottom bar and sheet on phones
+- Breadcrumb, page tabs (the current crumb also switches between them),
+  and a <kbd>Ctrl</kbd>+<kbd>K</kbd> / <kbd>/</kbd> command palette with
+  fuzzy search over every page you can open and the Appearance choices
+- Light, dark and auto modes, applied before first paint (no flash)
+- Host chip (hostname and model), LuCI's indicators (including the unsaved
+  changes count) as keyboard-accessible pills
+- Its own login page, and restyled stock pages, forms, tables, charts and
+  status icons; tables become cards on small screens
+- Tidier stock pages: a table row with a main action (Edit, else the
+  highlighted one) and two or more others shows the main one and folds
+  the others into a ⋯ menu; Add, highlighted and an app's own buttons
+  stay visible, and rows of equal actions (Startup, Processes) stay as
+  LuCI drew them; firewall verdicts are coloured badges, red only where
+  the internet-facing zone accepts input; the nftables chains are cards,
+  and tooltips are never cut off
+- One control size (bigger on touch screens) for fields, buttons and
+  every tab, one tab style at every level, and field help folded to its
+  first line
+- System fonts, self-drawn SVG icons, no CDNs or frameworks
+
+**`luci-app-vantage`**, the dashboard at `admin/dashboard` (the landing page):
+
+- Health verdict with checks for uplink, CPU, memory, Wi-Fi, client signal
+  and storage, each with its own icon, a one-line reason and a picture
+  along its edge (the last minutes of download and CPU, how full memory
+  and storage are, clients by band or airtime, how client signals
+  spread); a check opens what it is about (a weak client's details, or
+  the list when several are weak)
+- Network path from gateway to access point, radios and SSIDs, and a
+  Wired branch for the Ethernet ports; click any node for details. Behind
+  it the login page's packets or starfield move with the live uplink
+  rate (or nothing, as picked under Appearance)
+- Live throughput for the uplink and every radio (last 5 minutes; uplink
+  and CPU update every 2 seconds), in the chart style you pick under
+  Customize (overlaid, log scale, mirrored or separate lanes), and radio
+  cards with channel, width, TX power and noise
+- Clients with human names (your alias, reverse DNS, mDNS, DHCP hints, WPS
+  device name, vendor, or "Private device" for randomised MACs), signal,
+  link rate, Wi-Fi generation, live traffic and an experience score with
+  its reason; filters by band, activity, weak signal and new clients.
+  Wired devices too, from the bridge's table: port, link speed, traffic
+  when a device has its port to itself (else the port's total), the ports
+  of a swconfig switch behind a VLAN port, and when each was last heard
+- Client inspector: signal history, link rates, capabilities, traffic,
+  retries; rename a device in place
+- Top talkers, wireless networks, system tile (CPU per core, memory,
+  storage, firmware)
+- Firewall overview (Network → Firewall → Overview): what is open from the
+  internet, which zone reaches which, what is switched off or ignored, and
+  warnings for the risky cases, read the way firewall4 reads the config;
+  every item links to the LuCI page that changes it
+- Your own layout: drag tiles, change their width or hide them; saved in
+  the browser for each screen size, with a reset to the default
+
 ## Build
 
 With podman and the official OpenWrt SDK image:
@@ -174,7 +207,8 @@ live device:
 2. **Demo mode** – `--demo` pseudonymises the recording as it loads:
    documentation MACs and addresses (`00:00:5E:00:53:xx`, `192.0.2.0/24`,
    `2001:db8::/32`), neutral hostname, SSIDs and client names. The
-   screenshots above were taken this way.
+   screenshots above were taken this way, the larger access point with
+   `--big`.
 
 ```sh
 node dev/replay/server.js --mirror ../vantage-mirror --port 8106 --demo \
@@ -204,7 +238,8 @@ node security-tests/test_acl_policy.js
 
 - **Read-only dashboard.** The app's rpcd ACL grants read methods only
   (system, network, iwinfo, hostapd status, host hints, mDNS, `/proc/stat`,
-  and LuCI's swconfig switch port state) and no `file.exec`. Wireless configuration comes from the app's own rpcd
+  the kernel's route to the internet and LuCI's swconfig switch port state) and
+  no `file.exec`. Wireless configuration comes from the app's own rpcd
   ucode plugin (`luci.vantage wireless`), which leaves out Wi-Fi keys,
   SAE passwords and RADIUS secrets. Reverse DNS (`network.rrdns lookup`,
   which lets its holder aim the device's DNS queries at any server) is a

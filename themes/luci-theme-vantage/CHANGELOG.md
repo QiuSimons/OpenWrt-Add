@@ -6,6 +6,43 @@ Each release ships both packages, `luci-theme-vantage` and
 <https://github.com/anothaDev/luci-theme-vantage/releases> and in the
 [signed repositories](https://anothadev.github.io/luci-theme-vantage/).
 
+## Unreleased
+
+- **Dashboard: every line to the internet in the network path** (#88,
+  [@Bryce199805](https://github.com/Bryce199805)). With two or more WANs
+  (failover by metric, or mwan3) the path showed one, and on a router
+  without Wi-Fi the others appeared among the local networks. Every up
+  interface with a default route of its own now sits on the internet
+  side, each with its own wire into the device and its live rates, and
+  opens its own details; the one whose default route has the lowest
+  metric is marked "default route" (with mwan3, its own rules decide where
+  traffic goes). IPv6 on the same device, or on the port under a PPPoE
+  session (`wan6`), stays part of its line. The throughput chart has a row
+  per line, and each line keeps its own history across a failover. A WAN
+  that is down shows nowhere until it comes up again. With one line the
+  path is as before.
+- **A full-tunnel VPN is drawn as a tunnel through the line.** When
+  ordinary traffic goes through a VPN (WireGuard, OpenVPN, GRE, ...), the
+  path shows the line it leaves by with the tunnel on its wire: a lock and
+  the VPN's name under the line's rates, "default route via vpn" beside
+  other lines, and the tunnel and its own rates in the line's details. The
+  VPN no longer stands in for the line, and it shows on routers with
+  Wi-Fi too, where the networks are not listed. Which route wins comes
+  from the kernel (a new read-only `luci.vantage routes` asks it which
+  route it takes to the internet, as `ip route get` does, one lookup for
+  IPv4 and one for IPv6): with a VPN and a WAN of the same metric, as
+  WireGuard and DHCP leave them, the kernel keeps the route added last,
+  which netifd's list cannot tell, and OpenVPN adds its own. Without that
+  answer, only a VPN with a lower metric than the line's counts. An IPv4
+  VPN over an IPv6-only line rides it too. A VPN that holds the only
+  default route is still the uplink; a backup VPN, one in its own routing
+  table, and OpenVPN's `redirect-gateway def1` stay among the networks.
+  With several lines the tunnel is drawn on the main one.
+- **The throughput chart stops flipping to "collecting".** With five
+  minutes of history, its subtitle kept switching between "last 5 min" and
+  "collecting · 4 min of data", because the oldest sample kept is usually a
+  few seconds short of five minutes.
+
 ## 1.0.15 - 2026-11-04
 
 - **The dashboard and LuCI's pages look like one product.** The dashboard
