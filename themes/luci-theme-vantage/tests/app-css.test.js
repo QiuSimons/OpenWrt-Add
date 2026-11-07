@@ -92,3 +92,9 @@ test('other lines to the internet (#88): the main row as with one line, the othe
 	assert.match(rule('.vt-app .vt-node-tag').body, /text-transform:\s*none/);
 	assert.match(rule('.vt-app .vt-node-rates').body, /flex-wrap:\s*wrap/, 'a narrow node wraps its rates');
 });
+
+test('Customize\'s notes are not the hint, which phones hide', () => {
+	const view = fs.readFileSync(path.join(__dirname, '..', 'luci-app-vantage/htdocs/luci-static/resources/view/vantage/overview.js'), 'utf8');
+	assert.match(view, /el\.editNote = E\('span', \{ 'class': 'vt-edit-note'/);
+	assert.ok(!/vt-edit-note[^{]*\{[^}]*display: none[^}]*\}/.test(css.replace(/\.vt-edit-note\[hidden\][^}]*\}/, '')));
+});

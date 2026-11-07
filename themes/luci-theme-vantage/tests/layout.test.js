@@ -50,6 +50,32 @@ test('normalize: Wi-Fi tiles never appear on a wired device; one tile always sho
 	assert.equal(shown(n).length, 1);
 });
 
+test('encode and decode: the router\'s form of a layout', () => {
+	const list = [ { id: 'hero', c: 0, w: 4 }, { id: 'chart', c: 0, w: 2, hide: true } ];
+	assert.equal(layout.encode(list), 'hero:0:4 chart:0:2:h');
+	assert.equal(layout.option('wide'), 'layout_wide');
+	assert.equal(layout.option('narrow-wired'), 'layout_narrow_wired');
+	const got = layout.decode('wide=hero:0:4 chart:0:2:h;mid=default;narrow_wired=sys:0:1');
+	assert.deepEqual(Object.keys(got), [ 'wide', 'mid', 'narrow-wired' ]);
+	assert.deepEqual([ ...got.wide ], list);
+	assert.equal(got.mid, null, 'null is the default layout');
+	for (const junk of [ '', null, undefined, 'x', 'wide', 'wide=', '=hero:0:4', 'tall=hero:0:4', '__proto__=hero:0:4' ])
+		assert.deepEqual(Object.keys(layout.decode(junk)), [], String(junk));
+	assert.deepEqual(layout.normalize(layout.decode('wide=nosuch:0:4').wide, 'wide', false), layout.defaults('wide', false), 'normalize has the last word');
+	assert.equal(layout.encode([ null, 1, 'x', { id: 'hero', c: 0, w: 4 } ]), 'hero:0:4', 'stored junk is skipped');
+	assert.deepEqual(layout.normalize([], 'wide', false), layout.defaults('wide', false), 'an empty layout is the default');
+});
+
+test('merge: the router first for a login that may save, this browser first for any other', () => {
+	const mine = { wide: [ 'mine' ], mid: [ 'mine' ] }, saved = { wide: [ 'router' ], narrow: [ 'router' ], mid: null };
+	const yes = layout.merge(mine, saved, true);
+	assert.deepEqual(Object.assign({}, yes), { wide: [ 'router' ], narrow: [ 'router' ] }, 'the router\'s reset wins too');
+	const no = layout.merge(mine, saved, false);
+	assert.deepEqual(Object.assign({}, no), { wide: [ 'mine' ], mid: [ 'mine' ], narrow: [ 'router' ] });
+	assert.deepEqual(Object.assign({}, layout.merge(mine, {}, true)), mine, 'a browser keeps its own until someone saves');
+	assert.deepEqual(mine, { wide: [ 'mine' ], mid: [ 'mine' ] }, 'nothing changed in place');
+});
+
 test('move skips hidden tiles and stops at the ends', () => {
 	let l = layout.setHidden(layout.defaults('wide', false), 'radios', true);
 	l = layout.move(l, 'chart', 1);

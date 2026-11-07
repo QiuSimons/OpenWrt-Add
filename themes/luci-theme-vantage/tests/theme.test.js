@@ -300,3 +300,100 @@ test('status enhancers: memory and storage sections are found with and without .
 		assert.equal(mem.children[1].children.length, 2, release + ': idempotent');
 	}
 });
+
+/* Appearance for every browser (#89): /etc/config/vantage_theme, written
+   through the theme's own rpcd group, read by the templates */
+test('Appearance: a pick of this browser\'s own, then the router\'s, then one from before, then the default', () => {
+	const start = src.indexOf('function lookValue(');
+	assert.ok(start > 0, 'found lookValue');
+	const end = src.indexOf('\n}\n', start) + 2;
+	const lookValue = new Function(src.slice(start, end) + '\nreturn lookValue;')();
+	const OK = [ 'auto', 'light', 'dark' ];
+	/* [ pending, own, router, before ] */
+	assert.equal(lookValue(OK, [ null, null, null, null ]), 'auto', 'the default');
+	assert.equal(lookValue(OK, [ null, null, null, 'dark' ]), 'dark', 'a pick from before, the router silent');
+	assert.equal(lookValue(OK, [ null, null, 'light', 'dark' ]), 'light', 'the router over a pick from before');
+	assert.equal(lookValue(OK, [ null, null, 'auto', 'dark' ]), 'auto', 'auto saved for everyone is a value too');
+	assert.equal(lookValue(OK, [ null, 'dark', 'light', null ]), 'dark', 'a pick without the right to save it, here only');
+	assert.equal(lookValue(OK, [ 'light', 'dark', 'auto', null ]), 'light', 'a pick being saved');
+	assert.equal(lookValue(OK, [ null, 'Dark', '', 'x' ]), 'auto', 'unknown values are skipped');
+	assert.equal(lookValue([ 'grid', 'stars', 'none' ], [ undefined, null, '', 'stars' ]), 'stars');
+});
+
+test('Appearance: the templates and the login page read the same keys, in the same order', () => {
+	const T = path.join(__dirname, '..', 'luci-theme-vantage');
+	const header = fs.readFileSync(path.join(T, 'ucode/template/themes/vantage/header.ut'), 'utf8');
+	const login = fs.readFileSync(path.join(T, 'ucode/template/themes/vantage/sysauth.ut'), 'utf8');
+	const loginJs = fs.readFileSync(path.join(T, 'htdocs/luci-static/vantage/login.js'), 'utf8');
+	const table = /\nconst LOOK = (\{[\s\S]*?\n\});\n/.exec(src);
+	assert.ok(table, 'found LOOK');
+	const LOOK = new Function('THEME_KEY', 'LOGIN_KEY', 'BACKDROP_KEY', 'return ' + table[1])('vantage.theme', 'vantage.login', 'vantage.backdrop.v1');
+	assert.deepEqual(Object.keys(LOOK), [ 'theme', 'login', 'backdrop' ]);
+	assert.ok(header.includes("look('theme', 'vantage.theme.own', 'vantage.theme', [ 'auto', 'light', 'dark' ])"));
+	assert.ok(header.includes("look('backdrop', 'vantage.backdrop.own', 'vantage.backdrop.v1', [ 'grid', 'stars', 'none' ])"));
+	assert.ok(login.includes("localStorage.getItem('vantage.theme.own'); v[2] = localStorage.getItem('vantage.theme')"));
+	assert.ok(loginJs.includes("localStorage.getItem('vantage.login.own'); v[2] = localStorage.getItem('vantage.login')"));
+	for (const [ name, k ] of Object.entries(LOOK)) {
+		assert.match(k.own, /^vantage\.[a-z]+\.own$/, name);
+		assert.ok(header.includes(`data-vt-look-${name}="{{ look_${name} }}"`), `header hands over ${name}`);
+	}
+	assert.deepEqual(LOOK.theme.ok, [ 'auto', 'light', 'dark' ]);
+	assert.deepEqual(LOOK.login.ok, [ 'grid', 'stars', 'none' ]);
+	assert.deepEqual(LOOK.backdrop.ok, [ 'grid', 'stars', 'none' ]);
+	/* saved in config vantage_theme, section appearance, and nowhere else */
+	assert.deepEqual([ ...src.matchAll(/callLook(?:Set|Commit|Revert)\(([^)]*?)[,)]/g) ].map(m => m[1]), [ "'vantage_theme'", "'vantage_theme'", "'vantage_theme'", "'vantage_theme'" ]);
+	/* rpcd refuses revert while an apply is pending, as it does commit, so nothing is set that could not be taken back */
+	assert.match(src, /callLookRevert\('vantage_theme'\)\s*\.then\(\(\) => callLookSet\(/);
+	/* a commit that fails later is reverted, never left in the session */
+	assert.match(src, /callLookCommit\('vantage_theme'\)\.catch\(e => callLookRevert\('vantage_theme'\)/);
+	assert.match(src, /callLookSet\('vantage_theme', 'appearance', values\)/);
+	assert.match(src, /lookWrite\(\{ \[name\]: value \}\)/);
+});
+
+test('Customize: the theme, the template and the dashboard keep the same chart styles and layout form', () => {
+	const { load } = require('./luci-stub');
+	const layout = load('vantage.layout'), series = load('vantage.series');
+	const header = fs.readFileSync(path.join(__dirname, '..', 'luci-theme-vantage/ucode/template/themes/vantage/header.ut'), 'utf8');
+	const charts = new Function('return ' + /const VIEW_CHARTS = (\[[^\]]*\]);/.exec(src)[1])();
+	assert.deepEqual(charts, series.CHART_STYLES);
+	assert.ok(header.includes(`look('chart', ${JSON.stringify(charts).replace(/"/g, "'").replace(/,/g, ', ').replace('[', '[ ').replace(']', ' ]')})`));
+	const form = /const VIEW_LAYOUT = (\/.*\/);/.exec(src)[1];
+	assert.ok(header.includes(`match(v, ${form})`), 'the template reads what the theme writes');
+	const re = new Function('return ' + form)();
+	/* every tile of every default layout, shown and hidden, fits the form and comes back */
+	for (const tier of [ 'wide', 'mid', 'narrow' ]) for (const wired of [ false, true ]) {
+		for (const hide of [ false, true ]) {
+			const list = layout.compact(layout.defaults(tier, wired).map(e => Object.assign({}, e, { hide })));
+			const text = layout.encode(list);
+			assert.match(text, re, text);
+			const k = layout.key(tier, wired), opt = layout.option(k);
+			assert.match(opt, /^layout_(wide|mid|narrow)(_wired)?$/);
+			assert.ok(header.includes(`'${opt.slice(7)}'`), `the template reads ${opt}`);
+			assert.deepEqual([ ...layout.decode(`${opt.slice(7)}=${text}`)[k] ], list);
+		}
+	}
+	/* the longest tile name still fits */
+	for (const id of layout.TILES) assert.match(`${id}:0:1`, re, id);
+	/* a failed save can be done again: only one under way stops a repeat */
+	assert.match(src, /pending\[name\] === value && !failed\[name\]/);
+	assert.match(src, /'click', \(\) => \{ if \(input\.checked && \(this\.lookFailed \|\| \{\}\)\[look\]\) set\(o\[0\]\)/);
+	/* Esc in the palette stays there: the dashboard would take it as Done */
+	assert.match(src, /case 'Escape': ev\.preventDefault\(\); ev\.stopPropagation\(\); this\.closePalette\(\)/);
+	/* only a login that may save hands it to the router, in one write */
+	assert.match(src, /VIEW_SAVE_EVENT, ev => \{[\s\S]{0,120}this\.lookState\(\) !== 'yes'[\s\S]{0,300}lookWrite\(values\)/);
+});
+
+test('Appearance: the theme\'s rpcd group writes config vantage_theme only, which ships empty', () => {
+	const T = path.join(__dirname, '..', 'luci-theme-vantage');
+	const acl = JSON.parse(fs.readFileSync(path.join(T, 'root/usr/share/rpcd/acl.d/luci-theme-vantage.json'), 'utf8'));
+	assert.deepEqual(Object.keys(acl), [ 'luci-theme-vantage' ]);
+	const g = acl['luci-theme-vantage'];
+	assert.deepEqual(Object.keys(g).sort(), [ 'description', 'write' ], 'a write group only, no read grants');
+	assert.deepEqual(g.write, { ubus: { uci: [ 'set', 'commit', 'revert' ] }, uci: [ 'vantage_theme' ] });
+	/* no read of its own: the dashboard gets these through the template */
+	assert.deepEqual(Object.keys(g).sort(), [ 'description', 'write' ]);
+	const conf = fs.readFileSync(path.join(T, 'root/etc/config/vantage_theme'), 'utf8');
+	assert.deepEqual(conf.split('\n').filter(l => l.trim() && !/^\s*#/.test(l)), [ "config appearance 'appearance'" ], 'one section, nothing set');
+	const mk = fs.readFileSync(path.join(T, 'Makefile'), 'utf8');
+	assert.match(mk, /define Package\/luci-theme-vantage\/conffiles\n\/etc\/config\/vantage_theme\nendef/);
+});

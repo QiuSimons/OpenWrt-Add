@@ -100,16 +100,21 @@ function environment(o) {
 					return o.listen;
 				if (c === 'uhttpd' && s === 'main' && opt === 'listen_https')
 					return o.hostile ? [ '0.0.0.0:443', '[::]:8443', '0.0.0.0:0', '0.0.0.0:70000', HOSTILE, HOSTILE + ':1' ] : [ '0.0.0.0:443', '[::]:443' ];
+				/* Appearance saved for every browser (/etc/config/vantage_theme) */
+				if (c === 'vantage_theme' && s === 'appearance')
+					return o.hostile ? HOSTILE : (o.look || {})[opt] ?? null;
 				return null;
 			},
-			get_all: () => null,
-			foreach: () => {}
+			get_all: (c, s) => (c === 'vantage_theme' && s === 'appearance' && !o.noSection) ? {} : null,
+			/* rpcd's logins: what a new login would be granted */
+			foreach: (c, t, fn) => { if (c === 'rpcd' && t === 'login') for (const s of o.logins || []) fn(s); }
 		},
 		ctx: {
 			path: o.path, request_path: o.path, request_args: [],
 			authsession: o.authed ? 'a'.repeat(32) : null,
 			authtoken: o.authed ? 'b'.repeat(32) : null,
-			authuser: o.authed ? 'root' : null
+			authuser: o.authed ? 'root' : null,
+			authacl: o.acl
 		},
 		version: {
 			distname: o.hostile ? SECRET.distname + HOSTILE : SECRET.distname,
@@ -300,12 +305,59 @@ test('login: fuser is never echoed, hostile inputs change no markup, nothing abo
 	assertNoSecrets(evil.html, 'login');
 	assertNoSecrets(good.html, 'login');
 	assert.deepEqual(evil.calls.ubus, [], 'login page called ubus');
-	assert.deepEqual(evil.calls.uci, [ 'uhttpd.main.listen_https' ], 'login page read more than the HTTPS ports');
+	assert.deepEqual(evil.calls.uci, [ 'uhttpd.main.listen_https', 'vantage_theme.appearance.theme', 'vantage_theme.appearance.login' ],
+		'login page read more than the HTTPS ports and the Appearance saved for every browser');
 	assert.match(evil.html, /role="alert">Invalid username and\/or password! Please try again\.</, 'generic error for a failed login');
 	assert.ok(!renderLogin({ path: ADMIN }).html.includes('role="alert"'), 'no error before a login attempt');
 	assert.deepEqual(inlineScripts(evil.html), inlineScripts(good.html), 'login inline scripts depend on input');
 	for (const s of inlineScripts(evil.html))
 		assert.ok(!/443|SECRET|alert\(|luci-static/.test(s), 'login inline script carries data');
+});
+
+test('Appearance saved for every browser: only values the theme knows reach the pages, as data attributes', () => {
+	const looks = html => Object.fromEntries(tokenize(html).tags.find(t => t.name === 'html').attrs.filter(a => /^data-vt-look-(theme|login|backdrop)$/.test(a[0])));
+	const look = { theme: 'dark', login: 'stars', backdrop: 'none' };
+	assert.deepEqual(looks(renderLogin({ path: ADMIN, look }).html), { 'data-vt-look-theme': 'dark', 'data-vt-look-login': 'stars' });
+	assert.deepEqual(looks(renderPage({ path: ADMIN, authed: true, look }).html),
+		{ 'data-vt-look-theme': 'dark', 'data-vt-look-login': 'stars', 'data-vt-look-backdrop': 'none' });
+	for (const odd of [ HOSTILE, 'Dark', ' dark', 'stars ', [ 'dark' ], {}, 1, '' ]) {
+		const o = { theme: odd, login: odd, backdrop: odd };
+		assert.deepEqual(looks(renderLogin({ path: ADMIN, look: o }).html), { 'data-vt-look-theme': '', 'data-vt-look-login': '' }, `login ${JSON.stringify(odd)}`);
+		assert.deepEqual(looks(renderPage({ path: ADMIN, authed: true, look: o }).html),
+			{ 'data-vt-look-theme': '', 'data-vt-look-login': '', 'data-vt-look-backdrop': '' }, `header ${JSON.stringify(odd)}`);
+	}
+	/* the dashboard's chart style and layouts: logged in only, in their form only */
+	const view = (html, n) => attrOf(html, 'html', 'data-vt-look-' + n);
+	const lay = { chart: 'log', layout_wide: 'hero:0:4 chart:0:2:h', layout_mid: 'default', layout_narrow_wired: 'sys:0:1' };
+	const mine = renderPage({ path: ADMIN, authed: true, look: lay }).html;
+	assert.equal(view(mine, 'chart'), 'log');
+	assert.equal(view(mine, 'layout'), 'wide=hero:0:4 chart:0:2:h;mid=default;narrow_wired=sys:0:1');
+	for (const o of [ renderPage({ path: [ 'admin', 'x' ], authed: false, look: lay }).html ]) {
+		assert.equal(view(o, 'chart'), '', 'anonymous');
+		assert.equal(view(o, 'layout'), '', 'anonymous');
+	}
+	assert.ok(!/data-vt-look-(chart|layout)/.test(renderLogin({ path: ADMIN, look: lay }).html), 'the login page has no use for them');
+	for (const odd of [ HOSTILE, 'hero:0:4;mid=x', 'hero:0:4"', 'Hero:0:4', 'hero:9:9', 'hero:0:4 ', ' hero:0:4', 'hero', 'default x',
+		Array(9).fill('hero:0:1').join(' '), 'x'.repeat(9) + ':0:1', [ 'hero:0:4' ], {}, 1, '' ]) {
+		const page = renderPage({ path: ADMIN, authed: true, look: { chart: odd, layout_wide: odd } }).html;
+		assert.equal(view(page, 'chart'), '', `chart ${JSON.stringify(odd)}`);
+		assert.equal(view(page, 'layout'), '', `layout ${JSON.stringify(odd)}`);
+	}
+	/* may this login save it: held now, granted at a new login, or not at all */
+	const save = o => attrOf(renderPage(Object.assign({ path: ADMIN, authed: true }, o)).html, 'html', 'data-vt-look-save');
+	const held = { 'access-group': { 'luci-theme-vantage': [ 'read', 'write' ] } };
+	const root = [ { username: 'root', read: [ '*' ], write: [ '*' ] } ];
+	assert.equal(save({ acl: held, logins: root }), 'yes');
+	assert.equal(save({ acl: { 'access-group': { 'luci-base': [ 'read', 'write' ] } }, logins: root }), 'relogin', 'a login from before the group');
+	assert.equal(save({ acl: { 'access-group': {} }, logins: [ { username: 'root', write: 'luci-*' } ] }), 'relogin', 'one pattern, as rpcd matches it');
+	assert.equal(save({ acl: { 'access-group': {} }, logins: [ { username: 'root', write: [ 'luci-app-*' ] } ] }), 'no');
+	assert.equal(save({ acl: { 'access-group': {} }, logins: [ { username: 'admin', write: [ '*' ] } ] }), 'no', 'another user\'s grant');
+	assert.equal(save({ acl: { 'access-group': { 'luci-theme-vantage': [ 'read' ] } }, logins: [] }), 'no');
+	assert.equal(save({ acl: held, logins: root, noSection: true }), 'no', 'no section to save into');
+	assert.equal(attrOf(renderPage({ path: [ 'admin', 'x' ], authed: false, acl: held, logins: root }).html, 'html', 'data-vt-look-save'), 'no', 'anonymous');
+	/* the inline scripts stay data-free: they read the attributes */
+	assert.deepEqual(inlineScripts(renderLogin({ path: ADMIN, look }).html), inlineScripts(renderLogin({ path: ADMIN }).html));
+	assert.deepEqual(inlineScripts(renderPage({ path: ADMIN, authed: true, look: Object.assign({}, look, lay) }).html), inlineScripts(renderPage({ path: ADMIN, authed: true }).html));
 });
 
 test('login form: post back without action, contract field names and autocomplete', () => {

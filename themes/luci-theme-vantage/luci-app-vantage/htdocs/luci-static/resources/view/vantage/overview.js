@@ -490,8 +490,44 @@ function writeFolds(v) {
 	try { window.localStorage.setItem(FOLD_KEY, JSON.stringify(v)); } catch (e) {}
 }
 
-/* Tile layouts the viewer arranged, per screen class, in this browser;
-   vantage.layout validates whatever comes back */
+/* What the Vantage theme's template hands over (data-vt-look-*): under it
+   the router keeps the layouts and the chart style with the Appearance */
+function lookAttr(name) {
+	var root = typeof document !== 'undefined' ? document.documentElement : null;
+	return (root && root.getAttribute ? root.getAttribute(name) : null) || '';
+}
+
+function lookSaves() { return lookAttr('data-vt-look-save') === 'yes'; }
+
+/* What Customize changed and the router doesn't have yet, as the options
+   it's saved in. Kept across a failed save or a reload, so Done sends
+   this and nothing else: a browser's earlier picks stay its own until
+   someone changes them. */
+var UNSAVED_KEY = 'vantage.view.unsaved';
+
+function readUnsaved() {
+	var v = null;
+	try { v = JSON.parse(window.localStorage.getItem(UNSAVED_KEY) || 'null'); } catch (e) { v = null; }
+	return Array.isArray(v) ? v.filter(function(k) { return /^(chart|layout_(wide|mid|narrow)(_wired)?)$/.test(k); }) : [];
+}
+
+function writeUnsaved(list) {
+	try {
+		if (list.length) window.localStorage.setItem(UNSAVED_KEY, JSON.stringify(list));
+		else window.localStorage.removeItem(UNSAVED_KEY);
+	} catch (e) {}
+}
+
+/* Done hands the theme what changed; true if it took it (a login that may
+   save). Without it, or for any other login, it stays in this browser. */
+function offerView(values, done) {
+	var ev = null;
+	try { ev = new CustomEvent('vantage:view-save', { detail: { values: values, done: done }, cancelable: true }); } catch (e) { ev = null; }
+	return !!ev && typeof window.dispatchEvent === 'function' && !window.dispatchEvent(ev);
+}
+
+/* Tile layouts the viewer arranged, per screen class, this browser's copy
+   of them and the router's; vantage.layout validates whatever comes back */
 var LAYOUT_KEY = 'vantage.layout.v1';
 
 function readLayouts() {
@@ -500,44 +536,62 @@ function readLayouts() {
 	var out = Object.create(null);
 	if (v && typeof v === 'object' && !Array.isArray(v))
 		Object.keys(v).forEach(function(k) { if (/^(wide|mid|narrow)(-wired)?$/.test(k) && Array.isArray(v[k])) out[k] = v[k]; });
-	return out;
+	/* changed here and not saved yet: this browser's stands, until Done sends it */
+	var saved = layout.decode(lookAttr('data-vt-look-layout')), unsaved = readUnsaved();
+	Object.keys(saved).forEach(function(k) { if (unsaved.indexOf(layout.option(k)) >= 0) delete saved[k]; });
+	return layout.merge(out, saved, lookSaves());
 }
 
+/* a login that can't save follows the router: what is the router's isn't
+   this browser's to keep */
 function writeLayouts(v) {
+	var saved = lookSaves() ? null : layout.decode(lookAttr('data-vt-look-layout')), out = {};
+	Object.keys(v).forEach(function(k) {
+		if (!saved || !saved[k] || layout.encode(saved[k]) !== layout.encode(v[k])) out[k] = v[k];
+	});
 	try {
-		if (Object.keys(v).length) window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(v));
+		if (Object.keys(out).length) window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(out));
 		else window.localStorage.removeItem(LAYOUT_KEY);
 	} catch (e) {}
 }
 
 /* The throughput chart style the viewer picked (series.CHART_STYLES),
-   in this browser */
+   this browser's copy of it and the router's */
 var CHART_KEY = 'vantage.chart.v1';
 
 function readChartStyle() {
 	var v = null;
 	try { v = window.localStorage.getItem(CHART_KEY); } catch (e) { v = null; }
-	return series.CHART_STYLES.indexOf(v) >= 0 ? v : series.CHART_STYLES[0];
+	return series.chartPick(lookAttr('data-vt-look-chart'), v, lookSaves() && readUnsaved().indexOf('chart') < 0);
 }
 
 function writeChartStyle(v) {
 	try {
-		if (v === series.CHART_STYLES[0]) window.localStorage.removeItem(CHART_KEY);
+		/* the default needs no entry, unless the router has another */
+		if (v === series.CHART_STYLES[0] && !lookAttr('data-vt-look-chart')) window.localStorage.removeItem(CHART_KEY);
 		else window.localStorage.setItem(CHART_KEY, v);
 	} catch (e) {}
 }
 
-/* The network path's backdrop the viewer picked (backdrop.STYLES), in
-   this browser */
+/* The network path's backdrop the viewer picked (backdrop.STYLES). Under
+   the Vantage theme its Appearance decides (saved for every browser on
+   the router where the viewer may) and keeps the one in force in
+   data-vt-backdrop; elsewhere this browser keeps it. */
 var BACKDROP_KEY = 'vantage.backdrop.v1';
 
 function readBackdrop() {
-	var v = null;
+	var root = typeof document !== 'undefined' ? document.documentElement : null;
+	var v = root && root.getAttribute ? root.getAttribute('data-vt-backdrop') : null;
+	if (backdrop.STYLES.indexOf(v) >= 0) return v;
 	try { v = window.localStorage.getItem(BACKDROP_KEY); } catch (e) { v = null; }
 	return backdrop.STYLES.indexOf(v) >= 0 ? v : backdrop.STYLES[0];
 }
 
 function writeBackdrop(v) {
+	/* the theme takes it (and cancels the event) */
+	var ev = null;
+	try { ev = new CustomEvent('vantage:backdrop-set', { detail: v, cancelable: true }); } catch (e) { ev = null; }
+	if (ev && typeof window.dispatchEvent === 'function' && !window.dispatchEvent(ev)) return;
 	try {
 		if (v === backdrop.STYLES[0]) window.localStorage.removeItem(BACKDROP_KEY);
 		else window.localStorage.setItem(BACKDROP_KEY, v);
@@ -728,7 +782,7 @@ return view.extend({
 		this.backdropStyle = readBackdrop();
 		/* picked under the theme's Appearance (menu-vantage.js), here or
 		   in another tab */
-		var self = this, follow = function() { self.setBackdrop(readBackdrop()); };
+		var self = this, follow = function() { self.showBackdrop(readBackdrop()); };
 		if (window.addEventListener) {
 			window.addEventListener('vantage:backdrop', follow);
 			window.addEventListener('storage', function(ev) { if (ev.key === BACKDROP_KEY) follow(); });
@@ -1260,11 +1314,20 @@ return view.extend({
 		var l = this.lay;
 		if (!l) return;
 		var k = layout.key(l.tier, l.wired);
-		if (layout.same(list, layout.defaults(l.tier, l.wired))) delete this.layouts[k];
+		if (layout.same(list, layout.defaults(l.tier, l.wired))) this.clearLayout(k);
 		else this.layouts[k] = layout.compact(list);
 		writeLayouts(this.layouts);
+		this.viewChanged(layout.option(k));
 		this.held = Object.create(null);
 		this.doLayout();
+	},
+
+	/* back to the default. The router's layout would come back on reload
+	   (for a login that can't save, or before Done), so this browser keeps
+	   an empty one of its own, which normalize reads as the default. */
+	clearLayout: function(k) {
+		if (k in layout.decode(lookAttr('data-vt-look-layout'))) this.layouts[k] = [];
+		else delete this.layouts[k];
 	},
 
 	editTile: function(id, fn, say) {
@@ -1282,7 +1345,10 @@ return view.extend({
 		window.setTimeout(function() { txt(s, text); }, 30);
 	},
 
-	setEditing: function(on) {
+	/* leave: close without saving (Esc or the Customize button after a
+	   failed save; Done tries again) */
+	setEditing: function(on, leave) {
+		if (!on && this.editing && !leave && this.saveView()) return;
 		this.editing = !!on;
 		this.el.root.classList.toggle('vt-editing', this.editing);
 		this.el.layoutBtn.setAttribute('aria-pressed', String(this.editing));
@@ -1291,8 +1357,56 @@ return view.extend({
 		   at once, nothing held from the other mode */
 		this.held = Object.create(null);
 		this.doLayout();
-		if (this.editing) this.el.editDone.focus();
+		if (this.editing) {
+			this.viewFailed = false;
+			this.editNote(lookAttr('data-vt-look-save') === 'relogin' ? _('Log in again to save this for every browser.') : '');
+			this.el.editDone.focus();
+		}
 		else this.el.layoutBtn.focus();
+	},
+
+	editNote: function(text) {
+		this.el.editNote.hidden = !text;
+		txt(this.el.editNote, text);
+	},
+
+	/* the options of /etc/config/vantage_theme this dashboard stands for */
+	viewValues: function() {
+		var self = this, out = { chart: this.chartStyle };
+		[ 'wide', 'mid', 'narrow' ].forEach(function(tier) {
+			[ false, true ].forEach(function(wired) {
+				var k = layout.key(tier, wired);
+				out[layout.option(k)] = self.layouts[k] && self.layouts[k].length ? layout.encode(self.layouts[k]) : 'default';
+			});
+		});
+		return out;
+	},
+
+	/* this option changed under Customize, for a login that may save it */
+	viewChanged: function(opt) {
+		if (!lookSaves()) return;
+		var list = readUnsaved();
+		if (list.indexOf(opt) < 0) writeUnsaved(list.concat(opt));
+	},
+
+	/* Done: what changed goes to the theme in one write. True while that
+	   runs: Customize closes when it is saved, and stays open with a note
+	   if it was not, so the pick can be saved again. */
+	saveView: function() {
+		var self = this, now = this.viewValues(), out = {};
+		if (this.viewSaving) return true;
+		readUnsaved().forEach(function(k) { out[k] = now[k]; });
+		if (!Object.keys(out).length) return false;
+		this.viewSaving = offerView(out, function(ok) {
+			self.viewSaving = false;
+			self.viewFailed = !ok;
+			if (!ok) { self.editNote(_('Could not save this for every browser. Try again.')); return; }
+			/* anything changed since it was sent goes out on this close */
+			var then = self.viewValues();
+			writeUnsaved(readUnsaved().filter(function(k) { return then[k] !== out[k]; }));
+			self.setEditing(false);
+		});
+		return this.viewSaving;
 	},
 
 	/* the throughput chart style, picked under Customize */
@@ -1322,10 +1436,18 @@ return view.extend({
 		return E('div', { 'class': 'vt-edit-field' }, [ E('label', { 'for': 'vt-backdrop-style' }, [ _('Network path background') ]), pick ]);
 	},
 
+	/* picked here (Customize): saved, and shown */
 	setBackdrop: function(v) {
 		if (backdrop.STYLES.indexOf(v) < 0 || v === this.backdropStyle) return;
-		this.backdropStyle = v;
 		writeBackdrop(v);
+		this.showBackdrop(v);
+	},
+
+	/* picked elsewhere (the theme's Appearance, another tab): shown only,
+	   never saved back */
+	showBackdrop: function(v) {
+		if (backdrop.STYLES.indexOf(v) < 0 || v === this.backdropStyle) return;
+		this.backdropStyle = v;
 		if (this.backdrop) this.backdrop.style(v);
 		if (this.backdropPick && this.backdropPick.value !== v) this.backdropPick.value = v;
 	},
@@ -1334,6 +1456,7 @@ return view.extend({
 		if (series.CHART_STYLES.indexOf(v) < 0 || v === this.chartStyle) return;
 		this.chartStyle = v;
 		writeChartStyle(v);
+		this.viewChanged('chart');
 		this.chartHide();
 		this.paintChart();
 	},
@@ -1341,18 +1464,20 @@ return view.extend({
 	buildEditBar: function() {
 		var self = this, el = this.el;
 		el.editHint = E('span', { 'class': 'vt-hint' });
+		el.editNote = E('span', { 'class': 'vt-edit-note', 'role': 'status', 'hidden': 'hidden' });
 		el.editHidden = E('div', { 'class': 'vt-edit-hidden' });
 		el.editSay = E('span', { 'class': 'vt-sr', 'role': 'status', 'aria-live': 'polite' });
 		el.editBar = E('div', { 'class': 'vt-editbar', 'role': 'region', 'aria-label': _('Customize the dashboard'), 'hidden': 'hidden' }, [
-			E('div', { 'class': 'vt-editbar-text' }, [ E('strong', {}, [ _('Customize the dashboard') ]), el.editHint ]),
+			E('div', { 'class': 'vt-editbar-text' }, [ E('strong', {}, [ _('Customize the dashboard') ]), el.editHint, el.editNote ]),
 			el.editHidden,
 			E('div', { 'class': 'vt-edit-picks' }, [ this.buildChartPick(), this.buildBackdropPick() ]),
 			E('div', { 'class': 'vt-editbar-actions' }, [
 				E('button', { 'type': 'button', 'class': 'vt-btn', 'click': function() {
 					var l = self.lay;
 					if (!l) return;
-					delete self.layouts[layout.key(l.tier, l.wired)];
+					self.clearLayout(layout.key(l.tier, l.wired));
 					writeLayouts(self.layouts);
+					self.viewChanged(layout.option(layout.key(l.tier, l.wired)));
 					self.held = Object.create(null);
 					self.doLayout();
 					self.announce(_('Layout reset'));
@@ -1417,9 +1542,10 @@ return view.extend({
 		var self = this, l = this.lay;
 		if (!l) return;
 		var shown = l.list.filter(function(e) { return !e.hide; });
-		txt(this.el.editHint, l.tier === 'wide' ? _('Drag a tile by its handle or use its buttons. Saved in this browser for wide screens.')
-			: l.tier === 'mid' ? _('Drag a tile by its handle or use its buttons. Saved in this browser for medium screens.')
-			: _('Drag a tile by its handle or use its buttons. Saved in this browser for narrow screens.'));
+		var every = lookSaves();
+		txt(this.el.editHint, l.tier === 'wide' ? (every ? _('Drag a tile by its handle or use its buttons. Done saves it for wide screens in every browser.') : _('Drag a tile by its handle or use its buttons. Saved in this browser for wide screens.'))
+			: l.tier === 'mid' ? (every ? _('Drag a tile by its handle or use its buttons. Done saves it for medium screens in every browser.') : _('Drag a tile by its handle or use its buttons. Saved in this browser for medium screens.'))
+			: every ? _('Drag a tile by its handle or use its buttons. Done saves it for narrow screens in every browser.') : _('Drag a tile by its handle or use its buttons. Saved in this browser for narrow screens.'));
 		this.el.root.classList.toggle('vt-edit-1col', l.cols === 1);
 		shown.forEach(function(e, i) {
 			var o = self.ov[e.id];
@@ -1532,7 +1658,7 @@ return view.extend({
 				el.liveText = E('span', { 'class': 'vt-live-text' })
 			]),
 			el.layoutBtn = E('button', { 'type': 'button', 'class': 'vt-btn vt-btn-ghost vt-layout-btn', 'aria-pressed': 'false',
-				'title': _('Customize the dashboard'), 'click': L.bind(function() { this.setEditing(!this.editing); }, this) }, [
+				'title': _('Customize the dashboard'), 'click': L.bind(function() { this.setEditing(!this.editing, this.viewFailed); }, this) }, [
 				icon('layout'), E('span', {}, [ _('Customize') ])
 			])
 		]);
@@ -1720,13 +1846,14 @@ return view.extend({
 	},
 
 	/* the nodes the path shows: rebuilt only when this changes (a radio,
-	   SSID or network comes or goes); a poll updates text in place */
+	   SSID, network or wired port comes or goes); a poll updates text in
+	   place */
 	heroKey: function() {
-		var m = this.m, lines = '\nlines=' + this.extraLines().map(function(x) { return x.iface; }).join(',');
-		if (m.wired) return 'w\n' + m.networks.filter(function(n) { return n.up; }).slice(0, 8).map(function(n) { return n.name; }).join('\n') + lines;
+		var m = this.m, tail = '\nwired=' + this.wiredPorts().join(',') + '\nlines=' + this.extraLines().map(function(x) { return x.iface; }).join(',');
+		if (m.wired) return 'w\n' + m.networks.filter(function(n) { return n.up; }).slice(0, 8).map(function(n) { return n.name; }).join('\n') + tail;
 		return 'r\n' + m.radios.map(function(r) {
 			return r.id + '=' + m.ssids.filter(function(s) { return s.radio === r.id; }).map(function(s) { return s.id; }).join(',');
-		}).join('\n') + '\nwired=' + this.wiredPorts().join(',') + lines;
+		}).join('\n') + tail;
 	},
 
 	/* the lines to the internet beside the main one (failover, mwan3;
@@ -1874,26 +2001,26 @@ return view.extend({
 				h.radios.push(b);
 			});
 			if (!h.radios.length) h.branches.appendChild(E('div', { 'class': 'vt-empty-inline' }, [ _('No radios reported') ]));
-			/* wired hosts downstream: one branch beside the radios, a node
-			   per port */
-			var ports = this.wiredPorts();
-			if (ports.length) {
-				var wb = { id: 'wired', wired: true, ssids: [], title: span('vt-node-title vt-tn'), sub: span('vt-node-sub vt-tn') };
-				wb.el = E('button', { 'type': 'button', 'class': 'vt-node vt-node-radio', 'click': function() { self.showWired(null); } }, [
-					E('span', { 'class': 'vt-node-body' }, [ E('span', { 'class': 'vt-node-kicker' }, [ _('Wired') ]), wb.title, wb.sub ])
+		}
+		/* wired hosts downstream: one branch beside the radios or the
+		   networks, a node per port; its id is no interface's name */
+		var ports = this.wiredPorts();
+		if (ports.length) {
+			var wb = { id: ':wired', wired: true, ssids: [], title: span('vt-node-title vt-tn'), sub: span('vt-node-sub vt-tn') };
+			wb.el = E('button', { 'type': 'button', 'class': 'vt-node vt-node-radio', 'click': function() { self.showWired(null); } }, [
+				E('span', { 'class': 'vt-node-body' }, [ E('span', { 'class': 'vt-node-kicker' }, [ _('Wired') ]), wb.title, wb.sub ])
+			]);
+			var wcol = E('div', { 'class': 'vt-branch-ssids' });
+			ports.forEach(function(p) {
+				var sn = { id: 'port:' + p, port: p, name: E('span'), count: span('vt-tn'), rate: span('vt-node-sub vt-tn') };
+				sn.el = E('button', { 'type': 'button', 'class': 'vt-node vt-node-ssid', 'click': function() { self.showWired(p); } }, [
+					E('span', { 'class': 'vt-node-body' }, [ E('span', { 'class': 'vt-node-title vt-ssid-name' }, [ sn.name ]), E('span', { 'class': 'vt-node-sub' }, [ sn.count ]), sn.rate ])
 				]);
-				var wcol = E('div', { 'class': 'vt-branch-ssids' });
-				ports.forEach(function(p) {
-					var sn = { id: 'port:' + p, port: p, name: E('span'), count: span('vt-tn'), rate: span('vt-node-sub vt-tn') };
-					sn.el = E('button', { 'type': 'button', 'class': 'vt-node vt-node-ssid', 'click': function() { self.showWired(p); } }, [
-						E('span', { 'class': 'vt-node-body' }, [ E('span', { 'class': 'vt-node-title vt-ssid-name' }, [ sn.name ]), E('span', { 'class': 'vt-node-sub' }, [ sn.count ]), sn.rate ])
-					]);
-					wb.ssids.push(sn);
-					wcol.appendChild(sn.el);
-				});
-				wb.wrap = E('div', { 'class': 'vt-branch' }, [ wb.el, wcol ]);
-				h.radios.push(wb);
-			}
+				wb.ssids.push(sn);
+				wcol.appendChild(sn.el);
+			});
+			wb.wrap = E('div', { 'class': 'vt-branch' }, [ wb.el, wcol ]);
+			h.radios.push(wb);
 		}
 		h.radios.forEach(function(b) {
 			h.branches.appendChild(b.wrap);
@@ -1967,6 +2094,7 @@ return view.extend({
 			var nets = Object.create(null);
 			m.networks.forEach(function(n) { if (n.up && !nets[n.name]) nets[n.name] = n; });
 			h.radios.forEach(function(b) {
+				if (b.wired) { self.updateWiredBranch(b); return; }
 				var n = nets[b.id];
 				if (!n) return;
 				var r = n.dev ? st.devRates[n.dev] : null;
@@ -3558,7 +3686,7 @@ return view.extend({
 			return;
 		}
 		if (ev.key === 'Escape' && this.editing && !this.drag) {
-			this.setEditing(false);
+			this.setEditing(false, this.viewFailed);
 			return;
 		}
 		/* 'f' focuses the client filter; '/' and Ctrl+K belong to the theme */

@@ -97,8 +97,8 @@ LuCI back to Bootstrap once (opkg runs the old package's removal script
 during the upgrade); choose Vantage again under System → System →
 Language and Style. opkg checks `Packages.sig` against `/etc/opkg/keys`
 and each package against the hash in the index. Remove a language package
-before the app (`opkg remove luci-i18n-vantage-zh-cn luci-app-vantage
-luci-theme-vantage`); opkg leaves the empty directories behind, which is
+before the app (`opkg remove luci-i18n-vantage-zh-cn
+luci-i18n-vantage-theme-zh-cn luci-app-vantage luci-theme-vantage`); opkg leaves the empty directories behind, which is
 harmless.
 
 Tested on a 24.10.8 router (x86, without Wi-Fi or add-ons): an upgrade
@@ -126,8 +126,8 @@ from your configured package feeds.
 When an optional package is missing, the dashboard leaves that name source
 out and keeps working.
 
-Space: the download is about 105 KB in total, and the two packages take
-about 400 KB once installed (less on a compressed overlay).
+Space: the download is about 200 KB in total, and the two packages take
+about 730 KB once installed (less on a compressed overlay).
 
 ### Browser
 
@@ -521,7 +521,7 @@ a new one, then log in). Two reasons:
 | | `luci-theme-vantage` | `luci-app-vantage` |
 |---|---|---|
 | Files | `/www/luci-static/vantage/` (CSS, icons, logo), `/www/luci-static/resources/menu-vantage.js`, `/www/luci-static/resources/vantage-theme/`, `/usr/share/ucode/luci/template/themes/vantage/` | `/www/luci-static/resources/view/vantage/`, `/www/luci-static/resources/vantage/`, `/usr/share/luci/menu.d/zz-luci-app-vantage.json`, `/usr/share/rpcd/acl.d/luci-app-vantage.json`, `/etc/config/vantage` |
-| Configuration | Registers the theme as `luci.themes.Vantage`. Makes it the active theme (`luci.main.mediaurlbase=/luci-static/vantage`) **only on a first install**, never on an upgrade or reinstall. | None besides its own `/etc/config/vantage` (client names). |
+| Configuration | Registers the theme as `luci.themes.Vantage`. Makes it the active theme (`luci.main.mediaurlbase=/luci-static/vantage`) **only on a first install**, never on an upgrade or reinstall. Adds `/etc/config/vantage_theme` (Appearance, and the dashboard's layout and chart style) and the rpcd group `luci-theme-vantage`. | None besides its own `/etc/config/vantage` (client names). |
 | Menu | – | Adds **Dashboard** (`admin/dashboard`) as the first menu entry, so it is the page LuCI opens after login. Status → Overview is unchanged. With `luci-mod-dashboard` also installed, which uses the same entry, Dashboard opens Vantage's and LuCI's moves to Status → Dashboard. With the Vantage theme installed but not selected, Dashboard opens LuCI's own page instead (see [Switch themes](#switch-themes)). |
 | After install | Clears LuCI's caches (`/tmp/luci-indexcache.*`, `/tmp/luci-modulecache/`) and reloads rpcd. | Same. |
 
@@ -536,8 +536,10 @@ The dashboard's URL is `http://192.0.2.1/cgi-bin/luci/admin/dashboard`.
 
 In LuCI: **System → System → Language and Style → Design**, pick a theme,
 then **Save & Apply**. Vantage is listed as `Vantage`. The light / dark /
-auto switch in Vantage's top bar is a per-browser setting and doesn't
-change the router's configuration.
+auto switch in Vantage's top bar (Appearance, with the login and network
+path backgrounds) is saved on the router for every browser, in
+`/etc/config/vantage_theme`, and so are the dashboard's layout and chart
+style; it doesn't touch any other configuration.
 
 From SSH:
 
@@ -598,7 +600,7 @@ A language package contains only the compiled catalogue
 `vantage-theme.<lang>.lmo`) and a first-boot script that registers the
 language (`luci.languages.<lang>`). Texts that are not translated yet stay
 in English. `apk upgrade` upgrades installed language packages with the
-rest; with files, install the new language packages together with the new
+rest; if you upgrade by package name, name them too; with files, install the new language packages together with the new
 packages. To remove a translation, `apk del` its packages; when you
 uninstall Vantage, name its language packages too.
 
@@ -626,7 +628,10 @@ apk replaces the installed version. Your theme choice is kept (the
 upgrade never selects a theme), and so are your device names: when
 `/etc/config/vantage` has been changed, apk keeps your file and saves the
 packaged one next to it as `/etc/config/vantage.apk-new`, which you can
-delete. Log out and in once after upgrading.
+delete. The same goes for your Appearance in `/etc/config/vantage_theme`
+(`vantage_theme.apk-new`). On 24.10, opkg keeps your file too, saves the
+packaged one as `vantage_theme-opkg`, and prints a harmless error line about
+it. Log out and in once after upgrading.
 
 ### Downgrade
 
@@ -655,14 +660,17 @@ Or name just one of them, and add any installed language packages
   Overview after login again. If you named devices, apk leaves your
   modified `/etc/config/vantage` in place; delete it with
   `rm /etc/config/vantage` if you don't want to keep it.
+- **Appearance:** a saved `/etc/config/vantage_theme` stays behind the same
+  way; `rm /etc/config/vantage_theme` removes it (and
+  `vantage_theme.apk-new` or `vantage_theme-opkg`, if an upgrade left one).
 
 Log out and in afterwards to refresh the menu.
 
 ### Keep your device names
 
 Device names live in `/etc/config/vantage` and nowhere else. LuCI's backup
-(**System → Backup / Flash Firmware → Generate archive**) includes it. To
-copy just that file:
+(**System → Backup / Flash Firmware → Generate archive**) includes it, and
+`/etc/config/vantage_theme` with your Appearance. To copy just that file:
 
 ```sh
 scp -O root@192.0.2.1:/etc/config/vantage ./vantage.config        # back up
@@ -870,7 +878,16 @@ Then reload the page. To remove Vantage entirely, see
   separate group (`luci-app-vantage-names`), is the plugin method
   `luci.vantage set_alias`, which checks each name on the device and
   writes nothing but `/etc/config/vantage` (at most 512 names). Details
-  in the README's [Security](../README.md#security) section.
+  in the [spec](SPEC.md#6-security-requirements).
+- **The theme's Appearance.** The theme's own permission group,
+  `luci-theme-vantage`, may write `/etc/config/vantage_theme` and nothing
+  else: the colour mode, the backgrounds, and the dashboard's layout and
+  chart style, saved for every browser. A user
+  without it keeps their picks in their own browser. rpcd grants groups at
+  login, and again to open logins when it reloads, as every LuCI package
+  install makes it do; a login that could have the group but doesn't yet
+  is asked to log in again. To let another user save, add the group to
+  their `list write` in `/etc/config/rpcd`.
 - **Wi-Fi keys.** The dashboard reads the wireless configuration through
   its own plugin method (`luci.vantage wireless`), which returns SSIDs,
   channels and the encryption mode but no Wi-Fi passwords, SAE passwords or

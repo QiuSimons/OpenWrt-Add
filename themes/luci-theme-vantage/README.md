@@ -4,7 +4,7 @@
 
 # Vantage
 
-**A theme for LuCI, OpenWrt's web interface, plus a dashboard that opens when you log in: who's connected, how busy the uplink is, and what needs fixing. Every other LuCI page gets the same look. For OpenWrt 25.12 and 24.10.**
+**A theme and live dashboard for LuCI, OpenWrt's web interface. Log in and see who's connected, how busy your connection is, and what needs fixing. For OpenWrt 25.12 and 24.10.**
 
 ![OpenWrt 25.12 and 24.10](https://img.shields.io/badge/OpenWrt-25.12%20%7C%2024.10-00B5E2?style=flat-square) ![LuCI theme + app](https://img.shields.io/badge/LuCI-theme%20%2B%20app-5a6472?style=flat-square) ![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-3d8b40?style=flat-square)
 
@@ -15,39 +15,65 @@
 <br>
 
 <p align="center">
-  <img src="docs/screenshots/dashboard-dark.png" alt="The Vantage dashboard in dark mode: six health cards with their own icons and edge charts, the signal card flagging a weak client, the network path from the gateway through the access point to its radios and SSIDs, live throughput in download and upload colours, and radio cards" width="100%">
+  <a href="https://anothadev.github.io/luci-theme-vantage/"><img src="docs/screenshots/vantage-promo.webp" alt="A ten-second tour of Vantage: the dark dashboard with live charts and the network path, a client's details, Ctrl K search, and the switch from dark to light" width="100%"></a>
 </p>
 
-<p align="center"><sub>Screenshots show recorded data from a real access point, pseudonymised
-(documentation addresses and MACs, neutral names); the larger access point
-below is generated. See <a href="#develop">Develop</a>.</sub></p>
+<p align="center"><sub>The video and screenshots use recorded data with addresses and names
+replaced. The larger access point further down is generated.</sub></p>
 
-## Highlights
+## What you get
 
-- **Health at a glance.** Six checks (uplink, CPU, memory, Wi-Fi, client
-  signal, storage), each with a one-line reason and a picture along its
-  edge; click one to open what it is about.
-- **A live network path.** Gateway, access point, radios and SSIDs, plus a
-  Wired branch per port, with packets that move with the uplink rate.
-  Click any node for details.
-- **Every client, by name.** Your alias, reverse DNS, mDNS, DHCP or WPS
-  names, or the vendor; signal, link rate, Wi-Fi generation, live traffic
-  and an experience score that says why. Wired devices too.
-- **LuCI, restyled.** Icon rail, breadcrumbs, a <kbd>Ctrl</kbd>+<kbd>K</kbd>
-  palette over every page, light, dark or auto without a flash, and tables
-  that become cards on phones.
-- **Read-only and self-contained.** The dashboard's only write is device
-  names and it never reads Wi-Fi keys; no CDNs or web fonts, nothing loads
-  from the internet.
+Two packages that work together or alone: the theme doesn't need the
+dashboard, and the dashboard on its own works under any LuCI theme.
+
+**The dashboard** (`luci-app-vantage`) is the page you land on after login.
+
+- **Health at a glance.** Six checks: uplink, CPU, memory, Wi-Fi, client
+  signal and storage. Each gives a one-line reason, and clicking it opens
+  the details.
+- **A live network path.** Your internet lines, this device, its radios
+  and SSIDs, and its wired ports, with packets that move at the real
+  uplink rate. Click anything for details.
+- **Every client, by name.** Your alias, a name from DHCP, mDNS, WPS or
+  reverse DNS, or else the vendor. You get signal, link rate, Wi-Fi
+  generation, live traffic and an experience score that explains itself.
+  Wired devices are listed too, with their port and link speed.
+- **Live charts.** Five minutes of throughput for the uplink and every
+  radio, in the chart style you choose, plus radio cards, top talkers and
+  a system tile.
+- **Firewall overview.** What's open from the internet, which zones reach
+  which, and warnings for risky setups. Every item links to the LuCI page
+  that changes it.
+- **Your own layout.** Drag, resize or hide tiles, with one layout per
+  screen size. With the Vantage theme, your layout and chart style are
+  saved on the router, so every browser matches.
+
+**The theme** (`luci-theme-vantage`) restyles every LuCI page.
+
+- **Quick to get around.** An icon rail, breadcrumbs, and
+  <kbd>Ctrl</kbd>+<kbd>K</kbd> or <kbd>/</kbd> to search every page you
+  can open.
+- **Good on phones.** A bottom bar replaces the rail, and tables become
+  cards.
+- **Light, dark or auto**, with no flash on load. Your choice and your
+  background picks are saved on the router, so every browser matches.
+- **Tidier stock pages.** One control size, one tab style, field help
+  folded to its first line, spare row actions tucked into a ⋯ menu, and
+  coloured firewall verdicts.
+- **Its own login page**, with moving packets, a starfield or nothing.
+
+Nothing loads from the internet: Vantage uses system fonts and its own
+icons, with no CDNs or frameworks. The dashboard's only write is device
+names, and it never reads Wi-Fi keys. See [Security](#security).
 
 ## Install
 
-For OpenWrt 25.12 (apk). Both packages are architecture-independent, so
-the same files install on any target. For 24.10 (opkg, signed `.ipk`
-repository), see [OpenWrt 24.10](docs/INSTALL.md#openwrt-2410).
+These steps are for OpenWrt 25.12 (apk). On 24.10, follow the
+[24.10 steps](docs/INSTALL.md#openwrt-2410). Both packages are
+architecture-independent, so the same files install on any router.
 
-From the signed repository, on the router (once; later versions come with
-`apk upgrade`):
+**From the signed repository.** Run this on the router. You only need to
+do it once; later versions come with `apk upgrade`.
 
 ```sh
 wget -O /etc/apk/keys/vantage-signing.pem https://anothadev.github.io/luci-theme-vantage/vantage-signing.pem
@@ -56,10 +82,10 @@ echo 'https://anothadev.github.io/luci-theme-vantage/25.12/packages.adb' >> /etc
 apk update && apk add luci-theme-vantage luci-app-vantage
 ```
 
-Or from the files of a
-[release](https://github.com/anothaDev/luci-theme-vantage/releases) (or
-[your own build](#build)), with the files in the current directory
-(`192.0.2.1` stands for your router's address):
+**From release files.** Download them from a
+[release](https://github.com/anothaDev/luci-theme-vantage/releases) or
+[build your own](#build), then run this in the same folder. `192.0.2.1`
+stands for your router's address.
 
 ```sh
 sha256sum -c --ignore-missing SHA256SUMS
@@ -67,17 +93,20 @@ scp -O luci-theme-vantage-*.apk luci-app-vantage-*.apk root@192.0.2.1:/tmp/
 ssh root@192.0.2.1 'apk add --no-network --allow-untrusted /tmp/luci-theme-vantage-*.apk /tmp/luci-app-vantage-*.apk'
 ```
 
-Log out of LuCI and back in; the dashboard is now the landing page. On a
-fresh install the theme selects itself; an upgrade never overrides the
-theme you chose (System → System → Language and Style). Removing the theme
-switches LuCI back to Bootstrap.
+Log out of LuCI and back in, and the dashboard is your landing page. A
+fresh install switches to the theme for you. An upgrade keeps the theme
+you chose, and removing the theme switches LuCI back to Bootstrap.
 
-**[The install guide](docs/INSTALL.md)** covers requirements, verifying
-the packages, installing only one of them, upgrades, uninstalling,
+**[The install guide](docs/INSTALL.md)** covers the rest: requirements,
+verifying packages, installing just one of them, upgrades, uninstalling,
 building Vantage into your own firmware, troubleshooting, and a
 ready-made prompt for installing with a coding agent.
 
 ## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/dashboard-dark.png" alt="The Vantage dashboard in dark mode: six health cards with their own icons and edge charts, the signal card flagging a weak client, the network path from the gateway through the access point to its radios and SSIDs, live throughput in download and upload colours, and radio cards" width="100%">
+</p>
 
 <table>
   <tr>
@@ -86,14 +115,14 @@ ready-made prompt for installing with a coding agent.
   </tr>
   <tr>
     <td align="center"><sub>Light mode: health checks, network path and live throughput</sub></td>
-    <td align="center"><sub>Client inspector with experience score, signal and link details</sub></td>
+    <td align="center"><sub>Client details: experience score, signal and link info</sub></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/screenshots/palette.png" alt="Command palette listing pages and Appearance actions that match a search"></td>
     <td width="50%"><img src="docs/screenshots/network-path.png" alt="Network path of a quad-radio access point with ten SSIDs and a Wired branch of six ports"></td>
   </tr>
   <tr>
-    <td align="center"><sub><kbd>Ctrl</kbd>+<kbd>K</kbd> palette: pages and Appearance actions, fuzzy matched</sub></td>
+    <td align="center"><sub><kbd>Ctrl</kbd>+<kbd>K</kbd> search over pages and Appearance options</sub></td>
     <td align="center"><sub>A larger access point (generated): four radios, ten networks, six wired ports</sub></td>
   </tr>
   <tr>
@@ -101,81 +130,64 @@ ready-made prompt for installing with a coding agent.
     <td width="50%"><img src="docs/screenshots/channel-analysis.png" alt="Channel Analysis page showing neighbouring networks"></td>
   </tr>
   <tr>
-    <td align="center"><sub>Stock Status page under the theme, with a combined memory bar</sub></td>
-    <td align="center"><sub>Stock Channel Analysis (neighbour networks are generated)</sub></td>
+    <td align="center"><sub>LuCI's Status page under the theme, with a combined memory bar</sub></td>
+    <td align="center"><sub>LuCI's Channel Analysis page (neighbouring networks are generated)</sub></td>
   </tr>
   <tr>
     <td width="50%" valign="middle"><img src="docs/screenshots/login.png" alt="The theme's login page with moving packet traces on a dark grid"></td>
     <td width="50%" align="center"><img src="docs/screenshots/mobile.png" alt="Dashboard on a phone-sized screen" width="40%"></td>
   </tr>
   <tr>
-    <td align="center"><sub>Login page with grid packets (or a starfield, or nothing)</sub></td>
-    <td align="center"><sub>Phone layout with the bottom bar and the Wi-Fi/Wired switch</sub></td>
+    <td align="center"><sub>Login page with grid packets, a starfield or nothing</sub></td>
+    <td align="center"><sub>Phone layout with the bottom bar and Wi-Fi/Wired switch</sub></td>
   </tr>
 </table>
 
-## What you get
+## Security
 
-Two packages. Installed on its own, the app works under any LuCI theme;
-with both installed, the dashboard goes with the Vantage theme and LuCI's
-own page opens under another one. The theme is useful without the app.
+Vantage is built to read your router, not change it. The full rules are in
+the [spec](docs/SPEC.md#6-security-requirements).
 
-**`luci-theme-vantage`**, the shell:
+- **The dashboard only reads.** Its permissions cover read methods and
+  can't run commands. Its one write is device names, stored in
+  `/etc/config/vantage`.
+- **Wi-Fi keys stay out.** Wireless settings come through Vantage's own
+  plugin, which leaves out Wi-Fi keys, SAE passwords and RADIUS secrets.
+- **The theme writes one file.** Appearance, and the dashboard's layout
+  and chart style, go to `/etc/config/vantage_theme` and nowhere else. A
+  user without that permission keeps their picks in their own browser.
+- **Extras are separate permissions.** Renaming devices
+  (`luci-app-vantage-names`) and reverse DNS (`luci-app-vantage-rdns`) are
+  their own groups, so you can leave them out. The firewall overview only
+  appears for users who already hold LuCI's firewall permission.
+- **Checked by tests.** They reject HTML built from data, render the
+  theme's templates with hostile input, confirm the permissions match what
+  the code calls, and keep real addresses, MACs and SSIDs out of the
+  repository.
 
-- Icon rail with a flyout per category; a bottom bar and sheet on phones
-- Breadcrumb, page tabs (the current crumb also switches between them),
-  and a <kbd>Ctrl</kbd>+<kbd>K</kbd> / <kbd>/</kbd> command palette with
-  fuzzy search over every page you can open and the Appearance choices
-- Light, dark and auto modes, applied before first paint (no flash)
-- Host chip (hostname and model), LuCI's indicators (including the unsaved
-  changes count) as keyboard-accessible pills
-- Its own login page, and restyled stock pages, forms, tables, charts and
-  status icons; tables become cards on small screens
-- Tidier stock pages: a table row with a main action (Edit, else the
-  highlighted one) and two or more others shows the main one and folds
-  the others into a ⋯ menu; Add, highlighted and an app's own buttons
-  stay visible, and rows of equal actions (Startup, Processes) stay as
-  LuCI drew them; firewall verdicts are coloured badges, red only where
-  the internet-facing zone accepts input; the nftables chains are cards,
-  and tooltips are never cut off
-- One control size (bigger on touch screens) for fields, buttons and
-  every tab, one tab style at every level, and field help folded to its
-  first line
-- System fonts, self-drawn SVG icons, no CDNs or frameworks
+One known exception: LuCI's own header adds its `L.env` script to every
+page, including the menu tree on logged-out 404 pages. That's upstream
+behaviour, tracked in [`docs/luci-contract.md`](docs/luci-contract.md).
 
-**`luci-app-vantage`**, the dashboard at `admin/dashboard` (the landing page):
+## Compatibility
 
-- Health verdict with checks for uplink, CPU, memory, Wi-Fi, client signal
-  and storage, each with its own icon, a one-line reason and a picture
-  along its edge (the last minutes of download and CPU, how full memory
-  and storage are, clients by band or airtime, how client signals
-  spread); a check opens what it is about (a weak client's details, or
-  the list when several are weak)
-- Network path from gateway to access point, radios and SSIDs, and a
-  Wired branch for the Ethernet ports; click any node for details. Behind
-  it the login page's packets or starfield move with the live uplink
-  rate (or nothing, as picked under Appearance)
-- Live throughput for the uplink and every radio (last 5 minutes; uplink
-  and CPU update every 2 seconds), in the chart style you pick under
-  Customize (overlaid, log scale, mirrored or separate lanes), and radio
-  cards with channel, width, TX power and noise
-- Clients with human names (your alias, reverse DNS, mDNS, DHCP hints, WPS
-  device name, vendor, or "Private device" for randomised MACs), signal,
-  link rate, Wi-Fi generation, live traffic and an experience score with
-  its reason; filters by band, activity, weak signal and new clients.
-  Wired devices too, from the bridge's table: port, link speed, traffic
-  when a device has its port to itself (else the port's total), the ports
-  of a swconfig switch behind a VLAN port, and when each was last heard
-- Client inspector: signal history, link rates, capabilities, traffic,
-  retries; rename a device in place
-- Top talkers, wireless networks, system tile (CPU per core, memory,
-  storage, firmware)
-- Firewall overview (Network → Firewall → Overview): what is open from the
-  internet, which zone reaches which, what is switched off or ignored, and
-  warnings for the risky cases, read the way firewall4 reads the config;
-  every item links to the LuCI page that changes it
-- Your own layout: drag tiles, change their width or hide them; saved in
-  the browser for each screen size, with a reset to the default
+| OpenWrt | Status |
+|---|---|
+| 25.12 | Built with the 25.12 SDK and tested |
+| 24.10 | Signed `.ipk` packages, built with the 24.10 SDK and tested on a 24.10.8 router without Wi-Fi ([install](docs/INSTALL.md#openwrt-2410)) |
+
+## Languages
+
+Vantage is available in English and Simplified Chinese (dashboard
+translation by [@ntbowen](https://github.com/ntbowen)). Each language
+installs as its own packages, for example
+`apk add luci-i18n-vantage-zh-cn luci-i18n-vantage-theme-zh-cn`; see
+[Languages](docs/INSTALL.md#languages) in the install guide.
+
+Translations are very welcome. In a fork, run
+`dev/i18n/update.sh --add <lang>`, translate the two new `.po` files and
+open a pull request that touches only `po/` files.
+[Translations](CONTRIBUTING.md#translations) has the details.
 
 ## Build
 
@@ -185,30 +197,18 @@ With podman and the official OpenWrt SDK image:
 dev/build/sdk-build.sh 25.12.4          # builds HEAD into dist/25.12.4/
 ```
 
-The script builds from a clean clone of the commit in an SDK image pinned
-by digest, so the same commit, SDK release and image always produce
-byte-identical packages. It checks every package against the commit's
-source (`security-tests/verify_built_apk.js`) before writing it to
-`dist/<release>/`, next to `SHA256SUMS` and a `BUILDINFO` with the build
-inputs. Optional index signing and the details are in the
+The same commit and SDK always produce byte-identical packages, and each
+package is checked against the source before it reaches `dist/`. Signing
+and the other details are in the
 [install guide](docs/INSTALL.md#build-from-source).
 
 ## Develop
 
-The UI is developed offline against recorded device data, never against a
-live device:
-
-1. **Replay** – `dev/replay/` serves the complete LuCI UI on `127.0.0.1`
-   from a recording of a real LuCI session (ubus replies, HTTP responses
-   and static files; the format is in the replay's README) or from
-   hand-written fixtures, with the theme and app loaded from this tree;
-   reload to see an edit. Save & Apply works against an in-memory overlay.
-   Recordings stay outside the repository.
-2. **Demo mode** – `--demo` pseudonymises the recording as it loads:
-   documentation MACs and addresses (`00:00:5E:00:53:xx`, `192.0.2.0/24`,
-   `2001:db8::/32`), neutral hostname, SSIDs and client names. The
-   screenshots above were taken this way, the larger access point with
-   `--big`.
+You don't need a router to work on Vantage. The replay in `dev/replay/`
+serves the full LuCI interface from a recording or hand-written fixtures,
+with the theme and app loaded from this repository, so you can reload to
+see an edit. `--demo` swaps real addresses and names for documentation
+values, which is how the screenshots were made.
 
 ```sh
 node dev/replay/server.js --mirror ../vantage-mirror --port 8106 --demo \
@@ -216,96 +216,24 @@ node dev/replay/server.js --mirror ../vantage-mirror --port 8106 --demo \
     --app-dir luci-app-vantage
 ```
 
-See [`dev/replay/README.md`](dev/replay/README.md) for all options,
-[`docs/SPEC.md`](docs/SPEC.md) for the product and
-[`docs/luci-contract.md`](docs/luci-contract.md) for what LuCI expects from a
-theme. `dev/icons/build.js` generates the status icon set; `prototypes/`
-holds the design prototypes the packages were made from. Coding agents
-working on the repository should read [`AGENTS.md`](AGENTS.md).
-
-Checks:
-
-```sh
-node --test tests/
-dev/i18n/update.sh --check
-node security-tests/check_dom_sinks.js
-node security-tests/check_private_addresses.js [--require-mirror --mirror ../vantage-mirror]
-node security-tests/test_templates.js
-node security-tests/test_acl_policy.js
-```
-
-## Security
-
-- **Read-only dashboard.** The app's rpcd ACL grants read methods only
-  (system, network, iwinfo, hostapd status, host hints, mDNS, `/proc/stat`,
-  the kernel's route to the internet and LuCI's swconfig switch port state) and
-  no `file.exec`. Wireless configuration comes from the app's own rpcd
-  ucode plugin (`luci.vantage wireless`), which leaves out Wi-Fi keys,
-  SAE passwords and RADIUS secrets. Reverse DNS (`network.rrdns lookup`,
-  which lets its holder aim the device's DNS queries at any server) is a
-  separate, optional group, `luci-app-vantage-rdns`. The one write, device
-  names, goes through the plugin's `set_alias`, which validates the name
-  and MAC on the device and writes only `/etc/config/vantage` (at most 512
-  names); it is in its own group, `luci-app-vantage-names`. No group grants
-  uci writes. The firewall overview reads the `firewall` config (and the
-  interface status, to find the uplink) and is
-  shown only to sessions that hold LuCI's own `luci-app-firewall` group,
-  which already reads and changes that config; the app grants nothing for
-  it.
-- **No markup from data.** Every DOM node is built with `E()` and text
-  nodes; `check_dom_sinks.js` rejects `innerHTML` and other HTML sinks.
-- **Templates.** `test_templates.js` renders the theme's templates with
-  hostile input and checks that markup stays stable, inline scripts carry
-  no data, the login error is generic and the theme adds nothing about the
-  device to logged-out pages. LuCI's core header still adds its `L.env`
-  script to every page (on anonymous 404 pages including the menu tree);
-  that is upstream behaviour, tracked as a known failure, see
-  `docs/luci-contract.md` section 2.
-- **ACL policy.** `test_acl_policy.js` checks that the ACL grants exactly
-  the methods the app declares, and nothing more.
-- **No private data in the tree.** `check_private_addresses.js` rejects
-  private IPv4/IPv6 addresses, MACs outside the documentation ranges, and
-  the hostnames and SSIDs recorded from the real device.
-
-## Compatibility
-
-| OpenWrt | Status |
-|---|---|
-| 25.12 | Built with the 25.12 SDK and tested |
-| 24.10 | Signed `.ipk` packages since 1.0.8, built with the 24.10 SDK and tested on a 24.10.8 router without Wi-Fi ([install](docs/INSTALL.md#openwrt-2410)) |
-
-## Languages
-
-Available: English and Simplified Chinese (dashboard, thanks to
-[@ntbowen](https://github.com/ntbowen)). Translations are very welcome.
-
-To add a language: fork the repository, run
-`dev/i18n/update.sh --add <lang>` (a LuCI language code such as `de` or
-`zh_Hans`), translate the two new `.po` files and open a pull request
-that touches only `po/` files. Preview your work in the replay with
-`--lang <lang>`. The details are under
-[Translations](CONTRIBUTING.md#translations).
-
-Each translation installs as its own packages, e.g.
-`apk add luci-i18n-vantage-de luci-i18n-vantage-theme-de`; see
-[Languages](docs/INSTALL.md#languages) in the install guide.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) has the setup and the checks to run,
+[`docs/SPEC.md`](docs/SPEC.md) describes the product, and
+[`docs/luci-contract.md`](docs/luci-contract.md) lists what LuCI expects
+from a theme. Coding agents should read [`AGENTS.md`](AGENTS.md).
 
 ## Contributing
 
 Issues and pull requests are welcome; see
-[`CONTRIBUTING.md`](CONTRIBUTING.md). A bug report should include your
-OpenWrt version (`cat /etc/openwrt_release`), your browser, and
-screenshots taken with the replay's `--demo` mode or with personal data
-removed: no real IP addresses, MACs or SSIDs. Report security problems
-privately as described in [`SECURITY.md`](SECURITY.md), not in a public
-issue.
+[`CONTRIBUTING.md`](CONTRIBUTING.md). For a bug report, include your
+OpenWrt version (`cat /etc/openwrt_release`), your browser, and screenshots
+with personal data removed: no real IP addresses, MACs or SSIDs. Report
+security problems privately as described in [`SECURITY.md`](SECURITY.md),
+not in a public issue.
 
-What changed in each release is in [`CHANGELOG.md`](CHANGELOG.md).
-Planned work and ideas are in [`docs/ROADMAP.md`](docs/ROADMAP.md); next
-up is searching clients, radios and networks with <kbd>Ctrl</kbd>+<kbd>K</kbd>.
+Past releases are in [`CHANGELOG.md`](CHANGELOG.md), and planned work is in
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## License
 
-GNU General Public License v3.0 or later (GPL-3.0-or-later), see
-[`LICENSE`](LICENSE) and
+GPL-3.0-or-later. See [`LICENSE`](LICENSE) and
 [`luci-theme-vantage/NOTICE`](luci-theme-vantage/NOTICE).

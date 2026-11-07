@@ -39,8 +39,9 @@ In scope:
   example escaping, or information shown to visitors who are not logged in
 - the theme's and the dashboard's JavaScript, for example markup injection
   through host names, SSIDs or other data a client controls
-- the dashboard's rpcd ACL: permissions broader than documented, or writes
-  outside `/etc/config/vantage`
+- the rpcd ACLs: permissions broader than documented, or writes outside
+  `/etc/config/vantage` (the dashboard) and `/etc/config/vantage_theme`
+  (the theme)
 - packaging: the install and removal scripts, file permissions
 - the dev tooling that handles recorded device data (`dev/replay/`),
   for example real identifiers leaking into demo output or the

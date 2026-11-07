@@ -644,6 +644,42 @@ test('other lines: each node shows its name, gateway and live rates, wired into 
 	assert.equal(h.gwKicker.textContent, 'Internet');
 });
 
+test('no Wi-Fi: the path has the Wired branch too, even beside a network called wired (#98)', t => {
+	const self = Object.create(view);
+	const host = (mac, port, extra) => Object.assign({ mac: '00:00:5e:00:53:' + mac, name: mac, nameSource: 'mac', port, shared: false, speed: null, gateway: false }, extra);
+	const wan = LINE('wan', 'eth1', 10);
+	const hosts = [ host('01', 'lan5'), host('02', 'lan5'), host('03', 'lan5'), host('04', 'lan6'), host('05', 'eth1', { gateway: true }) ];
+	self.m = { wired: true, networks: [ { name: 'lan', proto: 'static', dev: 'br-lan', up: true, ipv4: '192.0.2.1/24' }, { name: 'wired', dev: 'br-wired', up: true } ],
+		radios: [], ssids: [], wiredHosts: hosts, device: { model: 'Router', uptime: 1 }, uplink: wan, uplinks: [ wan ] };
+	self.st = { uplinkRate: null, devRates: { lan5: { rx: 1000, tx: 3000 }, 'br-lan': { rx: 1, tx: 2 } } };
+	const nodes = [];
+	self.el = { path: { childNodes: [], classList: { toggle() {} }, setAttribute() {}, getAttribute() { return null; }, insertBefore(c) { nodes.push(c); return c; } }, wires: {}, flows: {} };
+	const key = self.heroKey();
+	assert.match(key, /\nwired=lan5,lan6\n/);
+	const savedL = global.L;
+	global.L = { url: () => '/network' };
+	t.after(() => { if (savedL === undefined) delete global.L; else global.L = savedL; });
+	withDom(() => {
+		const bare = global.E;
+		global.E = (...args) => Object.assign(bare(...args), { getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }, setAttribute(k, v) { this.attrs[k] = v; } });
+		self.buildHeroNodes(key);
+		const h = self.hero;
+		assert.deepEqual(h.radios.map(b => b.id), [ 'lan', 'wired', ':wired' ], 'beside the networks, and not mistaken for one');
+		const b = h.radios[2];
+		assert.deepEqual(b.ssids.map(sn => sn.port), [ 'lan5', 'lan6' ]);
+		self.updateHero();
+		assert.equal(b.title.textContent, '4 devices', 'the hosts on its ports, not the gateway');
+		assert.deepEqual(b.ssids.map(sn => [ sn.name.textContent, sn.count.textContent ]), [ [ 'lan5', '3 devices' ], [ 'lan6 · 04', '—' ] ], 'one host alone on a port goes by its name');
+		assert.equal(h.radios[0].title.textContent, 'lan', 'the networks still fill in');
+		const keys = self.wireList().map(w => w.key);
+		assert.equal(new Set(keys).size, keys.length, 'one wire per key');
+		assert.ok(keys.includes('r:wired') && keys.includes('r::wired') && keys.includes('s::wired:port:lan6'));
+	});
+	/* a port that comes or goes rebuilds the path */
+	hosts.push(host('06', 'lan7'));
+	assert.notEqual(self.heroKey(), key);
+});
+
 test('other lines: the uplink drawer shows the line asked for, its rates and route metric', () => {
 	const self = Object.create(view);
 	const wan = LINE('wan', 'eth1', 10), wanb = LINE('wanb', 'eth2', 20);

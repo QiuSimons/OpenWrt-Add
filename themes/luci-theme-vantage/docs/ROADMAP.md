@@ -35,9 +35,8 @@ present) and results must be built as text nodes like everything else.
 
 ## Later
 
-- **Tunnels and proxies in the network path:** show active tunnel
-  interfaces (TUN, WireGuard, OpenVPN) between the device and the
-  internet with their live rates, and name known proxy suites (OpenClash,
+- **Proxies in the network path:** a full-tunnel VPN already shows on its
+  line; name known proxy suites (OpenClash,
   PassWall, Mihomo, sing-box) with their running state, from a small
   table of service names. Needs one read-only ACL addition (the list of
   running services). Suite internals (nodes, rules) stay in their own

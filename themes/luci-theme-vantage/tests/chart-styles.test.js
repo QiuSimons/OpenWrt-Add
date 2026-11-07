@@ -178,3 +178,13 @@ test('chart history: restored values above the rate ceiling are dropped; scales 
 			}
 		}
 });
+
+test('chartPick: the router first for a login that may save, this browser first for any other', () => {
+	const pick = series.chartPick.bind(series), d = series.CHART_STYLES[0];
+	assert.equal(pick('log', 'lanes', true), 'log');
+	assert.equal(pick('log', 'lanes', false), 'lanes');
+	assert.equal(pick('log', null, false), 'log', 'this browser has none');
+	assert.equal(pick('', 'lanes', true), 'lanes', 'a browser keeps its own until someone saves');
+	assert.equal(pick('nope', 'nope', true), d);
+	assert.equal(pick(null, null, false), d);
+});

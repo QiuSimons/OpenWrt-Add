@@ -6,18 +6,42 @@ Each release ships both packages, `luci-theme-vantage` and
 <https://github.com/anothaDev/luci-theme-vantage/releases> and in the
 [signed repositories](https://anothadev.github.io/luci-theme-vantage/).
 
-## Unreleased
+## 1.0.16 - 2026-11-06
 
+- **Theme: Appearance is saved on the router** (#89,
+  [@smallprogram](https://github.com/smallprogram)). The colour mode
+  (auto, light or dark), the login page's background and the dashboard's
+  network path background were kept in each browser, so another computer
+  showed the defaults. They are now saved in `/etc/config/vantage_theme`
+  and the same in every browser, the login page included, from the first
+  paint. With the theme installed, the dashboard's layout and chart style
+  are saved there too, when you press Done under Customize; each screen
+  size keeps its own layout. A browser keeps its earlier picks until
+  someone changes the setting. Saving needs the theme's new rpcd group,
+  `luci-theme-vantage` (root has it), which may write that one config
+  only; without it a
+  change stays in that browser, as before, and Appearance says so. Logins
+  already open get the group too, when the install reloads rpcd.
+- **Dashboard: right download rate on PPPoE with flow offloading** (#92,
+  [@Omoinemie](https://github.com/Omoinemie)). Offloaded downloads skip
+  `pppoe-wan`'s counters, so the uplink read a few kbit/s during a speed
+  test. A PPPoE line now counts on the port under it.
+- **Dashboard: the network path at medium widths.** Between about 860 and
+  1050 pixels the rates slid under the device card and a long tag ran out
+  of its card.
+- **Esc in the Ctrl K search stays there.** It also closed a drawer behind
+  the search.
 - **Dashboard: every line to the internet in the network path** (#88,
   [@Bryce199805](https://github.com/Bryce199805)). With two or more WANs
   (failover by metric, or mwan3) the path showed one, and on a router
   without Wi-Fi the others appeared among the local networks. Every up
   interface with a default route of its own now sits on the internet
-  side, each with its own wire into the device and its live rates, and
-  opens its own details; the one whose default route has the lowest
-  metric is marked "default route" (with mwan3, its own rules decide where
-  traffic goes). IPv6 on the same device, or on the port under a PPPoE
-  session (`wan6`), stays part of its line. The throughput chart has a row
+  side (the main one and up to four more), each with its own wire into the
+  device and its live rates, and opens its own details; the one whose
+  default route has the lowest metric is marked "default route", and on a
+  tie the one the kernel takes (with mwan3, its own rules decide where
+  traffic goes). IPv6 on the same device, on the port under a PPPoE
+  session (`wan6`), or through 6rd, 6in4 or 6to4 stays part of its line. The throughput chart has a row
   per line, and each line keeps its own history across a failover. A WAN
   that is down shows nowhere until it comes up again. With one line the
   path is as before.

@@ -204,7 +204,7 @@ test('names group: luci.vantage set_alias, uci read on vantage, no uci write', (
 	assert.deepEqual(g.write, { ubus: WRITE_UBUS });
 });
 
-test('no uci write grant anywhere; the only non-read grant is the plugin\'s set_alias', () => {
+test('no uci write grant in the app; its only non-read grant is the plugin\'s set_alias', () => {
 	const extra = [];
 	for (const [ name, g ] of Object.entries(acl)) {
 		for (const kind of [ 'read', 'write' ]) {

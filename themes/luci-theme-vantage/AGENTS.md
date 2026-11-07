@@ -46,7 +46,8 @@ Two OpenWrt 25.12 LuCI packages plus offline tooling. No npm, no
 5. **Templates escape everything.** `{{ }}` does not escape: use
    `entityencode(v, true)`, and `striptags()` for titles. Never output
    `fuser`. On pages for visitors who are not logged in (login, 404,
-   CSRF) the theme adds nothing about the device (LuCI's core header
+   CSRF) the theme adds nothing about the device, only the login page's
+   colour mode and background (LuCI's core header
    still prints its `L.env` script; that is upstream, see
    `docs/luci-contract.md` section 2). Inline scripts carry no data. Stay within
    the ucode subset that `dev/replay/ut.js` compiles. `test_templates.js`
@@ -59,8 +60,9 @@ Two OpenWrt 25.12 LuCI packages plus offline tooling. No npm, no
    sits in its own optional group (`luci-app-vantage-rdns`); the names
    group (`luci-app-vantage-names`) grants the plugin's `set_alias`, which
    validates and writes `/etc/config/vantage` itself, and reading that
-   config. No group
-   grants uci writes; no `file.exec`. The plugin's name rules must match
+   config. No group of the app grants uci writes; the theme's own group
+   (`luci-theme-vantage`) writes `/etc/config/vantage_theme` and nothing
+   else. No `file.exec`. The plugin's name rules must match
    `names.js` and `dev/replay/vantage-plugin.js` (`tests/plugin.test.js`).
    Adding a call means changing the view, the ACL JSON and the allowlist in
    `security-tests/test_acl_policy.js` together, and saying why in the

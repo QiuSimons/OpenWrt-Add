@@ -827,3 +827,76 @@ test('build: a host behind a switch VLAN has a switch port\'s link, not the CPU 
 	assert.deepEqual([ build({ switch0: [ port(1, false, 0) ] })[0].carrier ], [ false ], 'none with a link: down');
 	assert.deepEqual([ build({})[0].speed, build({})[0].carrier ], [ null, true ], 'not answered: no speed, the port\'s carrier');
 });
+
+/* review of 1.0.16 */
+const up = (name, proto, dev, target, extra) => Object.assign({ interface: name, up: true, proto, device: dev, l3_device: dev,
+	route: [ { target, mask: 0, nexthop: target === '::' ? '::' : '192.0.2.1' } ] }, extra);
+
+test('a metric tie goes to the line the kernel takes, and the other line stays', () => {
+	const ifaces = [ up('wan', 'dhcp', 'eth1', '0.0.0.0'), up('wanb', 'dhcp', 'eth2', '0.0.0.0') ];
+	const kernel = [ { family: 4, dev: 'eth2', metric: 0 } ];
+	const main = model.resolveUplink(ifaces, {}, [], null, kernel);
+	assert.equal(main.iface, 'wanb');
+	assert.deepEqual(model.extraUplinks(ifaces, {}, [], main, null, kernel).map(x => x.iface), [ 'wan' ]);
+	assert.equal(model.resolveUplink(ifaces, {}, [], null, null).iface, 'wan', 'no answer: by name, as before');
+	/* the metric still decides first */
+	const lower = [ up('wan', 'dhcp', 'eth1', '0.0.0.0', { metric: 10 }), up('wanb', 'dhcp', 'eth2', '0.0.0.0', { metric: 20 }) ];
+	lower.forEach(i => { i.route[0].metric = i.metric; });
+	assert.equal(model.resolveUplink(lower, {}, [], null, [ { family: 4, dev: 'eth2', metric: 20 } ]).iface, 'wan');
+});
+
+test('6rd, 6in4 and 6to4 IPv6 belongs to the IPv4 line, not the local networks', () => {
+	for (const proto of [ '6rd', '6in4', '6to4' ]) {
+		const dev = `${proto}-wan6`, ifaces = [ up('wan', 'dhcp', 'eth1', '0.0.0.0'), up('wan6', proto, dev, '::', { 'ipv6-address': [ { address: '2001:db8::2', mask: 64 } ] }),
+			{ interface: 'lan', up: true, proto: 'static', device: 'br-lan', l3_device: 'br-lan' } ];
+		const kernel = [ { family: 4, dev: 'eth1', metric: 0 }, { family: 6, dev, metric: 0 } ];
+		const main = model.resolveUplink(ifaces, {}, [], null, kernel);
+		assert.equal(main.iface, 'wan', proto);
+		assert.deepEqual(main.ifaces, [ 'wan', 'wan6' ], proto);
+		assert.ok(main.ipv6.includes('2001:db8::2/64'), proto);
+		assert.equal(main.tunnel, null, `${proto} is not a VPN`);
+		assert.deepEqual(model.extraUplinks(ifaces, {}, [], main, null, kernel), [], proto);
+		assert.deepEqual(model.networks(ifaces, [ main ]).map(n => n.name), [ 'lan' ], proto);
+	}
+});
+
+test('with two lines, 6rd stays where it was: there is no telling which it rides', () => {
+	const ifaces = [ up('wan', 'dhcp', 'eth1', '0.0.0.0'), up('wanb', 'dhcp', 'eth2', '0.0.0.0'), up('wanb6', '6rd', '6rd-wanb', '::') ];
+	const main = model.resolveUplink(ifaces, {}, [], null, null);
+	assert.deepEqual(main.ifaces, [ 'wan' ]);
+	assert.deepEqual(model.networks(ifaces, [ main ].concat(model.extraUplinks(ifaces, {}, [], main))).map(n => n.name), [ 'wanb6' ]);
+});
+
+test('a WireGuard IPv6 default is still not part of the line', () => {
+	const ifaces = [ up('wan', 'dhcp', 'eth1', '0.0.0.0'), up('wg0', 'wireguard', 'wg0', '::') ];
+	const main = model.resolveUplink(ifaces, {}, [], null, [ { family: 4, dev: 'eth1', metric: 0 } ]);
+	assert.deepEqual(main.ifaces, [ 'wan' ]);
+});
+
+test('PPPoE counts on the port under the session, which offloaded downloads do pass (#92)', () => {
+	const devs = { eth1: { devtype: 'ethernet', statistics: { rx_bytes: 9e9, tx_bytes: 1e9 } }, 'pppoe-wan': { statistics: { rx_bytes: 1e3, tx_bytes: 1e9 } } };
+	const ifaces = [ { interface: 'wan', up: true, proto: 'pppoe', device: 'eth1', l3_device: 'pppoe-wan', route: [ { target: '0.0.0.0', mask: 0, nexthop: '192.0.2.1' } ] } ];
+	const x = model.resolveUplink(ifaces, devs, [], null, null);
+	assert.equal(x.statsDev, 'eth1');
+	assert.equal(x.l3dev, 'pppoe-wan');
+	assert.equal(x.stats.rx_bytes, 9e9);
+	/* the port's counters unknown: the session's, as before */
+	assert.equal(model.resolveUplink(ifaces, { 'pppoe-wan': devs['pppoe-wan'] }, [], null, null).statsDev, 'pppoe-wan');
+	/* DHCP on a port is unchanged */
+	assert.equal(model.resolveUplink([ up('wan', 'dhcp', 'eth1', '0.0.0.0') ], devs, [], null, null).statsDev, 'eth1');
+});
+
+test('two PPPoE sessions on one port keep their own counters', () => {
+	const pppoe = (name, metric) => ({ interface: name, up: true, proto: 'pppoe', device: 'eth0', l3_device: 'pppoe-' + name, metric,
+		route: [ { target: '0.0.0.0', mask: 0, nexthop: '192.0.2.1', metric } ] });
+	const m = model.build({ ifaces: [ pppoe('wan', 10), pppoe('wanb', 20) ], devs: { eth0: { devtype: 'ethernet', statistics: { rx_bytes: 9 } },
+		'pppoe-wan': { statistics: { rx_bytes: 1 } }, 'pppoe-wanb': { statistics: { rx_bytes: 2 } } } });
+	assert.deepEqual(m.uplinks.map(x => x.statsDev), [ 'pppoe-wan', 'pppoe-wanb' ]);
+	assert.deepEqual(m.uplinks.map(x => x.stats.rx_bytes), [ 1, 2 ], 'and their own totals in the drawer');
+});
+
+test('PPPoE on a DSA port stays on that port: the conduit carries the other ports too', () => {
+	const devs = { wan: { devtype: 'dsa', 'hw-tc-offload': true, conduit: 'eth0' }, eth0: {}, 'pppoe-wan': {} };
+	const ifaces = [ { interface: 'wan', up: true, proto: 'pppoe', device: 'wan', l3_device: 'pppoe-wan', route: [ { target: '0.0.0.0', mask: 0, nexthop: '192.0.2.1' } ] } ];
+	assert.equal(model.resolveUplink(ifaces, devs, [], null, null).statsDev, 'wan');
+});

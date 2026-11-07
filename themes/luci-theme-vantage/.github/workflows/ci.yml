@@ -264,7 +264,7 @@ jobs:
           cp "$i"/*.ipk "$i"/Packages "$i"/Packages.gz "$i"/Packages.sig "$i"/SHA256SUMS "site/${SDK_IPK%.*}/"
           cp keys/vantage-signing.pem keys/vantage-24.10.usign.pub site/
           cp dev/build/repo-index.html site/index.html
-          mkdir -p site/screenshots && cp docs/screenshots/*.png site/screenshots/
+          mkdir -p site/screenshots && cp docs/screenshots/*.png docs/screenshots/*.mp4 site/screenshots/
           find site -type f | sort
 
       - name: Upload site

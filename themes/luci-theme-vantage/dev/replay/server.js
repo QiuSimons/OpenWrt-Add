@@ -246,8 +246,9 @@ for (const [ name, file ] of fixtures.configs()) {
 	const values = parseUci(readText(file));
 	if (!store.uciSeed(name, values)) store.uciAddSections(name, values);
 }
-/* uci configs shipped by the app packages, unless the mirror has them */
-for (const d of appDirs) {
+/* uci configs shipped by the app packages and the theme's
+   (/etc/config/vantage_theme), unless the mirror has them */
+for (const d of appDirs.concat(themeDir ? [ path.resolve(themeDir, '../../..') ] : [])) {
 	const cdir = path.join(d, 'root/etc/config');
 	let files = [];
 	try { files = fs.readdirSync(cdir).filter(f => /^[A-Za-z0-9_-]+$/.test(f)); } catch (e) {}
@@ -451,10 +452,27 @@ function buildUrl(...p) {
 	return parts.length ? SCRIPT + '/' + parts.join('/') : SCRIPT + '/';
 }
 
+/* the logged-in session's groups, as rpcd grants them to root (read and
+   write '*'): every group of the packages' rpcd ACL files, for templates
+   that look at ctx.authacl (the theme's Appearance) */
+const ACL_GROUPS = {};
+for (const d of appDirs.concat(themeDir ? [ path.resolve(themeDir, '../../..') ] : [])) {
+	const adir = path.join(d, 'root/usr/share/rpcd/acl.d');
+	let files = [];
+	try { files = fs.readdirSync(adir).filter(f => /^[A-Za-z0-9_.-]+\.json$/.test(f)); } catch (e) {}
+	for (const f of files) {
+		let acl = null;
+		try { acl = JSON.parse(readText(path.join(adir, f))); } catch (e) {}
+		for (const g of Object.keys(acl && typeof acl === 'object' ? acl : {}))
+			if (/^[A-Za-z0-9_.-]+$/.test(g)) ACL_GROUPS[g] = [ 'read', 'write' ];
+	}
+}
+
 /* ucode environment the templates see */
 function templateEnv(req, resolved, loggedIn, form) {
 	const ctx = Object.assign({}, resolved.ctx, {
-		authsession: loggedIn ? SID : null, authtoken: loggedIn ? TOKEN : null, authuser: loggedIn ? 'root' : null
+		authsession: loggedIn ? SID : null, authtoken: loggedIn ? TOKEN : null, authuser: loggedIn ? 'root' : null,
+		authacl: loggedIn ? { 'access-group': Object.assign({}, ACL_GROUPS) } : null
 	});
 	const getenv = k => ({
 		SCRIPT_NAME: SCRIPT, PATH_INFO: '/' + resolved.ctx.request_path.join('/'), DOCUMENT_ROOT: '/www',

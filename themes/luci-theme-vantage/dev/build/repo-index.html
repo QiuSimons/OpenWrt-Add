@@ -151,7 +151,8 @@ section { padding: clamp(56px, 9vw, 104px) 0 0; }
 .feature .copy p { margin-top: 12px; color: var(--text-2); font-size: 17px; }
 .feature .copy ul { margin: 14px 0 0; padding-left: 20px; color: var(--text-2); }
 .feature .copy li + li { margin-top: 4px; }
-.feature figcaption, .pair figcaption { padding: 10px 14px; border-top: 1px solid var(--line); color: var(--text-3); font-size: 13px; }
+.frame video { display: block; width: 100%; height: auto; }
+.frame > figcaption, .feature figcaption, .pair figcaption { padding: 10px 14px; border-top: 1px solid var(--line); color: var(--text-3); font-size: 13px; }
 .pair { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
 .phone { display: grid; gap: clamp(24px, 4vw, 56px); grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; }
 .phone .frame { max-width: 340px; justify-self: center; border-radius: 22px; }
@@ -289,6 +290,20 @@ footer a { color: var(--text-2); }
 		</div>
 	</section>
 
+	<section aria-labelledby="video-h">
+		<div class="wrap">
+			<div class="sec-head">
+				<h2 id="video-h">Vantage in ten seconds</h2>
+			</div>
+			<figure class="frame">
+				<video width="1920" height="1080" controls autoplay muted loop playsinline preload="metadata" poster="screenshots/vantage-promo-poster.png" aria-label="A ten-second tour: the dashboard, a client's details, Ctrl K search, and the switch from dark to light">
+					<source src="screenshots/vantage-promo.mp4" type="video/mp4" media="(prefers-reduced-motion: no-preference)">
+				</video>
+				<figcaption><a href="screenshots/vantage-promo.mp4">Open the video</a> (10 seconds, no sound)</figcaption>
+			</figure>
+		</div>
+	</section>
+
 	<section aria-labelledby="tour-h">
 		<div class="wrap">
 			<div class="sec-head">
@@ -382,7 +397,7 @@ footer a { color: var(--text-2); }
 				<p>CI runs the tests and security checks on every push and pull request, and publishes a release only when its build matches the hashes I committed. The details are in the <a href="https://github.com/anothaDev/luci-theme-vantage#security">README</a> and <a href="https://github.com/anothaDev/luci-theme-vantage/blob/main/SECURITY.md">SECURITY.md</a>.</p>
 			</div>
 			<ul class="trust">
-				<li><strong>Least privilege.</strong> The dashboard's ACL grants exactly the methods it calls. Reverse DNS and device names each sit in a group of their own, and no group grants uci writes.</li>
+				<li><strong>Least privilege.</strong> The dashboard's ACL grants exactly the methods it calls. Reverse DNS and device names each sit in a group of their own, and no dashboard group grants uci writes.</li>
 				<li><strong>No markup from data.</strong> Every element is built with LuCI's <code>E()</code> and text nodes; a check rejects <code>innerHTML</code> and other HTML sinks.</li>
 				<li><strong>Reproducible packages.</strong> The same commit, SDK release and pinned image always give byte-identical packages, checked against the commit's source.</li>
 				<li><strong>Signed repositories.</strong> apk and opkg check the index signature against the project key and each package against its hash.</li>
@@ -420,7 +435,7 @@ opkg-key add /tmp/vantage-24.10.usign.pub
 echo 'src/gz vantage https://anothadev.github.io/luci-theme-vantage/24.10' &gt;&gt; /etc/opkg/customfeeds.conf
 opkg update
 opkg install luci-theme-vantage luci-app-vantage</pre>
-					<p>Translations: <code>opkg install luci-i18n-vantage-&lt;lang&gt;</code> (for example <code>zh-cn</code>).</p>
+					<p>Translations: <code>opkg install luci-i18n-vantage-&lt;lang&gt; luci-i18n-vantage-theme-&lt;lang&gt;</code> (for example <code>zh-cn</code>).</p>
 				</div>
 			</div>
 			<p class="note">Then log out of LuCI and back in; the dashboard is the first page after login. What changed in each release:
