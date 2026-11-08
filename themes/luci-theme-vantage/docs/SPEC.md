@@ -62,14 +62,18 @@ everywhere: theme dir `vantage`, media URL `/luci-static/vantage`, uci
   opens the changes dialog. When the bar runs short of room the host
   chip gives way first, and at 900 px and below the pills shrink (the
   auto-refresh pill to a pause or play sign, the changes pill to its
-  count), so the breadcrumb is cut last. Nothing in the shell pulses.
+  count), so the breadcrumb is cut last. The auto-refresh dot is the only
+  thing in the shell that pulses: a slow, soft ring while refreshing, still
+  while paused, and fast while the dashboard reports a problem: amber while
+  it reconnects or warns, red for an error.
 - **Host chip**: hostname · model (board name when the model string is a
   placeholder), from `system board` via rpc in the menu script; a name
   the other contains (compared without case and punctuation) is left
   out.
 - **Theme toggle**: auto / light / dark, applied in `<head>` before CSS
-  (no flash), exposed as `html[data-darkmode]`. Appearance (this mode, the
-  login and network path backgrounds) is saved on the router for every
+  (no flash), exposed as `html[data-darkmode]`. Appearance (this mode, what
+  shows next to the logo after login, the login and network path
+  backgrounds) is saved on the router for every
   browser, in `/etc/config/vantage_theme` (section `appearance`), by
   sessions holding the theme's rpcd group `luci-theme-vantage` (uci `set`,
   `commit` and `revert` on that config only; rpcd refuses commit and
@@ -134,9 +138,10 @@ everywhere: theme dir `vantage`, media URL `/luci-static/vantage`, uci
 
 ### Pages
 
-- Own **login** (`sysauth.ut`): the mark and an "Authorization Required"
-  heading, generic error, contract-correct form. No system information
-  (no hostname, model or version) for unauthenticated visitors.
+- Own **login** (`sysauth.ut`): the mark and the router's hostname as the
+  heading ("Authorization Required" without one), as LuCI's Bootstrap
+  shows it too; generic error, contract-correct form. No other system
+  information (no model or version) for unauthenticated visitors.
 - All core widgets per contract §5 (dropdown state machine, tabs, modals
   incl. apply countdown, tooltips, dynlist, progress bars, file browser,
   notifications with real fade-out transition, changes dialog).
@@ -396,7 +401,8 @@ text around it so it looks the same size.
   answers, the full poll leaves both to it; if it stops, the full poll
   samples them again.
   A poll updates only what changed and lays nothing out unless a tile
-  changes size. Idle animations (the Live beat, the flow on busy wires)
+  changes size. Idle animations (the status circle's ring, the Live beat,
+  the flow on busy wires)
   use transform and opacity only, so the compositor runs them; with
   reduced motion they stop and busy wires show a static dotted line.
 - ACL: three groups for the app, and the theme's own, below. `luci-app-vantage` (read): `system info/board`,
@@ -464,12 +470,16 @@ text around it so it looks the same size.
   each behind a separate narrow write ACL and a confirmation;
   optional rpcd plugin keeping a small ring buffer for history, alerts.
 - **v3**: topology view, luci-app-statistics integration.
+- **Low-performance mode** ("potato mode", #101): poll what changes
+  slowly (wired hosts, temperatures, radio details) every 30 s instead of
+  every 5 s, and the rest less often, for routers where a refresh costs
+  noticeable CPU.
 
 ## 6. Security requirements
 
 - Templates escape everything request-derived; never echo `fuser`; the
   theme's own markup for unauthenticated renders (login, 404, CSRF) adds
-  nothing about the device. Not in the theme's control: LuCI's core
+  nothing about the device but the login page's hostname. Not in the theme's control: LuCI's core
   `header.ut` prints `L = new LuCI({...})` after the theme header on every
   page, with the LuCI build and package-database time in the `luci.js`
   URL and `nodespec: dispatched`, which on an anonymous 404 is the whole

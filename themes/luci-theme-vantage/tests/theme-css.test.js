@@ -120,12 +120,24 @@ test('720px: phone rules and desktop rules split without a gap, and the menu scr
 	assert.match(menuJs, /this\.mqMobile = window\.matchMedia\('\(max-width: 720px\)'\);/);
 });
 
-test('nothing pulses: the only endless animations are spinners; the compact poll pill is a pause / play button', () => {
+test('only the refresh dot pulses besides spinners: softly, fast while the dashboard reconnects, warns or errs; no login dot (#100)', () => {
 	const endless = themeRules.filter(r => /animation(-iteration-count)?:[^;]*infinite/.test(r.body));
-	assert.ok(endless.length >= 2, 'found the spinners');
+	assert.ok(endless.length >= 4, 'found the spinners and the ring');
 	for (const r of endless)
-		for (const s of r.sel) assert.match(s, /spinning|^#modal_overlay > \.modal/, 'endless animation on ' + s);
-	assert.doesNotMatch(themeCss, /@keyframes vt-live\b/);
+		for (const s of r.sel) assert.match(s, /spinning|^#modal_overlay > \.modal|poll-status"\]\[data-style="active"\]::after$/, 'endless animation on ' + s);
+	const ring = sel => themeRules.find(r => !r.media && r.sel.includes(sel));
+	const sec = r => parseFloat(/animation:\s*\S+\s+([\d.]+)s/.exec(r.body)[1]);
+	const soft = ring('#indicators > span[data-indicator="poll-status"][data-style="active"]::after');
+	const fast = ring('html[data-vt-live="err"] #indicators > span[data-indicator="poll-status"][data-style="active"]::after');
+	assert.match(soft.body, /animation:\s*vt-live-soft\b/);
+	assert.match(fast.body, /animation:\s*vt-live\b/);
+	assert.ok(sec(soft) > sec(fast), 'a problem pulses faster');
+	assert.ok(fast.sel.includes('html[data-vt-alert="warn"] #indicators > span[data-indicator="poll-status"][data-style="active"]::after'), 'a warning: amber and fast, as reconnecting');
+	const red = ring('html[data-vt-alert="err"] #indicators > span[data-indicator="poll-status"][data-style="active"]::after');
+	assert.match(red.body, /var\(--err\)/);
+	assert.equal(sec(red), sec(fast), 'an error: red, as fast');
+	assert.ok(themeRules.indexOf(red) > themeRules.indexOf(fast), 'an error wins over a warning or a reconnect');
+	assert.ok(!themeRules.some(r => r.sel.some(s => /data-style="inactive"/.test(s)) && /animation:/.test(r.body)), 'paused: still');
 	assert.doesNotMatch(themeCss, /vt-login-dot/);
 	/* the dot is a status colour, never the accent */
 	const dot = themeRules.find(r => !r.media && r.sel.includes('#indicators > span[data-indicator="poll-status"][data-style="active"]::before'));

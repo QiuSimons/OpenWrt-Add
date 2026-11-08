@@ -37,9 +37,13 @@ test('the Live beat: behind its dot, invisible unless it animates', () => {
 	assert.match(css, /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*animation: none !important/);
 });
 
-test('nothing pulses while all is fine: the orb on warn and err, the Live beat while reconnecting', () => {
+test('the orb and the Live beat always pulse, slower while all is fine; a paused page keeps a still dot (#100)', () => {
 	const animated = rules.filter(r => /(?:^|;|\s)animation\s*:\s*vt-(ring|beat)\b/.test(r.body)).map(r => r.sel).sort();
-	assert.deepEqual(animated, [ '.vt-app .vt-live-err .vt-live-beat::after', '.vt-app .vt-orb-warn::after, .vt-app .vt-orb-err::after' ]);
+	assert.deepEqual(animated, [ '.vt-app .vt-live-err .vt-live-beat::after', '.vt-app .vt-live-ok .vt-live-beat::after', '.vt-app .vt-orb-warn::after, .vt-app .vt-orb-err::after', '.vt-app .vt-orb::after' ]);
+	const seconds = sel => parseFloat(/animation\s*:\s*\S+\s+([\d.]+)s/.exec(rules.find(r => r.sel === sel).body)[1]);
+	assert.ok(seconds('.vt-app .vt-orb::after') > seconds('.vt-app .vt-orb-warn::after, .vt-app .vt-orb-err::after'), 'attention pulses faster');
+	assert.ok(seconds('.vt-app .vt-live-ok .vt-live-beat::after') > seconds('.vt-app .vt-live-err .vt-live-beat::after'), 'reconnecting beats faster');
+	assert.ok(!rules.some(r => /vt-live-paused/.test(r.sel) && /animation\s*:/.test(r.body)), 'paused: no beat');
 });
 
 test('a band and a name source keep their case inside upper-case labels ("2.4 GHz", "mDNS")', () => {

@@ -267,10 +267,10 @@ test('status enhancers: memory and storage sections are found with and without .
 		bar('Buffered', '10.00 MiB / 2.00 GiB (0%)'), bar('Cached', '100.00 MiB / 2.00 GiB (5%)') ]);
 	const diskTable = () => new N('table', 'table', [ bar('Disk space', '23.55 MiB / 98.33 MiB (23%)') ]);
 	/* 25.12: <div.cbi-section><div.cbi-title><h3>Memory<span.label>Hide</span></h3></div><div><table/></div></div> */
-	const v2512 = name => new N('div', 'cbi-section', [ new N('div', 'cbi-title', [ new N('h3', '', [ name, new N('span', 'label', [ 'Hide' ]) ]) ]),
-		new N('div', '', [ name === 'Memory' ? memTable() : diskTable() ]) ]);
+	const v2512 = (name, t) => new N('div', 'cbi-section', [ new N('div', 'cbi-title', [ new N('h3', '', [ name, new N('span', 'label', [ 'Hide' ]) ]) ]),
+		new N('div', '', [ t || (name === 'Memory' ? memTable() : diskTable()) ]) ]);
 	/* LuCI 24.10: <div.cbi-section><h3>Memory</h3><div><table/></div></div> */
-	const v2410 = name => new N('div', 'cbi-section', [ new N('h3', '', [ name ]), new N('div', '', [ name === 'Memory' ? memTable() : diskTable() ]) ]);
+	const v2410 = (name, t) => new N('div', 'cbi-section', [ new N('h3', '', [ name ]), new N('div', '', [ t || (name === 'Memory' ? memTable() : diskTable()) ]) ]);
 
 	for (const [ release, make ] of [ [ '25.12', v2512 ], [ '24.10', v2410 ] ]) {
 		const view = new N('div', '', [ make('Memory'), make('Storage'), make('System') ]);
@@ -298,6 +298,27 @@ test('status enhancers: memory and storage sections are found with and without .
 		/* a second pass (the next poll) finds nothing left to do */
 		kit.enhanceMemory();
 		assert.equal(mem.children[1].children.length, 2, release + ': idempotent');
+
+		/* two more tables: "Total Available" without a value, read LuCI's way;
+		   none at all (Kwrt, #103): "Used" is total - MemAvailable, swap as "Swap used" */
+		const unknown = new N('table', 'table', [
+			new N('tr', 'tr', [ new N('td', 'td', [ 'Total Available' ]), new N('td', 'td', [ '?' ]) ]),
+			bar('Used', '400.00 MiB / 2.00 GiB (20%)'), bar('Buffered', '10.00 MiB / 2.00 GiB (0%)'), bar('Cached', '100.00 MiB / 2.00 GiB (5%)') ]);
+		const kwrt = new N('table', 'table', [ bar('Used', '4.42 GiB / 15.38 GiB (29%)'), bar('Cached', '8.08 GiB / 15.38 GiB (52%)'),
+			bar('Swap used', '16.00 MiB / 5.12 GiB (0%)') ]);
+		view.append(make('Memory', unknown));
+		view.append(make('Memory', kwrt));
+		kit.enhanceMemory();
+		const meter = sec => sec.children[1].children[0];
+		const big = sec => meter(sec).children[0].children[0].textContent;
+		assert.match(big(view.children[0]), /^80%/, release + ': LuCI\'s table, as before (the fixture\'s free beats its Total Available)');
+		assert.match(big(view.children[3]), /^86%/, release + ': "?" is still LuCI\'s table: free + buffered + cached');
+		assert.match(big(view.children[4]), /^71%/, release + ': Kwrt: total - Used is what is available');
+		const legend = meter(view.children[4]).children[2].textContent;
+		assert.match(legend, new RegExp('^In use' + Math.round(4.42 * 2 ** 30) + ' B'), release + ': in use is Kwrt\'s Used');
+		const swap = meter(view.children[4]).children[3];
+		assert.ok(swap && swap.cls.has('v-meter-swap'), release + ': Kwrt\'s swap row is read');
+		assert.match(swap.textContent, new RegExp(16 * 2 ** 20 + ' B / '), release + ': swap used as given');
 	}
 });
 
@@ -325,10 +346,14 @@ test('Appearance: the templates and the login page read the same keys, in the sa
 	const header = fs.readFileSync(path.join(T, 'ucode/template/themes/vantage/header.ut'), 'utf8');
 	const login = fs.readFileSync(path.join(T, 'ucode/template/themes/vantage/sysauth.ut'), 'utf8');
 	const loginJs = fs.readFileSync(path.join(T, 'htdocs/luci-static/vantage/login.js'), 'utf8');
+	/* no session here: the dashboard's history in this tab goes */
+	const storeKey = /STORE_KEY = '([^']+)'/.exec(fs.readFileSync(path.join(T, '../luci-app-vantage/htdocs/luci-static/resources/view/vantage/overview.js'), 'utf8'))[1];
+	assert.ok(loginJs.includes(`sessionStorage.removeItem('${storeKey}')`), 'the login page drops the dashboard history');
 	const table = /\nconst LOOK = (\{[\s\S]*?\n\});\n/.exec(src);
 	assert.ok(table, 'found LOOK');
 	const LOOK = new Function('THEME_KEY', 'LOGIN_KEY', 'BACKDROP_KEY', 'return ' + table[1])('vantage.theme', 'vantage.login', 'vantage.backdrop.v1');
-	assert.deepEqual(Object.keys(LOOK), [ 'theme', 'login', 'backdrop' ]);
+	assert.deepEqual(Object.keys(LOOK), [ 'theme', 'login', 'backdrop', 'brand' ]);
+	assert.ok(header.includes("look('brand', [ 'none', 'hostname', 'model' ])"), 'the template keeps the same brand values');
 	assert.ok(header.includes("look('theme', 'vantage.theme.own', 'vantage.theme', [ 'auto', 'light', 'dark' ])"));
 	assert.ok(header.includes("look('backdrop', 'vantage.backdrop.own', 'vantage.backdrop.v1', [ 'grid', 'stars', 'none' ])"));
 	assert.ok(login.includes("localStorage.getItem('vantage.theme.own'); v[2] = localStorage.getItem('vantage.theme')"));
@@ -340,6 +365,8 @@ test('Appearance: the templates and the login page read the same keys, in the sa
 	assert.deepEqual(LOOK.theme.ok, [ 'auto', 'light', 'dark' ]);
 	assert.deepEqual(LOOK.login.ok, [ 'grid', 'stars', 'none' ]);
 	assert.deepEqual(LOOK.backdrop.ok, [ 'grid', 'stars', 'none' ]);
+	assert.deepEqual(LOOK.brand.ok, [ 'none', 'hostname', 'model' ], 'nothing next to the logo unless picked');
+	assert.ok(!login.includes('vt-look-brand'), 'the login page shows no device name');
 	/* saved in config vantage_theme, section appearance, and nowhere else */
 	assert.deepEqual([ ...src.matchAll(/callLook(?:Set|Commit|Revert)\(([^)]*?)[,)]/g) ].map(m => m[1]), [ "'vantage_theme'", "'vantage_theme'", "'vantage_theme'", "'vantage_theme'" ]);
 	/* rpcd refuses revert while an apply is pending, as it does commit, so nothing is set that could not be taken back */
@@ -396,4 +423,32 @@ test('Appearance: the theme\'s rpcd group writes config vantage_theme only, whic
 	assert.deepEqual(conf.split('\n').filter(l => l.trim() && !/^\s*#/.test(l)), [ "config appearance 'appearance'" ], 'one section, nothing set');
 	const mk = fs.readFileSync(path.join(T, 'Makefile'), 'utf8');
 	assert.match(mk, /define Package\/luci-theme-vantage\/conffiles\n\/etc\/config\/vantage_theme\nendef/);
+});
+
+/* Check for updates (#102): only when asked, one known URL, only a version passes */
+test('update check: reads the theme\'s version from the package list, compares, builds its own link', () => {
+	const pick = name => { const s = src.indexOf('function ' + name + '('); return src.slice(s, src.indexOf('\n}\n', s) + 2); };
+	const { versionParts, newerVersion, listedVersion } = new Function(
+		[ 'versionParts', 'newerVersion', 'listedVersion' ].map(pick).join('\n') + '\nreturn { versionParts, newerVersion, listedVersion };')();
+	const list = [ 'Package: luci-app-vantage', 'Version: 9.9.9-r1', '', 'Package: luci-theme-vantage', 'Version: 1.0.17-r1', 'Depends: luci-base', '' ].join('\n');
+	assert.equal(listedVersion(list), '1.0.17', 'the theme\'s own entry, not the app\'s');
+	for (const odd of [ 'Version: 1.0.17<script>', 'Version: 1.0.17-r1 x', 'Version: javascript:1', 'Version: 1', 'Version: 1.0.17-rc1', 'Version: 12345.0.0' ])
+		assert.equal(listedVersion('Package: luci-theme-vantage\n' + odd + '\n'), null, odd);
+	assert.equal(listedVersion('Package: luci-theme-vantage-extra\nVersion: 2.0.0\n'), null, 'another package');
+	assert.equal(listedVersion('<html>not a list</html>'), null);
+	const newer = (a, b) => newerVersion(versionParts(a), versionParts(b));
+	assert.ok(newer('1.0.17', '1.0.16'));
+	assert.ok(newer('1.1.0', '1.0.16'));
+	assert.ok(!newer('1.0.16', '1.0.16'));
+	assert.ok(!newer('1.0.16', '1.0.16.2'), 'a test build ahead of the release');
+	assert.ok(newer('1.0.16.1', '1.0.16'));
+	/* one request, to the constant URL, from the click handler only; nothing else leaves for the internet */
+	assert.equal(src.split('fetch(UPDATE_INDEX,').length - 1, 1);
+	assert.match(src, /const UPDATE_INDEX = 'https:\/\/anothadev\.github\.io\/luci-theme-vantage\/24\.10\/Packages';/);
+	assert.match(src, /fetch\(UPDATE_INDEX, \{ cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer'/);
+	assert.match(src, /btn\.addEventListener\('click', \(\) => this\.checkUpdates\(btn, out\)\)/);
+	assert.equal(src.split('checkUpdates(').length - 1, 2, 'defined once, called from the click only');
+	assert.deepEqual([ ...src.matchAll(/fetch\(([^,)]+)/g) ].map(m => m[1]).filter(a => !/^L\.resource\(/.test(a)), [ 'UPDATE_INDEX' ]);
+	/* the link is a constant: nothing from the list reaches an attribute */
+	assert.match(src, /'href': 'https:\/\/github\.com\/anothaDev\/luci-theme-vantage\/releases\/latest',/);
 });

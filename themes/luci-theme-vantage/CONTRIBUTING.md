@@ -214,7 +214,9 @@ SDK.
 ## Releases
 
 1. Add the release to `CHANGELOG.md` (user-visible changes, newest
-   first), bump `PKG_VERSION` in both Makefiles and commit.
+   first), bump `PKG_VERSION` in both Makefiles and the `VERSION` lines of
+   `overview.js` and `menu-vantage.js` (`tests/version.test.js` checks
+   them), and commit.
 2. Build that commit locally for both releases:
    `dev/build/sdk-build.sh 25.12.4` and `dev/build/sdk-build.sh 24.10.8`.
 3. Commit both builds' hashes, `dist/25.12.4/SHA256SUMS` and

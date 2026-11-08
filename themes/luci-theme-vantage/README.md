@@ -63,7 +63,8 @@ dashboard, and the dashboard on its own works under any LuCI theme.
 - **Its own login page**, with moving packets, a starfield or nothing.
 
 Nothing loads from the internet: Vantage uses system fonts and its own
-icons, with no CDNs or frameworks. The dashboard's only write is device
+icons, with no CDNs or frameworks. The one exception is **Check for
+updates** under Appearance, and only when you click it. The dashboard's only write is device
 names, and it never reads Wi-Fi keys. See [Security](#security).
 
 ## Install
@@ -72,14 +73,18 @@ These steps are for OpenWrt 25.12 (apk). On 24.10, follow the
 [24.10 steps](docs/INSTALL.md#openwrt-2410). Both packages are
 architecture-independent, so the same files install on any router.
 
-**From the signed repository.** Run this on the router. You only need to
-do it once; later versions come with `apk upgrade`.
+**From the signed repository.** Run this on the router. It stops before
+installing anything if the key's hash doesn't match. You only need to do it
+once; later versions come with `apk upgrade`.
 
 ```sh
-wget -O /etc/apk/keys/vantage-signing.pem https://anothadev.github.io/luci-theme-vantage/vantage-signing.pem
-sha256sum /etc/apk/keys/vantage-signing.pem   # must be c8a6c83eeb49ca2407932fb5e95785776128cef87db75ebaea0fe4171eee2157
-echo 'https://anothadev.github.io/luci-theme-vantage/25.12/packages.adb' >> /etc/apk/repositories.d/customfeeds.list
-apk update && apk add luci-theme-vantage luci-app-vantage
+key=$(mktemp) &&
+wget -O "$key" https://anothadev.github.io/luci-theme-vantage/vantage-signing.pem &&
+echo "c8a6c83eeb49ca2407932fb5e95785776128cef87db75ebaea0fe4171eee2157  $key" | sha256sum -c - &&
+cp "$key" /etc/apk/keys/vantage-signing.pem &&
+echo 'https://anothadev.github.io/luci-theme-vantage/25.12/packages.adb' >> /etc/apk/repositories.d/customfeeds.list &&
+apk update &&
+apk add luci-theme-vantage luci-app-vantage
 ```
 
 **From release files.** Download them from a
@@ -88,9 +93,11 @@ apk update && apk add luci-theme-vantage luci-app-vantage
 stands for your router's address.
 
 ```sh
-sha256sum -c --ignore-missing SHA256SUMS
-scp -O luci-theme-vantage-*.apk luci-app-vantage-*.apk root@192.0.2.1:/tmp/
-ssh root@192.0.2.1 'apk add --no-network --allow-untrusted /tmp/luci-theme-vantage-*.apk /tmp/luci-app-vantage-*.apk'
+f=$(awk '/ luci-(theme|app)-vantage-.*\.apk$/ {print $2}' SHA256SUMS) &&
+grep -E ' luci-(theme|app)-vantage-.*\.apk$' SHA256SUMS | sha256sum -c - &&
+ssh root@192.0.2.1 'mkdir -m 700 /tmp/vantage' &&
+scp -O $f root@192.0.2.1:/tmp/vantage/ &&
+ssh root@192.0.2.1 'apk add --no-network --allow-untrusted /tmp/vantage/*.apk; s=$?; rm -r /tmp/vantage; exit $s'
 ```
 
 Log out of LuCI and back in, and the dashboard is your landing page. A

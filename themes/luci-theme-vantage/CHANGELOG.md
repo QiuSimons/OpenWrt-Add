@@ -6,6 +6,49 @@ Each release ships both packages, `luci-theme-vantage` and
 <https://github.com/anothaDev/luci-theme-vantage/releases> and in the
 [signed repositories](https://anothadev.github.io/luci-theme-vantage/).
 
+## 1.0.17 - 2026-11-08
+
+- **Install commands stop when a check fails.** Each pasted block now
+  chains its steps, so a key or file that doesn't match its published
+  SHA-256 stops it before anything is trusted or installed. On 24.10 the
+  key is checked by its file's SHA-256: the `usign -F` fingerprint is
+  stored in the key itself and proved nothing. Files are fetched into a
+  private `/tmp/vantage` folder, and Uninstall now also removes the
+  signing key and the feed line, on both package managers.
+- **Theme: the pulse is back** (#100,
+  [@smallprogram](https://github.com/smallprogram)). The dashboard's
+  status circle pulses slowly while all is fine and faster when something
+  needs attention, and the top bar's refresh dot does the same: soft green
+  while refreshing, amber and faster on a warning or while reconnecting,
+  red on an error. The login page has no dot.
+- **Theme: the login page shows the router's hostname** instead of
+  "Authorization Required" (#100).
+- **Theme: a name next to the logo** (#100). Appearance → Next to the
+  logo shows the hostname or the model beside the logo; the default stays
+  the logo only.
+- **Installed version and a Check for updates button** (#102,
+  [@bakaranadnan-a11y](https://github.com/bakaranadnan-a11y)). The
+  dashboard's System tile and Appearance show the version. Check for
+  updates reads the project's package list from your browser, only when
+  you click it, without cookies or a referrer; nothing installs by itself.
+- **Theme: the memory meter on Kwrt** (#103,
+  [@keriesli](https://github.com/keriesli)). Status → Overview showed
+  100% available and 0 B in use with luci-mod-status builds that have no
+  "Total Available" row; those are read too now, swap included.
+- **Dashboard: on routers without Wi-Fi the network path shows the Wired
+  branch** (#98, [@VIKINGYFY](https://github.com/VIKINGYFY)), with its
+  hosts, as on Wi-Fi devices.
+- **Theme: text fields in tables keep their width** (#106,
+  [@elonnzhang](https://github.com/elonnzhang)). A column with a short
+  header, such as Name and Path in Network Shares, shrank to a sliver
+  and hid its value.
+- **Dashboard: pausing stops the motion.** Paused from the top bar's
+  refresh pill, the status ring, the flow dots and the backdrop stand
+  still; the CPU reading starts over on resume.
+- **Dashboard: history stays with one login.** The charts' history kept
+  in the browser tab is dropped at logout and ignored by another login in
+  the same tab.
+
 ## 1.0.16 - 2026-11-06
 
 - **Theme: Appearance is saved on the router** (#89,

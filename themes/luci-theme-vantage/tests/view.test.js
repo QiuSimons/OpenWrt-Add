@@ -12,6 +12,8 @@ const { load, RES } = require('./luci-stub');
 const REPLIES = {};
 /* the view's `ui`: tests set ui.menu */
 const UI = {};
+/* LuCI's poll: tests pause it */
+const POLL = { on: true, active() { return this.on; } };
 
 function loadView() {
 	const src = fs.readFileSync(path.join(RES, 'view/vantage/overview.js'), 'utf8');
@@ -19,7 +21,7 @@ function loadView() {
 		view: { extend: p => p },
 		/* replies come from REPLIES['object method'](...args) when set */
 		rpc: { declare: o => function(...args) { const f = REPLIES[o.object + ' ' + o.method]; return f ? f(...args) : Promise.resolve(null); } },
-		poll: {}, ui: UI, dom: {}
+		poll: POLL, ui: UI, dom: {}
 	};
 	const params = [], values = [];
 	for (const m of src.matchAll(/^'require ([\w.-]+)(?: as (\w+))?';$/gm)) {
@@ -74,6 +76,8 @@ test('deep links: arbitrary text, unknown radios and bad escapes are dropped, no
 });
 
 test('stored history: keys from sessionStorage cannot replace a prototype', () => {
+	const savedL = global.L;
+	global.L = { env: {} };
 	const stored = JSON.stringify({ net: JSON.parse('{"__proto__":[[1,2,3]],"constructor":[[1,2,3]],"radio0":[[1,2,3]]}'), clients: {} });
 	const saved = global.window;
 	global.window = {
@@ -92,6 +96,7 @@ test('stored history: keys from sessionStorage cannot replace a prototype', () =
 			assert.equal(Object.getPrototypeOf(self.st[k]), null, k);
 	} finally {
 		global.window = saved;
+		global.L = savedL;
 	}
 });
 
@@ -475,12 +480,33 @@ test('header: model and hostname once each, one of them when it holds the other'
 	assert.deepEqual(id({ model: 'Example AX3000', hostname: '--' }), [ 'Example AX3000', '--' ], 'nothing to compare: both');
 });
 
+test('health: the theme\'s refresh dot hears a warning or an error, nothing else', () => {
+	const saved = global.document;
+	const root = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } };
+	global.document = { documentElement: root };
+	try {
+		for (const [ level, want ] of [ [ 'ok', '' ], [ 'warn', 'warn' ], [ 'err', 'err' ], [ 'unknown', '' ], [ 'info', '' ] ]) {
+			const self = Object.create(view);
+			self.st = { summary: { level, headline: 'x' } };
+			self.m = { clients: [], device: {}, wired: false };
+			self.el = { orb: {}, headline: { textContent: '' }, subline: { textContent: '' } };
+			self.identity = () => [];
+			self.paintHead();
+			assert.equal(self.el.orb.className, 'vt-orb vt-orb-' + level);
+			assert.equal(root.attrs['data-vt-alert'], want, level);
+		}
+	} finally {
+		if (saved === undefined) delete global.document; else global.document = saved;
+	}
+});
+
 test('live pill: under the Vantage theme only when not live; under another theme always', () => {
 	const saved = { L: global.L, document: global.document };
 	const pill = () => ({ className: '', hidden: false, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } });
+	const root = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } };
 	const run = (media, st) => {
 		global.L = { env: { media } };
-		global.document = { hidden: false };
+		global.document = { hidden: false, documentElement: root };
 		const self = Object.create(view);
 		self.st = Object.assign({ paused: false, lastErr: null, lastOk: Date.now() }, st);
 		self.el = { live: pill(), liveText: { textContent: '' } };
@@ -490,9 +516,55 @@ test('live pill: under the Vantage theme only when not live; under another theme
 	try {
 		assert.deepEqual(run('/luci-static/vantage', {}), [ true, 'vt-livepill vt-live-ok' ], 'the theme\'s poll indicator says it');
 		assert.deepEqual(run('/luci-static/vantage', { lastErr: new Error('x') }), [ false, 'vt-livepill vt-live-err' ]);
+		assert.equal(root.attrs['data-vt-live'], 'err', 'the theme\'s refresh dot hears it');
 		assert.deepEqual(run('/luci-static/vantage/', { paused: true }), [ false, 'vt-livepill vt-live-paused' ]);
 		assert.deepEqual(run('/luci-static/bootstrap', {}), [ false, 'vt-livepill vt-live-ok' ]);
 	} finally {
+		global.L = saved.L;
+		if (saved.document === undefined) delete global.document; else global.document = saved.document;
+	}
+});
+
+test('paused from LuCI\'s indicator: the pill says so (once, under the Vantage theme) and nothing moves', () => {
+	const saved = { L: global.L, document: global.document };
+	const root = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } };
+	const anim = () => ({ state: 'running', play() { this.state = 'running'; }, pause() { this.state = 'paused'; } });
+	const make = media => {
+		global.L = { env: { media } };
+		global.document = { hidden: false, documentElement: root };
+		const self = Object.create(view);
+		const cls = new Set();
+		self.st = { paused: false, lastErr: null, lastOk: Date.now() };
+		self.el = { live: { className: '', hidden: false, setAttribute() {} }, liveText: { textContent: '' },
+			root: { classList: { toggle: (c, on) => on ? cls.add(c) : cls.delete(c) } } };
+		self.wireMap = { a: { anims: [ anim(), anim() ] } };
+		self.backdrop = { paused: false, pause(on) { this.paused = on; } };
+		self.cls = cls;
+		return self;
+	};
+	try {
+		POLL.on = false;
+		let self = make('/luci-static/vantage');
+		self.paintLive();
+		assert.equal(self.el.live.className, 'vt-livepill vt-live-paused');
+		assert.equal(self.el.live.hidden, true, 'the theme\'s indicator already says Paused');
+		assert.equal(self.el.liveText.textContent, 'Paused');
+		assert.equal(root.attrs['data-vt-live'], 'paused');
+		assert.ok(self.cls.has('vt-still'), 'the status circle stands still');
+		assert.deepEqual(self.wireMap.a.anims.map(a => a.state), [ 'paused', 'paused' ], 'the flow dots stop where they are');
+		assert.equal(self.backdrop.paused, true, 'the backdrop keeps its last frame');
+		POLL.on = true;
+		self.paintLive();
+		assert.equal(self.el.live.className, 'vt-livepill vt-live-ok');
+		assert.ok(!self.cls.has('vt-still'));
+		assert.deepEqual(self.wireMap.a.anims.map(a => a.state), [ 'running', 'running' ], 'and go on from there');
+		assert.equal(self.backdrop.paused, false);
+		POLL.on = false;
+		self = make('/luci-static/bootstrap');
+		self.paintLive();
+		assert.deepEqual([ self.el.live.hidden, self.el.liveText.textContent ], [ false, 'Paused' ], 'another theme: the pill says it');
+	} finally {
+		POLL.on = true;
 		global.L = saved.L;
 		if (saved.document === undefined) delete global.document; else global.document = saved.document;
 	}
@@ -711,9 +783,33 @@ test('other lines: the uplink drawer shows the line asked for, its rates and rou
 	});
 });
 
+test('stored history: it belongs to one login', () => {
+	const savedWindow = global.window, savedL = global.L, box = {};
+	const hist = sid => JSON.stringify({ sid, cpu: [ [ 1, 2 ], [ 3, 4 ] ], clients: { '00:00:5E:00:53:01': [ [ 1, 2 ] ] } });
+	global.window = {
+		sessionStorage: { getItem: () => box.v || null, setItem(k, v) { box.v = v; } },
+		localStorage: { getItem: () => null, setItem() {} }
+	};
+	global.L = { env: { sessionid: '0123456789abcdef0123456789abcdef' } };
+	const load = () => { const self = Object.create(view); self.initState({ board: {}, canWrite: false, canRdns: false, mdns: null }); return self; };
+	const now = Date.now();
+	try {
+		box.v = hist('89abcdef').replace('[[1,2],[3,4]]', JSON.stringify([ [ now - 2000, 2 ], [ now - 1000, 4 ] ]));
+		assert.equal(load().st.hist.cpu.length, 2, 'the same login keeps its history');
+		box.v = hist('ffffffff');
+		const other = load();
+		assert.equal(other.st.hist.cpu.length, 0, 'another login starts empty');
+		assert.deepEqual(Object.keys(other.st.clientHist), []);
+	} finally {
+		global.window = savedWindow;
+		global.L = savedL;
+	}
+});
+
 test('other lines: a failover starts the new main line on its own history; a restored "uplink" of nobody is dropped', () => {
-	const saved = global.window;
+	const saved = global.window, savedL = global.L;
 	const box = {};
+	global.L = { env: {} };
 	global.window = {
 		sessionStorage: { getItem: () => box.v || null, setItem(k, v) { box.v = v; } },
 		localStorage: { getItem: () => null, setItem() {} }
@@ -745,6 +841,7 @@ test('other lines: a failover starts the new main line on its own history; a res
 		assert.ok(!('uplink' in JSON.parse(box.v).net));
 	} finally {
 		global.window = saved;
+		global.L = savedL;
 	}
 });
 

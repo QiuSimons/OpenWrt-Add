@@ -105,6 +105,12 @@ function environment(o) {
 					return o.hostile ? HOSTILE : (o.look || {})[opt] ?? null;
 				return null;
 			},
+			get_first: (c, t, opt) => {
+				calls.uci.push([ c, '@' + t, opt ].join('.'));
+				if (c === 'system' && t === 'system' && opt === 'hostname' && !o.noHostname)
+					return o.hostile ? SECRET.hostname + HOSTILE : SECRET.hostname;
+				return null;
+			},
 			get_all: (c, s) => (c === 'vantage_theme' && s === 'appearance' && !o.noSection) ? {} : null,
 			/* rpcd's logins: what a new login would be granted */
 			foreach: (c, t, fn) => { if (c === 'rpcd' && t === 'login') for (const s of o.logins || []) fn(s); }
@@ -296,17 +302,23 @@ test('header: the contract hooks and script order are in place', () => {
 	}
 });
 
-test('login: fuser is never echoed, hostile inputs change no markup, nothing about the device', () => {
+test('login: fuser is never echoed, hostile inputs change no markup, the hostname and nothing else about the device', () => {
 	const good = renderLogin({ path: ADMIN, fuser: 'root' });
 	const evil = renderLogin({ path: EVIL_PATH, hostile: true, fuser: HOSTILE + 'FUSER-MARK' });
 	assert.deepEqual(skeleton(evil.html), skeleton(good.html), 'login markup skeleton changed');
 	assertNoPayload(evil.html, 'login');
 	assert.ok(!evil.html.includes('FUSER-MARK'), 'fuser echoed');
-	assertNoSecrets(evil.html, 'login');
-	assertNoSecrets(good.html, 'login');
+	/* the hostname is the heading, encoded; nothing else about the device */
+	const notHost = html => { for (const [ k, v ] of Object.entries(SECRET)) if (k !== 'hostname') assert.ok(!html.includes(v), `login: ${k} (${v}) leaked`); };
+	notHost(evil.html);
+	notHost(good.html);
+	assert.match(good.html, /<h1 class="vt-login-title">SECRET-HOSTNAME<\/h1>/, 'the hostname is the heading');
+	assert.equal(good.html.split(SECRET.hostname).length - 1, 1, 'the hostname once');
+	assert.match(evil.html, /<h1 class="vt-login-title">SECRET-HOSTNAME&#34;&#62;&#60;script&#62;/, 'a hostile hostname is encoded');
+	assert.match(renderLogin({ path: ADMIN, noHostname: true }).html, /<h1 class="vt-login-title">Authorization Required<\/h1>/, 'none: as before');
 	assert.deepEqual(evil.calls.ubus, [], 'login page called ubus');
-	assert.deepEqual(evil.calls.uci, [ 'uhttpd.main.listen_https', 'vantage_theme.appearance.theme', 'vantage_theme.appearance.login' ],
-		'login page read more than the HTTPS ports and the Appearance saved for every browser');
+	assert.deepEqual(evil.calls.uci, [ 'uhttpd.main.listen_https', 'vantage_theme.appearance.theme', 'vantage_theme.appearance.login', 'system.@system.hostname' ],
+		'login page read more than the HTTPS ports, the Appearance saved for every browser and the hostname');
 	assert.match(evil.html, /role="alert">Invalid username and\/or password! Please try again\.</, 'generic error for a failed login');
 	assert.ok(!renderLogin({ path: ADMIN }).html.includes('role="alert"'), 'no error before a login attempt');
 	assert.deepEqual(inlineScripts(evil.html), inlineScripts(good.html), 'login inline scripts depend on input');
@@ -315,16 +327,16 @@ test('login: fuser is never echoed, hostile inputs change no markup, nothing abo
 });
 
 test('Appearance saved for every browser: only values the theme knows reach the pages, as data attributes', () => {
-	const looks = html => Object.fromEntries(tokenize(html).tags.find(t => t.name === 'html').attrs.filter(a => /^data-vt-look-(theme|login|backdrop)$/.test(a[0])));
-	const look = { theme: 'dark', login: 'stars', backdrop: 'none' };
+	const looks = html => Object.fromEntries(tokenize(html).tags.find(t => t.name === 'html').attrs.filter(a => /^data-vt-look-(theme|login|backdrop|brand)$/.test(a[0])));
+	const look = { theme: 'dark', login: 'stars', backdrop: 'none', brand: 'hostname' };
 	assert.deepEqual(looks(renderLogin({ path: ADMIN, look }).html), { 'data-vt-look-theme': 'dark', 'data-vt-look-login': 'stars' });
 	assert.deepEqual(looks(renderPage({ path: ADMIN, authed: true, look }).html),
-		{ 'data-vt-look-theme': 'dark', 'data-vt-look-login': 'stars', 'data-vt-look-backdrop': 'none' });
+		{ 'data-vt-look-theme': 'dark', 'data-vt-look-login': 'stars', 'data-vt-look-backdrop': 'none', 'data-vt-look-brand': 'hostname' });
 	for (const odd of [ HOSTILE, 'Dark', ' dark', 'stars ', [ 'dark' ], {}, 1, '' ]) {
-		const o = { theme: odd, login: odd, backdrop: odd };
+		const o = { theme: odd, login: odd, backdrop: odd, brand: odd };
 		assert.deepEqual(looks(renderLogin({ path: ADMIN, look: o }).html), { 'data-vt-look-theme': '', 'data-vt-look-login': '' }, `login ${JSON.stringify(odd)}`);
 		assert.deepEqual(looks(renderPage({ path: ADMIN, authed: true, look: o }).html),
-			{ 'data-vt-look-theme': '', 'data-vt-look-login': '', 'data-vt-look-backdrop': '' }, `header ${JSON.stringify(odd)}`);
+			{ 'data-vt-look-theme': '', 'data-vt-look-login': '', 'data-vt-look-backdrop': '', 'data-vt-look-brand': '' }, `header ${JSON.stringify(odd)}`);
 	}
 	/* the dashboard's chart style and layouts: logged in only, in their form only */
 	const view = (html, n) => attrOf(html, 'html', 'data-vt-look-' + n);

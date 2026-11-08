@@ -488,6 +488,11 @@ function templateEnv(req, resolved, loggedIn, form) {
 			/* no https listener here: keeps the login page from probing localhost:443 */
 			get: (c, s, o) => (c === 'uhttpd' && o === 'listen_https') ? null : store.uciGet(c, s, o),
 			get_all: (c, s) => store.uciGet(c, s),
+			/* the first section of a type: its option, or its name without one */
+			get_first: (c, t, o) => {
+				for (const s of Object.values(store.uciGet(c) || {})) if (s['.type'] === t) return o ? (s[o] ?? null) : s['.name'];
+				return null;
+			},
 			foreach: (c, t, fn) => { for (const s of Object.values(store.uciGet(c) || {})) if (!t || s['.type'] === t) if (fn(s) === false) break; }
 		},
 		ctx, version,

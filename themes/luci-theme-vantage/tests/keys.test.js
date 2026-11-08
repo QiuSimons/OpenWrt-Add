@@ -38,8 +38,39 @@ const usignFingerprint = () => {
 	return raw.subarray(2, 10).toString('hex');
 };
 
-test('keys/: the 24.10 key is a usign public key, and the docs give its fingerprint', () => {
+test('keys/: the 24.10 key is a usign public key, and the docs give its number and hash', () => {
 	const fp = usignFingerprint();
+	const sum = crypto.createHash('sha256').update(fs.readFileSync(path.join(DIR, 'vantage-24.10.usign.pub'))).digest('hex');
+	assert.match(fs.readFileSync(path.join(__dirname, '..', 'docs/INSTALL.md'), 'utf8'), new RegExp(fp), 'the file name it gets on the router');
 	for (const doc of [ 'docs/INSTALL.md', 'dev/build/repo-index.html' ])
-		assert.match(fs.readFileSync(path.join(__dirname, '..', doc), 'utf8'), new RegExp(fp), doc);
+		assert.match(fs.readFileSync(path.join(__dirname, '..', doc), 'utf8'), new RegExp(sum), doc);
+});
+
+/* the setup commands as a reader copies them */
+const SETUP_DOCS = [ 'README.md', 'docs/INSTALL.md', 'dev/build/repo-index.html' ];
+const setupBlocks = doc => {
+	const text = fs.readFileSync(path.join(__dirname, '..', doc), 'utf8').replace(/&amp;/g, '&').replace(/&gt;/g, '>');
+	return text.split(/(?=key=\$\(mktemp\))/).slice(1).map(b => b.split(/\n(?=```|<\/pre>)|<\/pre>/)[0].trim().split('\n'));
+};
+
+test('install commands: a failed key check stops them before the key is trusted', () => {
+	for (const doc of SETUP_DOCS) {
+		const blocks = setupBlocks(doc);
+		assert.ok(blocks.length >= 1, doc + ': found the setup commands');
+		for (const lines of blocks) {
+			lines.slice(0, -1).forEach(l => assert.match(l, /&&$/, doc + ': chained: ' + l));
+			const at = re => lines.findIndex(l => re.test(l));
+			const check = at(/\| sha256sum -c - &&$/);
+			assert.ok(check > 0, doc + ': checks the hash');
+			assert.ok(check < at(/^(cp "\$key" \/etc\/apk\/keys\/|opkg-key add "\$key")/), doc + ': checks before trusting the key');
+			assert.ok(check < at(/customfeeds/), doc + ': checks before adding the feed');
+		}
+		assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', doc), 'utf8'), /^usign -F|^wget -O \/etc\/(apk|opkg)/m,
+			doc + ': no key written unchecked, no check on the key number alone');
+	}
+});
+
+test('install commands: packages never install from a folder others can write', () => {
+	for (const doc of [ 'README.md', 'docs/INSTALL.md' ])
+		assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', doc), 'utf8'), /allow-untrusted[^\n]* \/tmp\/(?!vantage\b)/, doc);
 });

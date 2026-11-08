@@ -284,7 +284,7 @@ footer a { color: var(--text-2); }
 				<li class="card">
 					<div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M4 7.5 12 12l8-4.5M12 12v9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></div>
 					<h3>Small and self-contained</h3>
-					<p>System fonts and self-drawn icons; nothing loads from the internet, so the UI works offline. Two architecture-independent packages for every target, from signed apk and opkg repositories.</p>
+					<p>System fonts and self-drawn icons; nothing loads from the internet unless you click Check for updates, so the UI works offline. Two architecture-independent packages for every target, from signed apk and opkg repositories.</p>
 				</li>
 			</ul>
 		</div>
@@ -381,7 +381,7 @@ footer a { color: var(--text-2); }
 			<div class="feature" style="margin-top: clamp(48px, 7vw, 88px)">
 				<div class="copy">
 					<h3>A login page of its own</h3>
-					<p>A quiet card on the grid, with packets moving behind it, a starfield, or nothing, as picked under Appearance. The theme adds nothing about the device to it.</p>
+					<p>A quiet card on the grid, with packets moving behind it, a starfield, or nothing, as picked under Appearance. The theme adds nothing about the device to it but the router's hostname as its heading.</p>
 				</div>
 				<figure class="frame">
 					<img src="screenshots/login.png" width="1920" height="1000" loading="lazy" decoding="async" alt="The theme's login page: a login card on a dark grid with moving packet traces">
@@ -415,11 +415,12 @@ footer a { color: var(--text-2); }
 				<div class="repo">
 					<h3>OpenWrt 25.12 <span>apk</span></h3>
 					<p>One-time setup on the router, then install and upgrade with <code>apk</code>:</p>
-<pre tabindex="0" role="region" aria-label="OpenWrt 25.12 setup commands">wget -O /etc/apk/keys/vantage-signing.pem https://anothadev.github.io/luci-theme-vantage/vantage-signing.pem
-sha256sum /etc/apk/keys/vantage-signing.pem
-# must print c8a6c83eeb49ca2407932fb5e95785776128cef87db75ebaea0fe4171eee2157
-echo 'https://anothadev.github.io/luci-theme-vantage/25.12/packages.adb' &gt;&gt; /etc/apk/repositories.d/customfeeds.list
-apk update
+<pre tabindex="0" role="region" aria-label="OpenWrt 25.12 setup commands">key=$(mktemp) &amp;&amp;
+wget -O "$key" https://anothadev.github.io/luci-theme-vantage/vantage-signing.pem &amp;&amp;
+echo "c8a6c83eeb49ca2407932fb5e95785776128cef87db75ebaea0fe4171eee2157  $key" | sha256sum -c - &amp;&amp;
+cp "$key" /etc/apk/keys/vantage-signing.pem &amp;&amp;
+echo 'https://anothadev.github.io/luci-theme-vantage/25.12/packages.adb' &gt;&gt; /etc/apk/repositories.d/customfeeds.list &amp;&amp;
+apk update &amp;&amp;
 apk add luci-theme-vantage luci-app-vantage</pre>
 					<p>Translations, where available, are separate packages:
 					<code>apk add luci-i18n-vantage-&lt;lang&gt; luci-i18n-vantage-theme-&lt;lang&gt;</code>
@@ -428,12 +429,12 @@ apk add luci-theme-vantage luci-app-vantage</pre>
 				<div class="repo">
 					<h3>OpenWrt 24.10 <span>opkg</span></h3>
 					<p>One-time setup on the router, then install and upgrade with <code>opkg</code>:</p>
-<pre tabindex="0" role="region" aria-label="OpenWrt 24.10 setup commands">wget -O /tmp/vantage-24.10.usign.pub https://anothadev.github.io/luci-theme-vantage/vantage-24.10.usign.pub
-usign -F -p /tmp/vantage-24.10.usign.pub
-# must print 297430484082d03d
-opkg-key add /tmp/vantage-24.10.usign.pub
-echo 'src/gz vantage https://anothadev.github.io/luci-theme-vantage/24.10' &gt;&gt; /etc/opkg/customfeeds.conf
-opkg update
+<pre tabindex="0" role="region" aria-label="OpenWrt 24.10 setup commands">key=$(mktemp) &amp;&amp;
+wget -O "$key" https://anothadev.github.io/luci-theme-vantage/vantage-24.10.usign.pub &amp;&amp;
+echo "427da4a0b83a258f831f18b5408fd91101b8ac8d34a7d7a4011670d3b8c6d5ba  $key" | sha256sum -c - &amp;&amp;
+opkg-key add "$key" &amp;&amp;
+echo 'src/gz vantage https://anothadev.github.io/luci-theme-vantage/24.10' &gt;&gt; /etc/opkg/customfeeds.conf &amp;&amp;
+opkg update &amp;&amp;
 opkg install luci-theme-vantage luci-app-vantage</pre>
 					<p>Translations: <code>opkg install luci-i18n-vantage-&lt;lang&gt; luci-i18n-vantage-theme-&lt;lang&gt;</code> (for example <code>zh-cn</code>).</p>
 				</div>
@@ -442,8 +443,8 @@ opkg install luci-theme-vantage luci-app-vantage</pre>
 			<a href="https://github.com/anothaDev/luci-theme-vantage/blob/main/CHANGELOG.md">CHANGELOG.md</a>;
 			the packages are also attached to the
 			<a href="https://github.com/anothaDev/luci-theme-vantage/releases">releases</a>.</p>
-			<p class="note">Compare the key fingerprints with the ones in the project's
-			<a href="https://github.com/anothaDev/luci-theme-vantage/blob/main/docs/INSTALL.md">install guide</a> before trusting it.</p>
+			<p class="note">The commands stop before installing anything if a key doesn't match its hash. This page could be changed along with the keys, so first compare the hashes with the ones in the project's
+			<a href="https://github.com/anothaDev/luci-theme-vantage/blob/main/docs/INSTALL.md">install guide</a> on GitHub.</p>
 		</div>
 	</section>
 </main>

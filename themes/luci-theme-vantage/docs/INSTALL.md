@@ -13,14 +13,17 @@ documentation address range; replace it with your router's LAN address.
 once:
 
 ```sh
-wget -O /etc/apk/keys/vantage-signing.pem https://anothadev.github.io/luci-theme-vantage/vantage-signing.pem
-sha256sum /etc/apk/keys/vantage-signing.pem   # must be c8a6c83eeb49ca2407932fb5e95785776128cef87db75ebaea0fe4171eee2157
-echo 'https://anothadev.github.io/luci-theme-vantage/25.12/packages.adb' >> /etc/apk/repositories.d/customfeeds.list
-apk update && apk add luci-theme-vantage luci-app-vantage
+key=$(mktemp) &&
+wget -O "$key" https://anothadev.github.io/luci-theme-vantage/vantage-signing.pem &&
+echo "c8a6c83eeb49ca2407932fb5e95785776128cef87db75ebaea0fe4171eee2157  $key" | sha256sum -c - &&
+cp "$key" /etc/apk/keys/vantage-signing.pem &&
+echo 'https://anothadev.github.io/luci-theme-vantage/25.12/packages.adb' >> /etc/apk/repositories.d/customfeeds.list &&
+apk update &&
+apk add luci-theme-vantage luci-app-vantage
 ```
 
-If the fingerprint differs, stop and delete the key file. Later versions
-install with `apk update && apk upgrade`. See
+The commands stop before anything is installed if the key's hash
+differs. Later versions install with `apk update && apk upgrade`. See
 [Signed repository](#signed-repository).
 
 **From files**, on OpenWrt 25.12, with the two `.apk` files and `SHA256SUMS` from a
@@ -28,10 +31,11 @@ install with `apk update && apk upgrade`. See
 in the current directory on your computer:
 
 ```sh
-sha256sum -c --ignore-missing SHA256SUMS
-scp -O luci-theme-vantage-*.apk luci-app-vantage-*.apk root@192.0.2.1:/tmp/
-ssh root@192.0.2.1 'apk add --no-network --allow-untrusted /tmp/luci-theme-vantage-*.apk /tmp/luci-app-vantage-*.apk'
-ssh root@192.0.2.1 'rm -f /tmp/luci-theme-vantage-*.apk /tmp/luci-app-vantage-*.apk'
+f=$(awk '/ luci-(theme|app)-vantage-.*\.apk$/ {print $2}' SHA256SUMS) &&
+grep -E ' luci-(theme|app)-vantage-.*\.apk$' SHA256SUMS | sha256sum -c - &&
+ssh root@192.0.2.1 'mkdir -m 700 /tmp/vantage' &&
+scp -O $f root@192.0.2.1:/tmp/vantage/ &&
+ssh root@192.0.2.1 'apk add --no-network --allow-untrusted /tmp/vantage/*.apk; s=$?; rm -r /tmp/vantage; exit $s'
 ```
 
 Then **log out of LuCI and log in again**. The dashboard is now the first
@@ -79,17 +83,27 @@ same two files install on every target: MIPS, ARM, x86 and the rest.
 
 Releases since 1.0.8 also carry `.ipk` packages built with the 24.10.8
 SDK, and a signed 24.10 repository. That repository uses its own usign
-key, fingerprint `297430484082d03d`. One-time setup on the router:
+key. Its SHA-256 (of the key file) is:
+
+    427da4a0b83a258f831f18b5408fd91101b8ac8d34a7d7a4011670d3b8c6d5ba
+
+One-time setup on the router:
 
 ```sh
-wget -O /tmp/vantage-24.10.usign.pub https://anothadev.github.io/luci-theme-vantage/vantage-24.10.usign.pub
-usign -F -p /tmp/vantage-24.10.usign.pub
-# must print 297430484082d03d
-opkg-key add /tmp/vantage-24.10.usign.pub
-echo 'src/gz vantage https://anothadev.github.io/luci-theme-vantage/24.10' >> /etc/opkg/customfeeds.conf
-opkg update
+key=$(mktemp) &&
+wget -O "$key" https://anothadev.github.io/luci-theme-vantage/vantage-24.10.usign.pub &&
+echo "427da4a0b83a258f831f18b5408fd91101b8ac8d34a7d7a4011670d3b8c6d5ba  $key" | sha256sum -c - &&
+opkg-key add "$key" &&
+echo 'src/gz vantage https://anothadev.github.io/luci-theme-vantage/24.10' >> /etc/opkg/customfeeds.conf &&
+opkg update &&
 opkg install luci-theme-vantage luci-app-vantage
 ```
+
+The commands stop before anything is installed if the key's hash differs.
+Earlier versions of this guide compared `usign -F` with `297430484082d03d`.
+That proves nothing: the number is stored in the key file, and any other key
+can carry the same one. If you set up the repository that way, compare
+`sha256sum /etc/opkg/keys/297430484082d03d` with the hash above.
 
 Upgrade with `opkg update && opkg upgrade luci-theme-vantage
 luci-app-vantage`. Upgrading from a self-built 1.0.7 or older `.ipk` switches
@@ -99,7 +113,8 @@ Language and Style. opkg checks `Packages.sig` against `/etc/opkg/keys`
 and each package against the hash in the index. Remove a language package
 before the app (`opkg remove luci-i18n-vantage-zh-cn
 luci-i18n-vantage-theme-zh-cn luci-app-vantage luci-theme-vantage`); opkg leaves the empty directories behind, which is
-harmless.
+harmless. Removing the packages keeps the key and the feed trusted; see
+[Uninstall](#uninstall).
 
 Tested on a 24.10.8 router (x86, without Wi-Fi or add-ons): an upgrade
 from 1.0.6, removal, a fresh install with the Chinese translation, and the
@@ -190,10 +205,13 @@ and on the repository site. Its SHA-256 (of the PEM file) is:
 Set it up once on the router:
 
 ```sh
-wget -O /etc/apk/keys/vantage-signing.pem https://anothadev.github.io/luci-theme-vantage/vantage-signing.pem
-sha256sum /etc/apk/keys/vantage-signing.pem   # must be c8a6c83eeb49ca2407932fb5e95785776128cef87db75ebaea0fe4171eee2157
-echo 'https://anothadev.github.io/luci-theme-vantage/25.12/packages.adb' >> /etc/apk/repositories.d/customfeeds.list
-apk update && apk add luci-theme-vantage luci-app-vantage
+key=$(mktemp) &&
+wget -O "$key" https://anothadev.github.io/luci-theme-vantage/vantage-signing.pem &&
+echo "c8a6c83eeb49ca2407932fb5e95785776128cef87db75ebaea0fe4171eee2157  $key" | sha256sum -c - &&
+cp "$key" /etc/apk/keys/vantage-signing.pem &&
+echo 'https://anothadev.github.io/luci-theme-vantage/25.12/packages.adb' >> /etc/apk/repositories.d/customfeeds.list &&
+apk update &&
+apk add luci-theme-vantage luci-app-vantage
 ```
 
 Upgrades then come with the rest of your packages:
@@ -215,15 +233,15 @@ once: it replaces the pins with plain names and installs the repository
 version. From then on `apk upgrade` works. Check with
 `grep vantage /etc/apk/world` (plain names, no `><`).
 
-To stop trusting the project, delete the key and the repository line:
-`rm /etc/apk/keys/vantage-signing.pem`, then remove the line from
-`/etc/apk/repositories.d/customfeeds.list`. Installed packages stay.
+To stop trusting the project, remove the key and the repository line as
+shown under [Uninstall](#uninstall). Installed packages stay.
 
 The repository holds the latest release only; to install an older version,
 use its files from the release page. The key is used by CI on tagged
-releases; if it ever has to be replaced, the new fingerprint will be
-announced in a release and in this guide, and you would install the new
-key the same way.
+releases; if it ever has to be replaced, the new hash will be announced in a
+release and in this guide. Remove the old key first (see
+[Uninstall](#uninstall)), then install the new one the same way: a key left
+in place stays trusted.
 
 ### Build from source
 
@@ -377,22 +395,23 @@ VANTAGE_SIGN_KEY=~/.config/vantage-signing/vantage.key.pem dev/build/sdk-build.s
 For 23.05/24.10 (opkg) use a usign key (`usign -G -s key-build -p
 key-build.pub`); the index is then `Packages` with `Packages.sig`, and
 `BUILDINFO` records the key's fingerprint. The 24.10 repository is signed
-this way, with the fingerprint given under [OpenWrt 24.10](#openwrt-2410).
+this way, with the key given under [OpenWrt 24.10](#openwrt-2410).
 
 In CI, both private keys are secrets of the GitHub environment
 `release-signing`: only a pushed `v*` tag can use it, and I approve each
 such run before the build sees the keys.
 
-On the router, once: install the public key after checking its SHA-256
-against the published value:
+On the router, once: with the public key copied to `/tmp/vantage/` (made as
+in [step 1](#1-copy-the-files-to-the-router)), install it only if its SHA-256
+matches the published value:
 
 ```sh
-sha256sum /tmp/vantage-signing.pub.pem
-cp /tmp/vantage-signing.pub.pem /etc/apk/keys/vantage-signing.pem
+echo '<published SHA-256>  /tmp/vantage/vantage-signing.pub.pem' | sha256sum -c - &&
+cp /tmp/vantage/vantage-signing.pub.pem /etc/apk/keys/vantage-signing.pem
 ```
 
-Then, with the two packages and `packages.adb` copied to one directory
-(for example `/tmp/vantage/`), install without `--allow-untrusted`:
+Then, with the two packages and `packages.adb` copied to the same folder,
+install without `--allow-untrusted`:
 
 ```sh
 apk add --no-network --repository /tmp/vantage/packages.adb luci-theme-vantage luci-app-vantage
@@ -408,11 +427,21 @@ keeps working for unsigned builds.
 
 ### 1. Copy the files to the router
 
-From your computer:
+From your computer, make a folder only root can use, then copy the files
+into it:
 
 ```sh
-scp -O luci-theme-vantage-*.apk luci-app-vantage-*.apk SHA256SUMS root@192.0.2.1:/tmp/
+ssh root@192.0.2.1 'mkdir -m 700 /tmp/vantage' &&
+scp -O SHA256SUMS $(awk '/ luci-(theme|app)-vantage-.*\.apk$/ {print $2}' SHA256SUMS) root@192.0.2.1:/tmp/vantage/
 ```
+
+This copies the two packages that `SHA256SUMS` lists by name, so an older
+download in the same folder stays behind.
+
+Files go in their own folder because `/tmp` is open to every process on the
+router, and installing turns signature checks off. If `mkdir` says the
+folder exists, look inside it. When it is a leftover of yours, remove it with
+`rm -r /tmp/vantage` and start again.
 
 `-O` makes scp use the classic SCP protocol. OpenWrt's SSH server
 (Dropbear) has no SFTP server, and OpenSSH 9.0 and later use SFTP unless
@@ -429,8 +458,8 @@ follows GitHub's redirects over HTTPS). Take the tag and file names from
 the release page:
 
 ```sh
-cd /tmp
-BASE='https://github.com/anothaDev/luci-theme-vantage/releases/download/<tag>'
+mkdir -m 700 /tmp/vantage && cd /tmp/vantage &&
+BASE='https://github.com/anothaDev/luci-theme-vantage/releases/download/<tag>' &&
 for f in SHA256SUMS luci-theme-vantage-<version>.apk luci-app-vantage-<version>.apk; do
 	wget -O "$f" "$BASE/$f" || break
 done
@@ -440,7 +469,7 @@ done
 
 ```sh
 ssh root@192.0.2.1
-cd /tmp
+cd /tmp/vantage
 sha256sum -c SHA256SUMS
 ```
 
@@ -452,27 +481,28 @@ are listed but missing):
 grep -E 'luci-(theme|app)-vantage-' SHA256SUMS | sha256sum -c
 ```
 
-Continue only when every file says `OK`.
+Continue only when every file says `OK`. This catches a damaged or incomplete
+copy, not a tampered release ([why](#from-a-github-release)).
 
 ### 3. Install
 
 Both packages:
 
 ```sh
-apk add --no-network --allow-untrusted /tmp/luci-theme-vantage-*.apk /tmp/luci-app-vantage-*.apk
+apk add --no-network --allow-untrusted /tmp/vantage/luci-theme-vantage-*.apk /tmp/vantage/luci-app-vantage-*.apk
 ```
 
 Theme only:
 
 ```sh
-apk add --no-network --allow-untrusted /tmp/luci-theme-vantage-*.apk
+apk add --no-network --allow-untrusted /tmp/vantage/luci-theme-vantage-*.apk
 ```
 
 Dashboard only (works under Bootstrap or any other theme; installed with
 the theme, the dashboard shows only while Vantage is the selected theme):
 
 ```sh
-apk add --no-network --allow-untrusted /tmp/luci-app-vantage-*.apk
+apk add --no-network --allow-untrusted /tmp/vantage/luci-app-vantage-*.apk
 ```
 
 **Why `--allow-untrusted`?** On OpenWrt 25.12, apk only installs packages
@@ -481,8 +511,11 @@ Vantage is not part of OpenWrt and its packages are not signed, so apk
 refuses them (`UNTRUSTED signature`) unless you pass this flag. It turns off
 signature checking for that command, which means:
 
-- The hash check in step 2 is the only thing that tells you the files are
-  the ones you meant to install. Do not skip it.
+- The hash check in step 2 is the only check left, and it only finds a
+  damaged or incomplete copy: `SHA256SUMS` comes from the same place as the
+  packages, so it can't show a release wasn't tampered with. Do not skip
+  it, and use the [signed repository](#signed-repository) for that
+  protection.
 - The flag covers everything that command installs, including anything
   apk would fetch from your package feeds in the same run. `--no-network`
   prevents that: apk installs only the named files and fails instead of
@@ -491,8 +524,8 @@ signature checking for that command, which means:
   `rpcd-mod-iwinfo` (unusual on a standard image), install it with a
   normal, signature-checked `apk update && apk add <package>`, then repeat
   the `--no-network` command.
-- The globs match every version in `/tmp`. Keep only one version of each
-  package there, or name the files exactly.
+- The globs match every version in the folder. Keep only one version of
+  each package there, or name the files exactly.
 - A maintainer who publishes a signed index lets you skip
   `--allow-untrusted` altogether; see [Signed packages](#signed-packages).
 
@@ -505,7 +538,7 @@ apk list --installed | grep vantage
 ### 4. Clean up and log in again
 
 ```sh
-rm -f /tmp/luci-theme-vantage-*.apk /tmp/luci-app-vantage-*.apk /tmp/SHA256SUMS
+rm -r /tmp/vantage
 ```
 
 In the browser, **log out and log in again** (or close the LuCI tab and open
@@ -585,7 +618,7 @@ to the two packages and listed in the same `SHA256SUMS`. Check, copy and
 install them like the others, for example:
 
 ```sh
-apk add --no-network --allow-untrusted /tmp/luci-i18n-vantage-zh-cn-*.apk /tmp/luci-i18n-vantage-theme-zh-cn-*.apk
+apk add --no-network --allow-untrusted /tmp/vantage/luci-i18n-vantage-zh-cn-*.apk /tmp/vantage/luci-i18n-vantage-theme-zh-cn-*.apk
 ```
 
 For LuCI's own pages in the same language, install OpenWrt's
@@ -618,10 +651,11 @@ apk update && apk upgrade luci-theme-vantage luci-app-vantage
 `apk add luci-theme-vantage luci-app-vantage` once instead; see
 [Switching from a file install](#signed-repository).)
 
-With files: get the newer ones, check their hashes as above, copy them to `/tmp`, then:
+With files: get the newer ones, check their hashes as above, copy them to
+`/tmp/vantage` as in [step 1](#1-copy-the-files-to-the-router), then:
 
 ```sh
-apk add --no-network --allow-untrusted /tmp/luci-theme-vantage-*.apk /tmp/luci-app-vantage-*.apk
+apk add --no-network --allow-untrusted /tmp/vantage/luci-theme-vantage-*.apk /tmp/vantage/luci-app-vantage-*.apk
 ```
 
 apk replaces the installed version. Your theme choice is kept (the
@@ -644,7 +678,8 @@ switches LuCI to Bootstrap, and the reinstall selects Vantage again.
 ### Uninstall
 
 ```sh
-apk del luci-app-vantage luci-theme-vantage
+apk del luci-app-vantage luci-theme-vantage        # OpenWrt 25.12
+opkg remove luci-app-vantage luci-theme-vantage    # OpenWrt 24.10
 ```
 
 Or name just one of them, and add any installed language packages
@@ -663,6 +698,19 @@ Or name just one of them, and add any installed language packages
 - **Appearance:** a saved `/etc/config/vantage_theme` stays behind the same
   way; `rm /etc/config/vantage_theme` removes it (and
   `vantage_theme.apk-new` or `vantage_theme-opkg`, if an upgrade left one).
+- **Signing key and repository:** these stay, so your router keeps trusting
+  the project's key and any package it signs. Unless you plan to reinstall,
+  remove them, using the lines for your version:
+
+```sh
+# OpenWrt 25.12
+rm /etc/apk/keys/vantage-signing.pem
+sed -i '/anothadev\.github\.io\/luci-theme-vantage/d' /etc/apk/repositories.d/customfeeds.list
+
+# OpenWrt 24.10
+rm /etc/opkg/keys/297430484082d03d
+sed -i '/anothadev\.github\.io\/luci-theme-vantage/d' /etc/opkg/customfeeds.conf
+```
 
 Log out and in afterwards to refresh the menu.
 
@@ -881,8 +929,12 @@ Then reload the page. To remove Vantage entirely, see
   in the [spec](SPEC.md#6-security-requirements).
 - **The theme's Appearance.** The theme's own permission group,
   `luci-theme-vantage`, may write `/etc/config/vantage_theme` and nothing
-  else: the colour mode, the backgrounds, and the dashboard's layout and
-  chart style, saved for every browser. A user
+  else. It exists to save the colour mode, the backgrounds, what shows next
+  to the logo, and the dashboard's layout and chart style for every browser, but it grants plain
+  `uci set`, so nothing limits option names or sizes when writing. The theme
+  and dashboard only use values that pass their checks when reading, so a bad
+  value can't reach the page, but a user with this group could fill the
+  router's storage. Give it only to users you trust that far. A user
   without it keeps their picks in their own browser. rpcd grants groups at
   login, and again to open logins when it reloads, as every LuCI package
   install makes it do; a login that could have the group but doesn't yet
@@ -894,23 +946,35 @@ Then reload the page. To remove Vantage entirely, see
   RADIUS secrets. A restricted LuCI user who only has the dashboard cannot
   read the keys. (LuCI's own Status and Wireless pages grant more; check
   what else such a user has.)
+- **Dashboard history.** The graphs and recent station list (up to 32 MAC
+  addresses) stay in the browser tab's `sessionStorage`, so a reload keeps
+  them. Vantage's login page clears them, so logging out leaves nothing
+  behind. Under another theme they stay in that tab after logout until the
+  dashboard opens again, which ignores what another login left.
 - **Reverse DNS is a separate group.** `luci-app-vantage-rdns` grants
   `network.rrdns lookup`, whose caller may name the DNS server and port.
   A user who holds it can make the device send DNS queries to any host it
   can reach. Give it only to users you would trust with that; without it
   the dashboard simply shows no reverse-DNS names.
 - **The theme** adds nothing about the device to what logged-out visitors
-  see (the login page, error pages), and loads nothing from the internet.
+  see (the login page, error pages) except the router's hostname as the
+  login page's heading, as LuCI's Bootstrap does. It loads nothing from the
+  internet unless you click **Check for updates** under Appearance: then
+  your browser reads the project's 24.10 package list on GitHub Pages,
+  without cookies or a referrer (browsers still send the address you
+  opened LuCI at, as the request's Origin), and shows only the version it
+  finds. Nothing is installed by it.
   LuCI itself still puts its `L.env` script on those pages: the LuCI
   build on every page and, on "not found" pages, the tree of installed
   menu entries. That comes from LuCI's core templates, happens with every
   theme, and cannot be changed by a theme.
 - **Signed repository.** The [signed repository](#signed-repository) is
   the safest route: apk verifies the index signature and every package
-  hash itself. Check the key fingerprint before trusting the key.
+  hash itself. The install commands check the key's hash before trusting it.
 - **Unsigned packages.** Installing with `--allow-untrusted` means apk
-  doesn't check who made the files. Check the SHA-256 hashes every time,
-  keep `--no-network` on that command so nothing else is installed
+  doesn't check who made the files. Check the SHA-256 hashes every time to
+  catch a damaged copy; they can't show a release wasn't tampered with.
+  Keep `--no-network` on that command so nothing else is installed
   unchecked, and rebuild the release if you want independent proof of what
   it contains. With a [signed index](#signed-packages) apk checks the
   signature itself.
@@ -937,15 +1001,16 @@ Rules. Follow every one; if one gets in the way, stop and ask me.
 1. Check first, change nothing: run `cat /etc/openwrt_release` and
    `apk --version` on the router. Stop and tell me if DISTRIB_RELEASE does
    not start with 25.12 or apk is missing.
-2. Verify with `sha256sum -c` against SHA256SUMS on my computer, and again
-   on the router after copying to /tmp. Stop on any mismatch or missing
-   file. Never install a file whose hash you have not checked.
+2. Verify with `sha256sum -c` against SHA256SUMS on my computer. Make the
+   router's folder with `mkdir -m 700 /tmp/vantage` (stop if it exists), copy
+   into it, and verify again there. Stop on any mismatch or missing file.
+   Never install a file whose hash you have not checked.
 3. Before changing anything, back up LuCI's settings:
    `cp /etc/config/luci /tmp/luci.pre-vantage`, and copy that file to my
    computer with `scp -O`.
 4. Show me the exact install commands and wait for my "yes" before any
    `apk add` or `apk del`. Install only with
-   `apk add --no-network --allow-untrusted <exact /tmp paths of the Vantage files>`.
+   `apk add --no-network --allow-untrusted <exact /tmp/vantage paths of the Vantage files>`.
    If it reports a missing dependency (such as luci-base, rpcd or
    rpcd-mod-iwinfo), ask me, then install it with a plain `apk update && apk add <package>`
    without --allow-untrusted, and repeat the --no-network command.
@@ -953,8 +1018,9 @@ Rules. Follow every one; if one gets in the way, stop and ask me.
    firmware. Never change passwords, SSH keys, or the network, wireless,
    firewall or DHCP configuration. Do not run `uci set`/`uci commit`
    except the theme selection in the guide, and only if I ask for it.
-6. Delete only files you created in /tmp (the copied .apk files and
-   SHA256SUMS), by exact name. No `rm -r`, no deleting anything else.
+6. Delete only files you created in /tmp/vantage (the copied .apk files and
+   SHA256SUMS), by exact name, then `rmdir /tmp/vantage`. No `rm -r`, no
+   deleting anything else.
 7. If a command fails, stop and show me its output. Do not improvise
    fixes. To roll back: `apk del luci-app-vantage luci-theme-vantage`
    (LuCI switches back to Bootstrap by itself); restoring

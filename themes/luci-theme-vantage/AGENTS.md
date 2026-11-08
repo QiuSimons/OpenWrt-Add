@@ -47,7 +47,7 @@ Two OpenWrt 25.12 LuCI packages plus offline tooling. No npm, no
    `entityencode(v, true)`, and `striptags()` for titles. Never output
    `fuser`. On pages for visitors who are not logged in (login, 404,
    CSRF) the theme adds nothing about the device, only the login page's
-   colour mode and background (LuCI's core header
+   hostname heading (encoded), colour mode and background (LuCI's core header
    still prints its `L.env` script; that is upstream, see
    `docs/luci-contract.md` section 2). Inline scripts carry no data. Stay within
    the ucode subset that `dev/replay/ut.js` compiles. `test_templates.js`

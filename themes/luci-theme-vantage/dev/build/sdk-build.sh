@@ -232,11 +232,16 @@ for pkg in $packages; do
 		fi
 	done
 done
-# the i18n tooling should use the luci feed commit this SDK builds with
-want_luci=$(sed -n 's/^LUCI_REV=\([0-9a-f]\{40\}\)$/\1/p' "$work/feed/dev/i18n/update.sh" 2>/dev/null || true)
-have_luci=$(sed -n 's|^src-git luci [^ ]*\^\([0-9a-f]\{40\}\)$|\1|p' "$tools/feeds.conf" 2>/dev/null || true)
-[ -z "$want_luci" ] || [ "$want_luci" = "$have_luci" ] ||
-	echo "sdk-build: warning: dev/i18n/update.sh pins LuCI $want_luci, the SDK's luci feed is ${have_luci:-unknown}" >&2
+# every feed at a commit, so BUILDINFO names what was built
+"$here/check-feeds.sh" "$tools/feeds.conf" "$release" || die "unpinned feeds; log: $work/build.log"
+# the i18n tooling's LuCI pin is the luci feed of the 25.12 SDK; 24.10's is
+# another branch, so only the apk build can compare them
+if [ "$fmt" = apk ]; then
+	want_luci=$(sed -n 's/^LUCI_REV=\([0-9a-f]\{40\}\)$/\1/p' "$work/feed/dev/i18n/update.sh" 2>/dev/null || true)
+	have_luci=$(sed -n 's|^src-git luci [^ ]*\^\([0-9a-f]\{40\}\)$|\1|p' "$tools/feeds.conf" 2>/dev/null || true)
+	[ -n "$want_luci" ] && [ "$want_luci" = "$have_luci" ] ||
+		die "dev/i18n/update.sh pins LuCI ${want_luci:-nothing}, the SDK's luci feed is ${have_luci:-unknown}"
+fi
 
 # exactly the expected packages, nothing else
 mapfile -t built < <(find "$work/artifacts/bin" -type f \( -name 'luci-*-vantage*.apk' -o -name 'luci-*-vantage*.ipk' \) | sort)
