@@ -61,6 +61,9 @@ uci set upnpd.config.use_stun='1'
 uci set upnpd.config.stun_host='stun.miwifi.com'
 uci commit upnpd
 
+# 强制放行光猫多层NAT与STUN受限检测
+[ -f /etc/init.d/miniupnpd ] && sed -i 's/upnpd_write_bool use_stun.*/echo "ext_perform_stun=allow-filtered"; echo "ext_allow_private_ipv4=yes"/' /etc/init.d/miniupnpd
+
 #dnsmasq 设置以及开启 IPv6
 uci del dhcp.lan.ra 2>/dev/null
 uci del dhcp.lan.dhcpv6 2>/dev/null
