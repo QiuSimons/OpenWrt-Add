@@ -478,29 +478,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         flowcone_mark: ip_cfg.flowcone_mark,
                         frag_epoch,
                     };
-                    if flush_v4 || flush_v6 {
-                        let mut off = g_cfg;
-                        off.enabled_v4 = 0;
-                        off.enabled_v6 = 0;
-                        off.wan_ip4 = 0;
-                        off.wan_ip6 = [0u8; 16];
-                        off.frag_epoch = frag_epoch;
-                        let off_ok = lock_or_exit(&ip_session, "session").set_config(off);
-                        if off_ok {
+                    let had_flush = flush_v4 || flush_v6;
+                    let set_ok = if had_flush {
+                        let ok = lock_or_exit(&ip_session, "session").set_config(g_cfg);
+                        if ok {
                             if flush_v4 {
                                 lock_or_exit(&ip_session, "session").clear_v4_mappings();
                             }
                             if flush_v6 {
                                 lock_or_exit(&ip_session, "session").clear_v6_mappings();
                             }
+                            flush_v4 = false;
+                            flush_v6 = false;
                         } else {
-                            eprintln!("flowcone: could not publish off-state config");
+                            eprintln!("flowcone: could not publish pre-clear config");
                             RESYNC_REQUESTED.store(true, Ordering::Relaxed);
                         }
-                        flush_v4 = false;
-                        flush_v6 = false;
-                    }
-                    let set_ok = lock_or_exit(&ip_session, "session").set_config(g_cfg);
+                        ok
+                    } else {
+                        lock_or_exit(&ip_session, "session").set_config(g_cfg)
+                    };
                     if !set_ok {
                         eprintln!("flowcone: could not publish data-plane config");
                         RESYNC_REQUESTED.store(true, Ordering::Relaxed);
