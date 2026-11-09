@@ -148,6 +148,10 @@ return view.extend({
 
 		o = s.option(form.Flag, '_advanced', _('Advanced Settings'),
 			_('Show advanced port range, timeout, and firewall integration options.'));
+		o.default = o.disabled;
+		o.rmempty = false;
+		o.cfgvalue = function() { return '0'; };
+		o.write = function() {};
 
 		o = s.option(form.Value, 'min_port', _('Min Port'));
 		o.datatype = 'port';

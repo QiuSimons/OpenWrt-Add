@@ -47,9 +47,11 @@ jobs:
             fi
           done
 
-          cargo +nightly build --manifest-path crates/flowcone-ebpf/Cargo.toml --release --target=bpfel-unknown-none -Z build-std=core
-          mkdir -p crates/flowcone-daemon/ebpf
-          cp crates/flowcone-ebpf/target/bpfel-unknown-none/release/flowcone-ebpf crates/flowcone-daemon/ebpf/flowcone-ebpf.bin
+          cd crates/flowcone-ebpf
+          cargo +nightly build --release --target=bpfel-unknown-none -Z build-std=core
+          mkdir -p ../flowcone-daemon/ebpf
+          cp target/bpfel-unknown-none/release/flowcone-ebpf ../flowcone-daemon/ebpf/flowcone-ebpf.bin
+          readelf -S ../flowcone-daemon/ebpf/flowcone-ebpf.bin | grep -q '\.BTF'
 
       - name: Commit changes
         id: commit

@@ -328,11 +328,12 @@ pub(crate) fn refresh_liveness_netlink(
 
     bind(&sock, &SocketAddrNetlink::new(0, 0)).map_err(|_| "netlink bind error")?;
 
-    let _ = sockopt::set_socket_timeout(
+    sockopt::set_socket_timeout(
         &sock,
         sockopt::Timeout::Recv,
         Some(Duration::from_millis(500)),
-    );
+    )
+    .map_err(|_| "netlink recv timeout error")?;
 
     send(&sock, &batch_bytes, SendFlags::empty()).map_err(|_| "netlink send error")?;
 

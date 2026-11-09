@@ -182,7 +182,7 @@ jobs:
             TITLE:=RFC 4787 Full-Cone NAT using eBPF and TCX
             URL:=https://github.com/QiuSimons/FlowCone
             DEPENDS:=$(FLOWCONE_RUST_ARCH_DEPENDS) \\
-              +nftables +kmod-sched-core +kmod-sched-bpf
+              +nftables +kmod-sched-core +kmod-sched-bpf +vmlinux-btf
           endef
 
           define Package/flowcone/description

@@ -4,15 +4,15 @@
 use aya_ebpf::{
     EbpfContext,
     bindings::{__sk_buff, TC_ACT_SHOT, TC_ACT_UNSPEC},
-    helpers::bpf_ktime_get_coarse_ns,
+    helpers::{bpf_ktime_get_coarse_ns, bpf_loop},
     macros::{classifier, map},
     maps::{Array, HashMap, LruHashMap, ProgramArray, Queue},
     programs::TcContext,
 };
-use core::mem;
+use core::{ffi::c_void, mem};
 use flowcone_common::{
-    BindingValue4, BindingValue6, EndpointKey4, EndpointKey6, FragKey4, FragKey6, FragValue4,
-    FragValue6, GlobalConfig, MAX_BINDINGS, PORT_QUEUE_ENTRIES, PORT_STATE_ENTRIES,
+    BindingValue4, BindingValue6, EndpointKey4, EndpointKey6, FRAG_MAP_ENTRIES, FragKey4, FragKey6,
+    FragValue4, FragValue6, GlobalConfig, MAX_BINDINGS, PORT_QUEUE_ENTRIES, PORT_STATE_ENTRIES,
     SESSION_EVENT_ENTRIES, SessionEvent4, SessionEvent6,
 };
 
@@ -33,6 +33,9 @@ const UDP_CSUM_OFFSET: usize = 6;
 const BPF_ANY: u64 = 0;
 const BPF_NOEXIST: u64 = 1;
 const BPF_F_NO_PREALLOC: u32 = 1;
+
+const PORT_FREE_BIT: u8 = 1;
+const PORT_QUEUED_BIT: u8 = 2;
 
 #[unsafe(link_section = "license")]
 #[used]
@@ -60,24 +63,37 @@ static EGRESS_TARGET: ProgramArray = ProgramArray::with_max_entries(1, 0);
 #[map]
 static FRAG_TARGET: ProgramArray = ProgramArray::with_max_entries(1, 0);
 #[map]
+static FRAG6_TARGET: ProgramArray = ProgramArray::with_max_entries(1, 0);
+#[map]
 static ICMP_TARGET: ProgramArray = ProgramArray::with_max_entries(1, 0);
 #[map]
 static ICMP6_TARGET: ProgramArray = ProgramArray::with_max_entries(1, 0);
 
-const FRAG_ENTRIES: u32 = 1024;
-const FRAG_TIMEOUT_NS: u64 = 30_000_000_000;
+const FRAG_TIMEOUT_SEC: u32 = 30;
+/// The free queue can contain stale entries for ports claimed by port
+/// preservation. `bpf_loop` walks up to PRIMARY + FALLBACK entries at runtime;
+/// the callback is verified once, so this bound does not expand the classifier
+/// verifier state like an unrolled loop would.
+const EGRESS_ALLOC_PRIMARY: usize = 32;
+const EGRESS_ALLOC_FALLBACK: usize = 32;
+const FRAG_ALLOC_PRIMARY: usize = 32;
+const FRAG_ALLOC_FALLBACK: usize = 32;
+const FRAG6_ALLOC_PRIMARY: usize = 1;
+const FRAG6_ALLOC_FALLBACK: usize = 0;
 
 #[map]
-static FRAG_IN_V4: LruHashMap<FragKey4, FragValue4> = LruHashMap::with_max_entries(FRAG_ENTRIES, 0);
+static FRAG_IN_V4: LruHashMap<FragKey4, FragValue4> =
+    LruHashMap::with_max_entries(FRAG_MAP_ENTRIES, 0);
 #[map]
 static FRAG_OUT_V4: LruHashMap<FragKey4, FragValue4> =
-    LruHashMap::with_max_entries(FRAG_ENTRIES, 0);
+    LruHashMap::with_max_entries(FRAG_MAP_ENTRIES, 0);
 
 #[map]
-static FRAG_IN_V6: LruHashMap<FragKey6, FragValue6> = LruHashMap::with_max_entries(FRAG_ENTRIES, 0);
+static FRAG_IN_V6: LruHashMap<FragKey6, FragValue6> =
+    LruHashMap::with_max_entries(FRAG_MAP_ENTRIES, 0);
 #[map]
 static FRAG_OUT_V6: LruHashMap<FragKey6, FragValue6> =
-    LruHashMap::with_max_entries(FRAG_ENTRIES, 0);
+    LruHashMap::with_max_entries(FRAG_MAP_ENTRIES, 0);
 
 #[map]
 static OUTBOUND_BINDINGS_V4: HashMap<EndpointKey4, BindingValue4> =
@@ -105,8 +121,9 @@ static SESSION_EVENTS_V6: Queue<SessionEvent6> = Queue::with_max_entries(SESSION
 #[map]
 static GC_FLAGS: Array<u32> = Array::with_max_entries(1, 0);
 
-/// Port pool: one state byte per port plus two parity queues. The byte marks
-/// whether the port is still queued; BPF_NOEXIST is the authoritative claim.
+/// Port pool: one free/claimed byte per port plus two parity queues. A port
+/// claimed by preservation leaves a stale queue entry behind; the pop path
+/// discards it and BPF_NOEXIST remains the authoritative claim.
 #[map]
 static PORT_FREE_V4: Array<u8> = Array::with_max_entries(PORT_STATE_ENTRIES, 0);
 
@@ -196,8 +213,7 @@ fn read_be16(p: usize) -> u16 {
 /// Parse the PPP protocol field (optional 0xff 0x03 address/control, optional
 /// one-byte protocol compression). Returns the IP ethertype and header offset.
 #[inline(always)]
-fn parse_ppp(data: usize, data_end: usize, mut off: usize) -> Option<L2Info> {
-    let _ = data;
+fn parse_ppp(data_end: usize, mut off: usize) -> Option<L2Info> {
     if off + 2 > data_end {
         return None;
     }
@@ -257,7 +273,7 @@ fn parse_l2(data: usize, data_end: usize, l2_len: u32) -> Option<L2Info> {
             if ip_off + 6 > data_end {
                 return None;
             }
-            return parse_ppp(data, data_end, ip_off + 6);
+            return parse_ppp(data_end, ip_off + 6);
         }
         if proto == ETH_P_IP || proto == ETH_P_IPV6 {
             return Some(L2Info { proto, ip_off });
@@ -266,7 +282,7 @@ fn parse_l2(data: usize, data_end: usize, l2_len: u32) -> Option<L2Info> {
     }
 
     if l2_len == 2 {
-        return parse_ppp(data, data_end, data);
+        return parse_ppp(data_end, data);
     }
 
     // Raw IP / TUN / WireGuard / RAWIP.
@@ -285,9 +301,9 @@ fn parse_l2(data: usize, data_end: usize, l2_len: u32) -> Option<L2Info> {
     })
 }
 
-#[inline(always)]
-fn now_ns() -> u64 {
-    unsafe { bpf_ktime_get_coarse_ns() }
+#[inline(never)]
+fn now_sec() -> u32 {
+    (unsafe { bpf_ktime_get_coarse_ns() } / 1_000_000_000) as u32
 }
 
 #[inline(always)]
@@ -370,7 +386,7 @@ fn fixup_l3_v4(ctx: &TcContext, data: usize, ip_off: usize, old_ip: u32, new_ip:
         .is_ok()
 }
 
-/// Fix up the UDP checksum for an IPv6 address/port rewrite.
+/// Compare two IPv6 addresses without alignment assumptions.
 #[inline(always)]
 fn ipv6_eq(a: &[u8; 16], b: &[u8; 16]) -> bool {
     let p_a = a.as_ptr() as *const u64;
@@ -450,25 +466,46 @@ fn push_event_v6(key: &EndpointKey6, port: u16) {
 
 #[inline(always)]
 fn port_is_reserved(reserved: &Array<u8>, port: u16) -> bool {
-    match reserved.get_ptr_mut(port as u32) {
-        Some(p) => unsafe { *p != 0 },
-        None => false,
-    }
+    reserved.get(port as u32).map(|v| *v).unwrap_or(0) != 0
 }
 
 #[inline(always)]
-fn port_state_clear(map: &Array<u8>, port: u16) {
+fn port_state_unqueue(map: &Array<u8>, port: u16) {
     if let Some(p) = map.get_ptr_mut(port as u32) {
         unsafe {
-            *p = 0;
+            *p &= !PORT_QUEUED_BIT;
         }
     }
 }
 
 #[inline(always)]
-fn queue_push(q: &Queue<u16>, port: u16) {
+fn port_state_bound(map: &Array<u8>, port: u16) {
+    if let Some(p) = map.get_ptr_mut(port as u32) {
+        unsafe {
+            *p &= !PORT_FREE_BIT;
+        }
+    }
+}
+
+#[inline(always)]
+fn queue_push(q: &Queue<u16>, state: &Array<u8>, port: u16) {
+    if let Some(p) = state.get_ptr_mut(port as u32) {
+        unsafe {
+            if *p & PORT_QUEUED_BIT != 0 {
+                return;
+            }
+            *p |= PORT_QUEUED_BIT;
+        }
+    } else {
+        return;
+    }
     if q.push(&port, 0).is_err() {
         let _ = PORT_FLAGS.set(0, &1, 0);
+        if let Some(p) = state.get_ptr_mut(port as u32) {
+            unsafe {
+                *p &= !PORT_QUEUED_BIT;
+            }
+        }
     }
 }
 
@@ -476,18 +513,24 @@ fn queue_push(q: &Queue<u16>, port: u16) {
 fn release_port_v4(port: u16) {
     if let Some(p) = PORT_FREE_V4.get_ptr_mut(port as u32) {
         unsafe {
-            if *p != 0 {
-                return;
+            if *p & PORT_FREE_BIT != 0 {
+                if *p & PORT_QUEUED_BIT != 0 {
+                    return;
+                }
+            } else {
+                *p |= PORT_FREE_BIT;
+                if *p & PORT_QUEUED_BIT != 0 {
+                    return;
+                }
             }
-            *p = 1;
         }
     } else {
         return;
     }
     if (port & 1) == 0 {
-        queue_push(&FREE_EVEN_V4, port);
+        queue_push(&FREE_EVEN_V4, &PORT_FREE_V4, port);
     } else {
-        queue_push(&FREE_ODD_V4, port);
+        queue_push(&FREE_ODD_V4, &PORT_FREE_V4, port);
     }
 }
 
@@ -495,18 +538,24 @@ fn release_port_v4(port: u16) {
 fn release_port_v6(port: u16) {
     if let Some(p) = PORT_FREE_V6.get_ptr_mut(port as u32) {
         unsafe {
-            if *p != 0 {
-                return;
+            if *p & PORT_FREE_BIT != 0 {
+                if *p & PORT_QUEUED_BIT != 0 {
+                    return;
+                }
+            } else {
+                *p |= PORT_FREE_BIT;
+                if *p & PORT_QUEUED_BIT != 0 {
+                    return;
+                }
             }
-            *p = 1;
         }
     } else {
         return;
     }
     if (port & 1) == 0 {
-        queue_push(&FREE_EVEN_V6, port);
+        queue_push(&FREE_EVEN_V6, &PORT_FREE_V6, port);
     } else {
-        queue_push(&FREE_ODD_V6, port);
+        queue_push(&FREE_ODD_V6, &PORT_FREE_V6, port);
     }
 }
 
@@ -531,103 +580,233 @@ fn claim_port_v6(port: u16, in_val: &BindingValue6) -> bool {
 }
 
 #[inline(always)]
-fn pop_and_claim_v4(
-    q: &Queue<u16>,
+fn pop_and_claim_v4(q: &Queue<u16>, in_val: &BindingValue4) -> Result<Option<u16>, ()> {
+    let port = match q.pop() {
+        Ok(Some(port)) => port,
+        _ => return Err(()),
+    };
+    port_state_unqueue(&PORT_FREE_V4, port);
+    if claim_port_v4(port, in_val) {
+        port_state_bound(&PORT_FREE_V4, port);
+        return Ok(Some(port));
+    }
+    if !port_is_reserved(&RESERVED_V4, port)
+        && PORT_FREE_V4
+            .get(port as u32)
+            .map(|s| *s & PORT_FREE_BIT != 0)
+            .unwrap_or(false)
+    {
+        if (port & 1) == 0 {
+            queue_push(&FREE_EVEN_V4, &PORT_FREE_V4, port);
+        } else {
+            queue_push(&FREE_ODD_V4, &PORT_FREE_V4, port);
+        }
+    }
+    Ok(None)
+}
+
+#[inline(always)]
+fn pop_and_claim_v6(q: &Queue<u16>, in_val: &BindingValue6) -> Result<Option<u16>, ()> {
+    let port = match q.pop() {
+        Ok(Some(port)) => port,
+        _ => return Err(()),
+    };
+    port_state_unqueue(&PORT_FREE_V6, port);
+    if claim_port_v6(port, in_val) {
+        port_state_bound(&PORT_FREE_V6, port);
+        return Ok(Some(port));
+    }
+    if !port_is_reserved(&RESERVED_V6, port)
+        && PORT_FREE_V6
+            .get(port as u32)
+            .map(|s| *s & PORT_FREE_BIT != 0)
+            .unwrap_or(false)
+    {
+        if (port & 1) == 0 {
+            queue_push(&FREE_EVEN_V6, &PORT_FREE_V6, port);
+        } else {
+            queue_push(&FREE_ODD_V6, &PORT_FREE_V6, port);
+        }
+    }
+    Ok(None)
+}
+
+/// `bpf_loop` callback context. Keeping the retry state here keeps the
+/// classifier small: the verifier checks the callback once instead of
+/// unrolling 64 queue/claim sequences into the main program.
+#[repr(C)]
+struct PortAllocCtx4 {
+    in_val: BindingValue4,
+    primary: u32,
+    index: u32,
+    parity: u8,
+    saw_stale: u8,
+    result: u16,
+}
+
+#[repr(C)]
+struct PortAllocCtx6 {
+    in_val: BindingValue6,
+    primary: u32,
+    index: u32,
+    parity: u8,
+    saw_stale: u8,
+    result: u16,
+}
+
+#[inline(never)]
+unsafe extern "C" fn alloc_cb_v4(_index: u32, ctx: *mut c_void) -> i64 {
+    let c = unsafe { &mut *(ctx as *mut PortAllocCtx4) };
+    let primary = c.index < c.primary;
+    let q = if primary {
+        if c.parity == 0 {
+            &FREE_EVEN_V4
+        } else {
+            &FREE_ODD_V4
+        }
+    } else if c.parity == 0 {
+        &FREE_ODD_V4
+    } else {
+        &FREE_EVEN_V4
+    };
+
+    match pop_and_claim_v4(q, &c.in_val) {
+        Ok(Some(port)) => {
+            c.result = port;
+            1
+        }
+        Ok(None) => {
+            c.saw_stale = 1;
+            c.index += 1;
+            0
+        }
+        Err(()) => {
+            if primary {
+                // The primary parity queue is empty; skip straight to the
+                // fallback queue instead of burning the remaining iterations.
+                c.index = c.primary;
+                0
+            } else {
+                1
+            }
+        }
+    }
+}
+
+#[inline(never)]
+unsafe extern "C" fn alloc_cb_v6(_index: u32, ctx: *mut c_void) -> i64 {
+    let c = unsafe { &mut *(ctx as *mut PortAllocCtx6) };
+    let primary = c.index < c.primary;
+    let q = if primary {
+        if c.parity == 0 {
+            &FREE_EVEN_V6
+        } else {
+            &FREE_ODD_V6
+        }
+    } else if c.parity == 0 {
+        &FREE_ODD_V6
+    } else {
+        &FREE_EVEN_V6
+    };
+
+    match pop_and_claim_v6(q, &c.in_val) {
+        Ok(Some(port)) => {
+            c.result = port;
+            1
+        }
+        Ok(None) => {
+            c.saw_stale = 1;
+            c.index += 1;
+            0
+        }
+        Err(()) => {
+            if primary {
+                c.index = c.primary;
+                0
+            } else {
+                1
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn alloc_port_v4<const PRIMARY: usize, const FALLBACK: usize>(
+    pref: u16,
     min: u16,
     max: u16,
     in_val: &BindingValue4,
-) -> Result<Option<u16>, ()> {
-    let port = match q.pop() {
-        Ok(Some(port)) => port,
-        _ => return Err(()),
-    };
-    port_state_clear(&PORT_FREE_V4, port);
-    if port >= min && port <= max && claim_port_v4(port, in_val) {
-        return Ok(Some(port));
+) -> Option<u16> {
+    if pref >= min && pref <= max && claim_port_v4(pref, in_val) {
+        // Port preservation bypasses the queue. Clear the free bit so the
+        // stale queue entry is discarded on pop and release_port() can
+        // return the port after the mapping expires.
+        port_state_bound(&PORT_FREE_V4, pref);
+        return Some(pref);
     }
-    Ok(None)
+    let mut ctx = PortAllocCtx4 {
+        in_val: *in_val,
+        primary: PRIMARY as u32,
+        index: 0,
+        parity: (pref & 1) as u8,
+        saw_stale: 0,
+        result: 0,
+    };
+    unsafe {
+        bpf_loop(
+            (PRIMARY + FALLBACK) as u32,
+            alloc_cb_v4 as *const () as *mut c_void,
+            &mut ctx as *mut PortAllocCtx4 as *mut c_void,
+            0,
+        );
+    }
+    if ctx.result != 0 {
+        Some(ctx.result)
+    } else {
+        if ctx.saw_stale != 0 {
+            let _ = PORT_FLAGS.set(0, &1, 0);
+        }
+        None
+    }
 }
 
 #[inline(always)]
-fn pop_and_claim_v6(
-    q: &Queue<u16>,
+fn alloc_port_v6<const PRIMARY: usize, const FALLBACK: usize>(
+    pref: u16,
     min: u16,
     max: u16,
     in_val: &BindingValue6,
-) -> Result<Option<u16>, ()> {
-    let port = match q.pop() {
-        Ok(Some(port)) => port,
-        _ => return Err(()),
-    };
-    port_state_clear(&PORT_FREE_V6, port);
-    if port >= min && port <= max && claim_port_v6(port, in_val) {
-        return Ok(Some(port));
-    }
-    Ok(None)
-}
-
-#[inline(always)]
-fn alloc_port_v4(pref: u16, min: u16, max: u16, in_val: &BindingValue4) -> Option<u16> {
-    if pref >= min && pref <= max && claim_port_v4(pref, in_val) {
-        return Some(pref);
-    }
-    let parity = pref & 1;
-    let (q1, q2) = if parity == 0 {
-        (&FREE_EVEN_V4, &FREE_ODD_V4)
-    } else {
-        (&FREE_ODD_V4, &FREE_EVEN_V4)
-    };
-    let mut i = 0;
-    while i < 4 {
-        match pop_and_claim_v4(q1, min, max, in_val) {
-            Ok(Some(port)) => return Some(port),
-            Ok(None) => {}
-            Err(()) => break,
-        }
-        i += 1;
-    }
-    i = 0;
-    while i < 2 {
-        match pop_and_claim_v4(q2, min, max, in_val) {
-            Ok(Some(port)) => return Some(port),
-            Ok(None) => {}
-            Err(()) => break,
-        }
-        i += 1;
-    }
-    None
-}
-
-#[inline(always)]
-fn alloc_port_v6(pref: u16, min: u16, max: u16, in_val: &BindingValue6) -> Option<u16> {
+) -> Option<u16> {
     if pref >= min && pref <= max && claim_port_v6(pref, in_val) {
+        // See alloc_port_v4(): clear the free bit; the queue entry can only
+        // be consumed lazily and is discarded when popped.
+        port_state_bound(&PORT_FREE_V6, pref);
         return Some(pref);
     }
-    let parity = pref & 1;
-    let (q1, q2) = if parity == 0 {
-        (&FREE_EVEN_V6, &FREE_ODD_V6)
-    } else {
-        (&FREE_ODD_V6, &FREE_EVEN_V6)
+    let mut ctx = PortAllocCtx6 {
+        in_val: *in_val,
+        primary: PRIMARY as u32,
+        index: 0,
+        parity: (pref & 1) as u8,
+        saw_stale: 0,
+        result: 0,
     };
-    let mut i = 0;
-    while i < 4 {
-        match pop_and_claim_v6(q1, min, max, in_val) {
-            Ok(Some(port)) => return Some(port),
-            Ok(None) => {}
-            Err(()) => break,
-        }
-        i += 1;
+    unsafe {
+        bpf_loop(
+            (PRIMARY + FALLBACK) as u32,
+            alloc_cb_v6 as *const () as *mut c_void,
+            &mut ctx as *mut PortAllocCtx6 as *mut c_void,
+            0,
+        );
     }
-    i = 0;
-    while i < 2 {
-        match pop_and_claim_v6(q2, min, max, in_val) {
-            Ok(Some(port)) => return Some(port),
-            Ok(None) => {}
-            Err(()) => break,
+    if ctx.result != 0 {
+        Some(ctx.result)
+    } else {
+        if ctx.saw_stale != 0 {
+            let _ = PORT_FLAGS.set(0, &1, 0);
         }
-        i += 1;
+        None
     }
-    None
 }
 
 #[derive(Clone, Copy)]
@@ -651,12 +830,12 @@ fn locate_ipv6_l4(data_end: usize, ip_off: usize, mut nh: u8) -> Ipv6L4 {
             if cur_off + 2 > data_end {
                 return Ipv6L4::NonUdp;
             }
-            let ext = unsafe { &*(cur_off as *const [u8; 2]) };
-            nh = ext[0];
-            let ext_len = (ext[1] as usize + 1) * 8;
+            let next = read_u8(cur_off);
+            let ext_len = (read_u8(cur_off + 1) as usize + 1) * 8;
             if cur_off + ext_len > data_end {
                 return Ipv6L4::NonUdp;
             }
+            nh = next;
             cur_off += ext_len;
         } else if nh == IPPROTO_ROUTING {
             return Ipv6L4::Unsupported;
@@ -711,6 +890,9 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
         if (iph.ver_ihl >> 4) != 4 {
             return TC_ACT_UNSPEC;
         }
+        if iph.dst_addr != cfg.wan_ip4 {
+            return TC_ACT_UNSPEC;
+        }
         if iph.protocol == IPPROTO_ICMP {
             unsafe {
                 ICMP_TARGET.tail_call(&ctx, 0);
@@ -718,9 +900,6 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
             return TC_ACT_UNSPEC;
         }
         if iph.protocol != IPPROTO_UDP {
-            return TC_ACT_UNSPEC;
-        }
-        if iph.dst_addr != cfg.wan_ip4 {
             return TC_ACT_UNSPEC;
         }
 
@@ -747,7 +926,7 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
         if let Some(target) = INBOUND_BINDINGS_V4.get_ptr_mut(&ext_port) {
             let new_dst_ip = unsafe { (*target).ip };
             let new_dst_port = unsafe { (*target).port };
-            let now = now_ns();
+            let now = now_sec();
             unsafe {
                 (*target).last_seen = now;
             }
@@ -803,9 +982,13 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
 
         let udp_off = match locate_ipv6_l4(data_end, ip_off, iph.next_hdr) {
             Ipv6L4::Udp(off) => off,
-            Ipv6L4::Fragment | Ipv6L4::NonUdp | Ipv6L4::Unsupported => {
+            Ipv6L4::Fragment => {
+                unsafe {
+                    FRAG_TARGET.tail_call(&ctx, 0);
+                }
                 return TC_ACT_UNSPEC;
             }
+            Ipv6L4::NonUdp | Ipv6L4::Unsupported => return TC_ACT_UNSPEC,
         };
 
         if udp_off + mem::size_of::<UdpHdr>() > data_end {
@@ -822,7 +1005,7 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
         if let Some(target) = INBOUND_BINDINGS_V6.get_ptr_mut(&ext_port) {
             let new_dst_ip = unsafe { (*target).ip };
             let new_dst_port = unsafe { (*target).port };
-            let now = now_ns();
+            let now = now_sec();
             unsafe {
                 (*target).last_seen = now;
             }
@@ -924,7 +1107,7 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
             port: src_port,
             _pad: 0,
         };
-        let now = now_ns();
+        let now = now_sec();
 
         let mut mapped_port = None;
         if let Some(val) = OUTBOUND_BINDINGS_V4.get_ptr_mut(&ep_key) {
@@ -956,7 +1139,12 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
                 _pad: 0,
                 last_seen: now,
             };
-            let alloc = match alloc_port_v4(pref, cfg.min_port4, cfg.max_port4, &in_val) {
+            let alloc = match alloc_port_v4::<EGRESS_ALLOC_PRIMARY, EGRESS_ALLOC_FALLBACK>(
+                pref,
+                cfg.min_port4,
+                cfg.max_port4,
+                &in_val,
+            ) {
                 Some(p) => p,
                 None => return TC_ACT_SHOT,
             };
@@ -1029,14 +1217,16 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
         let udp_off = match locate_ipv6_l4(data_end, ip_off, iph.next_hdr) {
             Ipv6L4::Udp(off) => off,
             Ipv6L4::Fragment => {
-                return TC_ACT_SHOT;
-            }
-            Ipv6L4::NonUdp => {
+                unsafe {
+                    FRAG_TARGET.tail_call(&ctx, 0);
+                }
                 return TC_ACT_UNSPEC;
             }
-            Ipv6L4::Unsupported => {
-                return TC_ACT_SHOT;
-            }
+            // Routing headers, AH/ESP and an over-long extension chain are
+            // not NAT-able here. Pass them to the normal stack: ULA sources
+            // are not routable on the WAN, and dropping a non-UDP packet is
+            // strictly worse than leaving it alone.
+            Ipv6L4::NonUdp | Ipv6L4::Unsupported => return TC_ACT_UNSPEC,
         };
 
         if udp_off + mem::size_of::<UdpHdr>() > data_end {
@@ -1055,7 +1245,7 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
             port: src_port,
             _pad: [0; 3],
         };
-        let now = now_ns();
+        let now = now_sec();
 
         let mut mapped_port = None;
         if let Some(val) = OUTBOUND_BINDINGS_V6.get_ptr_mut(&ep_key) {
@@ -1087,7 +1277,12 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
                 _pad: [0; 3],
                 last_seen: now,
             };
-            let alloc = match alloc_port_v6(pref, cfg.min_port6, cfg.max_port6, &in_val) {
+            let alloc = match alloc_port_v6::<EGRESS_ALLOC_PRIMARY, EGRESS_ALLOC_FALLBACK>(
+                pref,
+                cfg.min_port6,
+                cfg.max_port6,
+                &in_val,
+            ) {
                 Some(p) => p,
                 None => return TC_ACT_SHOT,
             };
@@ -1141,6 +1336,38 @@ fn read_be32(p: usize) -> u32 {
     u32::from_be_bytes([read_u8(p), read_u8(p + 1), read_u8(p + 2), read_u8(p + 3)])
 }
 
+/// Walk Hop-by-Hop / Destination Options headers until the fragment header.
+/// Only these two headers may legally precede a fragment header that this
+/// program can translate.
+#[inline(always)]
+fn ipv6_fragment_offset(data_end: usize, ip_off: usize, mut nh: u8) -> Option<usize> {
+    let mut cur = ip_off + 40;
+    let mut iter = 0;
+    while iter < 4 {
+        if nh == IPPROTO_FRAGMENT {
+            if cur + 8 <= data_end {
+                return Some(cur);
+            }
+            return None;
+        }
+        if nh != IPPROTO_HOPOPTS && nh != IPPROTO_DSTOPTS {
+            return None;
+        }
+        if cur + 2 > data_end {
+            return None;
+        }
+        let next = read_u8(cur);
+        let len = (read_u8(cur + 1) as usize + 1) * 8;
+        if cur + len > data_end {
+            return None;
+        }
+        nh = next;
+        cur += len;
+        iter += 1;
+    }
+    None
+}
+
 #[inline(always)]
 fn frag_v6_target(
     ctx: &TcContext,
@@ -1149,37 +1376,42 @@ fn frag_v6_target(
     cfg: &GlobalConfig,
     ip_off: usize,
 ) -> i32 {
-    if ip_off + 48 > data_end {
+    if ip_off + 40 > data_end {
         return TC_ACT_UNSPEC;
     }
     let iph = unsafe { &mut *(ip_off as *mut Ipv6Hdr) };
-    if (u32::from_be(iph.ver_tc_fl) >> 28) != 6 || iph.next_hdr != 44 {
+    if (u32::from_be(iph.ver_tc_fl) >> 28) != 6 {
         return TC_ACT_UNSPEC;
     }
-    let next_hdr = unsafe { *((ip_off + 40) as *const u8) };
+    let Some(frag_off) = ipv6_fragment_offset(data_end, ip_off, iph.next_hdr) else {
+        return TC_ACT_UNSPEC;
+    };
+    if frag_off + 8 > data_end {
+        return TC_ACT_UNSPEC;
+    }
+    let next_hdr = read_u8(frag_off);
     if next_hdr != IPPROTO_UDP {
         return TC_ACT_UNSPEC;
     }
-    let frag_field = u16::from_be_bytes([unsafe { *((ip_off + 42) as *const u8) }, unsafe {
-        *((ip_off + 43) as *const u8)
-    }]);
+    let frag_field = read_be16(frag_off + 2);
     let offset = frag_field & 0xfff8;
     let more = (frag_field & 1) != 0;
-    let id = read_be32(ip_off + 44);
+    let id = read_be32(frag_off + 4);
     let ingress = ipv6_eq(&iph.dst_addr, &cfg.wan_ip6);
     let key = FragKey6 {
+                epoch: cfg.frag_epoch,
         src: iph.src_addr,
         dst: iph.dst_addr,
         id,
         proto: next_hdr,
         _pad: [0; 3],
     };
-    let now = now_ns();
+    let now = now_sec();
 
     if ingress {
         if offset != 0 {
             if let Some(v) = unsafe { FRAG_IN_V6.get(&key) }
-                && now.saturating_sub(v.last_seen) <= FRAG_TIMEOUT_NS
+                && now.saturating_sub(v.last_seen) <= FRAG_TIMEOUT_SEC
             {
                 iph.dst_addr = v.ip;
                 let mark = get_mark(&ctx);
@@ -1187,7 +1419,7 @@ fn frag_v6_target(
             }
             return TC_ACT_UNSPEC;
         }
-        let udp_off = ip_off + 48;
+        let udp_off = frag_off + 8;
         if udp_off + mem::size_of::<UdpHdr>() > data_end {
             return TC_ACT_UNSPEC;
         }
@@ -1235,7 +1467,7 @@ fn frag_v6_target(
         let Some(v) = (unsafe { FRAG_OUT_V6.get(&key) }) else {
             return TC_ACT_SHOT;
         };
-        if now.saturating_sub(v.last_seen) > FRAG_TIMEOUT_NS {
+        if now.saturating_sub(v.last_seen) > FRAG_TIMEOUT_SEC {
             return TC_ACT_SHOT;
         }
         iph.src_addr = v.ip;
@@ -1243,7 +1475,7 @@ fn frag_v6_target(
         ctx.skb.set_mark(mark | cfg.flowcone_mark);
         return TC_ACT_UNSPEC;
     }
-    let udp_off = ip_off + 48;
+    let udp_off = frag_off + 8;
     if udp_off + mem::size_of::<UdpHdr>() > data_end {
         return TC_ACT_SHOT;
     }
@@ -1286,7 +1518,12 @@ fn frag_v6_target(
             _pad: [0; 3],
             last_seen: now,
         };
-        let alloc = match alloc_port_v6(pref, cfg.min_port6, cfg.max_port6, &in_val) {
+        let alloc = match alloc_port_v6::<FRAG6_ALLOC_PRIMARY, FRAG6_ALLOC_FALLBACK>(
+            pref,
+            cfg.min_port6,
+            cfg.max_port6,
+            &in_val,
+        ) {
             Some(p) => p,
             None => return TC_ACT_SHOT,
         };
@@ -1339,6 +1576,34 @@ fn frag_v6_target(
     TC_ACT_UNSPEC
 }
 
+#[classifier]
+pub fn flowcone_frag_v6(ctx: TcContext) -> i32 {
+    let data = ctx.data();
+    let data_end = ctx.data_end();
+    let active = match ACTIVE_CONFIG.get(0) {
+        Some(v) => *v & 1,
+        None => 0,
+    };
+    let cfg = match CONFIG.get(active) {
+        Some(c) => c,
+        None => return TC_ACT_UNSPEC,
+    };
+    if cfg.bypass_mark_mask != 0 {
+        let mark = get_mark(&ctx);
+        if (mark & cfg.bypass_mark_mask) == cfg.bypass_mark_val {
+            return TC_ACT_UNSPEC;
+        }
+    }
+    let l2 = match parse_l2(data, data_end, cfg.l2_len) {
+        Some(v) => v,
+        None => return TC_ACT_UNSPEC,
+    };
+    if l2.proto != ETH_P_IPV6 || cfg.enabled_v6 == 0 {
+        return TC_ACT_UNSPEC;
+    }
+    frag_v6_target(&ctx, data, data_end, cfg, l2.ip_off)
+}
+
 /// IPv4 fragment NAT target. Called by the main target through FRAG_TARGET.
 /// First fragments create/use the normal UDP mapping; non-first fragments use
 /// the fragment cache. Out-of-order non-first fragments are passed/dropped
@@ -1367,7 +1632,10 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
         None => return TC_ACT_UNSPEC,
     };
     if l2.proto == ETH_P_IPV6 && cfg.enabled_v6 != 0 {
-        return frag_v6_target(&ctx, data, data_end, cfg, l2.ip_off);
+        unsafe {
+            FRAG6_TARGET.tail_call(&ctx, 0);
+        }
+        return TC_ACT_UNSPEC;
     }
     if l2.proto != ETH_P_IP || cfg.enabled_v4 != 1 {
         return TC_ACT_UNSPEC;
@@ -1388,15 +1656,16 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
     if ingress {
         if offset != 0 {
             let key = FragKey4 {
+                epoch: cfg.frag_epoch,
                 src: iph.src_addr,
                 dst: iph.dst_addr,
                 id: iph.id,
                 proto: IPPROTO_UDP,
                 _pad: 0,
             };
-            let now = now_ns();
+            let now = now_sec();
             if let Some(v) = unsafe { FRAG_IN_V4.get(&key) }
-                && now.saturating_sub(v.last_seen) <= FRAG_TIMEOUT_NS
+                && now.saturating_sub(v.last_seen) <= FRAG_TIMEOUT_SEC
             {
                 let old = iph.dst_addr;
                 iph.dst_addr = v.ip;
@@ -1426,11 +1695,12 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
         };
         let new_dst_ip = unsafe { (*target).ip };
         let new_dst_port = unsafe { (*target).port };
-        let now = now_ns();
+        let now = now_sec();
         unsafe {
             (*target).last_seen = now;
         }
         let key = FragKey4 {
+                epoch: cfg.frag_epoch,
             src: iph.src_addr,
             dst: iph.dst_addr,
             id: iph.id,
@@ -1473,18 +1743,22 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
     }
     if offset != 0 {
         let key = FragKey4 {
+                epoch: cfg.frag_epoch,
             src: iph.src_addr,
             dst: iph.dst_addr,
             id: iph.id,
             proto: IPPROTO_UDP,
             _pad: 0,
         };
-        let now = now_ns();
+        let now = now_sec();
         let Some(v) = (unsafe { FRAG_OUT_V4.get(&key) }) else {
             return TC_ACT_SHOT;
         };
-        if now.saturating_sub(v.last_seen) > FRAG_TIMEOUT_NS {
+        if now.saturating_sub(v.last_seen) > FRAG_TIMEOUT_SEC {
             return TC_ACT_SHOT;
+        }
+        if v.ip == 0 {
+            return TC_ACT_UNSPEC;
         }
         let old = iph.src_addr;
         iph.src_addr = v.ip;
@@ -1509,9 +1783,28 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
     let udph = unsafe { &mut *(udp_off as *mut UdpHdr) };
     let src_port = udph.src_port;
     if bypass_special_udp4(src_ip, iph.dst_addr, src_port, udph.dst_port) {
+        // The remaining fragments have no UDP header, so remember that this
+        // datagram must stay on the normal firewall path instead of dropping
+        // them for lack of a NAT cache entry.
+        if more {
+            let key = FragKey4 {
+                epoch: cfg.frag_epoch,
+                src: src_ip,
+                dst: iph.dst_addr,
+                id: iph.id,
+                proto: IPPROTO_UDP,
+                _pad: 0,
+            };
+            let value = FragValue4 {
+                ip: 0,
+                _pad: 0,
+                last_seen: now_sec(),
+            };
+            let _ = FRAG_OUT_V4.insert(&key, &value, BPF_ANY);
+        }
         return TC_ACT_UNSPEC;
     }
-    let now = now_ns();
+    let now = now_sec();
     let ep_key = EndpointKey4 {
         ip: src_ip,
         port: src_port,
@@ -1546,7 +1839,12 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
             _pad: 0,
             last_seen: now,
         };
-        let alloc = match alloc_port_v4(pref, cfg.min_port4, cfg.max_port4, &in_val) {
+        let alloc = match alloc_port_v4::<FRAG_ALLOC_PRIMARY, FRAG_ALLOC_FALLBACK>(
+            pref,
+            cfg.min_port4,
+            cfg.max_port4,
+            &in_val,
+        ) {
             Some(p) => p,
             None => return TC_ACT_SHOT,
         };
@@ -1573,6 +1871,7 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
         }
     };
     let key = FragKey4 {
+                epoch: cfg.frag_epoch,
         src: src_ip,
         dst: iph.dst_addr,
         id: iph.id,
@@ -1706,7 +2005,7 @@ pub fn flowcone_icmp_target(ctx: TcContext) -> i32 {
     };
     let new_ip = unsafe { (*target).ip };
     let new_port = unsafe { (*target).port };
-    let now = now_ns();
+    let now = now_sec();
     unsafe {
         (*target).last_seen = now;
     }
@@ -1914,7 +2213,7 @@ pub fn flowcone_icmp6_target(ctx: TcContext) -> i32 {
     let new_ip = unsafe { (*target).ip };
     let new_port = unsafe { (*target).port };
     unsafe {
-        (*target).last_seen = now_ns();
+        (*target).last_seen = now_sec();
     }
 
     let old_ip = emb.src_addr;

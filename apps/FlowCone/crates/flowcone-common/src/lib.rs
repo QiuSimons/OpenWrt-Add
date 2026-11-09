@@ -17,7 +17,7 @@ pub struct BindingValue4 {
     pub ip: u32,
     pub port: u16,
     pub _pad: u16,
-    pub last_seen: u64,
+    pub last_seen: u32,
 }
 
 #[cfg(not(target_arch = "bpf"))]
@@ -40,7 +40,7 @@ pub struct BindingValue6 {
     pub ip: [u8; 16],
     pub port: u16,
     pub _pad: [u16; 3],
-    pub last_seen: u64,
+    pub last_seen: u32,
 }
 
 #[cfg(not(target_arch = "bpf"))]
@@ -78,6 +78,7 @@ pub struct FragKey4 {
     pub id: u16,
     pub proto: u8,
     pub _pad: u8,
+    pub epoch: u32,
 }
 
 #[cfg(not(target_arch = "bpf"))]
@@ -88,7 +89,7 @@ unsafe impl aya::Pod for FragKey4 {}
 pub struct FragValue4 {
     pub ip: u32,
     pub _pad: u32,
-    pub last_seen: u64,
+    pub last_seen: u32,
 }
 
 #[cfg(not(target_arch = "bpf"))]
@@ -102,6 +103,7 @@ pub struct FragKey6 {
     pub id: u32,
     pub proto: u8,
     pub _pad: [u8; 3],
+    pub epoch: u32,
 }
 
 #[cfg(not(target_arch = "bpf"))]
@@ -111,7 +113,7 @@ unsafe impl aya::Pod for FragKey6 {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FragValue6 {
     pub ip: [u8; 16],
-    pub last_seen: u64,
+    pub last_seen: u32,
 }
 
 #[cfg(not(target_arch = "bpf"))]
@@ -132,6 +134,7 @@ pub struct GlobalConfig {
     pub enabled_v4: u32,
     pub enabled_v6: u32,
     pub flowcone_mark: u32,
+    pub frag_epoch: u32,
 }
 
 #[cfg(not(target_arch = "bpf"))]
@@ -233,7 +236,9 @@ pub fn is_routable_internal_ipv6(addr: &[u8; 16], allow_all_internal: bool) -> b
 }
 
 pub const MAX_BINDINGS: u32 = 65536;
-pub const FRAG_MAP_ENTRIES: u32 = 8192;
+/// Per-direction, per-family fragment cache capacity. Keep this the single
+/// source of truth for the eBPF LRU maps.
+pub const FRAG_MAP_ENTRIES: u32 = 1024;
 pub const SESSION_EVENT_ENTRIES: u32 = 16384;
 /// One byte of state per port; 65536 entries cover the full u16 port space.
 pub const PORT_STATE_ENTRIES: u32 = 65536;
@@ -244,74 +249,6 @@ pub const PORT_QUEUE_ENTRIES: u32 = 65536;
 /// Packet mark set on DNAT-translated inbound packets. The daemon can override
 /// this through GlobalConfig to avoid colliding with proxy/policy marks.
 pub const DEFAULT_FLOWCONE_MARK: u32 = 0x40000000;
-
-/// RFC 4787 port allocation:
-/// - Port preservation (REQ-3)
-/// - Parity preservation (REQ-4)
-/// - Parity relaxation fallback
-///
-/// The caller's is_free closure is the atomic port claim. This function is
-/// pure control flow and never allocates.
-pub fn select_rfc4787_port<F: FnMut(u16) -> bool>(
-    preferred: u16,
-    min_port: u16,
-    max_port: u16,
-    seed: u32,
-    mut is_free: F,
-) -> Option<u16> {
-    if min_port > max_port {
-        return None;
-    }
-
-    // 1. Port preservation
-    if preferred >= min_port && preferred <= max_port && is_free(preferred) {
-        return Some(preferred);
-    }
-
-    // 2. Parity preservation. 64 probes keeps the false-exhaustion rate
-    // negligible even at high occupancy without a full port-state scan.
-    let parity = (preferred & 1) as u32;
-    let minp = min_port as u32;
-    let maxp = max_port as u32;
-
-    let first = minp + ((parity ^ (minp & 1)) != 0) as u32;
-    if first <= maxp {
-        let cnt = (maxp - first) / 2 + 1;
-        if cnt > 0 {
-            let mut port = first + 2 * (seed % cnt);
-            let mut i: usize = 0;
-            while i < 64 && (i as u32) < cnt {
-                if port != preferred as u32 && is_free(port as u16) {
-                    return Some(port as u16);
-                }
-                port += 2;
-                if port > maxp {
-                    port = first;
-                }
-                i += 1;
-            }
-        }
-    }
-
-    // 3. Parity relaxation fallback
-    let total_ports = maxp - minp + 1;
-    if total_ports > 0 {
-        let mut port = minp + (seed.wrapping_add(1) % total_ports);
-        let mut k: usize = 0;
-        while k < 64 && (k as u32) < total_ports {
-            if port != preferred as u32 && is_free(port as u16) {
-                return Some(port as u16);
-            }
-            port += 1;
-            if port > maxp {
-                port = minp;
-            }
-            k += 1;
-        }
-    }
-
-    None
-}
 
 #[cfg(test)]
 mod tests {
@@ -428,49 +365,6 @@ mod tests {
     }
 
     #[test]
-    fn test_rfc4787_port_preservation() {
-        // Preferred port is free -> must allocate preferred port (REQ-3)
-        let port = select_rfc4787_port(5000, 1024, 65535, 12345, |p| p == 5000);
-        assert_eq!(port, Some(5000));
-    }
-
-    #[test]
-    fn test_rfc4787_parity_preservation() {
-        // Preferred even port 5000 is occupied. Must allocate an even port (REQ-4)
-        let even_alloc = select_rfc4787_port(5000, 1024, 65535, 99999, |p| p != 5000);
-        assert!(even_alloc.is_some());
-        let p_even = even_alloc.unwrap();
-        assert_eq!(p_even % 2, 0, "Expected even port for preferred even port");
-
-        // Preferred odd port 5001 is occupied. Must allocate an odd port (REQ-4)
-        let odd_alloc = select_rfc4787_port(5001, 1024, 65535, 88888, |p| p != 5001);
-        assert!(odd_alloc.is_some());
-        let p_odd = odd_alloc.unwrap();
-        assert_eq!(p_odd % 2, 1, "Expected odd port for preferred odd port");
-    }
-
-    #[test]
-    fn test_rfc4787_parity_relaxation_fallback() {
-        // Preferred even port 5000 is occupied, and ALL even ports are occupied.
-        // Must fallback to an available odd port (REQ-4 Fallback)
-        let fallback_alloc = select_rfc4787_port(5000, 1024, 1030, 42, |p| p % 2 != 0);
-        assert!(fallback_alloc.is_some());
-        let p = fallback_alloc.unwrap();
-        assert_eq!(
-            p % 2,
-            1,
-            "Expected fallback to odd port when even ports exhausted"
-        );
-    }
-
-    #[test]
-    fn test_rfc4787_full_exhaustion() {
-        // No ports free -> returns None
-        let none_alloc = select_rfc4787_port(5000, 1024, 1030, 42, |_| false);
-        assert_eq!(none_alloc, None);
-    }
-
-    #[test]
     fn test_internal_v4_prefixes_match_matcher() {
         for pfx in INTERNAL_V4_PREFIXES {
             let (base, len) = pfx.split_once('/').unwrap();
@@ -479,8 +373,7 @@ mod tests {
                 octets[i] = part.parse().unwrap();
             }
             // The matcher is defined over raw packet bytes, i.e. network byte
-            // order. Build the first and last address in that same order; the
-            // old code used from_ne_bytes/to_ne_bytes and was vacuous on LE.
+            // order. Build the first and last address in that same order.
             let base_raw = u32::from_ne_bytes(octets);
             let base_be = u32::from_be_bytes(octets);
             let host_bits = 32 - len.parse::<u32>().unwrap();
@@ -499,7 +392,7 @@ mod tests {
 
     #[test]
     fn test_global_config_layout() {
-        assert_eq!(core::mem::size_of::<GlobalConfig>(), 52);
+        assert_eq!(core::mem::size_of::<GlobalConfig>(), 56);
         assert_eq!(core::mem::align_of::<GlobalConfig>(), 4);
     }
 }

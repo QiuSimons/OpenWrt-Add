@@ -1,10 +1,12 @@
 #!/bin/sh /etc/rc.common
+# Derived from the nat6 package by sbwml.
 
 START=90
 
 interface() {
-	dhcpv6_interface=$(uci -q show network | grep -E "dhcpv6|ip6addr" | grep -o 'network\.\([^\.]*\)' | sed 's/network.//')
+	local IFS
 	IFS=$'\n'
+	dhcpv6_interface=$(uci -q show network | grep -E "dhcpv6|ip6addr" | grep -o 'network\.\([^\.]*\)' | sed 's/network.//')
 	for interface_name in $dhcpv6_interface
 	do
 		device=$(uci -q show network.$interface_name.device | grep -o "'.*'" | awk -F"'" '{print $2}')
@@ -13,16 +15,21 @@ interface() {
 			device=$(uci -q show network.$alias_interface.device | grep -o "'.*'" | awk -F"'" '{print $2}')
 			if [ -z $(uci -q show network.$alias_interface.device) ]; then
 				ipaddr=$(uci -q show network.$alias_interface.ipaddr | grep -o "'.*'" | awk -F"'" '{print $2}')
-				device=$(ifconfig | grep -B 1 $ipaddr 2>/dev/null | head -1 | awk '{print $1}')
+				device=$(ifconfig | grep -B 1 "$ipaddr" 2>/dev/null | head -1 | awk '{print $1}')
 			fi
 		fi
-		if [ $(ifconfig $device | grep -c "inet6 addr") -gt 0 ]; then
+		if [ $(ifconfig "$device" | grep -c "inet6 addr") -gt 0 ]; then
 			ip6gw=$(uci -q show network.$interface_name.ip6gw | grep -o "'.*'" | awk -F"'" '{print $2}')
 			[ -n "$ip6gw" ] && gateway="$ip6gw" || gateway=$(ip -6 route | grep "default from" | awk '{print $5}')
 			[ -z "$gateway" ] && gateway=$(ip -6 route | grep "^default via" | awk '{print $3}' | head -n1)
 			break
 		fi
 	done
+	local default_dev
+	default_dev=$(ip -6 route show default 2>/dev/null | awk '/^default/{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
+	if [ -n "$default_dev" ] && ifconfig "$default_dev" 2>/dev/null | grep -q "inet6 addr"; then
+		device="$default_dev"
+	fi
 }
 
 common_config() {
@@ -66,7 +73,7 @@ start() {
 	[ -z "$device" ] && logger -p error -t network -s "nat6: DHCPv6 interface device not configured, IPv6 NAT failed." && exit 0
 	[ -z "$gateway" ] && logger -p error -t network -s "nat6: DHCPv6 gateway not found, IPv6 NAT failed." && exit 0
 	common_config
-	ip -6 r add default via $gateway dev $device 2>/dev/null
+	ip -6 r add default via "$gateway" dev "$device" 2>/dev/null
 	nft delete table ip6 nat 2>/dev/null
 	nft add table ip6 nat 2>/dev/null
 	nft add chain ip6 nat prerouting { type nat hook prerouting priority 0\; } 2>/dev/null
@@ -83,7 +90,7 @@ start() {
 stop() {
 	interface
 	nft delete table ip6 nat 2>/dev/null
-	[ -n "$gateway" ] && [ -n "$device" ] && ip -6 r del default via $gateway dev $device 2>/dev/null
+	[ -n "$gateway" ] && [ -n "$device" ] && ip -6 r del default via "$gateway" dev "$device" 2>/dev/null
 	uci -q batch <<-EOF >/dev/null
 		del dhcp.lan.ra_default
 		commit dhcp

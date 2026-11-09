@@ -1,16 +1,17 @@
 #!/bin/sh /etc/rc.common
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 # ucitrack entry point: only restart nat6 when FlowCone IPv6 mode changes.
 
 START=99
 
 sync_nat6() {
-    current="$(uci -q get flowcone.config.enable_v6)"
-    [ -n "$current" ] || current=0
-    state="$(cat /tmp/nat6-flowcone.mode 2>/dev/null)"
-    [ "$current" = "$state" ] && return 0
-    echo "$current" > /tmp/nat6-flowcone.mode
-    [ -x /etc/init.d/nat6 ] && /etc/init.d/nat6 restart
+	current="$(uci -q get flowcone.config.enable_v6)"
+	[ -n "$current" ] || current=0
+	state="$(cat /tmp/nat6-flowcone.mode 2>/dev/null)"
+	[ "$current" = "$state" ] && return 0
+	echo "$current" > /tmp/nat6-flowcone.mode
+	[ -x /etc/init.d/nat6 ] && /etc/init.d/nat6 restart
 }
 
 start() { sync_nat6; }

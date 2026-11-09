@@ -11,7 +11,9 @@ rustflags = [
   "-C",
   "link-arg=--emit=obj",
   "-C",
+  "link-arg=--btf",
+  "-C",
   "link-arg=--llvm-args=-bpf-stack-size=4096",
-  # No `--btf`: a BTF-carrying object is validated against vmlinux BTF by the
-  # kernel, which fails on targets without CONFIG_DEBUG_INFO_BTF.
+  # BTF is required for bpf_loop callback func_info. The target must have
+  # vmlinux BTF available (CONFIG_DEBUG_INFO_BTF or external vmlinux-btf).
 ]

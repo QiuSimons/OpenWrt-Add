@@ -1,18 +1,18 @@
 mod btf;
 mod config;
+mod data_plane;
 mod firewall;
 mod netlink;
 mod session;
 
-use aya::maps::{Array, HashMap, MapData, ProgramArray, Queue};
-use aya::programs::links::LinkOrder;
-use aya::programs::tc::{
-    SchedClassifier, SchedClassifierLinkId, TcAttach, TcAttachType, qdisc_add_clsact,
-};
+use aya::maps::{Array, HashMap, MapData, Queue};
 use aya::{EbpfLoader, VerifierLogLevel};
-use flowcone_common::GlobalConfig;
-use session::SessionManager;
-use std::ffi::CString;
+use data_plane::DataPlane;
+use flowcone_common::{
+    BindingValue4, BindingValue6, EndpointKey4, EndpointKey6, FragKey4, FragKey6, FragValue4,
+    FragValue6, GlobalConfig, SessionEvent4, SessionEvent6,
+};
+use session::{SessionManager, SessionMaps};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
@@ -24,9 +24,30 @@ use std::time::{Duration, Instant};
 /// Safety net for link loss the ifindex cannot reveal (index reuse, ...).
 const REATTACH_INTERVAL: Duration = Duration::from_secs(30);
 
+macro_rules! take_map {
+    ($bpf:expr, $name:literal, $ty:ty) => {
+        <$ty>::try_from(
+            $bpf.take_map($name)
+                .ok_or(concat!("map ", $name, " not found"))?,
+        )?
+    };
+}
+
 static EBPF_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flowcone-ebpf.bin"));
 static RUNNING: AtomicBool = AtomicBool::new(true);
 static RESYNC_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// A poisoned control-plane lock means a thread panicked while holding
+/// shared state. Fail fast instead of silently skipping config/GC forever.
+fn lock_or_exit<'a, T>(mutex: &'a Mutex<T>, what: &str) -> std::sync::MutexGuard<'a, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            eprintln!("flowcone: {what} mutex poisoned; exiting");
+            std::process::exit(1);
+        }
+    }
+}
+
 struct ShutdownNotifier {
     running: Mutex<bool>,
     condvar: Condvar,
@@ -85,364 +106,6 @@ fn setup_signals(sig_write: OwnedFd, wake_write: OwnedFd) {
 fn get_monotonic_coarse_ns() -> u64 {
     let ts = rustix::time::clock_gettime(rustix::time::ClockId::MonotonicCoarse);
     (ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64)
-}
-
-fn load_classifier(bpf: &mut aya::Ebpf, prog_name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let prog: &mut SchedClassifier = bpf
-        .program_mut(prog_name)
-        .ok_or_else(|| format!("program {} not found", prog_name))?
-        .try_into()?;
-    prog.load()?;
-    Ok(())
-}
-
-fn attach_classifier(
-    bpf: &mut aya::Ebpf,
-    prog_name: &str,
-    iface: &str,
-    attach_type: TcAttachType,
-    previous: &mut Option<SchedClassifierLinkId>,
-    force_new: bool,
-    log_success: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let prog: &mut SchedClassifier = bpf
-        .program_mut(prog_name)
-        .ok_or_else(|| format!("program {} not found", prog_name))?
-        .try_into()?;
-
-    let type_name = match attach_type {
-        TcAttachType::Ingress => "ingress",
-        TcAttachType::Egress => "egress",
-    };
-
-    // bpf_link_update() is a no-op for a live link and fails with -ENOLINK once
-    // the net_device is gone, so the old link is taken either way and only
-    // updated while force_new is off (then the interface instance did not change).
-    let old_link = previous
-        .take()
-        .and_then(|link_id| prog.take_link(link_id).ok());
-    if let Some(link) = old_link
-        && !force_new
-        && let Ok(new_id) = prog.attach_to_link(link)
-    {
-        *previous = Some(new_id);
-        return Ok(());
-    }
-
-    let c_iface = CString::new(iface)?;
-    let link_id = match prog.attach(
-        &c_iface,
-        TcAttach::Tcx {
-            attach_type,
-            order: LinkOrder::last(),
-        },
-    ) {
-        Ok(id) => {
-            if log_success {
-                println!("flowcone: {} attached via TCX (last)", type_name);
-            }
-            id
-        }
-        Err(e) => {
-            eprintln!("flowcone: TCX {} fallback to netlink: {:?}", type_name, e);
-            prog.attach(&c_iface, TcAttach::Auto(attach_type))?
-        }
-    };
-
-    *previous = Some(link_id);
-    Ok(())
-}
-
-fn loaded_program_id(bpf: &aya::Ebpf, prog_name: &str) -> Result<u32, Box<dyn std::error::Error>> {
-    let prog: &SchedClassifier = bpf
-        .program(prog_name)
-        .ok_or_else(|| format!("program {} not found", prog_name))?
-        .try_into()?;
-    Ok(prog.info()?.id())
-}
-
-fn attach_new_classifier(
-    bpf: &mut aya::Ebpf,
-    prog_name: &str,
-    iface: &str,
-    attach_type: TcAttachType,
-) -> Result<SchedClassifierLinkId, Box<dyn std::error::Error>> {
-    let prog: &mut SchedClassifier = bpf
-        .program_mut(prog_name)
-        .ok_or_else(|| format!("program {} not found", prog_name))?
-        .try_into()?;
-    let c_iface = CString::new(iface)?;
-    let id = match prog.attach(
-        &c_iface,
-        TcAttach::Tcx {
-            attach_type,
-            order: LinkOrder::last(),
-        },
-    ) {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("flowcone: TCX dispatcher attach fallback: {:?}", e);
-            prog.attach(&c_iface, TcAttach::Auto(attach_type))?
-        }
-    };
-    Ok(id)
-}
-
-fn detach_classifier(bpf: &mut aya::Ebpf, prog_name: &str, id: SchedClassifierLinkId) {
-    if let Some(prog) = bpf.program_mut(prog_name)
-        && let Ok(prog) = TryInto::<&mut SchedClassifier>::try_into(prog)
-    {
-        let _ = prog.take_link(id);
-    }
-}
-
-fn tcx_is_tail(
-    iface: &str,
-    attach_type: TcAttachType,
-    prog_id: u32,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    let c_iface = CString::new(iface)?;
-    let (_, programs) = SchedClassifier::query_tcx(&c_iface, attach_type)?;
-    Ok(programs.last().map(|p| p.id() == prog_id).unwrap_or(false))
-}
-
-/// Loaded eBPF object plus the currently attached link ids.
-///
-/// The attached links are tiny A/B tail-call dispatchers. The real ingress/
-/// egress implementation is loaded once and referenced by two ProgramArray
-/// maps; both dispatchers call the same idempotent program, so a tail move can
-/// attach B, switch, and remove A without a WAN gap or double NAT.
-struct DataPlane {
-    bpf: aya::Ebpf,
-    iface: String,
-    ingress: Option<SchedClassifierLinkId>,
-    egress: Option<SchedClassifierLinkId>,
-    ingress_ids: [u32; 2],
-    egress_ids: [u32; 2],
-    active: usize,
-    tail_guard: bool,
-    _ingress_target: ProgramArray<MapData>,
-    _egress_target: ProgramArray<MapData>,
-    _frag_target: ProgramArray<MapData>,
-    _icmp_target: ProgramArray<MapData>,
-    _icmp6_target: ProgramArray<MapData>,
-}
-
-fn load_target_map(
-    bpf: &mut aya::Ebpf,
-    map_name: &str,
-    prog_name: &str,
-) -> Result<ProgramArray<MapData>, Box<dyn std::error::Error>> {
-    let mut map = ProgramArray::try_from(
-        bpf.take_map(map_name)
-            .ok_or_else(|| format!("map {map_name} not found"))?,
-    )?;
-    let prog: &SchedClassifier = bpf
-        .program(prog_name)
-        .ok_or_else(|| format!("program {prog_name} not found"))?
-        .try_into()?;
-    let fd = prog
-        .fd()
-        .map_err(|e| -> Box<dyn std::error::Error> { format!("{prog_name} fd: {e}").into() })?;
-    map.set(0, fd, 0)
-        .map_err(|e| -> Box<dyn std::error::Error> {
-            format!("{prog_name} map set: {e}").into()
-        })?;
-    Ok(map)
-}
-
-impl DataPlane {
-    fn disp_names(&self) -> (&'static str, &'static str) {
-        if self.active == 0 {
-            ("flowcone_tcx_ingress_a", "flowcone_tcx_egress_a")
-        } else {
-            ("flowcone_tcx_ingress_b", "flowcone_tcx_egress_b")
-        }
-    }
-
-    fn start(bpf: aya::Ebpf, iface: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut bpf = bpf;
-        // Load the real programs once; they are tail-call targets, not links.
-        load_classifier(&mut bpf, "flowcone_tcx_ingress").map_err(
-            |e| -> Box<dyn std::error::Error> {
-                format!("load target flowcone_tcx_ingress: {e}").into()
-            },
-        )?;
-        load_classifier(&mut bpf, "flowcone_tcx_egress").map_err(
-            |e| -> Box<dyn std::error::Error> {
-                format!("load target flowcone_tcx_egress: {e}").into()
-            },
-        )?;
-        load_classifier(&mut bpf, "flowcone_frag_target").map_err(
-            |e| -> Box<dyn std::error::Error> {
-                format!("load target flowcone_frag_target: {e}").into()
-            },
-        )?;
-        load_classifier(&mut bpf, "flowcone_icmp_target").map_err(
-            |e| -> Box<dyn std::error::Error> {
-                format!("load target flowcone_icmp_target: {e}").into()
-            },
-        )?;
-        load_classifier(&mut bpf, "flowcone_icmp6_target").map_err(
-            |e| -> Box<dyn std::error::Error> {
-                format!("load target flowcone_icmp6_target: {e}").into()
-            },
-        )?;
-
-        for name in [
-            "flowcone_tcx_ingress_a",
-            "flowcone_tcx_ingress_b",
-            "flowcone_tcx_egress_a",
-            "flowcone_tcx_egress_b",
-        ] {
-            load_classifier(&mut bpf, name).map_err(|e| -> Box<dyn std::error::Error> {
-                format!("load dispatcher {name}: {e}").into()
-            })?;
-        }
-        let ingress_target = load_target_map(&mut bpf, "INGRESS_TARGET", "flowcone_tcx_ingress")?;
-        let egress_target = load_target_map(&mut bpf, "EGRESS_TARGET", "flowcone_tcx_egress")?;
-        let frag_target = load_target_map(&mut bpf, "FRAG_TARGET", "flowcone_frag_target")?;
-        let icmp_target = load_target_map(&mut bpf, "ICMP_TARGET", "flowcone_icmp_target")?;
-        let icmp6_target = load_target_map(&mut bpf, "ICMP6_TARGET", "flowcone_icmp6_target")?;
-        let mut data_plane = Self {
-            bpf,
-            iface: iface.to_string(),
-            ingress: None,
-            egress: None,
-            ingress_ids: [0; 2],
-            egress_ids: [0; 2],
-            active: 0,
-            tail_guard: false,
-            _ingress_target: ingress_target,
-            _egress_target: egress_target,
-            _frag_target: frag_target,
-            _icmp_target: icmp_target,
-            _icmp6_target: icmp6_target,
-        };
-        data_plane.ingress_ids[0] = loaded_program_id(&data_plane.bpf, "flowcone_tcx_ingress_a")?;
-        data_plane.ingress_ids[1] = loaded_program_id(&data_plane.bpf, "flowcone_tcx_ingress_b")?;
-        data_plane.egress_ids[0] = loaded_program_id(&data_plane.bpf, "flowcone_tcx_egress_a")?;
-        data_plane.egress_ids[1] = loaded_program_id(&data_plane.bpf, "flowcone_tcx_egress_b")?;
-        data_plane.attach(true, true)?;
-        data_plane.tail_guard = true;
-        Ok(data_plane)
-    }
-
-    /// (Re-)attach the active dispatcher pair without loading them again.
-    fn attach(
-        &mut self,
-        force_new: bool,
-        log_success: bool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let iface = self.iface.clone();
-        let c_iface = CString::new(iface.as_str())?;
-        let _ = qdisc_add_clsact(&c_iface);
-        let (in_name, out_name) = self.disp_names();
-        attach_classifier(
-            &mut self.bpf,
-            in_name,
-            &iface,
-            TcAttachType::Ingress,
-            &mut self.ingress,
-            force_new,
-            log_success,
-        )?;
-        attach_classifier(
-            &mut self.bpf,
-            out_name,
-            &iface,
-            TcAttachType::Egress,
-            &mut self.egress,
-            force_new,
-            log_success,
-        )?;
-        Ok(())
-    }
-
-    /// Attach the inactive dispatcher pair at the tail, then remove the old
-    /// pair. Both dispatchers tail-call the same idempotent target, so the
-    /// overlap is safe and there is no WAN gap.
-    fn rotate(&mut self, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
-        let new = 1 - self.active;
-        let (new_in_name, new_out_name) = if new == 0 {
-            ("flowcone_tcx_ingress_a", "flowcone_tcx_egress_a")
-        } else {
-            ("flowcone_tcx_ingress_b", "flowcone_tcx_egress_b")
-        };
-        let (old_in_name, old_out_name) = self.disp_names();
-        let iface = self.iface.clone();
-        let c_iface = CString::new(iface.as_str())?;
-        let _ = qdisc_add_clsact(&c_iface);
-
-        let new_in =
-            attach_new_classifier(&mut self.bpf, new_in_name, &iface, TcAttachType::Ingress)?;
-        let new_out = match attach_new_classifier(
-            &mut self.bpf,
-            new_out_name,
-            &iface,
-            TcAttachType::Egress,
-        ) {
-            Ok(id) => id,
-            Err(e) => {
-                detach_classifier(&mut self.bpf, new_in_name, new_in);
-                return Err(e);
-            }
-        };
-
-        let old_in = self.ingress.replace(new_in);
-        let old_out = self.egress.replace(new_out);
-        self.active = new;
-        if let Some(id) = old_in {
-            detach_classifier(&mut self.bpf, old_in_name, id);
-        }
-        if let Some(id) = old_out {
-            detach_classifier(&mut self.bpf, old_out_name, id);
-        }
-        if verbose {
-            println!("flowcone: TCX dispatcher rotated A/B with zero WAN gap");
-        }
-        Ok(())
-    }
-
-    fn ensure_last(&mut self, verbose: bool) -> Result<bool, Box<dyn std::error::Error>> {
-        if !self.tail_guard {
-            return Ok(false);
-        }
-        let iface = self.iface.clone();
-        let in_id = self.ingress_ids[self.active];
-        let out_id = self.egress_ids[self.active];
-        let ingress_tail = match tcx_is_tail(&iface, TcAttachType::Ingress, in_id) {
-            Ok(v) => v,
-            Err(e) => {
-                if verbose {
-                    eprintln!("flowcone: TCX ingress order query failed: {:?}", e);
-                }
-                self.tail_guard = false;
-                return Ok(false);
-            }
-        };
-        let egress_tail = match tcx_is_tail(&iface, TcAttachType::Egress, out_id) {
-            Ok(v) => v,
-            Err(e) => {
-                if verbose {
-                    eprintln!("flowcone: TCX egress order query failed: {:?}", e);
-                }
-                self.tail_guard = false;
-                return Ok(false);
-            }
-        };
-        if ingress_tail && egress_tail {
-            return Ok(false);
-        }
-        if verbose {
-            println!(
-                "flowcone: TCX dispatcher no longer last (ingress_last={}, egress_last={}), rotating A/B",
-                ingress_tail, egress_tail
-            );
-        }
-        self.rotate(verbose)?;
-        Ok(true)
-    }
 }
 
 pub fn resolve_effective_v6(enable_v6: bool, wan_ip6: [u8; 16], has_masq: bool) -> u32 {
@@ -529,12 +192,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Without the verifier log first: it does not fit aya's buffer (E2BIG).
     // On failure retry with the log so the verifier reason is reported.
+    // FLOWCONE_VERIFIER_LOG=1 selects the DEBUG log for per-program loads,
+    // which is the only way to diagnose a late load_classifier() failure.
+    let verifier_log = std::env::var_os("FLOWCONE_VERIFIER_LOG").is_some();
     let mut bpf = {
         let mut loader = EbpfLoader::new();
         if let Some(ref b) = btf {
             loader.btf(b);
         }
-        loader.verifier_log_level(VerifierLogLevel::DISABLE);
+        loader.verifier_log_level(if verifier_log {
+            VerifierLogLevel::DEBUG
+        } else {
+            VerifierLogLevel::DISABLE
+        });
         match loader.load(EBPF_BYTES) {
             Ok(bpf) => bpf,
             Err(first) => {
@@ -552,75 +222,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let session_mgr = Arc::new(Mutex::new(SessionManager::new(
-        Array::try_from(bpf.take_map("CONFIG").ok_or("map CONFIG not found")?)?,
-        Array::try_from(
-            bpf.take_map("ACTIVE_CONFIG")
-                .ok_or("map ACTIVE_CONFIG not found")?,
-        )?,
-        HashMap::try_from(
-            bpf.take_map("OUTBOUND_BINDINGS_V4")
-                .ok_or("map OUTBOUND_BINDINGS_V4 not found")?,
-        )?,
-        HashMap::try_from(
-            bpf.take_map("INBOUND_BINDINGS_V4")
-                .ok_or("map INBOUND_BINDINGS_V4 not found")?,
-        )?,
-        HashMap::try_from(
-            bpf.take_map("OUTBOUND_BINDINGS_V6")
-                .ok_or("map OUTBOUND_BINDINGS_V6 not found")?,
-        )?,
-        HashMap::try_from(
-            bpf.take_map("INBOUND_BINDINGS_V6")
-                .ok_or("map INBOUND_BINDINGS_V6 not found")?,
-        )?,
-        Queue::try_from(
-            bpf.take_map("SESSION_EVENTS_V4")
-                .ok_or("map SESSION_EVENTS_V4 not found")?,
-        )?,
-        Queue::try_from(
-            bpf.take_map("SESSION_EVENTS_V6")
-                .ok_or("map SESSION_EVENTS_V6 not found")?,
-        )?,
-        Array::try_from(bpf.take_map("GC_FLAGS").ok_or("map GC_FLAGS not found")?)?,
-        Array::try_from(
-            bpf.take_map("PORT_FREE_V4")
-                .ok_or("map PORT_FREE_V4 not found")?,
-        )?,
-        Array::try_from(
-            bpf.take_map("PORT_FREE_V6")
-                .ok_or("map PORT_FREE_V6 not found")?,
-        )?,
-        Array::try_from(
-            bpf.take_map("RESERVED_V4")
-                .ok_or("map RESERVED_V4 not found")?,
-        )?,
-        Array::try_from(
-            bpf.take_map("RESERVED_V6")
-                .ok_or("map RESERVED_V6 not found")?,
-        )?,
-        Queue::try_from(
-            bpf.take_map("FREE_EVEN_V4")
-                .ok_or("map FREE_EVEN_V4 not found")?,
-        )?,
-        Queue::try_from(
-            bpf.take_map("FREE_ODD_V4")
-                .ok_or("map FREE_ODD_V4 not found")?,
-        )?,
-        Queue::try_from(
-            bpf.take_map("FREE_EVEN_V6")
-                .ok_or("map FREE_EVEN_V6 not found")?,
-        )?,
-        Queue::try_from(
-            bpf.take_map("FREE_ODD_V6")
-                .ok_or("map FREE_ODD_V6 not found")?,
-        )?,
-        Array::try_from(
-            bpf.take_map("PORT_FLAGS")
-                .ok_or("map PORT_FLAGS not found")?,
-        )?,
-    )));
-    if let Ok(mut mgr) = session_mgr.lock() {
+    let session_mgr = Arc::new(Mutex::new(SessionManager::new(SessionMaps {
+        config_map: take_map!(bpf, "CONFIG", Array<MapData, GlobalConfig>),
+        active_map: take_map!(bpf, "ACTIVE_CONFIG", Array<MapData, u32>),
+        ob_map4: take_map!(
+            bpf,
+            "OUTBOUND_BINDINGS_V4",
+            HashMap<MapData, EndpointKey4, BindingValue4>
+        ),
+        ib_map4: take_map!(
+            bpf,
+            "INBOUND_BINDINGS_V4",
+            HashMap<MapData, u16, BindingValue4>
+        ),
+        ob_map6: take_map!(
+            bpf,
+            "OUTBOUND_BINDINGS_V6",
+            HashMap<MapData, EndpointKey6, BindingValue6>
+        ),
+        ib_map6: take_map!(
+            bpf,
+            "INBOUND_BINDINGS_V6",
+            HashMap<MapData, u16, BindingValue6>
+        ),
+        frag_in4: take_map!(bpf, "FRAG_IN_V4", HashMap<MapData, FragKey4, FragValue4>),
+        frag_out4: take_map!(bpf, "FRAG_OUT_V4", HashMap<MapData, FragKey4, FragValue4>),
+        frag_in6: take_map!(bpf, "FRAG_IN_V6", HashMap<MapData, FragKey6, FragValue6>),
+        frag_out6: take_map!(bpf, "FRAG_OUT_V6", HashMap<MapData, FragKey6, FragValue6>),
+        events4: take_map!(bpf, "SESSION_EVENTS_V4", Queue<MapData, SessionEvent4>),
+        events6: take_map!(bpf, "SESSION_EVENTS_V6", Queue<MapData, SessionEvent6>),
+        gc_flags: take_map!(bpf, "GC_FLAGS", Array<MapData, u32>),
+        free_state4: take_map!(bpf, "PORT_FREE_V4", Array<MapData, u8>),
+        free_state6: take_map!(bpf, "PORT_FREE_V6", Array<MapData, u8>),
+        reserved4: take_map!(bpf, "RESERVED_V4", Array<MapData, u8>),
+        reserved6: take_map!(bpf, "RESERVED_V6", Array<MapData, u8>),
+        free_even4: take_map!(bpf, "FREE_EVEN_V4", Queue<MapData, u16>),
+        free_odd4: take_map!(bpf, "FREE_ODD_V4", Queue<MapData, u16>),
+        free_even6: take_map!(bpf, "FREE_EVEN_V6", Queue<MapData, u16>),
+        free_odd6: take_map!(bpf, "FREE_ODD_V6", Queue<MapData, u16>),
+        port_flags: take_map!(bpf, "PORT_FLAGS", Array<MapData, u32>),
+    })));
+    {
+        let mut mgr = lock_or_exit(&session_mgr, "session");
         mgr.configure_port_pool(config.min_port, config.max_port);
         mgr.init_port_pool(config.enable_v4, config.enable_v6);
         mgr.reserve_local_ports();
@@ -654,6 +297,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ifindex: start_ifindex,
             present: start_ifindex != 0,
         };
+        let mut frag_epoch: u32 = 0;
+        let mut flush_v4 = false;
+        let mut flush_v6 = false;
         let mut attach_timer = Instant::now();
 
         loop {
@@ -705,10 +351,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             );
                             if applied.ip4 != 0 {
                                 println!("flowcone: flushing stale v4 mappings");
-                                if let Ok(mut mgr) = ip_session.lock() {
-                                    mgr.clear_v4_mappings();
-                                }
                             }
+                            flush_v4 = true;
+                            frag_epoch = frag_epoch.wrapping_add(1);
                             applied.ip4 = ip4;
                             resolved_ip4 = ip4;
                             config_dirty = true;
@@ -717,6 +362,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(None) => {
                         if applied.ip4 != 0 {
                             println!("flowcone: WAN interface lost IPv4");
+                            flush_v4 = true;
+                            frag_epoch = frag_epoch.wrapping_add(1);
                             applied.ip4 = 0;
                             resolved_ip4 = 0;
                             config_dirty = true;
@@ -740,10 +387,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!("flowcone: WAN IPv6 updated to {}", Ipv6Addr::from(ip6));
                             if applied.ip6 != [0u8; 16] {
                                 println!("flowcone: flushing stale v6 mappings");
-                                if let Ok(mut mgr) = ip_session.lock() {
-                                    mgr.clear_v6_mappings();
-                                }
                             }
+                            flush_v6 = true;
+                            frag_epoch = frag_epoch.wrapping_add(1);
                             applied.ip6 = ip6;
                             resolved_ip6 = ip6;
                             config_dirty = true;
@@ -752,6 +398,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(None) => {
                         if applied.ip6 != [0u8; 16] {
                             println!("flowcone: WAN interface lost IPv6");
+                            flush_v6 = true;
+                            frag_epoch = frag_epoch.wrapping_add(1);
                             applied.ip6 = [0u8; 16];
                             resolved_ip6 = [0u8; 16];
                             config_dirty = true;
@@ -789,22 +437,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     (applied.v4_enabled && !active_v4) || (applied.effective_v6 > effective_v6);
                 let mut stage_ok = true;
                 let mut rules_staged = false;
+                let fw_cfg = firewall::FirewallConfig {
+                    iface: &ip_cfg.iface,
+                    enable_v4: active_v4,
+                    enable_v6: effective_v6 != 0,
+                    is_v6_masq,
+                    mark: ip_cfg.flowcone_mark,
+                    bypass_mask: ip_cfg.bypass_mark_mask,
+                    bypass_val: ip_cfg.bypass_mark_val,
+                    verbose: ip_cfg.verbose,
+                };
 
                 // On a shrink, stage the stricter rules before disabling the
                 // data plane. On grow or SIGHUP, sync once after publishing.
                 if ip_cfg.manage_nft && shrinking {
-                    stage_ok = firewall::sync_fw4_rules(
-                        &ip_cfg.iface,
-                        ip_cfg.min_port,
-                        ip_cfg.max_port,
-                        active_v4,
-                        effective_v6 != 0,
-                        is_v6_masq,
-                        ip_cfg.flowcone_mark,
-                        ip_cfg.bypass_mark_mask,
-                        ip_cfg.bypass_mark_val,
-                        ip_cfg.verbose,
-                    );
+                    stage_ok = firewall::sync_fw4_rules(&fw_cfg);
                     if !stage_ok {
                         eprintln!(
                             "flowcone: could not stage new firewall rules; keeping old data plane"
@@ -829,28 +476,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         enabled_v4: if active_v4 { 1 } else { 0 },
                         enabled_v6: effective_v6,
                         flowcone_mark: ip_cfg.flowcone_mark,
+                        frag_epoch,
                     };
-                    let set_ok = ip_session
-                        .lock()
-                        .map(|mut mgr| mgr.set_config(g_cfg))
-                        .unwrap_or(false);
+                    if flush_v4 || flush_v6 {
+                        let mut off = g_cfg;
+                        off.enabled_v4 = 0;
+                        off.enabled_v6 = 0;
+                        off.wan_ip4 = 0;
+                        off.wan_ip6 = [0u8; 16];
+                        off.frag_epoch = frag_epoch;
+                        let off_ok = lock_or_exit(&ip_session, "session").set_config(off);
+                        if off_ok {
+                            if flush_v4 {
+                                lock_or_exit(&ip_session, "session").clear_v4_mappings();
+                            }
+                            if flush_v6 {
+                                lock_or_exit(&ip_session, "session").clear_v6_mappings();
+                            }
+                        } else {
+                            eprintln!("flowcone: could not publish off-state config");
+                            RESYNC_REQUESTED.store(true, Ordering::Relaxed);
+                        }
+                        flush_v4 = false;
+                        flush_v6 = false;
+                    }
+                    let set_ok = lock_or_exit(&ip_session, "session").set_config(g_cfg);
                     if !set_ok {
                         eprintln!("flowcone: could not publish data-plane config");
                         RESYNC_REQUESTED.store(true, Ordering::Relaxed);
                     } else if ip_cfg.manage_nft {
-                        let sync_ok = rules_staged
-                            || firewall::sync_fw4_rules(
-                                &ip_cfg.iface,
-                                ip_cfg.min_port,
-                                ip_cfg.max_port,
-                                active_v4,
-                                effective_v6 != 0,
-                                is_v6_masq,
-                                ip_cfg.flowcone_mark,
-                                ip_cfg.bypass_mark_mask,
-                                ip_cfg.bypass_mark_val,
-                                ip_cfg.verbose,
-                            );
+                        let sync_ok = rules_staged || firewall::sync_fw4_rules(&fw_cfg);
                         if sync_ok {
                             applied.v4_enabled = active_v4;
                             applied.effective_v6 = effective_v6;
@@ -877,7 +532,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if reattach {
                 let mut attached = false;
-                if let Ok(mut dp) = ip_dp.lock() {
+                {
+                    let mut dp = lock_or_exit(&ip_dp, "data-plane");
                     let result = if force_new_attach {
                         dp.attach(true, false)
                     } else {
@@ -924,25 +580,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if last_reserve_scan.elapsed() >= Duration::from_secs(30) {
-                if let Ok(mut mgr) = ip_session.lock() {
-                    mgr.reserve_local_ports();
-                }
+                lock_or_exit(&ip_session, "session").reserve_local_ports();
                 last_reserve_scan = Instant::now();
             }
 
-            if ip_cfg.manage_nft && applied.liveness {
-                let _ = firewall::refresh_liveness(
+            if ip_cfg.manage_nft
+                && applied.liveness
+                && !firewall::refresh_liveness(
                     applied.v4_enabled,
                     applied.effective_v6 != 0,
                     applied.v6_masq,
                     ip_cfg.verbose,
-                );
+                )
+            {
+                // The sets can disappear on an fw4 reload; resync recreates
+                // them instead of letting the exemption expire silently.
+                if ip_cfg.verbose {
+                    eprintln!("flowcone: liveness refresh failed; scheduling resync");
+                }
+                RESYNC_REQUESTED.store(true, Ordering::Relaxed);
             }
 
+            let has_wan_addr = resolved_ip4 != 0 || resolved_ip6 != [0u8; 16];
             let sleep_dur = if ip_cfg.manage_nft && applied.liveness {
                 Duration::from_secs(5)
             } else {
-                Duration::from_secs(if resolved_ip4 != 0 { 5 } else { 1 })
+                Duration::from_secs(if has_wan_addr { 5 } else { 1 })
             };
             match monitor {
                 Some(ref monitor) => {
@@ -968,16 +631,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let gc_session = Arc::clone(&session_mgr);
-    let timeout_ns = config.timeout_sec.saturating_mul(1_000_000_000);
+    let timeout = config.timeout_sec as u32;
     let verbose = config.verbose;
     let gc_notifier = Arc::clone(&notifier);
     let gc_interval = Duration::from_secs(config.gc_interval_sec.max(1));
 
     let gc_thread = thread::spawn(move || {
         while gc_notifier.wait_timeout(gc_interval) {
-            let now = get_monotonic_coarse_ns();
-            if let Ok(mut mgr) = gc_session.lock() {
-                let (v4_swept, v6_swept) = mgr.gc_tick(now, timeout_ns);
+            let now = (get_monotonic_coarse_ns() / 1_000_000_000) as u32;
+            {
+                let mut mgr = lock_or_exit(&gc_session, "session");
+                let (v4_swept, v6_swept) = mgr.gc_tick(now, timeout);
                 if verbose && (v4_swept > 0 || v6_swept > 0) {
                     println!(
                         "flowcone: swept {} v4 and {} v6 expired sessions",
@@ -1008,9 +672,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         firewall::remove_rules(config.verbose);
     }
 
-    if let Ok(mut mgr) = session_mgr.lock() {
-        mgr.disable_fail_open();
-    }
+    lock_or_exit(&session_mgr, "session").disable_fail_open();
 
     let _ = ip_thread.join();
     let _ = gc_thread.join();

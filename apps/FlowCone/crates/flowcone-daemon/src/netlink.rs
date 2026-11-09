@@ -34,6 +34,8 @@ pub(crate) struct IfaceAddr {
 }
 
 const IFA_F_SECONDARY: u32 = 0x01;
+/// IPv6 privacy addresses reuse the secondary-address bit.
+const IFA_F_TEMPORARY: u32 = IFA_F_SECONDARY;
 const IFA_F_DADFAILED: u32 = 0x08;
 const IFA_F_DEPRECATED: u32 = 0x20;
 const IFA_F_TENTATIVE: u32 = 0x40;
@@ -157,24 +159,30 @@ fn pick_global_v4(addrs: &[IfaceAddr]) -> Option<[u8; 4]> {
         .map(|a| [a.addr[0], a.addr[1], a.addr[2], a.addr[3]])
 }
 
-/// Pick a global unicast IPv6 address, preferring a permanent one.
+/// Pick a global unicast IPv6 address: permanent first, then a non-temporary
+/// dynamic address, then a privacy/temporary address.
 fn pick_gua_v6(addrs: &[IfaceAddr]) -> Option<[u8; 16]> {
     let mut fallback = None;
+    let mut temporary = None;
     for a in addrs {
         // 2000::/3 only: ULA (fc00::/7) is not a WAN address even though it
         // is global scope.
         if a.family != 10 || a.scope != 0 || (a.addr[0] & 0xe0) != 0x20 {
             continue;
         }
-        if a.flags & (IFA_F_SECONDARY | IFA_F_DADFAILED | IFA_F_DEPRECATED | IFA_F_TENTATIVE) != 0 {
+        if a.flags & (IFA_F_DADFAILED | IFA_F_DEPRECATED | IFA_F_TENTATIVE) != 0 {
             continue;
         }
         if a.flags & IFA_F_PERMANENT != 0 {
             return Some(a.addr);
         }
-        fallback = fallback.or(Some(a.addr));
+        if a.flags & IFA_F_TEMPORARY != 0 {
+            temporary = temporary.or(Some(a.addr));
+        } else {
+            fallback = fallback.or(Some(a.addr));
+        }
     }
-    fallback
+    fallback.or(temporary)
 }
 
 /// Global addresses of one interface.
@@ -326,6 +334,16 @@ mod tests {
 
         let only_permanent = [addr(10, 0x24, 0x00, 0), addr(10, 0x28, IFA_F_PERMANENT, 0)];
         assert_eq!(pick_gua_v6(&only_permanent).unwrap()[0], 0x28);
+    }
+
+    #[test]
+    fn test_pick_gua_v6_falls_back_to_temporary() {
+        let only_temporary = [addr(10, 0x24, IFA_F_TEMPORARY, 0)];
+        assert_eq!(pick_gua_v6(&only_temporary).unwrap()[0], 0x24);
+
+        // A non-temporary dynamic address is still preferred over privacy.
+        let mixed = [addr(10, 0x25, IFA_F_TEMPORARY, 0), addr(10, 0x26, 0, 0)];
+        assert_eq!(pick_gua_v6(&mixed).unwrap()[0], 0x26);
     }
 
     #[test]

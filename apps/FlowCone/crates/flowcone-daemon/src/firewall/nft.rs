@@ -1,6 +1,7 @@
 //! nftables command channel, rule discovery and the standalone table used on
 //! systems without fw4.
 
+use super::FirewallConfig;
 use super::fw4::LIVENESS_TIMEOUT_SEC;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -34,16 +35,17 @@ pub(crate) fn generate_srcnat_rule_ip6(iface: &str, is_masq: bool) -> String {
 /// It contains liveness sets, the FlowCone UDP exemption, and a normal
 /// masquerade fallback for TCP/ICMP and for the moments when the daemon is
 /// down (the set elements expire and the maquerade path takes over).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn generate_standalone_script_live(
-    iface: &str,
-    enable_v4: bool,
-    enable_v6: bool,
-    is_v6_masq: bool,
-    mark: u32,
-    bypass_mask: u32,
-    bypass_val: u32,
-) -> String {
+pub(crate) fn generate_standalone_script_live(cfg: &FirewallConfig<'_>) -> String {
+    let FirewallConfig {
+        iface,
+        enable_v4,
+        enable_v6,
+        is_v6_masq,
+        mark,
+        bypass_mask,
+        bypass_val,
+        ..
+    } = *cfg;
     if !enable_v4 && !enable_v6 {
         return String::new();
     }
