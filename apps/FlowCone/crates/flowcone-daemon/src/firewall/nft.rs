@@ -124,21 +124,25 @@ pub(crate) fn refresh_standalone_liveness(
             .map(|p| format!("{} timeout {}s", p, LIVENESS_TIMEOUT_SEC))
             .collect::<Vec<_>>()
             .join(", ");
+        script.push_str(&format!("flush set inet flowcone {}\n", SET_V4));
         script.push_str(&format!(
             "add element inet flowcone {} {{ {} }}\n",
             SET_V4, elements
         ));
+        script.push_str(&format!("flush set inet flowcone {}\n", SET_FWD4));
         script.push_str(&format!(
             "add element inet flowcone {} {{ 0.0.0.0/0 timeout {}s }}\n",
             SET_FWD4, LIVENESS_TIMEOUT_SEC
         ));
     }
     if enable_v6 {
+        script.push_str(&format!("flush set inet flowcone {}\n", SET_V6));
         script.push_str(&format!(
             "add element inet flowcone {} {{ {} }}\n",
             SET_V6,
             v6_elements(is_v6_masq)
         ));
+        script.push_str(&format!("flush set inet flowcone {}\n", SET_FWD6));
         script.push_str(&format!(
             "add element inet flowcone {} {{ ::/0 timeout {}s }}\n",
             SET_FWD6, LIVENESS_TIMEOUT_SEC

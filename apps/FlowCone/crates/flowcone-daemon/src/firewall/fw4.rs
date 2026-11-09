@@ -392,21 +392,25 @@ pub(crate) fn refresh_fw4_liveness(
             .map(|p| format!("{} timeout {}s", p, LIVENESS_TIMEOUT_SEC))
             .collect::<Vec<_>>()
             .join(", ");
+        script.push_str(&format!("flush set inet fw4 {}\n", SET_V4));
         script.push_str(&format!(
             "add element inet fw4 {} {{ {} }}\n",
             SET_V4, elements
         ));
+        script.push_str(&format!("flush set inet fw4 {}\n", SET_FWD4));
         script.push_str(&format!(
             "add element inet fw4 {} {{ 0.0.0.0/0 timeout {}s }}\n",
             SET_FWD4, LIVENESS_TIMEOUT_SEC
         ));
     }
     if enable_v6 {
+        script.push_str(&format!("flush set inet fw4 {}\n", SET_V6));
         script.push_str(&format!(
             "add element inet fw4 {} {{ {} }}\n",
             SET_V6,
             v6_elements(is_v6_masq)
         ));
+        script.push_str(&format!("flush set inet fw4 {}\n", SET_FWD6));
         script.push_str(&format!(
             "add element inet fw4 {} {{ ::/0 timeout {}s }}\n",
             SET_FWD6, LIVENESS_TIMEOUT_SEC

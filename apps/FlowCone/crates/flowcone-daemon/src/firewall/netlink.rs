@@ -17,6 +17,7 @@ const NFNL_SUBSYS_NFTABLES: u8 = 10;
 const NFNL_MSG_BATCH_BEGIN: u16 = 16;
 const NFNL_MSG_BATCH_END: u16 = 17;
 const NFT_MSG_NEWSETELEM: u16 = 12;
+const NFT_MSG_DELSETELEM: u16 = 14;
 
 const NLM_F_REQUEST: u16 = 0x01;
 const NLM_F_ACK: u16 = 0x04;
@@ -172,6 +173,29 @@ impl NetlinkBatch {
         self.buf.resize(self.buf.len() + pad, 0);
     }
 
+    pub(crate) fn flush_set(&mut self, table: &str, set: &str) {
+        let msg_start = self.buf.len();
+        self.buf.resize(msg_start + 20, 0);
+
+        self.push_nla_str(NFTA_SET_ELEM_LIST_TABLE, table);
+        self.push_nla_str(NFTA_SET_ELEM_LIST_SET, set);
+
+        let msg_len = (self.buf.len() - msg_start) as u32;
+        let msg_type = ((NFNL_SUBSYS_NFTABLES as u16) << 8) | NFT_MSG_DELSETELEM;
+        let flags = NLM_F_REQUEST;
+        self.buf[msg_start..msg_start + 4].copy_from_slice(&msg_len.to_ne_bytes());
+        self.buf[msg_start + 4..msg_start + 6].copy_from_slice(&msg_type.to_ne_bytes());
+        self.buf[msg_start + 6..msg_start + 8].copy_from_slice(&flags.to_ne_bytes());
+        self.buf[msg_start + 8..msg_start + 12].copy_from_slice(&self.seq.to_ne_bytes());
+        self.buf[msg_start + 12..msg_start + 16].copy_from_slice(&0u32.to_ne_bytes());
+        self.buf[msg_start + 16] = NFPROTO_INET;
+        self.buf[msg_start + 17] = 0;
+        self.buf[msg_start + 18] = 0;
+        self.buf[msg_start + 19] = 0;
+
+        self.seq += 1;
+    }
+
     pub(crate) fn add_set_elements(
         &mut self,
         table: &str,
@@ -267,9 +291,11 @@ pub(crate) fn refresh_liveness_netlink(
             .iter()
             .map(|&p| v4_range(p))
             .collect();
+        batch.flush_set(table, super::fw4::SET_V4);
         batch.add_set_elements(table, super::fw4::SET_V4, &v4_ranges, timeout_ms);
 
         let fwd4_range = [v4_range("0.0.0.0/0")];
+        batch.flush_set(table, super::fw4::SET_FWD4);
         batch.add_set_elements(table, super::fw4::SET_FWD4, &fwd4_range, timeout_ms);
     }
 
@@ -279,9 +305,11 @@ pub(crate) fn refresh_liveness_netlink(
             v6_ranges.push(v6_range("2000::/3"));
         }
         v6_ranges.push(v6_range("fc00::/7"));
+        batch.flush_set(table, super::fw4::SET_V6);
         batch.add_set_elements(table, super::fw4::SET_V6, &v6_ranges, timeout_ms);
 
         let fwd6_range = [v6_range("::/0")];
+        batch.flush_set(table, super::fw4::SET_FWD6);
         batch.add_set_elements(table, super::fw4::SET_FWD6, &fwd6_range, timeout_ms);
     }
 
@@ -368,16 +396,24 @@ mod tests {
     #[test]
     fn test_batch_serialization_layout() {
         let mut batch = NetlinkBatch::new();
+        batch.flush_set("fw4", "flowcone_v4");
         let ranges = [v4_range("10.0.0.0/8")];
         batch.add_set_elements("fw4", "flowcone_v4", &ranges, 15000);
         let bytes = batch.finish();
 
         // Must start with BATCH_BEGIN (type 16, len 20)
-        assert!(bytes.len() > 60);
+        assert!(bytes.len() > 80);
         let len0 = u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
         let type0 = u16::from_ne_bytes([bytes[4], bytes[5]]);
         assert_eq!(len0, 20);
         assert_eq!(type0, NFNL_MSG_BATCH_BEGIN);
+
+        // Next message is flush_set (NFT_MSG_DELSETELEM = 14)
+        let flush_type = u16::from_ne_bytes([bytes[24], bytes[25]]);
+        assert_eq!(
+            flush_type,
+            ((NFNL_SUBSYS_NFTABLES as u16) << 8) | NFT_MSG_DELSETELEM
+        );
 
         // Ends with BATCH_END (type 17, len 20)
         let last_start = bytes.len() - 20;
@@ -398,5 +434,46 @@ mod tests {
         // if privileged, kernel rejects non-existent table gracefully.
         let res = refresh_liveness_netlink("non_existent_table_xyz", true, false, false);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_refresh_liveness_atomic_reset() {
+        let setup = std::process::Command::new("nft")
+            .args([
+                "-f",
+                "-",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                if let Some(ref mut stdin) = child.stdin {
+                    let _ = stdin.write_all(
+                        b"add table inet flowcone_nl_test\n\
+                          add set inet flowcone_nl_test flowcone_v4 { type ipv4_addr; flags interval,timeout; }\n\
+                          add set inet flowcone_nl_test flowcone_fwd4 { type ipv4_addr; flags interval,timeout; }\n\
+                          add set inet flowcone_nl_test flowcone_v6 { type ipv6_addr; flags interval,timeout; }\n\
+                          add set inet flowcone_nl_test flowcone_fwd6 { type ipv6_addr; flags interval,timeout; }\n"
+                    );
+                }
+                child.wait()
+            });
+
+        let Ok(status) = setup else { return };
+        if !status.success() {
+            return;
+        }
+
+        let res1 = refresh_liveness_netlink("flowcone_nl_test", true, true, false);
+        assert!(res1.is_ok());
+
+        std::thread::sleep(Duration::from_millis(300));
+
+        let res2 = refresh_liveness_netlink("flowcone_nl_test", true, true, false);
+        assert!(res2.is_ok());
+
+        let _ = std::process::Command::new("nft")
+            .args(["delete", "table", "inet", "flowcone_nl_test"])
+            .output();
     }
 }
