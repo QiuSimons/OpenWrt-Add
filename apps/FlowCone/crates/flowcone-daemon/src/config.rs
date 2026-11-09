@@ -139,6 +139,10 @@ pub fn parse_args() -> Result<Config, String> {
             "-v" | "--verbose" => {
                 cfg.verbose = true;
             }
+            "-V" | "--version" => {
+                println!("flowcone {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             "-h" | "--help" => {
                 print_help();
                 std::process::exit(0);
@@ -206,6 +210,7 @@ pub fn print_help() {
         "      --manage-nft <1|0>     Manage firewall nftables rules automatically (default: 1)"
     );
     println!("  -v, --verbose              Verbose output");
+    println!("  -V, --version              Show version");
     println!("  -h, --help                 Show help");
 }
 

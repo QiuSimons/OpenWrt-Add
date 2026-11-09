@@ -36,20 +36,23 @@ esac
 echo "==> Updating embedded Doona dashboard..."
 echo "Target directory: $TARGET_DIR"
 
-# Fetch latest release tag
-RELEASES_HTML="$(curl -fsSL --retry 3 --connect-timeout 10 "https://github.com/${UPSTREAM_REPO}/releases" 2>/dev/null || true)"
-LATEST_TAG="$(printf "%s" "$RELEASES_HTML" | grep -o 'releases/tag/[^"/]*' | head -n 1 | sed 's|releases/tag/||')"
+# Fetch latest release tag (no GitHub REST API)
+LATEST_TAG=""
+RELEASES_HTML="$(curl -fsSL -A "Mozilla/5.0 (X11; Linux x86_64)" --retry 3 --connect-timeout 10 "https://github.com/${UPSTREAM_REPO}/releases" 2>/dev/null || true)"
+if [ -n "$RELEASES_HTML" ]; then
+    LATEST_TAG="$(printf "%s" "$RELEASES_HTML" | grep -o 'releases/tag/[^"/]*' | head -n 1 | sed 's|releases/tag/||' || true)"
+fi
 
 if [ -z "$LATEST_TAG" ]; then
     echo "Warning: Could not detect latest tag from GitHub releases HTML. Trying git ls-remote..."
-    LATEST_TAG="$(git ls-remote --tags "https://github.com/${UPSTREAM_REPO}.git" | awk '{print $2}' | sed 's|refs/tags/||' | grep -v '\^{}' | sort -V | tail -n 1)"
+    LATEST_TAG="$(git ls-remote --tags "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null | awk '{print $2}' | sed 's|refs/tags/||' | grep -v '\^{}' | sort -V | tail -n 1 || true)"
 fi
 
 [ -n "$LATEST_TAG" ] || { echo "Error: Failed to resolve latest release tag for ${UPSTREAM_REPO}" >&2; exit 1; }
 echo "Latest release tag: $LATEST_TAG"
 
 # Resolve asset download URL
-ASSETS_HTML="$(curl -fsSL --retry 3 --connect-timeout 10 "https://github.com/${UPSTREAM_REPO}/releases/expanded_assets/${LATEST_TAG}" 2>/dev/null || true)"
+ASSETS_HTML="$(curl -fsSL -A "Mozilla/5.0 (X11; Linux x86_64)" --retry 3 --connect-timeout 10 "https://github.com/${UPSTREAM_REPO}/releases/expanded_assets/${LATEST_TAG}" 2>/dev/null || true)"
 TAG_NO_V="${LATEST_TAG#[vV]}"
 DOWNLOAD_URL=""
 
@@ -80,31 +83,35 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 ARCHIVE_FILE="$TMP_DIR/doona.tar.gz"
 echo "Downloading $DOWNLOAD_URL ..."
 
-if ! curl -fsSL --retry 3 --connect-timeout 15 -o "$ARCHIVE_FILE" "$DOWNLOAD_URL" 2>/dev/null || [ ! -s "$ARCHIVE_FILE" ]; then
-    # Try alternative format (switch between doona-v and doona-)
-    ALT_URL=""
-    if [ "$IS_LITE" -eq 1 ]; then
-        case "$DOWNLOAD_URL" in
-            *doona-lite-v*)
-                ALT_URL="$(echo "$DOWNLOAD_URL" | sed 's/doona-lite-v/doona-lite-/')"
-                ;;
-            *doona-lite-[0-9]*)
-                ALT_URL="$(echo "$DOWNLOAD_URL" | sed 's/doona-lite-/doona-lite-v/')"
-                ;;
-        esac
-    else
-        case "$DOWNLOAD_URL" in
-            *doona-v*)
-                ALT_URL="$(echo "$DOWNLOAD_URL" | sed 's/doona-v/doona-/')"
-                ;;
-            *doona-[0-9]*)
-                ALT_URL="$(echo "$DOWNLOAD_URL" | sed 's/doona-/doona-v/')"
-                ;;
-        esac
-    fi
-    if [ -n "$ALT_URL" ] && [ "$ALT_URL" != "$DOWNLOAD_URL" ]; then
-        echo "Retrying with alternative asset name format: $ALT_URL"
-        curl -fsSL --retry 3 --connect-timeout 15 -o "$ARCHIVE_FILE" "$ALT_URL"
+CURL_DOWN_OPTS=(-fsSL -A "Mozilla/5.0 (X11; Linux x86_64)" --retry 5 --retry-delay 2 --connect-timeout 15)
+
+if ! curl "${CURL_DOWN_OPTS[@]}" -o "$ARCHIVE_FILE" "$DOWNLOAD_URL" || [ ! -s "$ARCHIVE_FILE" ]; then
+    # Try alternative format ONLY if the asset URL was inferred (not confirmed by upstream assets HTML)
+    if [ -z "$ASSET_PATH" ]; then
+        ALT_URL=""
+        if [ "$IS_LITE" -eq 1 ]; then
+            case "$DOWNLOAD_URL" in
+                *doona-lite-v*)
+                    ALT_URL="$(echo "$DOWNLOAD_URL" | sed 's/doona-lite-v/doona-lite-/')"
+                    ;;
+                *doona-lite-[0-9]*)
+                    ALT_URL="$(echo "$DOWNLOAD_URL" | sed 's/doona-lite-/doona-lite-v/')"
+                    ;;
+            esac
+        else
+            case "$DOWNLOAD_URL" in
+                *doona-v*)
+                    ALT_URL="$(echo "$DOWNLOAD_URL" | sed 's/doona-v/doona-/')"
+                    ;;
+                *doona-[0-9]*)
+                    ALT_URL="$(echo "$DOWNLOAD_URL" | sed 's/doona-/doona-v/')"
+                    ;;
+            esac
+        fi
+        if [ -n "$ALT_URL" ] && [ "$ALT_URL" != "$DOWNLOAD_URL" ]; then
+            echo "Retrying with alternative inferred asset name format: $ALT_URL"
+            curl "${CURL_DOWN_OPTS[@]}" -o "$ARCHIVE_FILE" "$ALT_URL" || true
+        fi
     fi
 fi
 

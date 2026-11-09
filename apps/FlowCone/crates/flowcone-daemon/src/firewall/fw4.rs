@@ -374,6 +374,17 @@ pub(crate) fn refresh_fw4_liveness(
     is_v6_masq: bool,
     verbose: bool,
 ) -> bool {
+    match super::netlink::refresh_liveness_netlink("fw4", enable_v4, enable_v6, is_v6_masq) {
+        Ok(()) => return true,
+        Err(e) if verbose => {
+            eprintln!(
+                "flowcone: netlink fw4 liveness refresh failed ({}), falling back to CLI",
+                e
+            );
+        }
+        Err(_) => {}
+    }
+
     let mut script = String::new();
     if enable_v4 {
         let elements = flowcone_common::INTERNAL_V4_PREFIXES

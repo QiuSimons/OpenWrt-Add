@@ -106,6 +106,17 @@ pub(crate) fn refresh_standalone_liveness(
     if !nft_table_exists("inet", "flowcone") {
         return false;
     }
+    match super::netlink::refresh_liveness_netlink("flowcone", enable_v4, enable_v6, is_v6_masq) {
+        Ok(()) => return true,
+        Err(e) if verbose => {
+            eprintln!(
+                "flowcone: netlink standalone liveness refresh failed ({}), falling back to CLI",
+                e
+            );
+        }
+        Err(_) => {}
+    }
+
     let mut script = String::new();
     if enable_v4 {
         let elements = flowcone_common::INTERNAL_V4_PREFIXES

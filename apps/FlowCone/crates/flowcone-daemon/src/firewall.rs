@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU8, Ordering};
 
 mod fw4;
+mod netlink;
 mod nft;
 
 pub(crate) use fw4::*;
