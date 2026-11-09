@@ -53,6 +53,7 @@ pub(crate) fn sync_fw4_rules(cfg: &FirewallConfig<'_>) -> bool {
         .unwrap_or_default();
 
     if has_table_inet_fw4() {
+        clear_generic_tables();
         let native_includes = use_chain_pre();
         let set_file_ok = write_fw4_set_definitions();
         if !ensure_fw4_sets() {
@@ -121,34 +122,40 @@ pub(crate) fn sync_fw4_rules(cfg: &FirewallConfig<'_>) -> bool {
     }
 
     let standalone = postrouting_nat_chains.is_empty() && forward_filter_chains.is_empty();
+    let mut generic_tables = Vec::new();
     if standalone {
         body.push_str(&generate_standalone_script_live(cfg));
     } else {
-        body.push_str(&build_primary_insert_script(
-            iface,
+        generic_tables = collect_generic_tables(
             &postrouting_nat_chains,
+            &forward_filter_chains,
             enable_v4,
             enable_v6,
-            is_v6_masq,
-        ));
-        if enable_v4 || enable_v6 {
-            for c in &forward_filter_chains {
-                for fwd in generate_fw4_forward_rules(mark) {
-                    body.push_str(&format!(
-                        "insert rule {} {} {} {}\n",
-                        c.family, c.table, c.name, fwd
-                    ));
-                }
-            }
+        );
+        if !ensure_generic_sets(&generic_tables) {
+            eprintln!("flowcone: error: could not create generic firewall timeout sets");
+            return false;
         }
+        body.push_str(&build_generic_insert_script(
+            iface,
+            &postrouting_nat_chains,
+            &forward_filter_chains,
+            enable_v4,
+            enable_v6,
+            mark,
+            bypass_mask,
+            bypass_val,
+        ));
     }
 
     let ok = nft_apply_with_fallback(&deletes, &body, "Linux firewall rule sync");
     if ok {
         if standalone {
+            clear_generic_tables();
             refresh_standalone_liveness(enable_v4, enable_v6, is_v6_masq, verbose);
             report_layer(4, "standalone table inet flowcone", verbose);
         } else {
+            store_generic_tables(generic_tables);
             report_layer(3, "existing nftables chains", verbose);
         }
     } else {
@@ -177,12 +184,16 @@ pub(crate) fn refresh_liveness(
 ) -> bool {
     match LAST_LAYER.load(Ordering::Relaxed) {
         1 | 2 => refresh_fw4_liveness(enable_v4, enable_v6, is_v6_masq, verbose),
-        3 | 4 => refresh_standalone_liveness(enable_v4, enable_v6, is_v6_masq, verbose),
+        3 => refresh_generic_liveness(is_v6_masq, verbose),
+        4 => refresh_standalone_liveness(enable_v4, enable_v6, is_v6_masq, verbose),
         _ => false,
     }
 }
 
 pub(crate) fn liveness_supported() -> bool {
+    if LAST_LAYER.load(Ordering::Relaxed) == 3 && generic_liveness_supported() {
+        return true;
+    }
     has_table_inet_fw4() || nft_table_exists("inet", "flowcone")
 }
 
@@ -191,6 +202,7 @@ pub(crate) fn remove_rules(verbose: bool) {
     clean_firewall4_user_file();
     clean_fw4_set_definitions();
     delete_all_injected_rules(verbose);
+    remove_generic_sets(verbose);
 
     if has_table_inet_fw4() {
         remove_fw4_sets();

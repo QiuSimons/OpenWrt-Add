@@ -121,6 +121,7 @@ pub fn resolve_effective_v6(enable_v6: bool, wan_ip6: [u8; 16], has_masq: bool) 
 /// What the data plane and the firewall were last configured with.
 struct AppliedState {
     l2_len: u32,
+    l2_known: bool,
     ip4: u32,
     ip6: [u8; 16],
     effective_v6: u32,
@@ -145,6 +146,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "flowcone: modes: v4={}, v6={}, port range {}-{}, timeout {}s",
         config.enable_v4, config.enable_v6, config.min_port, config.max_port, config.timeout_sec
     );
+    if env!("FLOWCONE_EBPF_STALE") == "1" {
+        eprintln!(
+            "flowcone: embedded eBPF object is older than crates/flowcone-ebpf/src/main.rs or flowcone-common; rebuild it and copy to crates/flowcone-daemon/ebpf/flowcone-ebpf.bin, or set FLOWCONE_EBPF_PATH"
+        );
+    }
 
     // Self-pipe for async-signal-safe shutdown notification
     let (sig_read_end, sig_write_end) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)?;
@@ -269,12 +275,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         mgr.reserve_local_ports();
     }
 
-    let l2_len = netlink::get_iface_l2_len(&config.iface);
-    if config.verbose {
-        println!(
-            "flowcone: detected L2 header length: {} bytes for interface {}",
-            l2_len, config.iface
-        );
+    let initial_l2 = netlink::get_iface_l2_len(&config.iface);
+    match initial_l2 {
+        Some(l2_len) => {
+            if config.verbose {
+                println!(
+                    "flowcone: detected L2 header length: {} bytes for interface {}",
+                    l2_len, config.iface
+                );
+            }
+        }
+        None => eprintln!(
+            "flowcone: interface {} TYPE unreadable; NAT stays disabled",
+            config.iface
+        ),
     }
 
     let data_plane = Arc::new(Mutex::new(DataPlane::start(bpf, &config.iface)?));
@@ -287,7 +301,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ip_thread = thread::spawn(move || {
         let mut last_reserve_scan = Instant::now();
         let mut applied = AppliedState {
-            l2_len,
+            l2_len: initial_l2.unwrap_or(0),
+            l2_known: initial_l2.is_some(),
             ip4: 0,
             ip6: [0u8; 16],
             effective_v6: 0,
@@ -300,6 +315,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut frag_epoch: u32 = 0;
         let mut flush_v4 = false;
         let mut flush_v6 = false;
+        let mut l2_warned = initial_l2.is_none();
         let mut attach_timer = Instant::now();
 
         loop {
@@ -310,6 +326,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut resolved_ip4 = applied.ip4;
             let mut resolved_ip6 = applied.ip6;
 
+            match netlink::get_iface_l2_len(&ip_cfg.iface) {
+                Some(l2) => {
+                    if !applied.l2_known || applied.l2_len != l2 {
+                        applied.l2_len = l2;
+                        applied.l2_known = true;
+                        l2_warned = false;
+                        config_dirty = true;
+                    }
+                }
+                None => {
+                    if applied.l2_known {
+                        applied.l2_known = false;
+                        config_dirty = true;
+                    }
+                    if !l2_warned {
+                        eprintln!(
+                            "flowcone: interface {} TYPE unreadable; NAT stays disabled",
+                            ip_cfg.iface
+                        );
+                        l2_warned = true;
+                    }
+                }
+            }
+
             // A re-created interface (PPPoE/WireGuard reconnect) lost its
             // links; the periodic check below covers what the ifindex cannot.
             let cur_ifindex = netlink::get_ifindex(&ip_cfg.iface).unwrap_or(0);
@@ -319,7 +359,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "flowcone: interface {} re-created (ifindex {} -> {}), re-attaching",
                     ip_cfg.iface, applied.ifindex, cur_ifindex
                 );
-                applied.l2_len = netlink::get_iface_l2_len(&ip_cfg.iface);
                 reattach = true;
                 force_new_attach = true;
                 notable = true;
@@ -420,7 +459,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Read the masquerade state once; the data plane and the
                 // firewall rules must make the same decision.
                 let is_v6_masq = firewall::is_ipv6_masq_enabled();
-                let effective_v6 = resolve_effective_v6(ip_cfg.enable_v6, resolved_ip6, is_v6_masq);
+                let effective_v6 = if applied.l2_known {
+                    resolve_effective_v6(ip_cfg.enable_v6, resolved_ip6, is_v6_masq)
+                } else {
+                    0
+                };
 
                 if effective_v6 != applied.effective_v6 {
                     let desc = match effective_v6 {
@@ -432,7 +475,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("flowcone: IPv6 operational mode: {}", desc);
                 }
 
-                let active_v4 = ip_cfg.enable_v4 && resolved_ip4 != 0;
+                let active_v4 = ip_cfg.enable_v4 && resolved_ip4 != 0 && applied.l2_known;
                 let shrinking =
                     (applied.v4_enabled && !active_v4) || (applied.effective_v6 > effective_v6);
                 let mut stage_ok = true;

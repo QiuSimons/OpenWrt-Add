@@ -46,6 +46,7 @@ fn main() {
         let path = PathBuf::from(value);
         if path.is_file() {
             fs::copy(&path, &dest).expect("copy eBPF from FLOWCONE_EBPF_PATH");
+            println!("cargo:rustc-env=FLOWCONE_EBPF_STALE=0");
             return;
         }
         println!(
@@ -55,12 +56,17 @@ fn main() {
     }
 
     if embedded.is_file() {
-        if newer_than_embedded(&embedded, &ebpf_dir, &manifest) {
+        let stale = newer_than_embedded(&embedded, &ebpf_dir, &manifest);
+        if stale {
             println!(
                 "cargo:warning=flowcone-ebpf sources are newer than the embedded binary; set FLOWCONE_EBPF_PATH to a fresh object or rebuild it"
             );
         }
         fs::copy(&embedded, &dest).expect("copy embedded eBPF binary");
+        println!(
+            "cargo:rustc-env=FLOWCONE_EBPF_STALE={}",
+            if stale { 1 } else { 0 }
+        );
         return;
     }
 
@@ -86,4 +92,5 @@ fn main() {
 
     let built = ebpf_dir.join("target/bpfel-unknown-none/release/flowcone-ebpf");
     fs::copy(&built, &dest).expect("copy built eBPF binary");
+    println!("cargo:rustc-env=FLOWCONE_EBPF_STALE=0");
 }

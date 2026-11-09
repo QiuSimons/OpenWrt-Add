@@ -222,7 +222,7 @@ config flowcone 'config'
 
 ## 实现边界与兼容性
 
-> 仓库内没有自动化网络回归。本次交付在 A/B 双路由验证了 IPv4 eBPF verifier 加载；在 B 上验证了 STUN 映射与外部主动 UDP 的 fullcone 收包；同源端口 40000 的两个 LAN 客户端，第二个由 `bpf_loop` 回调分配到 1024 并完成外部主动 UDP 收包。IPv6/frag fullcone 仍需独立的 IPv6 WAN 实验室复测；不要用 verifier 通过冒充数据面通过。以下为代码实现边界。
+> 仓库内没有自动化网络回归；verifier 通过不等于数据面通过；IPv6、分片和 ICMPv6 需要抓包回归。以下为代码实现边界。
 
 - UDP 数据面：FlowCone 负责 UDP EIM/EIF 和端口保持；TCP/ICMP 仍由系统 NAT/fw4 处理。standalone 表会为 TCP/ICMP 提供 masquerade 回退。
 - IPv4 分片：出站/入站分片通过独立 fragment target 做首片建映射、后续片查缓存。分片缓存为 1024 条/方向/族（LRU，30 秒超时）；首片晚于后续片到达时，后续片可能被丢弃并依赖上层重传。
@@ -234,13 +234,13 @@ config flowcone 'config'
 - 软件 flow offload：forward accept 规则带 ct state new；chain-pre 持久化规则位于 fw4 flow add @ft 之后，已建立流继续走 flowtable，不阻断软件 offload。硬件 flow offload 会绕过 CPU TC 钩子，必须关闭；程序只能告警，无法从 eBPF 内关闭 fw4 的 flowtable 规则。
 - honk / daed 等 TC eBPF 透明代理：FlowCone 保持 TCX LinkOrder::last，只 OR 自己的 mark 位，不清除其他程序的 mark；DNAT mark 位可通过 --mark 配置以避免冲突。代理流量可用 --bypass-mark 让出，nft 豁免规则也会排除该 mark。OpenWrt init 的 START 从 95 调到 99，确保 honk(96)/dae(96)/daed(99) 先挂载、FlowCone 后挂载。运行期每 30 秒用进程内 query_tcx 检查一次；只有发现 FlowCone 不再是 TCX 尾部时才切换。切换使用两个 56 字节级的 tail-call dispatcher（A/B），它们指向同一份 FlowCone 主程序：先把未激活的 dispatcher 挂到链尾，再摘旧 dispatcher；主程序幂等，因此切换期间无 WAN 空窗、无双 NAT。检查不 fork tc/bpftool；正常场景不产生链路抖动。若之后单独重启代理，最多 30 秒后 FlowCone 会重新挂到最后；无法阻止其他程序在任意时刻再抢 last。
 - fw4 规则生命周期：规则引用 /etc/nftables.d/flowcone.nft 中的 timeout set；chain-pre 只保存规则，不保存活跃状态。fw4 reload 后由 SIGHUP/周期刷新重新填充 set，最坏 15 秒内回退到系统 masquerade。
-- generic 非 fw4 路径：仍使用内联前缀规则，liveness 保障只覆盖 fw4 与 standalone 表；通用 Linux 建议使用 fw4/nftables。
+- generic 非 fw4 路径：没有 fw4 时，在目标表内建带 15 秒 timeout 的 set；规则和 fw4 使用同一套 IPv4 特殊 UDP 排除与 bypass mark；进程退出后 set 过期，masquerade 恢复。
 - 自定义 mark：--mark 同时写入 eBPF 配置和 fw4/standalone/generic 防火墙规则；修改后需重启守护进程。
 - L2/PPPoE：挂在 pppoe-wan/ppp0 时 TC 看到裸 IP（l2_len=0）。若把程序挂到承载 PPPoE 的以太网口，且 PPP 协议字段为 1 字节压缩，IP 头会从奇数偏移开始；内核 bpf_l3/l4_csum_replace 拒绝奇数 offset，当前会丢弃该包。OpenWrt 默认挂 pppoe-wan，不会走到该路径。
 - 分片表容量：1024 条 LRU，表满时旧记录被挤出，后续分片会被丢弃；不会把私网地址发出去，但单个大数据报可能缺片。
 - 本机监听端口：守护进程每 30 秒按当前 /proc/net/udp{,6} 的监听集合整体对账；服务停止后端口会回到池中。仍被映射占用的端口不会立即回收。
 - 端口池：端口状态使用 FREE/QUEUED 位；preferred 成功只清 FREE、保留 QUEUED，release 不会重复入队。主 egress 和 frag v4 每侧最多 64 次（32 primary + 32 fallback），由 `bpf_loop` 回调执行；frag v6 因 verifier 预算只能 1/0。仍失败时置 `PORT_FLAGS`，由用户态重建队列。eBPF 对象携带 BTF，目标需有 vmlinux BTF；`bpf_loop` 还需 CAP_BPF（当前 root 运行）。
-- 过期回收：`last_seen` 为 u32 秒，32 位读原子；删除前复核 inbound/outbound，删除本身仍非原子。WAN 变化递增 frag key epoch，旧缓存不命中。
+- 过期回收：`last_seen` 为 u32 秒，32 位读原子；已建立流的 `last_seen` 最多每秒写一次；删除前复核 inbound/outbound，删除本身仍非原子。WAN 变化递增 frag key epoch，旧缓存不命中。
 
 ---
 

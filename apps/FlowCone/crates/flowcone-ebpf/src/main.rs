@@ -70,6 +70,7 @@ static ICMP_TARGET: ProgramArray = ProgramArray::with_max_entries(1, 0);
 static ICMP6_TARGET: ProgramArray = ProgramArray::with_max_entries(1, 0);
 
 const FRAG_TIMEOUT_SEC: u32 = 30;
+const LAST_SEEN_INTERVAL_SEC: u32 = 1;
 /// The free queue can contain stale entries for ports claimed by port
 /// preservation. `bpf_loop` walks up to PRIMARY + FALLBACK entries at runtime;
 /// the callback is verified once, so this bound does not expand the classifier
@@ -928,7 +929,9 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
             let new_dst_port = unsafe { (*target).port };
             let now = now_sec();
             unsafe {
-                (*target).last_seen = now;
+                if now.wrapping_sub((*target).last_seen) >= LAST_SEEN_INTERVAL_SEC {
+                    (*target).last_seen = now;
+                }
             }
 
             let old_dst_ip = iph.dst_addr;
@@ -1007,7 +1010,9 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
             let new_dst_port = unsafe { (*target).port };
             let now = now_sec();
             unsafe {
-                (*target).last_seen = now;
+                if now.wrapping_sub((*target).last_seen) >= LAST_SEEN_INTERVAL_SEC {
+                    (*target).last_seen = now;
+                }
             }
 
             let old_dst_ip = iph.dst_addr;
@@ -1113,7 +1118,9 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
         if let Some(val) = OUTBOUND_BINDINGS_V4.get_ptr_mut(&ep_key) {
             unsafe {
                 if (*val).ip == cfg.wan_ip4 {
-                    (*val).last_seen = now;
+                    if now.wrapping_sub((*val).last_seen) >= LAST_SEEN_INTERVAL_SEC {
+                        (*val).last_seen = now;
+                    }
                     mapped_port = Some((*val).port);
                 } else {
                     let old_port = u16::from_be((*val).port);
@@ -1220,7 +1227,7 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
                 unsafe {
                     FRAG_TARGET.tail_call(&ctx, 0);
                 }
-                return TC_ACT_UNSPEC;
+                return TC_ACT_SHOT;
             }
             // Routing headers, AH/ESP and an over-long extension chain are
             // not NAT-able here. Pass them to the normal stack: ULA sources
@@ -1251,7 +1258,9 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
         if let Some(val) = OUTBOUND_BINDINGS_V6.get_ptr_mut(&ep_key) {
             unsafe {
                 if ipv6_eq(&(*val).ip, &cfg.wan_ip6) {
-                    (*val).last_seen = now;
+                    if now.wrapping_sub((*val).last_seen) >= LAST_SEEN_INTERVAL_SEC {
+                        (*val).last_seen = now;
+                    }
                     mapped_port = Some((*val).port);
                 } else {
                     let old_port = u16::from_be((*val).port);
@@ -1434,7 +1443,9 @@ fn frag_v6_target(
         let new_ip = unsafe { (*target).ip };
         let new_port = unsafe { (*target).port };
         unsafe {
-            (*target).last_seen = now;
+            if now.wrapping_sub((*target).last_seen) >= LAST_SEEN_INTERVAL_SEC {
+                (*target).last_seen = now;
+            }
         }
         let old_ip = iph.dst_addr;
         let old_port = udph.dst_port;
@@ -1493,7 +1504,9 @@ fn frag_v6_target(
     if let Some(val) = OUTBOUND_BINDINGS_V6.get_ptr_mut(&ep_key) {
         unsafe {
             if ipv6_eq(&(*val).ip, &cfg.wan_ip6) {
-                (*val).last_seen = now;
+                if now.wrapping_sub((*val).last_seen) >= LAST_SEEN_INTERVAL_SEC {
+                    (*val).last_seen = now;
+                }
                 mapped = Some((*val).port);
             } else {
                 let old_port = u16::from_be((*val).port);
@@ -1635,7 +1648,7 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
         unsafe {
             FRAG6_TARGET.tail_call(&ctx, 0);
         }
-        return TC_ACT_UNSPEC;
+        return TC_ACT_SHOT;
     }
     if l2.proto != ETH_P_IP || cfg.enabled_v4 != 1 {
         return TC_ACT_UNSPEC;
@@ -1697,7 +1710,9 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
         let new_dst_port = unsafe { (*target).port };
         let now = now_sec();
         unsafe {
-            (*target).last_seen = now;
+            if now.wrapping_sub((*target).last_seen) >= LAST_SEEN_INTERVAL_SEC {
+                (*target).last_seen = now;
+            }
         }
         let key = FragKey4 {
                 epoch: cfg.frag_epoch,
@@ -1814,7 +1829,9 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
     if let Some(val) = OUTBOUND_BINDINGS_V4.get_ptr_mut(&ep_key) {
         unsafe {
             if (*val).ip == cfg.wan_ip4 {
-                (*val).last_seen = now;
+                if now.wrapping_sub((*val).last_seen) >= LAST_SEEN_INTERVAL_SEC {
+                    (*val).last_seen = now;
+                }
                 mapped = Some((*val).port);
             } else {
                 let old_port = u16::from_be((*val).port);
@@ -2007,7 +2024,9 @@ pub fn flowcone_icmp_target(ctx: TcContext) -> i32 {
     let new_port = unsafe { (*target).port };
     let now = now_sec();
     unsafe {
-        (*target).last_seen = now;
+        if now.wrapping_sub((*target).last_seen) >= LAST_SEEN_INTERVAL_SEC {
+            (*target).last_seen = now;
+        }
     }
 
     let old_emb_src = emb.src_addr;
@@ -2212,8 +2231,11 @@ pub fn flowcone_icmp6_target(ctx: TcContext) -> i32 {
     };
     let new_ip = unsafe { (*target).ip };
     let new_port = unsafe { (*target).port };
+    let now = now_sec();
     unsafe {
-        (*target).last_seen = now_sec();
+        if now.wrapping_sub((*target).last_seen) >= LAST_SEEN_INTERVAL_SEC {
+            (*target).last_seen = now;
+        }
     }
 
     let old_ip = emb.src_addr;

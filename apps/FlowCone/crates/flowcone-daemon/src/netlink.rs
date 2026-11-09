@@ -214,15 +214,11 @@ fn l2_len_for_arp_type(dev_type: u16) -> u32 {
     }
 }
 
-pub fn get_iface_l2_len(ifname: &str) -> u32 {
+pub fn get_iface_l2_len(ifname: &str) -> Option<u32> {
     let type_path = format!("/sys/class/net/{}/type", ifname);
-    let Ok(content) = std::fs::read_to_string(type_path) else {
-        return 14;
-    };
-    let Ok(dev_type) = content.trim().parse::<u16>() else {
-        return 14;
-    };
-    l2_len_for_arp_type(dev_type)
+    let content = std::fs::read_to_string(type_path).ok()?;
+    let dev_type = content.trim().parse::<u16>().ok()?;
+    Some(l2_len_for_arp_type(dev_type))
 }
 
 /// rtnetlink multicast groups: link state and IPv4/IPv6 address changes.
@@ -365,6 +361,14 @@ mod tests {
         assert_eq!(super::l2_len_for_arp_type(512), 0); // ARPHRD_PPP / pppoe-wan TC data is bare IP
         assert_eq!(super::l2_len_for_arp_type(772), 0); // ARPHRD_LOOPBACK
         assert_eq!(super::l2_len_for_arp_type(65534), 0); // ARPHRD_NONE
+    }
+
+    #[test]
+    fn test_get_iface_l2_len_unknown_and_loopback() {
+        assert_eq!(get_iface_l2_len("does-not-exist-xyz"), None);
+        if std::path::Path::new("/sys/class/net/lo").exists() {
+            assert_eq!(get_iface_l2_len("lo"), Some(0));
+        }
     }
 
     #[test]

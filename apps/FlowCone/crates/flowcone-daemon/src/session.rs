@@ -278,6 +278,26 @@ pub struct SessionMaps {
     pub port_flags: Array<MapData, u32>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ExpiryStep {
+    Keep { deadline: u32 },
+    Strike { deadline: u32 },
+    Drop,
+}
+
+/// `None` means neither side matches; `Some(0)` is a valid timestamp.
+fn expiry_step(now: u32, timeout: u32, seen: Option<u32>, strike: u8) -> ExpiryStep {
+    match seen {
+        Some(last) if now.saturating_sub(last) <= timeout => ExpiryStep::Keep {
+            deadline: last.saturating_add(timeout),
+        },
+        Some(_) if strike == 0 => ExpiryStep::Strike {
+            deadline: now.saturating_add(GC_EXPIRY_STRIKE_SEC),
+        },
+        _ => ExpiryStep::Drop,
+    }
+}
+
 impl SessionManager {
     pub fn new(maps: SessionMaps) -> Self {
         let SessionMaps {
@@ -728,32 +748,32 @@ impl SessionManager {
     /// Re-read both sides of a binding immediately before deletion. The data
     /// plane updates last_seen without a lock, so the value observed when the
     /// heap entry was popped may already be stale.
-    fn last_seen4(&self, key: &EndpointKey4, port: u16) -> u32 {
-        let mut last = 0;
+    fn last_seen4(&self, key: &EndpointKey4, port: u16) -> Option<u32> {
+        let mut last = None;
         if let Ok(val) = self.ob_map4.get(key, 0)
             && u16::from_be(val.port) == port
         {
-            last = val.last_seen;
+            last = Some(val.last_seen);
         }
         if let Ok(iv) = self.ib_map4.get(&port, 0)
             && iv.matches_key(key)
         {
-            last = last.max(iv.last_seen);
+            last = Some(last.map_or(iv.last_seen, |t| t.max(iv.last_seen)));
         }
         last
     }
 
-    fn last_seen6(&self, key: &EndpointKey6, port: u16) -> u32 {
-        let mut last = 0;
+    fn last_seen6(&self, key: &EndpointKey6, port: u16) -> Option<u32> {
+        let mut last = None;
         if let Ok(val) = self.ob_map6.get(key, 0)
             && u16::from_be(val.port) == port
         {
-            last = val.last_seen;
+            last = Some(val.last_seen);
         }
         if let Ok(iv) = self.ib_map6.get(&port, 0)
             && iv.matches_key(key)
         {
-            last = last.max(iv.last_seen);
+            last = Some(last.map_or(iv.last_seen, |t| t.max(iv.last_seen)));
         }
         last
     }
@@ -776,43 +796,49 @@ impl SessionManager {
             let ib = self.ib_map4.get(&port, 0);
             let ob_matches = matches!(&ob, Ok(val) if u16::from_be(val.port) == port);
             let ib_matches = matches!(&ib, Ok(iv) if iv.matches_key(&key));
-            let mut last = 0u32;
+            let mut seen = None;
             if ob_matches && let Ok(val) = ob {
-                last = val.last_seen;
+                seen = Some(val.last_seen);
             }
             if ib_matches && let Ok(iv) = ib {
-                last = last.max(iv.last_seen);
+                seen = Some(seen.map_or(iv.last_seen, |t| t.max(iv.last_seen)));
             }
             if !ob_matches {
                 if ib_matches {
                     let refreshed = self.last_seen4(&key, port);
-                    if refreshed != 0 && now.saturating_sub(refreshed) <= timeout {
-                        self.schedule4(refreshed.saturating_add(timeout), key, port, 0);
+                    if let Some(t) = refreshed.filter(|t| now.saturating_sub(*t) <= timeout) {
+                        self.schedule4(t.saturating_add(timeout), key, port, 0);
                     } else if self.ib_map4.remove(&port).is_ok() {
                         self.release_port4(port);
                         swept4 += 1;
                     }
                 }
-            } else if last != 0 && now.saturating_sub(last) <= timeout {
-                self.schedule4(last.saturating_add(timeout), key, port, 0);
-            } else if last != 0 && strike == 0 {
-                self.schedule4(now.saturating_add(GC_EXPIRY_STRIKE_SEC), key, port, 1);
             } else {
-                let refreshed = self.last_seen4(&key, port);
-                if refreshed != 0 && now.saturating_sub(refreshed) <= timeout {
-                    self.schedule4(refreshed.saturating_add(timeout), key, port, 0);
-                } else {
-                    let ob_removed = self.ob_map4.remove(&key).is_ok();
-                    let ib_removed = if ib_matches {
-                        self.ib_map4.remove(&port).is_ok()
-                    } else {
-                        false
-                    };
-                    if ib_removed {
-                        self.release_port4(port);
+                match expiry_step(now, timeout, seen, strike) {
+                    ExpiryStep::Keep { deadline } => {
+                        self.schedule4(deadline, key, port, 0);
                     }
-                    if ob_removed || ib_removed {
-                        swept4 += 1;
+                    ExpiryStep::Strike { deadline } => {
+                        self.schedule4(deadline, key, port, 1);
+                    }
+                    ExpiryStep::Drop => {
+                        let refreshed = self.last_seen4(&key, port);
+                        if let Some(t) = refreshed.filter(|t| now.saturating_sub(*t) <= timeout) {
+                            self.schedule4(t.saturating_add(timeout), key, port, 0);
+                        } else {
+                            let ob_removed = self.ob_map4.remove(&key).is_ok();
+                            let ib_removed = if ib_matches {
+                                self.ib_map4.remove(&port).is_ok()
+                            } else {
+                                false
+                            };
+                            if ib_removed {
+                                self.release_port4(port);
+                            }
+                            if ob_removed || ib_removed {
+                                swept4 += 1;
+                            }
+                        }
                     }
                 }
             }
@@ -833,43 +859,49 @@ impl SessionManager {
             let ib = self.ib_map6.get(&port, 0);
             let ob_matches = matches!(&ob, Ok(val) if u16::from_be(val.port) == port);
             let ib_matches = matches!(&ib, Ok(iv) if iv.matches_key(&key));
-            let mut last = 0u32;
+            let mut seen = None;
             if ob_matches && let Ok(val) = ob {
-                last = val.last_seen;
+                seen = Some(val.last_seen);
             }
             if ib_matches && let Ok(iv) = ib {
-                last = last.max(iv.last_seen);
+                seen = Some(seen.map_or(iv.last_seen, |t| t.max(iv.last_seen)));
             }
             if !ob_matches {
                 if ib_matches {
                     let refreshed = self.last_seen6(&key, port);
-                    if refreshed != 0 && now.saturating_sub(refreshed) <= timeout {
-                        self.schedule6(refreshed.saturating_add(timeout), key, port, 0);
+                    if let Some(t) = refreshed.filter(|t| now.saturating_sub(*t) <= timeout) {
+                        self.schedule6(t.saturating_add(timeout), key, port, 0);
                     } else if self.ib_map6.remove(&port).is_ok() {
                         self.release_port6(port);
                         swept6 += 1;
                     }
                 }
-            } else if last != 0 && now.saturating_sub(last) <= timeout {
-                self.schedule6(last.saturating_add(timeout), key, port, 0);
-            } else if last != 0 && strike == 0 {
-                self.schedule6(now.saturating_add(GC_EXPIRY_STRIKE_SEC), key, port, 1);
             } else {
-                let refreshed = self.last_seen6(&key, port);
-                if refreshed != 0 && now.saturating_sub(refreshed) <= timeout {
-                    self.schedule6(refreshed.saturating_add(timeout), key, port, 0);
-                } else {
-                    let ob_removed = self.ob_map6.remove(&key).is_ok();
-                    let ib_removed = if ib_matches {
-                        self.ib_map6.remove(&port).is_ok()
-                    } else {
-                        false
-                    };
-                    if ib_removed {
-                        self.release_port6(port);
+                match expiry_step(now, timeout, seen, strike) {
+                    ExpiryStep::Keep { deadline } => {
+                        self.schedule6(deadline, key, port, 0);
                     }
-                    if ob_removed || ib_removed {
-                        swept6 += 1;
+                    ExpiryStep::Strike { deadline } => {
+                        self.schedule6(deadline, key, port, 1);
+                    }
+                    ExpiryStep::Drop => {
+                        let refreshed = self.last_seen6(&key, port);
+                        if let Some(t) = refreshed.filter(|t| now.saturating_sub(*t) <= timeout) {
+                            self.schedule6(t.saturating_add(timeout), key, port, 0);
+                        } else {
+                            let ob_removed = self.ob_map6.remove(&key).is_ok();
+                            let ib_removed = if ib_matches {
+                                self.ib_map6.remove(&port).is_ok()
+                            } else {
+                                false
+                            };
+                            if ib_removed {
+                                self.release_port6(port);
+                            }
+                            if ob_removed || ib_removed {
+                                swept6 += 1;
+                            }
+                        }
                     }
                 }
             }
@@ -998,7 +1030,7 @@ impl SessionManager {
 
 #[cfg(test)]
 mod port_parser_tests {
-    use super::{parse_proc_udp_ports, reserved_delta};
+    use super::{ExpiryStep, expiry_step, parse_proc_udp_ports, reserved_delta};
 
     #[test]
     fn reserved_delta_tracks_started_and_stopped_services() {
@@ -1007,6 +1039,23 @@ mod port_parser_tests {
         let (added, removed) = reserved_delta(&previous, &current);
         assert_eq!(added, vec![60000]);
         assert_eq!(removed, vec![5353]);
+    }
+
+    #[test]
+    fn expiry_step_treats_zero_as_a_valid_timestamp() {
+        let cases = [
+            (10, 120, Some(0), 0, ExpiryStep::Keep { deadline: 120 }),
+            (0, 120, Some(0), 0, ExpiryStep::Keep { deadline: 120 }),
+            (130, 120, Some(0), 0, ExpiryStep::Strike { deadline: 131 }),
+            (130, 120, Some(0), 1, ExpiryStep::Drop),
+            (200, 120, Some(100), 0, ExpiryStep::Keep { deadline: 220 }),
+            (230, 120, Some(100), 0, ExpiryStep::Strike { deadline: 231 }),
+            (230, 120, Some(100), 1, ExpiryStep::Drop),
+            (10, 120, None, 0, ExpiryStep::Drop),
+        ];
+        for (now, timeout, seen, strike, want) in cases {
+            assert_eq!(expiry_step(now, timeout, seen, strike), want);
+        }
     }
 
     #[test]
