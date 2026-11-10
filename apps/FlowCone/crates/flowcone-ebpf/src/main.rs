@@ -6,14 +6,14 @@ use aya_ebpf::{
     bindings::{__sk_buff, TC_ACT_SHOT, TC_ACT_UNSPEC},
     helpers::{bpf_ktime_get_coarse_ns, bpf_loop},
     macros::{classifier, map},
-    maps::{Array, HashMap, LruHashMap, ProgramArray, Queue},
+    maps::{Array, HashMap, LruHashMap, ProgramArray, Queue, RingBuf},
     programs::TcContext,
 };
 use core::{ffi::c_void, mem};
 use flowcone_common::{
-    BindingValue4, BindingValue6, EndpointKey4, EndpointKey6, FRAG_MAP_ENTRIES, FragKey4, FragKey6,
+    BindingValue4, BindingValue6, ConfigStore, EndpointKey4, EndpointKey6, FRAG_MAP_ENTRIES, FragKey4, FragKey6,
     FragValue4, FragValue6, GlobalConfig, MAX_BINDINGS, PORT_QUEUE_ENTRIES, PORT_STATE_ENTRIES,
-    SESSION_EVENT_ENTRIES, SessionEvent4, SessionEvent6,
+    SESSION_EVENT_RINGBUF_BYTES, SessionEvent4, SessionEvent6,
 };
 
 const IPPROTO_ICMP: u8 = 1;
@@ -33,6 +33,7 @@ const UDP_CSUM_OFFSET: usize = 6;
 const BPF_ANY: u64 = 0;
 const BPF_NOEXIST: u64 = 1;
 const BPF_F_NO_PREALLOC: u32 = 1;
+const BPF_RB_NO_WAKEUP: u64 = 1;
 
 const PORT_FREE_BIT: u8 = 1;
 const PORT_QUEUED_BIT: u8 = 2;
@@ -46,12 +47,15 @@ fn get_mark(ctx: &TcContext) -> u32 {
     unsafe { (*(ctx.as_ptr() as *const __sk_buff)).mark }
 }
 
-/// Double-buffered config: ACTIVE_CONFIG selects one of two immutable slots.
+/// Double-buffered config in a single slot. `active & 1` selects the active slot.
 #[map]
-static CONFIG: Array<GlobalConfig> = Array::with_max_entries(2, 0);
+static CONFIG_STORE: Array<ConfigStore> = Array::with_max_entries(1, 0);
 
-#[map]
-static ACTIVE_CONFIG: Array<u32> = Array::with_max_entries(1, 0);
+#[inline(always)]
+fn get_config() -> Option<&'static GlobalConfig> {
+    let store = CONFIG_STORE.get(0)?;
+    Some(&store.slots[(store.active & 1) as usize])
+}
 
 /// Tail-call targets for the tiny A/B dispatchers. The real FlowCone program
 /// is loaded once and is never attached directly; the dispatchers are the
@@ -114,10 +118,10 @@ static INBOUND_BINDINGS_V6: HashMap<u16, BindingValue6> =
 
 /// Session-create notifications for the user-space expiry scheduler.
 #[map]
-static SESSION_EVENTS_V4: Queue<SessionEvent4> = Queue::with_max_entries(SESSION_EVENT_ENTRIES, 0);
+static SESSION_EVENTS_V4: RingBuf = RingBuf::with_byte_size(SESSION_EVENT_RINGBUF_BYTES, 0);
 
 #[map]
-static SESSION_EVENTS_V6: Queue<SessionEvent6> = Queue::with_max_entries(SESSION_EVENT_ENTRIES, 0);
+static SESSION_EVENTS_V6: RingBuf = RingBuf::with_byte_size(SESSION_EVENT_RINGBUF_BYTES, 0);
 
 #[map]
 static GC_FLAGS: Array<u32> = Array::with_max_entries(1, 0);
@@ -319,17 +323,18 @@ fn is_link_local_v4(raw_ip: u32) -> bool {
     b[0] == 169 && b[1] == 254
 }
 
+const DHCP_SERVER_PORT_BE: u16 = 67u16.to_be();
+const DHCP_CLIENT_PORT_BE: u16 = 68u16.to_be();
+
 /// DHCP client/relay and link-local/broadcast traffic must stay on the normal
 /// firewall path. The nftables exemption is generated with the same guards.
 #[inline(always)]
 fn bypass_special_udp4(src: u32, dst: u32, sport: u16, dport: u16) -> bool {
-    let sport = u16::from_be(sport);
-    let dport = u16::from_be(dport);
     src == 0
-        || sport == 67
-        || sport == 68
-        || dport == 67
-        || dport == 68
+        || sport == DHCP_SERVER_PORT_BE
+        || sport == DHCP_CLIENT_PORT_BE
+        || dport == DHCP_SERVER_PORT_BE
+        || dport == DHCP_CLIENT_PORT_BE
         || is_multicast_or_broadcast_v4(dst)
         || is_link_local_v4(dst)
 }
@@ -363,15 +368,16 @@ fn fixup_csum_v4(
                 BPF_F_PSEUDO_HDR | BPF_F_MARK_MANGLED_0 | CSUM_FIELD_U32,
             )
             .is_ok()
-        && ctx
-            .skb
-            .l4_csum_replace(
-                l4_off,
-                old_port as u64,
-                new_port as u64,
-                BPF_F_MARK_MANGLED_0 | CSUM_FIELD_U16,
-            )
-            .is_ok()
+        && (old_port == new_port
+            || ctx
+                .skb
+                .l4_csum_replace(
+                    l4_off,
+                    old_port as u64,
+                    new_port as u64,
+                    BPF_F_MARK_MANGLED_0 | CSUM_FIELD_U16,
+                )
+                .is_ok())
 }
 
 /// Fix up only the IPv4 header checksum (non-first fragments have no UDP header).
@@ -431,14 +437,16 @@ fn fixup_csum_v6(
         i += 1;
     }
 
-    ctx.skb
-        .l4_csum_replace(
-            l4_off,
-            old_port as u64,
-            new_port as u64,
-            BPF_F_MARK_MANGLED_0 | CSUM_FIELD_U16,
-        )
-        .is_ok()
+    old_port == new_port
+        || ctx
+            .skb
+            .l4_csum_replace(
+                l4_off,
+                old_port as u64,
+                new_port as u64,
+                BPF_F_MARK_MANGLED_0 | CSUM_FIELD_U16,
+            )
+            .is_ok()
 }
 
 #[inline(always)]
@@ -448,7 +456,7 @@ fn push_event_v4(key: &EndpointKey4, port: u16) {
         port,
         _pad: 0,
     };
-    if SESSION_EVENTS_V4.push(&event, 0).is_err() {
+    if SESSION_EVENTS_V4.output(&event, BPF_RB_NO_WAKEUP).is_err() {
         let _ = GC_FLAGS.set(0, &1, 0);
     }
 }
@@ -460,7 +468,7 @@ fn push_event_v6(key: &EndpointKey6, port: u16) {
         port,
         _pad: [0; 3],
     };
-    if SESSION_EVENTS_V6.push(&event, 0).is_err() {
+    if SESSION_EVENTS_V6.output(&event, BPF_RB_NO_WAKEUP).is_err() {
         let _ = GC_FLAGS.set(0, &1, 0);
     }
 }
@@ -860,11 +868,7 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
     let data = ctx.data();
     let data_end = ctx.data_end();
 
-    let active = match ACTIVE_CONFIG.get(0) {
-        Some(v) => *v & 1,
-        None => 0,
-    };
-    let cfg = match CONFIG.get(active) {
+    let cfg = match get_config() {
         Some(c) => c,
         None => return TC_ACT_UNSPEC,
     };
@@ -891,16 +895,16 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
         if (iph.ver_ihl >> 4) != 4 {
             return TC_ACT_UNSPEC;
         }
-        if iph.dst_addr != cfg.wan_ip4 {
-            return TC_ACT_UNSPEC;
-        }
-        if iph.protocol == IPPROTO_ICMP {
-            unsafe {
-                ICMP_TARGET.tail_call(&ctx, 0);
+        let proto = iph.protocol;
+        if proto != IPPROTO_UDP {
+            if proto == IPPROTO_ICMP && iph.dst_addr == cfg.wan_ip4 {
+                unsafe {
+                    ICMP_TARGET.tail_call(&ctx, 0);
+                }
             }
             return TC_ACT_UNSPEC;
         }
-        if iph.protocol != IPPROTO_UDP {
+        if iph.dst_addr != cfg.wan_ip4 {
             return TC_ACT_UNSPEC;
         }
 
@@ -967,19 +971,29 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
         if (u32::from_be(iph.ver_tc_fl) >> 28) != 6 {
             return TC_ACT_UNSPEC;
         }
+        let nh = iph.next_hdr;
+        if nh != IPPROTO_UDP {
+            if nh == 58 {
+                if ipv6_eq(&iph.dst_addr, &cfg.wan_ip6) {
+                    unsafe {
+                        ICMP6_TARGET.tail_call(&ctx, 0);
+                    }
+                }
+                return TC_ACT_UNSPEC;
+            }
+            if nh == 44 {
+                if ipv6_eq(&iph.dst_addr, &cfg.wan_ip6) {
+                    unsafe {
+                        FRAG6_TARGET.tail_call(&ctx, 0);
+                    }
+                }
+                return TC_ACT_UNSPEC;
+            }
+            if nh != IPPROTO_HOPOPTS && nh != IPPROTO_DSTOPTS {
+                return TC_ACT_UNSPEC;
+            }
+        }
         if !ipv6_eq(&iph.dst_addr, &cfg.wan_ip6) {
-            return TC_ACT_UNSPEC;
-        }
-        if iph.next_hdr == 44 {
-            unsafe {
-                FRAG_TARGET.tail_call(&ctx, 0);
-            }
-            return TC_ACT_UNSPEC;
-        }
-        if iph.next_hdr == 58 {
-            unsafe {
-                ICMP6_TARGET.tail_call(&ctx, 0);
-            }
             return TC_ACT_UNSPEC;
         }
 
@@ -987,7 +1001,7 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
             Ipv6L4::Udp(off) => off,
             Ipv6L4::Fragment => {
                 unsafe {
-                    FRAG_TARGET.tail_call(&ctx, 0);
+                    FRAG6_TARGET.tail_call(&ctx, 0);
                 }
                 return TC_ACT_UNSPEC;
             }
@@ -1046,11 +1060,7 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
     let data = ctx.data();
     let data_end = ctx.data_end();
 
-    let active = match ACTIVE_CONFIG.get(0) {
-        Some(v) => *v & 1,
-        None => 0,
-    };
-    let cfg = match CONFIG.get(active) {
+    let cfg = match get_config() {
         Some(c) => c,
         None => return TC_ACT_UNSPEC,
     };
@@ -1216,7 +1226,7 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
         }
         if iph.next_hdr == 44 {
             unsafe {
-                FRAG_TARGET.tail_call(&ctx, 0);
+                FRAG6_TARGET.tail_call(&ctx, 0);
             }
             return TC_ACT_SHOT;
         }
@@ -1225,7 +1235,7 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
             Ipv6L4::Udp(off) => off,
             Ipv6L4::Fragment => {
                 unsafe {
-                    FRAG_TARGET.tail_call(&ctx, 0);
+                    FRAG6_TARGET.tail_call(&ctx, 0);
                 }
                 return TC_ACT_SHOT;
             }
@@ -1593,11 +1603,7 @@ fn frag_v6_target(
 pub fn flowcone_frag_v6(ctx: TcContext) -> i32 {
     let data = ctx.data();
     let data_end = ctx.data_end();
-    let active = match ACTIVE_CONFIG.get(0) {
-        Some(v) => *v & 1,
-        None => 0,
-    };
-    let cfg = match CONFIG.get(active) {
+    let cfg = match get_config() {
         Some(c) => c,
         None => return TC_ACT_UNSPEC,
     };
@@ -1626,11 +1632,7 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
     let data = ctx.data();
     let data_end = ctx.data_end();
 
-    let active = match ACTIVE_CONFIG.get(0) {
-        Some(v) => *v & 1,
-        None => 0,
-    };
-    let cfg = match CONFIG.get(active) {
+    let cfg = match get_config() {
         Some(c) => c,
         None => return TC_ACT_UNSPEC,
     };
@@ -1644,12 +1646,6 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
         Some(v) => v,
         None => return TC_ACT_UNSPEC,
     };
-    if l2.proto == ETH_P_IPV6 && cfg.enabled_v6 != 0 {
-        unsafe {
-            FRAG6_TARGET.tail_call(&ctx, 0);
-        }
-        return TC_ACT_SHOT;
-    }
     if l2.proto != ETH_P_IP || cfg.enabled_v4 != 1 {
         return TC_ACT_UNSPEC;
     }
@@ -1950,11 +1946,7 @@ fn csum_replace(csum: u16, old: u16, new: u16) -> u16 {
 pub fn flowcone_icmp_target(ctx: TcContext) -> i32 {
     let data = ctx.data();
     let data_end = ctx.data_end();
-    let active = match ACTIVE_CONFIG.get(0) {
-        Some(v) => *v & 1,
-        None => 0,
-    };
-    let cfg = match CONFIG.get(active) {
+    let cfg = match get_config() {
         Some(c) => c,
         None => return TC_ACT_UNSPEC,
     };
@@ -2168,11 +2160,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 pub fn flowcone_icmp6_target(ctx: TcContext) -> i32 {
     let data = ctx.data();
     let data_end = ctx.data_end();
-    let active = match ACTIVE_CONFIG.get(0) {
-        Some(v) => *v & 1,
-        None => 0,
-    };
-    let cfg = match CONFIG.get(active) {
+    let cfg = match get_config() {
         Some(c) => c,
         None => return TC_ACT_UNSPEC,
     };

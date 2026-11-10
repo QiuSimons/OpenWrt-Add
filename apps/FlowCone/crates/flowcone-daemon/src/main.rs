@@ -5,12 +5,12 @@ mod firewall;
 mod netlink;
 mod session;
 
-use aya::maps::{Array, HashMap, MapData, Queue};
+use aya::maps::{Array, HashMap, MapData, Queue, RingBuf};
 use aya::{EbpfLoader, VerifierLogLevel};
 use data_plane::DataPlane;
 use flowcone_common::{
-    BindingValue4, BindingValue6, EndpointKey4, EndpointKey6, FragKey4, FragKey6, FragValue4,
-    FragValue6, GlobalConfig, SessionEvent4, SessionEvent6,
+    BindingValue4, BindingValue6, ConfigStore, EndpointKey4, EndpointKey6, FragKey4, FragKey6,
+    FragValue4, FragValue6, GlobalConfig,
 };
 use session::{SessionManager, SessionMaps};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -229,8 +229,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let session_mgr = Arc::new(Mutex::new(SessionManager::new(SessionMaps {
-        config_map: take_map!(bpf, "CONFIG", Array<MapData, GlobalConfig>),
-        active_map: take_map!(bpf, "ACTIVE_CONFIG", Array<MapData, u32>),
+        config_store: take_map!(bpf, "CONFIG_STORE", Array<MapData, ConfigStore>),
         ob_map4: take_map!(
             bpf,
             "OUTBOUND_BINDINGS_V4",
@@ -255,8 +254,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         frag_out4: take_map!(bpf, "FRAG_OUT_V4", HashMap<MapData, FragKey4, FragValue4>),
         frag_in6: take_map!(bpf, "FRAG_IN_V6", HashMap<MapData, FragKey6, FragValue6>),
         frag_out6: take_map!(bpf, "FRAG_OUT_V6", HashMap<MapData, FragKey6, FragValue6>),
-        events4: take_map!(bpf, "SESSION_EVENTS_V4", Queue<MapData, SessionEvent4>),
-        events6: take_map!(bpf, "SESSION_EVENTS_V6", Queue<MapData, SessionEvent6>),
+        events4: take_map!(bpf, "SESSION_EVENTS_V4", RingBuf<MapData>),
+        events6: take_map!(bpf, "SESSION_EVENTS_V6", RingBuf<MapData>),
         gc_flags: take_map!(bpf, "GC_FLAGS", Array<MapData, u32>),
         free_state4: take_map!(bpf, "PORT_FREE_V4", Array<MapData, u8>),
         free_state6: take_map!(bpf, "PORT_FREE_V6", Array<MapData, u8>),

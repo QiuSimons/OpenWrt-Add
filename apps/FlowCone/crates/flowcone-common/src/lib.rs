@@ -120,7 +120,7 @@ pub struct FragValue6 {
 unsafe impl aya::Pod for FragValue6 {}
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GlobalConfig {
     pub wan_ip4: u32,
     pub bypass_mark_mask: u32,
@@ -139,6 +139,16 @@ pub struct GlobalConfig {
 
 #[cfg(not(target_arch = "bpf"))]
 unsafe impl aya::Pod for GlobalConfig {}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ConfigStore {
+    pub active: u32,
+    pub slots: [GlobalConfig; 2],
+}
+
+#[cfg(not(target_arch = "bpf"))]
+unsafe impl aya::Pod for ConfigStore {}
 
 /// Non-routable IPv4 source ranges, as CIDR strings.
 ///
@@ -218,28 +228,26 @@ pub fn is_routable_internal_ipv6(addr: &[u8; 16], allow_all_internal: bool) -> b
     if addr[0] == 0xfe && (addr[1] & 0xc0) == 0x80 {
         return false;
     }
-    // Loopback / Unspecified: ::1 or ::
-    let hi = u64::from_ne_bytes([
-        addr[0], addr[1], addr[2], addr[3], addr[4], addr[5], addr[6], addr[7],
-    ]);
-    let mid = u32::from_ne_bytes([addr[8], addr[9], addr[10], addr[11]]);
-    let lo_hi = u16::from_ne_bytes([addr[12], addr[13]]);
-    if hi == 0 && mid == 0 && lo_hi == 0 && addr[14] == 0 && (addr[15] == 0 || addr[15] == 1) {
-        return false;
-    }
-
+    // ULA (fc00::/7) is never loopback or unspecified; accept immediately.
     if is_ula_ipv6(addr) {
         return true;
     }
+    if !allow_all_internal {
+        return false;
+    }
 
-    allow_all_internal
+    // Loopback / Unspecified: ::1 or ::
+    u128::from_be_bytes(*addr) > 1
 }
 
 pub const MAX_BINDINGS: u32 = 65536;
 /// Per-direction, per-family fragment cache capacity. Keep this the single
 /// source of truth for the eBPF LRU maps.
 pub const FRAG_MAP_ENTRIES: u32 = 1024;
-pub const SESSION_EVENT_ENTRIES: u32 = 16384;
+/// Capacity in bytes for the session event ring buffers.
+/// Must be a power of 2 and a multiple of page size (4096).
+/// 262,144 bytes (256 KiB) holds ~10,000 session creation events.
+pub const SESSION_EVENT_RINGBUF_BYTES: u32 = 262144;
 /// One byte of state per port; 65536 entries cover the full u16 port space.
 pub const PORT_STATE_ENTRIES: u32 = 65536;
 /// Each parity queue can hold the whole pool; duplicates are skipped via the
@@ -394,5 +402,7 @@ mod tests {
     fn test_global_config_layout() {
         assert_eq!(core::mem::size_of::<GlobalConfig>(), 56);
         assert_eq!(core::mem::align_of::<GlobalConfig>(), 4);
+        assert_eq!(core::mem::size_of::<ConfigStore>(), 116);
+        assert_eq!(core::mem::align_of::<ConfigStore>(), 4);
     }
 }
