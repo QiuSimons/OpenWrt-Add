@@ -217,18 +217,15 @@ pub fn is_ula_ipv6(addr: &[u8; 16]) -> bool {
     (addr[0] & 0xfe) == 0xfc
 }
 
-/// Check if IPv6 address is a valid routable internal unicast address (excluding link-local, multicast, loopback)
+/// Check if IPv6 address is a valid routable internal unicast address.
+///
+/// In ULA-only mode (`allow_all_internal = false`), only ULA `fc00::/7` is allowed.
+/// In full NAT66 mode (`allow_all_internal = true`), Global Unicast `2000::/3`
+/// is also accepted. This aligns exactly with the firewall liveness exemption
+/// sets (`{2000::/3, fc00::/7}`), avoiding Double NAT while excluding multicast
+/// (`ff00::/8`), link-local (`fe80::/10`), loopback (`::1`), and unspecified (`::`).
 #[inline(always)]
 pub fn is_routable_internal_ipv6(addr: &[u8; 16], allow_all_internal: bool) -> bool {
-    // Multicast: ff00::/8
-    if addr[0] == 0xff {
-        return false;
-    }
-    // Link-Local: fe80::/10 (fe80..febf)
-    if addr[0] == 0xfe && (addr[1] & 0xc0) == 0x80 {
-        return false;
-    }
-    // ULA (fc00::/7) is never loopback or unspecified; accept immediately.
     if is_ula_ipv6(addr) {
         return true;
     }
@@ -236,8 +233,7 @@ pub fn is_routable_internal_ipv6(addr: &[u8; 16], allow_all_internal: bool) -> b
         return false;
     }
 
-    // Loopback / Unspecified: ::1 or ::
-    u128::from_be_bytes(*addr) > 1
+    (addr[0] & 0xe0) == 0x20
 }
 
 pub const MAX_BINDINGS: u32 = 65536;
@@ -253,6 +249,36 @@ pub const PORT_STATE_ENTRIES: u32 = 65536;
 /// Each parity queue can hold the whole pool; duplicates are skipped via the
 /// per-port state, and a full queue sets a user-space rebuild flag.
 pub const PORT_QUEUE_ENTRIES: u32 = 65536;
+
+pub const PORT_FREE_BIT: u8 = 1;
+pub const PORT_QUEUED_BIT: u8 = 2;
+
+/// Port popped from queue. Clears `PORT_QUEUED_BIT`.
+#[inline(always)]
+pub fn port_state_on_unqueue(state: u8) -> u8 {
+    state & !PORT_QUEUED_BIT
+}
+
+/// Port bound to an active session. Clears `PORT_FREE_BIT`.
+#[inline(always)]
+pub fn port_state_on_bound(state: u8) -> u8 {
+    state & !PORT_FREE_BIT
+}
+
+/// Evaluate whether a released port needs to be pushed back to queue.
+/// Returns `(needs_queue_push, new_state)`.
+///
+/// If `PORT_QUEUED_BIT` is already set (e.g. redundant release or port preservation
+/// left a stale queue entry), no duplicate queue push is needed.
+#[inline(always)]
+pub fn port_state_on_release(state: u8) -> (bool, u8) {
+    let next = state | PORT_FREE_BIT;
+    if next & PORT_QUEUED_BIT != 0 {
+        (false, next)
+    } else {
+        (true, next | PORT_QUEUED_BIT)
+    }
+}
 
 /// Packet mark set on DNAT-translated inbound packets. The daemon can override
 /// this through GlobalConfig to avoid colliding with proxy/policy marks.
@@ -370,6 +396,39 @@ mod tests {
         assert!(!is_routable_internal_ipv6(&gua, false));
         // True if allow_all_internal is true (GUA+ULA mode)
         assert!(is_routable_internal_ipv6(&gua, true));
+
+        // Exact 2000::/3 boundaries and non-GUA exclusions
+        let mut pfx_100 = [0u8; 16];
+        pfx_100[0] = 0x01;
+        pfx_100[15] = 1;
+        assert!(!is_routable_internal_ipv6(&pfx_100, false));
+        assert!(!is_routable_internal_ipv6(&pfx_100, true));
+
+        let mut pfx_1fff = [0u8; 16];
+        pfx_1fff[0] = 0x1f;
+        pfx_1fff[1] = 0xff;
+        pfx_1fff[15] = 1;
+        assert!(!is_routable_internal_ipv6(&pfx_1fff, false));
+        assert!(!is_routable_internal_ipv6(&pfx_1fff, true));
+
+        let mut pfx_2000 = [0u8; 16];
+        pfx_2000[0] = 0x20;
+        pfx_2000[15] = 1;
+        assert!(!is_routable_internal_ipv6(&pfx_2000, false));
+        assert!(is_routable_internal_ipv6(&pfx_2000, true));
+
+        let mut pfx_3fff = [0u8; 16];
+        pfx_3fff[0] = 0x3f;
+        pfx_3fff[1] = 0xff;
+        pfx_3fff[15] = 1;
+        assert!(!is_routable_internal_ipv6(&pfx_3fff, false));
+        assert!(is_routable_internal_ipv6(&pfx_3fff, true));
+
+        let mut pfx_4000 = [0u8; 16];
+        pfx_4000[0] = 0x40;
+        pfx_4000[15] = 1;
+        assert!(!is_routable_internal_ipv6(&pfx_4000, false));
+        assert!(!is_routable_internal_ipv6(&pfx_4000, true));
     }
 
     #[test]
@@ -404,5 +463,48 @@ mod tests {
         assert_eq!(core::mem::align_of::<GlobalConfig>(), 4);
         assert_eq!(core::mem::size_of::<ConfigStore>(), 116);
         assert_eq!(core::mem::align_of::<ConfigStore>(), 4);
+    }
+
+    #[test]
+    fn test_port_lifecycle_state_machine() {
+        // Initial state after pool rebuild: both FREE and QUEUED bits set.
+        let initial = PORT_FREE_BIT | PORT_QUEUED_BIT;
+        assert_eq!(initial, 0x03);
+
+        // 1. Normal allocation flow:
+        // Pop from queue -> unqueue clears QUEUED_BIT.
+        let unqueued = port_state_on_unqueue(initial);
+        assert_eq!(unqueued, PORT_FREE_BIT); // 0x01: free but unqueued
+
+        // Claim port -> bound clears FREE_BIT.
+        let bound = port_state_on_bound(unqueued);
+        assert_eq!(bound, 0); // 0x00: fully bound to active session
+
+        // Session expires -> release:
+        let (needs_push, released) = port_state_on_release(bound);
+        assert!(needs_push);
+        assert_eq!(released, PORT_FREE_BIT | PORT_QUEUED_BIT); // 0x03: ready in queue
+
+        // 2. Port preservation flow (direct claim without pop):
+        // Preferred port claimed directly while stale entry remains in queue.
+        let preserved_bound = port_state_on_bound(initial);
+        assert_eq!(preserved_bound, PORT_QUEUED_BIT); // 0x02: bound, but QUEUED_BIT remains
+
+        // When the stale queue entry is popped later:
+        let stale_popped = port_state_on_unqueue(preserved_bound);
+        assert_eq!(stale_popped, 0); // Both bits clear
+        // Inbound claim will fail (port already in use). The pop handler checks:
+        // `stale_popped & PORT_FREE_BIT != 0` -> false! Entry is discarded without requeueing.
+
+        // If release is called while stale QUEUED_BIT was still present:
+        let (needs_push, refreshed) = port_state_on_release(preserved_bound);
+        assert!(!needs_push); // Stale entry already in queue, do not push duplicate!
+        assert_eq!(refreshed, PORT_FREE_BIT | PORT_QUEUED_BIT);
+
+        // 3. Duplicate release guard:
+        // Calling release on an already free/queued port does not push a duplicate entry.
+        let (needs_push, dup_state) = port_state_on_release(PORT_FREE_BIT | PORT_QUEUED_BIT);
+        assert!(!needs_push);
+        assert_eq!(dup_state, PORT_FREE_BIT | PORT_QUEUED_BIT);
     }
 }

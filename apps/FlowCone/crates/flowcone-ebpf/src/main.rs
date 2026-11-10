@@ -11,9 +11,10 @@ use aya_ebpf::{
 };
 use core::{ffi::c_void, mem};
 use flowcone_common::{
-    BindingValue4, BindingValue6, ConfigStore, EndpointKey4, EndpointKey6, FRAG_MAP_ENTRIES, FragKey4, FragKey6,
-    FragValue4, FragValue6, GlobalConfig, MAX_BINDINGS, PORT_QUEUE_ENTRIES, PORT_STATE_ENTRIES,
-    SESSION_EVENT_RINGBUF_BYTES, SessionEvent4, SessionEvent6,
+    BindingValue4, BindingValue6, ConfigStore, EndpointKey4, EndpointKey6, FRAG_MAP_ENTRIES,
+    FragKey4, FragKey6, FragValue4, FragValue6, GlobalConfig, MAX_BINDINGS, PORT_FREE_BIT,
+    PORT_QUEUE_ENTRIES, PORT_QUEUED_BIT, PORT_STATE_ENTRIES, SESSION_EVENT_RINGBUF_BYTES,
+    SessionEvent4, SessionEvent6,
 };
 
 const IPPROTO_ICMP: u8 = 1;
@@ -34,9 +35,6 @@ const BPF_ANY: u64 = 0;
 const BPF_NOEXIST: u64 = 1;
 const BPF_F_NO_PREALLOC: u32 = 1;
 const BPF_RB_NO_WAKEUP: u64 = 1;
-
-const PORT_FREE_BIT: u8 = 1;
-const PORT_QUEUED_BIT: u8 = 2;
 
 #[unsafe(link_section = "license")]
 #[used]
@@ -255,8 +253,10 @@ fn parse_ppp(data_end: usize, mut off: usize) -> Option<L2Info> {
     })
 }
 
-/// Parse Ethernet, one/two VLAN tags, PPPoE session, or a bare PPP/IP frame.
-/// l2_len is 0 for raw IP, 2 for PPP, 14 for Ethernet.
+/// Parse Ethernet, VLAN tags, and PPPoE session, or handle bare IP frames
+/// (raw IP, TUN, WireGuard, and PPP interfaces where the kernel already stripped
+/// the PPP header).
+/// l2_len is 0 for bare IP, 14 for Ethernet.
 #[inline(always)]
 fn parse_l2(data: usize, data_end: usize, l2_len: u32) -> Option<L2Info> {
     if l2_len == 14 {
@@ -284,10 +284,6 @@ fn parse_l2(data: usize, data_end: usize, l2_len: u32) -> Option<L2Info> {
             return Some(L2Info { proto, ip_off });
         }
         return None;
-    }
-
-    if l2_len == 2 {
-        return parse_ppp(data_end, data);
     }
 
     // Raw IP / TUN / WireGuard / RAWIP.
@@ -482,7 +478,7 @@ fn port_is_reserved(reserved: &Array<u8>, port: u16) -> bool {
 fn port_state_unqueue(map: &Array<u8>, port: u16) {
     if let Some(p) = map.get_ptr_mut(port as u32) {
         unsafe {
-            *p &= !PORT_QUEUED_BIT;
+            *p = flowcone_common::port_state_on_unqueue(*p);
         }
     }
 }
@@ -491,7 +487,7 @@ fn port_state_unqueue(map: &Array<u8>, port: u16) {
 fn port_state_bound(map: &Array<u8>, port: u16) {
     if let Some(p) = map.get_ptr_mut(port as u32) {
         unsafe {
-            *p &= !PORT_FREE_BIT;
+            *p = flowcone_common::port_state_on_bound(*p);
         }
     }
 }
@@ -512,7 +508,7 @@ fn queue_push(q: &Queue<u16>, state: &Array<u8>, port: u16) {
         let _ = PORT_FLAGS.set(0, &1, 0);
         if let Some(p) = state.get_ptr_mut(port as u32) {
             unsafe {
-                *p &= !PORT_QUEUED_BIT;
+                *p = flowcone_common::port_state_on_unqueue(*p);
             }
         }
     }
@@ -522,15 +518,9 @@ fn queue_push(q: &Queue<u16>, state: &Array<u8>, port: u16) {
 fn release_port_v4(port: u16) {
     if let Some(p) = PORT_FREE_V4.get_ptr_mut(port as u32) {
         unsafe {
-            if *p & PORT_FREE_BIT != 0 {
-                if *p & PORT_QUEUED_BIT != 0 {
-                    return;
-                }
-            } else {
-                *p |= PORT_FREE_BIT;
-                if *p & PORT_QUEUED_BIT != 0 {
-                    return;
-                }
+            *p |= PORT_FREE_BIT;
+            if *p & PORT_QUEUED_BIT != 0 {
+                return;
             }
         }
     } else {
@@ -547,15 +537,9 @@ fn release_port_v4(port: u16) {
 fn release_port_v6(port: u16) {
     if let Some(p) = PORT_FREE_V6.get_ptr_mut(port as u32) {
         unsafe {
-            if *p & PORT_FREE_BIT != 0 {
-                if *p & PORT_QUEUED_BIT != 0 {
-                    return;
-                }
-            } else {
-                *p |= PORT_FREE_BIT;
-                if *p & PORT_QUEUED_BIT != 0 {
-                    return;
-                }
+            *p |= PORT_FREE_BIT;
+            if *p & PORT_QUEUED_BIT != 0 {
+                return;
             }
         }
     } else {
@@ -818,6 +802,132 @@ fn alloc_port_v6<const PRIMARY: usize, const FALLBACK: usize>(
     }
 }
 
+#[inline(always)]
+fn get_or_create_mapping_v4<const PRIMARY: usize, const FALLBACK: usize>(
+    cfg: &GlobalConfig,
+    src_ip: u32,
+    src_port: u16,
+    now: u32,
+) -> Option<u16> {
+    let ep_key = EndpointKey4 {
+        ip: src_ip,
+        port: src_port,
+        _pad: 0,
+    };
+
+    if let Some(val) = OUTBOUND_BINDINGS_V4.get_ptr_mut(&ep_key) {
+        unsafe {
+            if (*val).ip == cfg.wan_ip4 {
+                if now.wrapping_sub((*val).last_seen) >= LAST_SEEN_INTERVAL_SEC {
+                    (*val).last_seen = now;
+                }
+                return Some((*val).port);
+            }
+            let old_port = u16::from_be((*val).port);
+            let _ = OUTBOUND_BINDINGS_V4.remove(&ep_key);
+            if let Some(in_val) = INBOUND_BINDINGS_V4.get_ptr_mut(&old_port)
+                && (*in_val).ip == src_ip
+                && (*in_val).port == src_port
+            {
+                let _ = INBOUND_BINDINGS_V4.remove(&old_port);
+                release_port_v4(old_port);
+            }
+        }
+    }
+
+    let pref = u16::from_be(src_port);
+    let in_val = BindingValue4 {
+        ip: src_ip,
+        port: src_port,
+        _pad: 0,
+        last_seen: now,
+    };
+    let alloc = alloc_port_v4::<PRIMARY, FALLBACK>(pref, cfg.min_port4, cfg.max_port4, &in_val)?;
+    let m_port = u16::to_be(alloc);
+    let new_val = BindingValue4 {
+        ip: cfg.wan_ip4,
+        port: m_port,
+        _pad: 0,
+        last_seen: now,
+    };
+    if OUTBOUND_BINDINGS_V4
+        .insert(&ep_key, &new_val, BPF_NOEXIST)
+        .is_ok()
+    {
+        push_event_v4(&ep_key, alloc);
+        Some(m_port)
+    } else {
+        let _ = INBOUND_BINDINGS_V4.remove(&alloc);
+        release_port_v4(alloc);
+        OUTBOUND_BINDINGS_V4
+            .get_ptr_mut(&ep_key)
+            .map(|val| unsafe { (*val).port })
+    }
+}
+
+#[inline(always)]
+fn get_or_create_mapping_v6<const PRIMARY: usize, const FALLBACK: usize>(
+    cfg: &GlobalConfig,
+    src_ip: [u8; 16],
+    src_port: u16,
+    now: u32,
+) -> Option<u16> {
+    let ep_key = EndpointKey6 {
+        ip: src_ip,
+        port: src_port,
+        _pad: [0; 3],
+    };
+
+    if let Some(val) = OUTBOUND_BINDINGS_V6.get_ptr_mut(&ep_key) {
+        unsafe {
+            if ipv6_eq(&(*val).ip, &cfg.wan_ip6) {
+                if now.wrapping_sub((*val).last_seen) >= LAST_SEEN_INTERVAL_SEC {
+                    (*val).last_seen = now;
+                }
+                return Some((*val).port);
+            }
+            let old_port = u16::from_be((*val).port);
+            let _ = OUTBOUND_BINDINGS_V6.remove(&ep_key);
+            if let Some(in_val) = INBOUND_BINDINGS_V6.get_ptr_mut(&old_port)
+                && ipv6_eq(&(*in_val).ip, &src_ip)
+                && (*in_val).port == src_port
+            {
+                let _ = INBOUND_BINDINGS_V6.remove(&old_port);
+                release_port_v6(old_port);
+            }
+        }
+    }
+
+    let pref = u16::from_be(src_port);
+    let in_val = BindingValue6 {
+        ip: src_ip,
+        port: src_port,
+        _pad: [0; 3],
+        last_seen: now,
+    };
+    let alloc = alloc_port_v6::<PRIMARY, FALLBACK>(pref, cfg.min_port6, cfg.max_port6, &in_val)?;
+    let m_port = u16::to_be(alloc);
+    let new_val = BindingValue6 {
+        ip: cfg.wan_ip6,
+        port: m_port,
+        _pad: [0; 3],
+        last_seen: now,
+    };
+    if OUTBOUND_BINDINGS_V6
+        .insert(&ep_key, &new_val, BPF_NOEXIST)
+        .is_ok()
+    {
+        push_event_v6(&ep_key, alloc);
+        Some(m_port)
+    } else {
+        let _ = INBOUND_BINDINGS_V6.remove(&alloc);
+        release_port_v6(alloc);
+        OUTBOUND_BINDINGS_V6
+            .get_ptr_mut(&ep_key)
+            .map(|val| unsafe { (*val).port })
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Ipv6L4 {
     Udp(usize),
@@ -909,7 +1019,7 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
         }
 
         let frag_off = u16::from_be(iph.frag_off);
-        if (frag_off & 0x3fff) != 0 || (frag_off & 0x2000) != 0 {
+        if (frag_off & 0x3fff) != 0 {
             unsafe {
                 FRAG_TARGET.tail_call(&ctx, 0);
             }
@@ -1094,7 +1204,7 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
         }
 
         let frag_off = u16::from_be(iph.frag_off);
-        if (frag_off & 0x3fff) != 0 || (frag_off & 0x2000) != 0 {
+        if (frag_off & 0x3fff) != 0 {
             unsafe {
                 FRAG_TARGET.tail_call(&ctx, 0);
             }
@@ -1117,75 +1227,13 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
             return TC_ACT_UNSPEC;
         }
 
-        let ep_key = EndpointKey4 {
-            ip: src_ip,
-            port: src_port,
-            _pad: 0,
-        };
-        let now = now_sec();
-
-        let mut mapped_port = None;
-        if let Some(val) = OUTBOUND_BINDINGS_V4.get_ptr_mut(&ep_key) {
-            unsafe {
-                if (*val).ip == cfg.wan_ip4 {
-                    if now.wrapping_sub((*val).last_seen) >= LAST_SEEN_INTERVAL_SEC {
-                        (*val).last_seen = now;
-                    }
-                    mapped_port = Some((*val).port);
-                } else {
-                    let old_port = u16::from_be((*val).port);
-                    let _ = OUTBOUND_BINDINGS_V4.remove(&ep_key);
-                    if let Some(in_val) = INBOUND_BINDINGS_V4.get_ptr_mut(&old_port)
-                        && (*in_val).ip == src_ip
-                        && (*in_val).port == src_port
-                    {
-                        let _ = INBOUND_BINDINGS_V4.remove(&old_port);
-                        release_port_v4(old_port);
-                    }
-                }
-            }
-        }
-
-        let mapped_port = if let Some(p) = mapped_port {
-            p
-        } else {
-            let pref = u16::from_be(src_port);
-            let in_val = BindingValue4 {
-                ip: src_ip,
-                port: src_port,
-                _pad: 0,
-                last_seen: now,
-            };
-            let alloc = match alloc_port_v4::<EGRESS_ALLOC_PRIMARY, EGRESS_ALLOC_FALLBACK>(
-                pref,
-                cfg.min_port4,
-                cfg.max_port4,
-                &in_val,
-            ) {
-                Some(p) => p,
-                None => return TC_ACT_SHOT,
-            };
-            let m_port = u16::to_be(alloc);
-            let new_val = BindingValue4 {
-                ip: cfg.wan_ip4,
-                port: m_port,
-                _pad: 0,
-                last_seen: now,
-            };
-            if OUTBOUND_BINDINGS_V4
-                .insert(&ep_key, &new_val, BPF_NOEXIST)
-                .is_ok()
-            {
-                push_event_v4(&ep_key, alloc);
-                m_port
-            } else {
-                let _ = INBOUND_BINDINGS_V4.remove(&alloc);
-                release_port_v4(alloc);
-                match OUTBOUND_BINDINGS_V4.get_ptr_mut(&ep_key) {
-                    Some(val) => unsafe { (*val).port },
-                    None => return TC_ACT_SHOT,
-                }
-            }
+        let mapped_port = match get_or_create_mapping_v4::<
+            EGRESS_ALLOC_PRIMARY,
+            EGRESS_ALLOC_FALLBACK,
+        >(cfg, src_ip, src_port, now_sec())
+        {
+            Some(p) => p,
+            None => return TC_ACT_SHOT,
         };
 
         let old_src_ip = iph.src_addr;
@@ -1257,75 +1305,13 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
 
         let src_addr = iph.src_addr;
         let src_port = udph.src_port;
-        let ep_key = EndpointKey6 {
-            ip: src_addr,
-            port: src_port,
-            _pad: [0; 3],
-        };
-        let now = now_sec();
-
-        let mut mapped_port = None;
-        if let Some(val) = OUTBOUND_BINDINGS_V6.get_ptr_mut(&ep_key) {
-            unsafe {
-                if ipv6_eq(&(*val).ip, &cfg.wan_ip6) {
-                    if now.wrapping_sub((*val).last_seen) >= LAST_SEEN_INTERVAL_SEC {
-                        (*val).last_seen = now;
-                    }
-                    mapped_port = Some((*val).port);
-                } else {
-                    let old_port = u16::from_be((*val).port);
-                    let _ = OUTBOUND_BINDINGS_V6.remove(&ep_key);
-                    if let Some(in_val) = INBOUND_BINDINGS_V6.get_ptr_mut(&old_port)
-                        && ipv6_eq(&(*in_val).ip, &src_addr)
-                        && (*in_val).port == src_port
-                    {
-                        let _ = INBOUND_BINDINGS_V6.remove(&old_port);
-                        release_port_v6(old_port);
-                    }
-                }
-            }
-        }
-
-        let mapped_port = if let Some(p) = mapped_port {
-            p
-        } else {
-            let pref = u16::from_be(src_port);
-            let in_val = BindingValue6 {
-                ip: src_addr,
-                port: src_port,
-                _pad: [0; 3],
-                last_seen: now,
-            };
-            let alloc = match alloc_port_v6::<EGRESS_ALLOC_PRIMARY, EGRESS_ALLOC_FALLBACK>(
-                pref,
-                cfg.min_port6,
-                cfg.max_port6,
-                &in_val,
-            ) {
-                Some(p) => p,
-                None => return TC_ACT_SHOT,
-            };
-            let m_port = u16::to_be(alloc);
-            let new_val = BindingValue6 {
-                ip: cfg.wan_ip6,
-                port: m_port,
-                _pad: [0; 3],
-                last_seen: now,
-            };
-            if OUTBOUND_BINDINGS_V6
-                .insert(&ep_key, &new_val, BPF_NOEXIST)
-                .is_ok()
-            {
-                push_event_v6(&ep_key, alloc);
-                m_port
-            } else {
-                let _ = INBOUND_BINDINGS_V6.remove(&alloc);
-                release_port_v6(alloc);
-                match OUTBOUND_BINDINGS_V6.get_ptr_mut(&ep_key) {
-                    Some(val) => unsafe { (*val).port },
-                    None => return TC_ACT_SHOT,
-                }
-            }
+        let mapped_port = match get_or_create_mapping_v6::<
+            EGRESS_ALLOC_PRIMARY,
+            EGRESS_ALLOC_FALLBACK,
+        >(cfg, src_addr, src_port, now_sec())
+        {
+            Some(p) => p,
+            None => return TC_ACT_SHOT,
         };
 
         let old_src_addr = iph.src_addr;
@@ -1418,7 +1404,7 @@ fn frag_v6_target(
     let id = read_be32(frag_off + 4);
     let ingress = ipv6_eq(&iph.dst_addr, &cfg.wan_ip6);
     let key = FragKey6 {
-                epoch: cfg.frag_epoch,
+        epoch: cfg.frag_epoch,
         src: iph.src_addr,
         dst: iph.dst_addr,
         id,
@@ -1505,72 +1491,11 @@ fn frag_v6_target(
         return TC_ACT_SHOT;
     }
     let src_port = udph.src_port;
-    let ep_key = EndpointKey6 {
-        ip: src_ip,
-        port: src_port,
-        _pad: [0; 3],
-    };
-    let mut mapped = None;
-    if let Some(val) = OUTBOUND_BINDINGS_V6.get_ptr_mut(&ep_key) {
-        unsafe {
-            if ipv6_eq(&(*val).ip, &cfg.wan_ip6) {
-                if now.wrapping_sub((*val).last_seen) >= LAST_SEEN_INTERVAL_SEC {
-                    (*val).last_seen = now;
-                }
-                mapped = Some((*val).port);
-            } else {
-                let old_port = u16::from_be((*val).port);
-                let _ = OUTBOUND_BINDINGS_V6.remove(&ep_key);
-                if let Some(in_val) = INBOUND_BINDINGS_V6.get_ptr_mut(&old_port)
-                    && ipv6_eq(&(*in_val).ip, &src_ip)
-                    && (*in_val).port == src_port
-                {
-                    let _ = INBOUND_BINDINGS_V6.remove(&old_port);
-                    release_port_v6(old_port);
-                }
-            }
-        }
-    }
-    let mapped = if let Some(p) = mapped {
-        p
-    } else {
-        let pref = u16::from_be(src_port);
-        let in_val = BindingValue6 {
-            ip: src_ip,
-            port: src_port,
-            _pad: [0; 3],
-            last_seen: now,
-        };
-        let alloc = match alloc_port_v6::<FRAG6_ALLOC_PRIMARY, FRAG6_ALLOC_FALLBACK>(
-            pref,
-            cfg.min_port6,
-            cfg.max_port6,
-            &in_val,
-        ) {
-            Some(p) => p,
-            None => return TC_ACT_SHOT,
-        };
-        let m_port = u16::to_be(alloc);
-        let new_val = BindingValue6 {
-            ip: cfg.wan_ip6,
-            port: m_port,
-            _pad: [0; 3],
-            last_seen: now,
-        };
-        if OUTBOUND_BINDINGS_V6
-            .insert(&ep_key, &new_val, BPF_NOEXIST)
-            .is_ok()
-        {
-            push_event_v6(&ep_key, alloc);
-            m_port
-        } else {
-            let _ = INBOUND_BINDINGS_V6.remove(&alloc);
-            release_port_v6(alloc);
-            match OUTBOUND_BINDINGS_V6.get_ptr_mut(&ep_key) {
-                Some(val) => unsafe { (*val).port },
-                None => return TC_ACT_SHOT,
-            }
-        }
+    let mapped = match get_or_create_mapping_v6::<FRAG6_ALLOC_PRIMARY, FRAG6_ALLOC_FALLBACK>(
+        cfg, src_ip, src_port, now,
+    ) {
+        Some(p) => p,
+        None => return TC_ACT_SHOT,
     };
     let old_src = iph.src_addr;
     let old_sport = udph.src_port;
@@ -1711,7 +1636,7 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
             }
         }
         let key = FragKey4 {
-                epoch: cfg.frag_epoch,
+            epoch: cfg.frag_epoch,
             src: iph.src_addr,
             dst: iph.dst_addr,
             id: iph.id,
@@ -1754,7 +1679,7 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
     }
     if offset != 0 {
         let key = FragKey4 {
-                epoch: cfg.frag_epoch,
+            epoch: cfg.frag_epoch,
             src: iph.src_addr,
             dst: iph.dst_addr,
             id: iph.id,
@@ -1797,94 +1722,31 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
         // The remaining fragments have no UDP header, so remember that this
         // datagram must stay on the normal firewall path instead of dropping
         // them for lack of a NAT cache entry.
-        if more {
-            let key = FragKey4 {
-                epoch: cfg.frag_epoch,
-                src: src_ip,
-                dst: iph.dst_addr,
-                id: iph.id,
-                proto: IPPROTO_UDP,
-                _pad: 0,
-            };
-            let value = FragValue4 {
-                ip: 0,
-                _pad: 0,
-                last_seen: now_sec(),
-            };
-            let _ = FRAG_OUT_V4.insert(&key, &value, BPF_ANY);
-        }
+        let key = FragKey4 {
+            epoch: cfg.frag_epoch,
+            src: src_ip,
+            dst: iph.dst_addr,
+            id: iph.id,
+            proto: IPPROTO_UDP,
+            _pad: 0,
+        };
+        let value = FragValue4 {
+            ip: 0,
+            _pad: 0,
+            last_seen: now_sec(),
+        };
+        let _ = FRAG_OUT_V4.insert(&key, &value, BPF_ANY);
         return TC_ACT_UNSPEC;
     }
     let now = now_sec();
-    let ep_key = EndpointKey4 {
-        ip: src_ip,
-        port: src_port,
-        _pad: 0,
-    };
-    let mut mapped = None;
-    if let Some(val) = OUTBOUND_BINDINGS_V4.get_ptr_mut(&ep_key) {
-        unsafe {
-            if (*val).ip == cfg.wan_ip4 {
-                if now.wrapping_sub((*val).last_seen) >= LAST_SEEN_INTERVAL_SEC {
-                    (*val).last_seen = now;
-                }
-                mapped = Some((*val).port);
-            } else {
-                let old_port = u16::from_be((*val).port);
-                let _ = OUTBOUND_BINDINGS_V4.remove(&ep_key);
-                if let Some(in_val) = INBOUND_BINDINGS_V4.get_ptr_mut(&old_port)
-                    && (*in_val).ip == src_ip
-                    && (*in_val).port == src_port
-                {
-                    let _ = INBOUND_BINDINGS_V4.remove(&old_port);
-                    release_port_v4(old_port);
-                }
-            }
-        }
-    }
-    let mapped = if let Some(p) = mapped {
-        p
-    } else {
-        let pref = u16::from_be(src_port);
-        let in_val = BindingValue4 {
-            ip: src_ip,
-            port: src_port,
-            _pad: 0,
-            last_seen: now,
-        };
-        let alloc = match alloc_port_v4::<FRAG_ALLOC_PRIMARY, FRAG_ALLOC_FALLBACK>(
-            pref,
-            cfg.min_port4,
-            cfg.max_port4,
-            &in_val,
-        ) {
-            Some(p) => p,
-            None => return TC_ACT_SHOT,
-        };
-        let m_port = u16::to_be(alloc);
-        let new_val = BindingValue4 {
-            ip: cfg.wan_ip4,
-            port: m_port,
-            _pad: 0,
-            last_seen: now,
-        };
-        if OUTBOUND_BINDINGS_V4
-            .insert(&ep_key, &new_val, BPF_NOEXIST)
-            .is_ok()
-        {
-            push_event_v4(&ep_key, alloc);
-            m_port
-        } else {
-            let _ = INBOUND_BINDINGS_V4.remove(&alloc);
-            release_port_v4(alloc);
-            match OUTBOUND_BINDINGS_V4.get_ptr_mut(&ep_key) {
-                Some(val) => unsafe { (*val).port },
-                None => return TC_ACT_SHOT,
-            }
-        }
+    let mapped = match get_or_create_mapping_v4::<FRAG_ALLOC_PRIMARY, FRAG_ALLOC_FALLBACK>(
+        cfg, src_ip, src_port, now,
+    ) {
+        Some(p) => p,
+        None => return TC_ACT_SHOT,
     };
     let key = FragKey4 {
-                epoch: cfg.frag_epoch,
+        epoch: cfg.frag_epoch,
         src: src_ip,
         dst: iph.dst_addr,
         id: iph.id,
