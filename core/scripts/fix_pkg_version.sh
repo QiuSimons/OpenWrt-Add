@@ -2,6 +2,7 @@
 # ==============================================================================
 # OpenWrt/Alpine apk-tools 版本号规范化
 # ==============================================================================
+set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "$REPO_ROOT" || exit 1
@@ -11,7 +12,7 @@ APK_VALID_REGEX="^[0-9]+(\.[0-9]+)*[a-z]?(_(alpha|beta|pre|rc|cvs|svn|git|hg|p)[
 echo "[Version] 开始执行 OpenWrt/Alpine 版本号合规修复..."
 
 find "$REPO_ROOT" -type f -name "Makefile" ! -path "*/.*/*" ! -path "*/core/*" | while read -r makefile; do
-    raw_val=$(grep "^PKG_VERSION:=" "$makefile" 2>/dev/null | awk -F':=' '{print $2}' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    raw_val=$(grep "^PKG_VERSION:=" "$makefile" 2>/dev/null | awk -F':=' '{print $2}' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)
 
     if [ -n "$raw_val" ]; then
         new_val="$raw_val"
@@ -48,9 +49,11 @@ find "$REPO_ROOT" -type f -name "Makefile" ! -path "*/.*/*" ! -path "*/core/*" |
     fi
 
     # 任务 3: 修复 PKG_MIRROR_HASH (强制改为 skip)
-    if grep -q "^PKG_MIRROR_HASH:=" "$makefile" 2>/dev/null && grep "^PKG_MIRROR_HASH:=" "$makefile" | grep -qv "^PKG_MIRROR_HASH:=skip[[:space:]]*$"; then
-        sed -i 's/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=skip/' "$makefile"
-        echo "  [修复 Mirror Hash] $makefile -> skip"
+    if grep -q "^PKG_MIRROR_HASH:=" "$makefile" 2>/dev/null; then
+        if grep "^PKG_MIRROR_HASH:=" "$makefile" | grep -qv "^PKG_MIRROR_HASH:=skip[[:space:]]*$"; then
+            sed -i 's/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=skip/' "$makefile"
+            echo "  [修复 Mirror Hash] $makefile -> skip"
+        fi
     fi
 done
 

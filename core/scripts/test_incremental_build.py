@@ -32,7 +32,7 @@ def run_cmd(cmd, env=None):
 
 def main():
     print("=" * 60)
-    print(">>> 开始执行 OpenWrt-Add 增量编译逻辑替代法验证 <<<")
+    print("=== OpenWrt-Add 增量编译逻辑验证 ===")
     print("=" * 60)
 
     work_dir = pathlib.Path(tempfile.mkdtemp(prefix="openwrt_inc_test_"))
@@ -153,7 +153,7 @@ Version: 1.10.0-1
         fp_data = json.loads((cached_apks / "fingerprints.json").read_text())
         assert len(fp_data) == 4, f"指纹库应有 4 个条目，实际: {len(fp_data)}"
         print(f"Save 完成，缓存内 APK 数量: {len(list(cached_apks.glob('*.apk')))}")
-        print("✓ Scenario 1 (冷构建与初次缓存归档) 验证通过！")
+        print("PASS: Scenario 1 (冷构建与初次缓存归档)")
 
         # -------------------------------------------------------------
         # Scenario 2: 热缓存零改动 (Warm Cache, No Changes)
@@ -167,7 +167,7 @@ Version: 1.10.0-1
         assert rc == 0, f"plan failed: {err}"
         targets = targets_file.read_text().strip()
         print(f"Plan 输出 Targets: '{targets}'")
-        assert targets == "", "零改动时 targets 必须为空！"
+        assert targets == "", "零改动时 targets 应为空"
 
         # 检查 artifacts/bin 是否已由缓存完整恢复
         recovered_apks = sorted([p.name for p in artifacts_bin.glob("*.apk")])
@@ -183,7 +183,7 @@ Version: 1.10.0-1
         )
         rc, out, err = run_cmd(cmd_verify)
         assert rc == 0, f"verify_manifest 验证失败: {out}\n{err}"
-        print("✓ Scenario 2 (100% 缓存命中，编译完全跳过且清单校验通过) 验证通过！")
+        print("PASS: Scenario 2 (缓存命中跳过编译)")
 
         # -------------------------------------------------------------
         # Scenario 3: 单包源码变更 (Modify Single Package)
@@ -215,7 +215,7 @@ Version: 1.10.0-1
         # 验证 manifest
         rc, out, err = run_cmd(cmd_verify)
         assert rc == 0, f"verify_manifest 失败: {out}\n{err}"
-        print("✓ Scenario 3 (仅单包增量构建，其余包无缝复用) 验证通过！")
+        print("PASS: Scenario 3 (单包增量构建)")
 
         # -------------------------------------------------------------
         # Scenario 4: 上次编译失败缺失包自动重跑 (Missing APK Auto-rebuild)
@@ -230,7 +230,7 @@ Version: 1.10.0-1
         assert rc == 0, f"plan failed: {err}"
         targets = targets_file.read_text().strip().split()
         print(f"Plan 输出 Targets: {targets}")
-        assert "package/feeds/custom/frp/compile" in targets, "缺少 frps 产物的 frp 必须被纳入编译 targets！"
+        assert "package/feeds/custom/frp/compile" in targets, "未产出完整 apk 应触发重编"
         assert "package/feeds/custom/r8168/compile" not in targets
         assert "package/feeds/custom/sing-box/compile" not in targets
 
@@ -240,7 +240,7 @@ Version: 1.10.0-1
         rc, out, err = run_cmd(cmd_save)
         assert rc == 0
         assert (cached_apks / "frps-0.58.1-r1.apk").is_file()
-        print("✓ Scenario 4 (自动检测未产出 APK 并触发定向补编) 验证通过！")
+        print("PASS: Scenario 4 (未产出 APK 自动补编)")
 
         # -------------------------------------------------------------
         # Scenario 5: 缓存包损坏/0字节容错 (Corrupted APK Protection)
@@ -255,8 +255,8 @@ Version: 1.10.0-1
         assert rc == 0
         targets = targets_file.read_text().strip().split()
         print(f"Plan 输出 Targets: {targets}")
-        assert "package/feeds/custom/sing-box/compile" in targets, "损坏的 APK 必须被识别为缺失并触发重编！"
-        print("✓ Scenario 5 (损坏文件自动识别与安全防护) 验证通过！")
+        assert "package/feeds/custom/sing-box/compile" in targets, "损坏 APK 应触发重编"
+        print("PASS: Scenario 5 (损坏文件识别与恢复)")
 
         # -------------------------------------------------------------
         # Scenario 6: 架构不兼容/defconfig未启用包跳过测试
@@ -276,8 +276,8 @@ Version: 1.10.0-1
         assert rc == 0
         targets = targets_file.read_text().strip()
         print(f"Plan 输出 Targets: '{targets}'")
-        assert targets == "", "未被 defconfig 启用的包绝不应被加入 targets！"
-        print("✓ Scenario 6 (defconfig 未启用包自动跳过) 验证通过！")
+        assert targets == "", "未启用包不应加入 targets"
+        print("PASS: Scenario 6 (defconfig 未启用包跳过)")
 
         # -------------------------------------------------------------
         # Scenario 7: 版本升级时缓存自动清理旧版本 APK
@@ -296,7 +296,7 @@ Version: 1.10.0-1
         print(f"缓存中 demo 包数量: {len(demo_apks)}, 文件: {[f.name for f in demo_apks]}")
         assert len(demo_apks) == 1, "升级后缓存应仅保留最新版 APK"
         assert demo_apks[0].name == "luci-app-demo-2.0-r1.apk"
-        print("✓ Scenario 7 (旧版本 APK 自动清理) 验证通过！")
+        print("PASS: Scenario 7 (旧版本 APK 清理)")
 
         # -------------------------------------------------------------
         # Scenario 8: 真实工程目录测试 (Real Apps & Themes Fingerprinting)
@@ -323,10 +323,10 @@ Version: 1.10.0-1
             
         elapsed = time.time() - t0
         print(f"真实工程 {len(real_dirs)} 个包全量指纹计算耗时: {elapsed*1000:.1f} ms")
-        print("✓ Scenario 8 (真实工程环境测试完全通过)")
+        print("PASS: Scenario 8 (工程环境指纹测试)")
 
         print("\n" + "=" * 60)
-        print(">>> 全部 8 项核心场景替代法逻辑验证 100% PASSED! <<<")
+        print("=== 全部 8 项场景测试通过 ===")
         print("=" * 60)
 
     finally:

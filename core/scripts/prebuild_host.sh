@@ -140,6 +140,38 @@ assert_elf() {
   esac
 }
 
+# ------------------------------------------------------------------------------
+# 缓存印章：记录 ARCH + 脚本哈希 + 源码签名，签名未变时跳过编译
+# ------------------------------------------------------------------------------
+SCRIPT_HASH="$(sha256sum "${BASH_SOURCE[0]}" | awk '{print $1}')"
+
+is_cached() {
+  local pkg="$1" sig="$2"; shift 2
+  local stamp_file="$OUT/$pkg/.stamp"
+
+  [ -f "$stamp_file" ] || return 1
+  [ "$(cat "$stamp_file" 2>/dev/null)" = "$ARCH $SCRIPT_HASH $sig" ] || return 1
+
+  local f
+  for f in "$@"; do
+    [ -s "$f" ] || return 1
+    case "$f" in
+      *.txt) ;;
+      *)
+        file -b "$f" | grep -q 'ELF' || return 1
+        ;;
+    esac
+  done
+
+  return 0
+}
+
+write_stamp() {
+  local pkg="$1" sig="$2"
+  mkdir -p "$OUT/$pkg"
+  printf '%s %s %s\n' "$ARCH" "$SCRIPT_HASH" "$sig" > "$OUT/$pkg/.stamp"
+}
+
 # ==============================================================================
 # 各包预编译
 # ==============================================================================
@@ -148,8 +180,18 @@ prebuild_frp() {
   local mk=apps/imm_pkg/frp/Makefile
   [ -f "$mk" ] || { log "SKIP frp (包已移除)"; return 0; }
 
-  local src="$WORK/frp" out="$OUT/frp/bin"
+  resolve_source "$mk"
+  local sig="${SRC_VERSION}_${SRC_URL}"
+  local out="$OUT/frp/bin"
+
+  if is_cached frp "$sig" "$out/frpc" "$out/frps"; then
+    log "SKIP frp (产物已是最新: $SRC_VERSION)"
+    return 0
+  fi
+
+  local src="$WORK/frp"
   fetch_source frp "$mk"
+  rm -f "$OUT/frp/.stamp"
   rm -rf "$out"; mkdir -p "$out"
 
   local ldflags="-s -w -X github.com/fatedier/frp/pkg/util/version.version=$SRC_VERSION"
@@ -157,32 +199,56 @@ prebuild_frp() {
   gobuild "$src" "$out" ./cmd/frpc noweb "$ldflags"
   gobuild "$src" "$out" ./cmd/frps noweb "$ldflags"
   assert_elf "$out/frpc"; assert_elf "$out/frps"
+
+  write_stamp frp "$sig"
 }
 
 prebuild_mosdns() {
   local mk=apps/luci-app-mosdns/mosdns/Makefile
   [ -f "$mk" ] || { log "SKIP mosdns (包已移除)"; return 0; }
 
-  local src="$WORK/mosdns" out="$OUT/mosdns/bin"
+  resolve_source "$mk"
+  local sig="${SRC_VERSION}_${SRC_RELEASE}_${SRC_URL}"
+  local out="$OUT/mosdns/bin"
+
+  if is_cached mosdns "$sig" "$out/mosdns"; then
+    log "SKIP mosdns (产物已是最新: $SRC_VERSION-$SRC_RELEASE)"
+    return 0
+  fi
+
+  local src="$WORK/mosdns"
   fetch_source mosdns "$mk"
+  rm -f "$OUT/mosdns/.stamp"
   rm -rf "$out"; mkdir -p "$out"
 
   local ldflags="-s -w -X main.version=v$SRC_VERSION-r$SRC_RELEASE"
   # GO_PKG_BUILD_PKG 未设置 -> 构建模块根目录
   gobuild "$src" "$out" . "" "$ldflags"
   assert_elf "$out/mosdns"
+
+  write_stamp mosdns "$sig"
 }
 
 prebuild_mihomo() {
-  local pkg dir src out ldflags
+  local pkg dir src out ldflags sig
   for pkg in mihomo-meta mihomo-alpha; do
     dir="apps/OpenWrt-mihomo/$pkg"
     [ -f "$dir/Makefile" ] || { log "SKIP $pkg (包已移除)"; continue; }
 
+    resolve_source "$dir/Makefile"
+    sig="${SRC_VERSION}_${SRC_BUILDVER}_${SRC_URL}"
+    out="$OUT/$pkg/bin"
+
+    if is_cached "$pkg" "$sig" "$out/mihomo"; then
+      log "SKIP $pkg (产物已是最新: $SRC_BUILDVER)"
+      continue
+    fi
+
     src="$WORK/$pkg"
     fetch_source "$pkg" "$dir/Makefile"
 
-    out="$OUT/$pkg/bin"; rm -rf "$OUT/$pkg"; mkdir -p "$out"
+    rm -f "$OUT/$pkg/.stamp"
+    rm -rf "$OUT/$pkg"; mkdir -p "$out"
     ldflags="-s -w"
     ldflags+=" -X github.com/metacubex/mihomo/constant.Version=$SRC_BUILDVER"
     ldflags+=" -X github.com/metacubex/mihomo/constant.BuildTime=$(date -u -Iseconds)"
@@ -190,6 +256,8 @@ prebuild_mihomo() {
     # GO_PKG_TAGS:=with_gvisor
     gobuild "$src" "$out" . with_gvisor "$ldflags"
     assert_elf "$out/mihomo"
+
+    write_stamp "$pkg" "$sig"
   done
 }
 
@@ -197,8 +265,18 @@ prebuild_singbox() {
   local mk=apps/imm_pkg/sing-box/Makefile
   [ -f "$mk" ] || { log "SKIP sing-box (包已移除)"; return 0; }
 
-  local src="$WORK/sing-box" out="$OUT/sing-box/bin"
+  resolve_source "$mk"
+  local sig="${SRC_VERSION}_${SRC_URL}_${SINGBOX_TAGS}"
+  local out="$OUT/sing-box/bin"
+
+  if is_cached sing-box "$sig" "$out/sing-box" "$OUT/sing-box/features.txt"; then
+    log "SKIP sing-box (产物已是最新: $SRC_VERSION)"
+    return 0
+  fi
+
+  local src="$WORK/sing-box"
   fetch_source sing-box "$mk"
+  rm -f "$OUT/sing-box/.stamp"
   rm -rf "$out"; mkdir -p "$out"
 
   local tags="$SINGBOX_TAGS"
@@ -214,14 +292,26 @@ prebuild_singbox() {
   features=$(echo "$SINGBOX_TAGS" | tr ',' '\n' | sed -n 's/^with_//p' | tr 'a-z' 'A-Z')
   [ -n "$features" ] || die "sing-box: 未能推导特性名"
   printf '%s\n' $features > "$OUT/sing-box/features.txt"
+
+  write_stamp sing-box "$sig"
 }
 
 prebuild_einat() {
   local mk=apps/openwrt-einat-ebpf/Makefile
   [ -f "$mk" ] || { log "SKIP einat-ebpf (包已移除)"; return 0; }
 
-  local src="$WORK/einat-ebpf" out="$OUT/einat-ebpf/bin"
+  resolve_source "$mk"
+  local sig="${SRC_VERSION}_${SRC_URL}"
+  local out="$OUT/einat-ebpf/bin"
+
+  if is_cached einat-ebpf "$sig" "$out/einat"; then
+    log "SKIP einat-ebpf (产物已是最新: $SRC_VERSION)"
+    return 0
+  fi
+
+  local src="$WORK/einat-ebpf"
   fetch_source einat-ebpf "$mk"
+  rm -f "$OUT/einat-ebpf/.stamp"
   rm -rf "$out"; mkdir -p "$out"
 
   # 获取 libbpf 头文件供 build.rs 编译 BPF
@@ -243,11 +333,31 @@ prebuild_einat() {
 
   cp "$src/target/$RUST_TARGET/release/einat" "$out/einat"
   assert_elf "$out/einat"
+
+  write_stamp einat-ebpf "$sig"
+}
+
+flowcone_sig() {
+  (
+    cd "$REPO_ROOT"
+    git ls-files -s apps/FlowCone 2>/dev/null || find apps/FlowCone -type f -exec sha256sum {} +
+    git status --porcelain apps/FlowCone 2>/dev/null || true
+  ) | sha256sum | awk '{print $1}'
 }
 
 prebuild_flowcone() {
   local dir="$REPO_ROOT/apps/FlowCone" out="$OUT/flowcone/bin"
   [ -d "$dir/crates/flowcone-daemon" ] || { log "SKIP flowcone (包已移除)"; return 0; }
+
+  local sig
+  sig="$(flowcone_sig)"
+
+  if is_cached flowcone "$sig" "$out/flowcone"; then
+    log "SKIP flowcone (产物已是最新: $sig)"
+    return 0
+  fi
+
+  rm -f "$OUT/flowcone/.stamp"
   rm -rf "$OUT/flowcone"; mkdir -p "$out"
 
   # 使用 flowcone 已签入的 ebpf 产物
@@ -256,6 +366,8 @@ prebuild_flowcone() {
 
   cp "$dir/target/$RUST_TARGET/release/flowcone" "$out/flowcone"
   assert_elf "$out/flowcone"
+
+  write_stamp flowcone "$sig"
 }
 
 prebuild_honk() {
@@ -263,13 +375,31 @@ prebuild_honk() {
   [ -f "$mk" ] || { log "SKIP honk (包已移除)"; return 0; }
 
   local script="$REPO_ROOT/apps/luci-app-honk/honk/build_honk_core.sh"
+  local toolchain="$REPO_ROOT/apps/luci-app-honk/honk/honk_toolchain.sh"
+  [ -x "$script" ] || die "honk prebuild script not found: $script"
+
+  local src_ver
+  src_ver="$(sed -n 's/^HONK_SRC_VERSION:=[[:space:]]*//p' "$mk" | tr -d ' \r\n')"
+  [ -n "$src_ver" ] || die "HONK_SRC_VERSION not found in $mk"
+
+  local script_hash
+  script_hash="$(sha256sum "$script" "$toolchain" | sha256sum | awk '{print $1}')"
+  local sig="${src_ver}_${script_hash}"
   local out="$OUT/honk/bin"
+
+  if is_cached honk "$sig" "$out/honk-core"; then
+    log "SKIP honk (产物已是最新: $src_ver)"
+    return 0
+  fi
+
+  rm -f "$OUT/honk/.stamp"
   rm -rf "$out"; mkdir -p "$out"
 
-  [ -x "$script" ] || die "honk prebuild script not found: $script"
   "$script" "$ARCH" "$out/honk-core" || die "honk prebuild failed via build_honk_core.sh"
 
   assert_elf "$out/honk-core"
+
+  write_stamp honk "$sig"
 
   # 源码与 target 只在本次构建需要，清掉给后面的 Rust 包腾磁盘
   rm -rf apps/luci-app-honk/honk/honk-src
@@ -279,8 +409,21 @@ prebuild_dae() {
   local mk=apps/luci-app-dae/dae/Makefile
   [ -f "$mk" ] || { log "SKIP dae (包已移除)"; return 0; }
 
-  local src="$WORK/dae" out="$OUT/dae/bin"
+  resolve_source "$mk"
+  local pgo_file="$REPO_ROOT/apps/luci-app-dae/dae/pprof/default.pgo"
+  local pgo_hash=""
+  [ -f "$pgo_file" ] && pgo_hash="$(sha256sum "$pgo_file" | awk '{print $1}')"
+  local sig="${SRC_VERSION}_${SRC_URL}_${pgo_hash}"
+  local out="$OUT/dae/bin"
+
+  if is_cached dae "$sig" "$out/dae"; then
+    log "SKIP dae (产物已是最新: $SRC_VERSION)"
+    return 0
+  fi
+
+  local src="$WORK/dae"
   fetch_source dae "$mk"
+  rm -f "$OUT/dae/.stamp"
   rm -rf "$out"; mkdir -p "$out"
 
   local bpf_headers="$WORK/dae_bpf_headers"
@@ -312,7 +455,6 @@ prebuild_dae() {
   ) || die "dae: bpf generate failed"
 
   local pgo_args=()
-  local pgo_file="$REPO_ROOT/apps/luci-app-dae/dae/pprof/default.pgo"
   [ -f "$pgo_file" ] && pgo_args+=("-pgo=$pgo_file")
 
   local ldflags="-s -w"
@@ -326,6 +468,8 @@ prebuild_dae() {
   ) || die "go build failed: dae"
 
   assert_elf "$out/dae"
+
+  write_stamp dae "$sig"
 }
 
 # ==============================================================================
@@ -349,7 +493,7 @@ main() {
   want dae      && prebuild_dae
   true
 
-  ( cd "$OUT" && find . -type f ! -name 'manifest.txt' | sed 's|^\./||' | sort ) > "$OUT/manifest.txt"
+  ( cd "$OUT" && find . -type f ! -name 'manifest.txt' ! -name '.*' ! -name '*.stamp*' | sed 's|^\./||' | sort ) > "$OUT/manifest.txt"
   log "产物清单:"
   sed 's/^/    /' "$OUT/manifest.txt"
 

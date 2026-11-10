@@ -17,6 +17,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DROP_CONF="${DROP_CONF:-$SCRIPT_DIR/../assets/drop-packages.conf}"
+PREBUILT_CONF="${PREBUILT_CONF:-$SCRIPT_DIR/../assets/prebuilt-packages.conf}"
 
 FEED="${1:?usage: apply_prebuilt.sh <feed_dir> [prebuilt_mount_path] [prebuilt_host_dir]}"
 PREBUILT="${2:-/prebuilt}"
@@ -34,18 +35,18 @@ if [ -n "$PREBUILT_HOST" ]; then
   PREBUILT_HOST="$(cd "$PREBUILT_HOST" && pwd)"
 fi
 
-# 相对 staging_feed 的包目录 | 类型(go|rust) | 预编译目录名 | 二进制名
-PACKAGES=(
-  "imm_pkg/frp|go||"
-  "luci-app-mosdns/mosdns|go||"
-  "OpenWrt-mihomo/mihomo-meta|go||"
-  "OpenWrt-mihomo/mihomo-alpha|go||"
-  "imm_pkg/sing-box|go||"
-  "luci-app-dae/dae|go||"
-  "openwrt-einat-ebpf|rust|einat-ebpf|einat"
-  "FlowCone/openwrt/flowcone|rust|flowcone|flowcone"
-  "luci-app-honk/honk|rust|honk|honk-core"
-)
+# 从 prebuilt-packages.conf 读取预编译包清单
+PACKAGES=()
+if [ -f "$PREBUILT_CONF" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+    cleaned="$(echo "$line" | awk -F'|' '{printf "%s|%s|%s|%s", $1, $2, $3, $4}' | tr -d ' ')"
+    PACKAGES+=("$cleaned")
+  done < "$PREBUILT_CONF"
+else
+  die "prebuilt config missing: $PREBUILT_CONF"
+fi
 
 # 按 drop-packages.conf 移除互斥变体
 drop_packages() {

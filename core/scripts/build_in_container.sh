@@ -2,16 +2,18 @@
 set -e
 
 # Install pahole and llvm-objcopy for vmlinux-btf encoding
-if command -v apt-get >/dev/null 2>&1; then
-    if [ -f /etc/debian_version ] && grep -q "^11" /etc/debian_version; then
-        printf "deb [check-valid-until=no trusted=yes] http://archive.debian.org/debian/ bullseye main\ndeb [check-valid-until=no trusted=yes] http://archive.debian.org/debian-security/ bullseye-security main\n" > /etc/apt/sources.list
-        rm -rf /etc/apt/sources.list.d/*
+if [ -d /feed/vmlinux-btf ] && ! command -v pahole >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+        if [ -f /etc/debian_version ] && grep -q "^11" /etc/debian_version; then
+            printf "deb [check-valid-until=no trusted=yes] http://archive.debian.org/debian/ bullseye main\ndeb [check-valid-until=no trusted=yes] http://archive.debian.org/debian-security/ bullseye-security main\n" > /etc/apt/sources.list
+            rm -rf /etc/apt/sources.list.d/*
+        fi
+        apt-get update -o Acquire::Check-Valid-Until=false || apt-get update
+        apt-get install -y --no-install-recommends dwarves llvm || apt-get install -y dwarves llvm || apt-get install -y pahole
+        rm -rf /var/lib/apt/lists/*
+    elif command -v apk >/dev/null 2>&1; then
+        apk add --no-cache dwarves llvm
     fi
-    apt-get update -o Acquire::Check-Valid-Until=false || apt-get update
-    apt-get install -y --no-install-recommends dwarves llvm || apt-get install -y dwarves llvm || apt-get install -y pahole
-    rm -rf /var/lib/apt/lists/*
-elif command -v apk >/dev/null 2>&1; then
-    apk add --no-cache dwarves llvm
 fi
 
 pahole_bin="$(command -v pahole || which pahole || true)"
@@ -210,10 +212,11 @@ cp /tmp/build.log /artifacts/logs/00-build.log
 # Collect built APKs into /artifacts/bin
 # 1. 收集 custom feed 下的应用和主题包
 find bin/packages/ -path '*/custom/*' -name '*.apk' -exec cp {} /artifacts/bin/ \; 2>/dev/null || true
-# 2. 从 bin/ 中按清单精准收集目标包（涵盖输出在 bin/targets/ 的内核模块如 kmod-r8168、kmod-natflow 等，避免拷贝 SDK 内置的无关 kmod）
+# 2. 从 bin/ 中收集尚未收集的目标包 (如 bin/targets/ 下的内核模块)
 if [ -f /artifacts/manifest/expected.txt ]; then
     while IFS= read -r pkg || [ -n "$pkg" ]; do
         [ -n "$pkg" ] || continue
+        compgen -G "/artifacts/bin/${pkg}-[0-9]*.apk" >/dev/null 2>&1 && continue
         find bin/ -type f -name "${pkg}-[0-9]*.apk" -exec cp -u {} /artifacts/bin/ \; 2>/dev/null || true
     done < /artifacts/manifest/expected.txt
 fi

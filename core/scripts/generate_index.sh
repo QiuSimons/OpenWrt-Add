@@ -5,6 +5,7 @@
 # Runs inside the SDK container with access to host-built apk tool.
 # ==============================================================================
 set -euo pipefail
+shopt -s nullglob
 
 APK=/builder/staging_dir/host/bin/apk
 [ -x "$APK" ] || { echo "::error::apk not found in SDK image"; exit 1; }
@@ -12,11 +13,12 @@ APK=/builder/staging_dir/host/bin/apk
 
 [ -f /certs/feed-key.pem ] || { echo "::error::Signing key /certs/feed-key.pem not found"; exit 1; }
 
+failed_arches=()
+
 for dir in /public/*/; do
   [ -d "$dir" ] || continue
   arch=$(basename "$dir")
   [ "$arch" = keys ] && continue
-  shopt -s nullglob
   files=("$dir"*.apk)
   [ ${#files[@]} -gt 0 ] || continue
   echo "--> indexing $arch (${#files[@]} apk)"
@@ -26,7 +28,6 @@ for dir in /public/*/; do
   indexed=0
   while [ "$attempt" -lt "$max_retries" ]; do
     attempt=$((attempt + 1))
-    shopt -s nullglob
     cur_files=("$dir"*.apk)
     [ ${#cur_files[@]} -gt 0 ] || { echo "::warning::[$arch] no apks found"; break; }
 
@@ -68,6 +69,12 @@ for dir in /public/*/; do
   done
 
   if [ "$indexed" -ne 1 ]; then
-    echo "::warning::[$arch] failed to create signed packages.adb index after retries"
+    echo "::error::[$arch] failed to create signed packages.adb index after retries"
+    failed_arches+=("$arch")
   fi
 done
+
+if [ ${#failed_arches[@]} -gt 0 ]; then
+  echo "::error::Indexing failed for architectures: ${failed_arches[*]}"
+  exit 1
+fi

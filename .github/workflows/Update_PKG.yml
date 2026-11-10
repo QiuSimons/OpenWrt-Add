@@ -21,8 +21,12 @@ jobs:
 
       - name: Setup Environment
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq patch curl git
+          for tool in patch curl git; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends patch curl git
+              break
+            fi
+          done
 
       - name: Sync and Standardize Packages
         run: |

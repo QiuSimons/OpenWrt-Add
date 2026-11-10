@@ -47,41 +47,46 @@ case "$OUT_FILE" in
   *) OUT_FILE="$PWD/$OUT_FILE" ;;
 esac
 
-if [ "$IF_NEEDED" = 1 ] && [ -f "$OUT_FILE" ]; then
-  if [ ! -f "$OUT_FILE.stamp" ]; then
-    echo "==> using prebuilt honk-core (no stamp): $OUT_FILE"
-    exit 0
-  fi
-  if [ "$(cat "$OUT_FILE.stamp")" = "$RUST_TARGET" ]; then
-    echo "==> honk-core is up to date: $OUT_FILE"
-    exit 0
-  fi
-  echo "==> honk-core target changed, rebuilding: $OUT_FILE"
-fi
-
-# Building: drop the old artifact so a failed build cannot be reused.
-rm -f "$OUT_FILE" "$OUT_FILE.stamp"
-
 MAKEFILE="${HONK_MAKEFILE:-$SCRIPT_DIR/Makefile}"
 if [ -n "$SRC_DIR" ]; then
   eval "$("$SCRIPT_DIR/honk_toolchain.sh" --src "$SRC_DIR" "$MAKEFILE")"
 else
   eval "$("$SCRIPT_DIR/honk_toolchain.sh" "$MAKEFILE")"
   SRC_DIR="$SCRIPT_DIR/honk-src"
-  CACHED_REV=$(git -C "$SRC_DIR" rev-parse HEAD 2>/dev/null || true)
-  if [ -d "$SRC_DIR/crates/honk-core" ] && [ "$CACHED_REV" = "$HONK_SRC_VERSION" ]; then
-    echo "==> Reusing $SRC_DIR at ${HONK_SRC_VERSION}"
-  else
-    if [ -n "$CACHED_REV" ]; then
-      echo "==> honk-src is at ${CACHED_REV}, expected ${HONK_SRC_VERSION}; refetching..."
-    fi
-    rm -rf "$SRC_DIR"
-    echo "==> Fetching honk source (${HONK_SRC_URL} @ ${HONK_SRC_VERSION})..."
-    git init -q "$SRC_DIR"
-    git -C "$SRC_DIR" remote add origin "$HONK_SRC_URL"
-    git -C "$SRC_DIR" fetch --depth 1 origin "$HONK_SRC_VERSION"
-    git -C "$SRC_DIR" checkout -q --detach FETCH_HEAD
+fi
+
+if [ "$IF_NEEDED" = 1 ] && [ -f "$OUT_FILE" ]; then
+  if [ ! -f "$OUT_FILE.stamp" ]; then
+    echo "==> using prebuilt honk-core (no stamp): $OUT_FILE"
+    exit 0
   fi
+  if [ "$(cat "$OUT_FILE.stamp")" = "$RUST_TARGET $HONK_SRC_VERSION" ]; then
+    echo "==> honk-core is up to date: $OUT_FILE"
+    exit 0
+  fi
+  echo "==> honk-core target or version changed, rebuilding: $OUT_FILE"
+fi
+
+# Building: drop the old artifact so a failed build cannot be reused.
+rm -f "$OUT_FILE" "$OUT_FILE.stamp"
+
+if [ -z "${HONK_SRC_VERSION:-}" ]; then
+  echo "ERROR: HONK_SRC_VERSION is not set" >&2
+  exit 1
+fi
+CACHED_REV=$(git -C "$SRC_DIR" rev-parse HEAD 2>/dev/null || true)
+if [ -d "$SRC_DIR/crates/honk-core" ] && [ "$CACHED_REV" = "$HONK_SRC_VERSION" ]; then
+  echo "==> Reusing $SRC_DIR at ${HONK_SRC_VERSION}"
+else
+  if [ -n "$CACHED_REV" ]; then
+    echo "==> honk-src is at ${CACHED_REV}, expected ${HONK_SRC_VERSION}; refetching..."
+  fi
+  rm -rf "$SRC_DIR"
+  echo "==> Fetching honk source (${HONK_SRC_URL} @ ${HONK_SRC_VERSION})..."
+  git init -q "$SRC_DIR"
+  git -C "$SRC_DIR" remote add origin "$HONK_SRC_URL"
+  git -C "$SRC_DIR" fetch --depth 1 origin "$HONK_SRC_VERSION"
+  git -C "$SRC_DIR" checkout -q --detach FETCH_HEAD
 fi
 
 SRC_DIR="$(cd "$SRC_DIR" && pwd)"
@@ -157,7 +162,7 @@ fi
 mkdir -p "$(dirname "$OUT_FILE")"
 cp -f "$BUILT_BIN" "$OUT_FILE"
 chmod +x "$OUT_FILE"
-printf '%s\n' "$RUST_TARGET" > "$OUT_FILE.stamp"
+printf '%s %s\n' "$RUST_TARGET" "$HONK_SRC_VERSION" > "$OUT_FILE.stamp"
 
 echo "==> Build succeeded: $OUT_FILE"
 echo "==> $FILE_DESC"

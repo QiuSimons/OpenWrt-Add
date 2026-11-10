@@ -159,8 +159,19 @@ sync_declared_pkg() {
     fi
 }
 
+get_packages_conf() {
+    if [ -f "$SCRIPT_DIR/packages.conf" ]; then
+        echo "$SCRIPT_DIR/packages.conf"
+    elif [ -f "$REPO_ROOT/core/assets/packages.conf" ]; then
+        echo "$REPO_ROOT/core/assets/packages.conf"
+    else
+        echo "$SCRIPT_DIR/packages.conf"
+    fi
+}
+
 sync_all_declared() {
-    local conf_file="$SCRIPT_DIR/packages.conf"
+    local conf_file
+    conf_file="$(get_packages_conf)"
     if [ ! -f "$conf_file" ]; then
         log_warn "未找到配置文件: $conf_file"
         return 0
@@ -196,7 +207,7 @@ run_post_processing() {
     bash "$SCRIPT_DIR/fix_pkg_version.sh"
     bash "$SCRIPT_DIR/fix_permissions.sh"
 
-    log_info "${CLR_BOLD}>>> 全局规则修复与环境标准化完成！${CLR_RESET}"
+    log_info "${CLR_BOLD}>>> 全局规则修复与环境标准化完成${CLR_RESET}"
 }
 
 print_summary() {
@@ -275,7 +286,9 @@ if [ -n "$TARGET_ONLY" ]; then
     elif type "sync_${pkg_base//-/_}" >/dev/null 2>&1; then
         "sync_${pkg_base//-/_}"
     else
-        line="$(grep -E "^[[:space:]]*([a-zA-Z0-9_-]+/)?$pkg_base[[:space:]]*\|" "$SCRIPT_DIR/packages.conf" | head -n 1)"
+        local conf_file
+        conf_file="$(get_packages_conf)"
+        line="$(grep -E "^[[:space:]]*([a-zA-Z0-9_-]+/)?$pkg_base[[:space:]]*\|" "$conf_file" 2>/dev/null | head -n 1)"
         if [ -n "$line" ]; then
             rel_path="$(echo "$line" | awk -F'|' '{print $1}' | tr -d '[:space:]')"
             url="$(echo "$line" | awk -F'|' '{print $2}' | tr -d '[:space:]')"

@@ -4,17 +4,11 @@
 # 适配现代 OpenWrt (21.02/23.05/24.10/25.12+) 的 luci.mk 语言标准
 # ==============================================================================
 
-set -o pipefail
+set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
-# 必须转成绝对路径：下面会 cd 进 REPO_ROOT，相对路径再用于 find 会指向不存在的
-# "$REPO_ROOT/$REPO_ROOT"，脚本会静默什么都不做
-_REPO_ROOT_RAW="$REPO_ROOT"
-REPO_ROOT="$(cd "$_REPO_ROOT_RAW" 2>/dev/null && pwd)" || {
-    echo "[i18n][ERROR] REPO_ROOT 不可用: ${_REPO_ROOT_RAW}" >&2
-    exit 1
-}
 cd "$REPO_ROOT" || exit 1
+REPO_ROOT="$PWD"
 
 echo "[i18n] 正在检查并标准化 LuCI 语言包目录..."
 

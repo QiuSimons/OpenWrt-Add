@@ -2,24 +2,25 @@
 # ==============================================================================
 # 自动为缺少 rpcd ACL 权限配置的 LuCI APP 生成基础 ACL 规则
 # ==============================================================================
-
-set -o pipefail
+set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "$REPO_ROOT" || exit 1
 
 check_if_acl_exist() {
-    ls "$1"/root/usr/share/rpcd/acl.d/*.json >/dev/null 2>&1 && return 0 || return 1
+    compgen -G "$1/root/usr/share/rpcd/acl.d/*.json" >/dev/null 2>&1
 }
 
-check_config_files() {
-    local count
-    count="$(ls "$1"/root/etc/config/* 2>/dev/null | wc -l)"
-    [ "$count" -eq 1 ] && return 0 || return 1
-}
-
-get_config_name() {
-    ls "$1"/root/etc/config/* 2>/dev/null | awk -F '/' '{print $NF}' | head -n 1
+# 若存在且仅存在 1 个常规配置文件，返回 0 并输出配置名
+get_single_config() {
+    local dir="$1/root/etc/config"
+    [ -d "$dir" ] || return 1
+    local -a files=()
+    for f in "$dir"/*; do
+        [ -f "$f" ] && files+=("$(basename "$f")")
+    done
+    [ ${#files[@]} -eq 1 ] || return 1
+    echo "${files[0]}"
 }
 
 create_acl_file() {
@@ -53,13 +54,11 @@ auto_create_acl() {
             continue
         fi
 
-        if check_config_files "$app_path"; then
-            local conf_name
-            conf_name="$(get_config_name "$app_path")"
-            if [ -n "$conf_name" ]; then
-                create_acl_file "$app_path/root/usr/share/rpcd/acl.d" "$app_name" "$conf_name"
-                echo "  + 生成 ACL: $app_name -> $conf_name"
-            fi
+        local conf_name
+        conf_name="$(get_single_config "$app_path" || true)"
+        if [ -n "$conf_name" ]; then
+            create_acl_file "$app_path/root/usr/share/rpcd/acl.d" "$app_name" "$conf_name"
+            echo "  + 生成 ACL: $app_name -> $conf_name"
         fi
     done
 

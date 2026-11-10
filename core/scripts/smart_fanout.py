@@ -67,7 +67,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('src')
     p.add_argument('out')
-    p.add_argument('--alias-generic', action='store_true', default=True, help='Fan out aarch64_generic to all aarch64 targets')
+    p.add_argument('--alias-generic', action=argparse.BooleanOptionalAction, default=True, help='Fan out aarch64_generic to all aarch64 targets')
     a = p.parse_args()
 
     os.makedirs(a.out, exist_ok=True)

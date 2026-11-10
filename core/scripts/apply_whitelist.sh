@@ -2,6 +2,7 @@
 # ==============================================================================
 # 将预置直连域名白名单合并进 Passwall 与 MosDNS 规则中
 # ==============================================================================
+set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 WHITELIST_FILE="$REPO_ROOT/core/assets/whitelist-domains.txt"
@@ -14,6 +15,11 @@ append_domains() {
     local target_file="$1"
     if [ ! -f "$target_file" ]; then
         return 0
+    fi
+
+    # 确保目标文件末尾有换行符，防止首个追加域名与原末尾域名粘连
+    if [ -s "$target_file" ] && [ "$(tail -c 1 "$target_file" | wc -l)" -eq 0 ]; then
+        printf '\n' >> "$target_file"
     fi
 
     local added=0
