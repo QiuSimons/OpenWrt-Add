@@ -65,6 +65,7 @@ define Build/Compile
 		popd ; \
 	)
 ifneq ($(CONFIG_FILEBROWSER_COMPRESS_UPX),)
+	$(STAGING_DIR_HOST)/bin/upx --lzma --best $(PKG_BUILD_DIR)/filebrowser
 endif
 endef
 
