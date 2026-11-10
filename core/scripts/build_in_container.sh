@@ -9,7 +9,8 @@ if [ -d /feed/vmlinux-btf ] && ! command -v pahole >/dev/null 2>&1; then
             rm -rf /etc/apt/sources.list.d/*
         fi
         apt-get update -o Acquire::Check-Valid-Until=false || apt-get update
-        apt-get install -y --no-install-recommends dwarves llvm || apt-get install -y dwarves llvm || apt-get install -y pahole
+        apt-get install -y --no-install-recommends dwarves llvm || \
+        apt-get install -y --no-install-recommends pahole llvm
         rm -rf /var/lib/apt/lists/*
     elif command -v apk >/dev/null 2>&1; then
         apk add --no-cache dwarves llvm

@@ -31,6 +31,7 @@ sync_openappfilter() {
         rm -rf "$tmp_dir"
         return 0
     fi
+    record_failure "$REPO_ROOT/$target"
     rm -rf "$tmp_dir"
     return 1
 }
@@ -68,6 +69,7 @@ sync_helloworld() {
         rm -rf "$tmp_dir"
         return 0
     fi
+    record_failure "$REPO_ROOT/$target"
     rm -rf "$tmp_dir"
     return 1
 }
@@ -87,6 +89,7 @@ sync_openwrt_pkgs() {
         rm -rf "$tmp_dir"
         return 0
     fi
+    record_failure "$REPO_ROOT/$target"
     rm -rf "$tmp_dir"
     return 1
 }
@@ -106,6 +109,7 @@ sync_openclash() {
         rm -rf "$tmp_dir"
         return 0
     fi
+    record_failure "$REPO_ROOT/$target"
     rm -rf "$tmp_dir"
     return 1
 }
@@ -137,6 +141,7 @@ sync_autocore_arm() {
         rm -rf "$tmp_dir"
         return 0
     fi
+    record_failure "$REPO_ROOT/$target"
     rm -rf "$tmp_dir"
     return 1
 }
@@ -161,6 +166,7 @@ sync_mentohust_openwrt_ipk() {
         rm -rf "$tmp_dir"
         return 0
     fi
+    record_failure "$REPO_ROOT/$target"
     rm -rf "$tmp_dir"
     return 1
 }
@@ -185,6 +191,7 @@ sync_einat_ebpf() {
         rm -rf "$tmp_dir"
         return 0
     fi
+    record_failure "$REPO_ROOT/$target"
     rm -rf "$tmp_dir"
     return 1
 }
@@ -206,6 +213,7 @@ sync_luci_einat() {
         rm -rf "$tmp_dir"
         return 0
     fi
+    record_failure "$REPO_ROOT/$target"
     rm -rf "$tmp_dir"
     return 1
 }
@@ -225,6 +233,7 @@ sync_openwrt_bandix() {
         rm -rf "$tmp_dir"
         return 0
     fi
+    record_failure "$REPO_ROOT/$target"
     rm -rf "$tmp_dir"
     return 1
 }
@@ -248,6 +257,7 @@ sync_argon_theme() {
         rm -rf "$tmp_dir"
         return 0
     fi
+    record_failure "$REPO_ROOT/$target"
     rm -rf "$tmp_dir"
     return 1
 }
@@ -270,6 +280,7 @@ sync_unblockmusic() {
         rm -rf "$tmp_dir"
         return 0
     fi
+    record_failure "$REPO_ROOT/$target"
     rm -rf "$tmp_dir"
     return 1
 }
@@ -292,6 +303,7 @@ sync_taskplan() {
         rm -rf "$tmp_dir"
         return 0
     fi
+    record_failure "$REPO_ROOT/$target"
     rm -rf "$tmp_dir"
     return 1
 }
@@ -303,6 +315,7 @@ sync_uugamebooster() {
     log_info "正在同步: uugamebooster 与 luci-app-uugamebooster (按需提取)..."
     local tmp_dir
     tmp_dir="$(mktemp -d)"
+    local fail=0
 
     if sparse_clone "https://github.com/coolsnowwolf/luci" "$tmp_dir/luci" "applications/luci-app-uugamebooster"; then
         if [ -d "$tmp_dir/luci/applications/luci-app-uugamebooster" ]; then
@@ -310,7 +323,13 @@ sync_uugamebooster() {
             cp -rf "$tmp_dir/luci/applications/luci-app-uugamebooster/"* "$tmp_dir/luci-app-uugamebooster/"
             sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' "$tmp_dir/luci-app-uugamebooster/Makefile" 2>/dev/null || true
             deploy_dir "$tmp_dir/luci-app-uugamebooster" "$REPO_ROOT/apps/luci-app-uugamebooster"
+        else
+            record_failure "$REPO_ROOT/apps/luci-app-uugamebooster"
+            fail=1
         fi
+    else
+        record_failure "$REPO_ROOT/apps/luci-app-uugamebooster"
+        fail=1
     fi
 
     if sparse_clone "https://github.com/coolsnowwolf/packages" "$tmp_dir/packages" "net/uugamebooster"; then
@@ -318,11 +337,17 @@ sync_uugamebooster() {
             mkdir -p "$tmp_dir/uugamebooster"
             cp -rf "$tmp_dir/packages/net/uugamebooster/"* "$tmp_dir/uugamebooster/"
             deploy_dir "$tmp_dir/uugamebooster" "$REPO_ROOT/apps/uugamebooster"
+        else
+            record_failure "$REPO_ROOT/apps/uugamebooster"
+            fail=1
         fi
+    else
+        record_failure "$REPO_ROOT/apps/uugamebooster"
+        fail=1
     fi
 
     rm -rf "$tmp_dir"
-    return 0
+    return "$fail"
 }
 
 # ------------------------------------------------------------------------------
@@ -341,6 +366,7 @@ sync_ap_modem() {
             return 0
         fi
     fi
+    record_failure "$REPO_ROOT/$target"
     rm -rf "$tmp_dir"
     return 1
 }
@@ -367,11 +393,16 @@ sync_immortalwrt_luci() {
                 local makefile="$tmp_dir/upstream/$path/Makefile"
                 [ -f "$makefile" ] && sed -i 's|\.\./\.\.|$(TOPDIR)/feeds/luci|g' "$makefile" 2>/dev/null || true
                 deploy_dir "$tmp_dir/upstream/$path" "$REPO_ROOT/apps/$app_name"
+            else
+                record_failure "$REPO_ROOT/apps/$app_name"
             fi
         done
         rm -rf "$tmp_dir"
         return 0
     fi
+    for path in "${subpaths[@]}"; do
+        record_failure "$REPO_ROOT/apps/$(basename "$path")"
+    done
     rm -rf "$tmp_dir"
     return 1
 }
@@ -401,6 +432,8 @@ sync_lede_pkg() {
         rm -rf "$tmp_dir"
         return 0
     fi
+    record_failure "$REPO_ROOT/invasive/fullconenat-nft"
+    record_failure "$REPO_ROOT/apps/lede_pkg/r8168"
     rm -rf "$tmp_dir"
     return 1
 }
@@ -455,6 +488,7 @@ sync_imm_pkg() {
         rm -rf "$tmp_dir"
         return 0
     fi
+    record_failure "$REPO_ROOT/$target"
     rm -rf "$tmp_dir"
     return 1
 }
@@ -487,3 +521,13 @@ run_all_custom_sync() {
         $handler || log_warn "$handler 执行遇到警告/错误，已保留安全旧版"
     done
 }
+
+# 真实包目录名称别名 (支持 --only <包名> 快速定位)
+sync_luci_theme_argon()             { sync_argon_theme "$@"; }
+sync_luci_app_openclash()           { sync_openclash "$@"; }
+sync_openwrt_einat_ebpf()           { sync_einat_ebpf "$@"; }
+sync_luci_app_einat()               { sync_luci_einat "$@"; }
+sync_luci_app_unblockneteasemusic() { sync_unblockmusic "$@"; }
+sync_luci_app_taskplan()            { sync_taskplan "$@"; }
+sync_luci_app_uugamebooster()       { sync_uugamebooster "$@"; }
+sync_luci_app_ap_modem()            { sync_ap_modem "$@"; }

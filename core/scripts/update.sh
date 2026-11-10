@@ -103,7 +103,7 @@ sparse_clone() {
     fi
 }
 
-# 部署目录 (拉取失败保留原目录)
+# 部署目录 (移动临时目录到目标位置，并记录成功指标)
 deploy_dir() {
     local src="$1"
     local dest="$2"
@@ -112,28 +112,37 @@ deploy_dir() {
     local parent_dir
     parent_dir="$(dirname "$dest")"
 
-    mkdir -p "$parent_dir"
-
-    if [ -d "$src" ]; then
-        rm -rf "$dest"
-        mv "$src" "$dest"
-        SUCCESS_PKGS+=("$pkg_name")
-        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-        log_info "  -> 成功就绪: $dest"
-        return 0
-    else
-        if [ -d "$dest" ]; then
-            log_warn "  ! $dest 拉取失败，已安全保留旧版本"
-        else
-            log_err "  x $dest 拉取失败且无旧版本可用"
-        fi
-        FAILED_PKGS+=("$pkg_name")
-        FAIL_COUNT=$((FAIL_COUNT + 1))
+    if [ ! -d "$src" ]; then
+        record_failure "$dest"
         return 1
     fi
+
+    mkdir -p "$parent_dir"
+    rm -rf "$dest"
+    mv "$src" "$dest"
+    SUCCESS_PKGS+=("$pkg_name")
+    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+    log_info "  -> 成功就绪: $dest"
+    return 0
 }
 
-export -f clone_repo sparse_clone deploy_dir log_info log_warn log_err
+# 记录失败指标并保留旧版本提示
+record_failure() {
+    local dest="$1"
+    local pkg_name
+    pkg_name="$(basename "$dest")"
+
+    if [ -d "$dest" ]; then
+        log_warn "  ! $dest 同步失败，已安全保留旧版本"
+    else
+        log_err "  x $dest 同步失败且无旧版本可用"
+    fi
+    FAILED_PKGS+=("$pkg_name")
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    return 1
+}
+
+export -f clone_repo sparse_clone deploy_dir record_failure log_info log_warn log_err
 
 source "$SCRIPT_DIR/custom.sh"
 
@@ -153,7 +162,7 @@ sync_declared_pkg() {
         rm -rf "$tmp_dir"
         return 0
     else
-        deploy_dir "$tmp_dir/$pkg_name" "$REPO_ROOT/$rel_path" || true
+        record_failure "$REPO_ROOT/$rel_path"
         rm -rf "$tmp_dir"
         return 1
     fi
@@ -286,7 +295,6 @@ if [ -n "$TARGET_ONLY" ]; then
     elif type "sync_${pkg_base//-/_}" >/dev/null 2>&1; then
         "sync_${pkg_base//-/_}"
     else
-        local conf_file
         conf_file="$(get_packages_conf)"
         line="$(grep -E "^[[:space:]]*([a-zA-Z0-9_-]+/)?$pkg_base[[:space:]]*\|" "$conf_file" 2>/dev/null | head -n 1)"
         if [ -n "$line" ]; then
