@@ -71,12 +71,27 @@ test('health: weak client, slow uplink, disabled radio, high memory', () => {
 	assert.equal(byId(h, 'signal').client, 'c');
 	assert.equal(byId(h, 'signal').list, null);
 	assert.equal(byId(h, 'uplink').level, 'warn');
-	assert.equal(byId(h, 'radios').level, 'warn');
+	/* switched off on purpose: shown, not counted (#110) */
+	assert.equal(byId(h, 'radios').level, 'info');
+	assert.equal(byId(h, 'radios').value, '1 radio off');
 	assert.equal(byId(h, 'memory').level, 'err');
 	assert.equal(byId(h, 'cpu').level, 'err');
 	const s = insight.summary(h);
 	assert.equal(s.level, 'err');
-	assert.equal(s.count, 5);
+	assert.equal(s.count, 4);
+});
+
+test('health: a radio switched off is no warning; one enabled but down is an error', () => {
+	const m = baseModel();
+	m.radios[1].disabled = true;
+	let h = insight.health(m, { cpu: { pct: 5, cores: [ 1 ] } });
+	assert.equal(byId(h, 'radios').level, 'info');
+	assert.match(byId(h, 'radios').reason, /is disabled/);
+	assert.deepEqual([ insight.summary(h).level, insight.summary(h).count ], [ 'ok', 0 ]);
+	m.radios[0].up = false;
+	h = insight.health(m, { cpu: { pct: 5, cores: [ 1 ] } });
+	assert.equal(byId(h, 'radios').level, 'err');
+	assert.equal(insight.summary(h).count, 1);
 });
 
 test('health: chip text is short, framed like the System tile, with the full sentence as detail', () => {
@@ -220,4 +235,25 @@ test('fmt.N_: English plural when the page language has one form and no translat
 		global.N_ = () => '%d 个射频已上线';     /* translated */
 		assert.equal(fmt.N_(2, '%d radio up', '%d radios up'), '%d 个射频已上线');
 	} finally { global.N_ = saved; }
+});
+
+/* #110: a station set quiet (far away on purpose) is no warning */
+test('health: a quiet station\'s weak signal is left out of the warning and of the weakest', () => {
+	const m = baseModel();
+	m.clients.push({ mac: 'far', name: 'Garden camera', signal: -84 }, { mac: 'near', name: 'Phone', signal: -58 });
+	const plain = byId(insight.health(m, {}), 'signal');
+	assert.equal(plain.level, 'warn');
+	const s = byId(insight.health(m, { quiet: { far: true } }), 'signal');
+	assert.equal(s.level, 'ok');
+	assert.ok(!/Garden camera|−84/.test(s.value + s.reason + s.detail), 'not named as the weakest either');
+	/* another weak one still warns */
+	m.clients.push({ mac: 'weak2', name: 'Laptop', signal: -80 });
+	const w = byId(insight.health(m, { quiet: { far: true } }), 'signal');
+	assert.equal(w.level, 'warn');
+	assert.equal(w.value, '1 weak');
+	assert.equal(w.client, 'weak2');
+	/* every station set quiet: no warning, and not "No clients" */
+	const all = byId(insight.health({ ...m, clients: [ m.clients[m.clients.length - 3] ] }, { quiet: { far: true } }), 'signal');
+	assert.deepEqual([ all.level, all.value ], [ 'ok', '—' ]);
+	assert.match(all.reason, /No warnings asked for/);
 });

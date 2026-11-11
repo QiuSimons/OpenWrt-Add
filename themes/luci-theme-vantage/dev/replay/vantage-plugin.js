@@ -53,7 +53,8 @@ const POLICY = {
 	thermal: {},
 	wired: {},
 	routes: {},
-	set_alias: { mac: 'string', name: 'string', icon: 'string' }
+	set_alias: { mac: 'string', name: 'string', icon: 'string' },
+	set_quiet: { mac: 'string', quiet: 'boolean' }
 };
 
 function normMac(v) {
@@ -247,6 +248,36 @@ function setAlias(uci, args) {
 	return { ok: true, op, mac };
 }
 
+/* set_quiet's uci work (#110): a quiet section per muted MAC, at most
+   MAX_QUIET, against the same minimal cursor as setAlias */
+const MAX_QUIET = 512;
+function setQuiet(uci, args) {
+	const mac = normMac(args.mac);
+	if (!mac || isMulticast(mac)) return { ok: false, error: 'invalid-mac' };
+	if (typeof args.quiet !== 'boolean') return { ok: false, error: 'invalid-value' };
+	const quiet = uci.sections().filter(s => s['.type'] === 'quiet');
+	const mine = quiet.filter(s => normMac(s.mac) === mac).map(s => s['.name']);
+	let op;
+	if (args.quiet) {
+		if (mine.length) return { ok: true, op: 'none', mac };
+		if (quiet.length >= MAX_QUIET) return { ok: false, error: 'too-many' };
+		const sid = uci.add('quiet');
+		if (!sid) return { ok: false, error: 'failed' };
+		uci.set(sid, 'mac', mac);
+		op = 'add';
+	}
+	else {
+		if (!mine.length) return { ok: true, op: 'none', mac };
+		mine.forEach(sid => uci.del(sid));
+		op = 'delete';
+	}
+	if (!uci.commit()) {
+		if (uci.revert) uci.revert();
+		return { ok: false, error: 'failed' };
+	}
+	return { ok: true, op, mac };
+}
+
 /* rpcd's argument check: every argument must be in the policy with the
    declared type (absent ones are fine) */
 function argsOk(method, args) {
@@ -380,7 +411,7 @@ function call(store, method, args) {
 		return { result: [ 0, { routes: routes(kernelLookup(dump)) } ] };
 	}
 	if (store.uciSeed) store.uciSeed(CONFIG, { main: { '.anonymous': false, '.type': 'vantage', '.name': 'main' } });
-	return { result: [ 0, setAlias(storeCursor(store), args) ] };
+	return { result: [ 0, (method === 'set_quiet' ? setQuiet : setAlias)(storeCursor(store), args) ] };
 }
 
-module.exports = { OBJECT, POLICY, MAX_ALIASES, NAME_MAX, ICONS, normMac, validateName, reduceWireless, wirelessFromConfig, wirelessReply, thermal, wired, routes, kernelLookup, setAlias, argsOk, call };
+module.exports = { OBJECT, POLICY, MAX_ALIASES, MAX_QUIET, NAME_MAX, ICONS, normMac, validateName, reduceWireless, wirelessFromConfig, wirelessReply, thermal, wired, routes, kernelLookup, setAlias, setQuiet, argsOk, call };

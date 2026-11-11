@@ -302,6 +302,83 @@ test('wired reply: hosts kept, a crowded bridge flagged, anything else read as n
 	finally { global.L = savedL; delete REPLIES['luci.vantage wired']; }
 });
 
+/* iwinfo info costs the router ~15 ms an interface: asked for a radio's
+   first interface, and for another only until hostapd gives its BSSID */
+test('iwinfo info: once a radio, and for a network hostapd does not answer for', async () => {
+	const asked = [], hapdOff = new Set();
+	const ifc = (ifname, mode) => ({ ifname, section: ifname, config: { mode: mode || 'ap', ssid: 'S-' + ifname } });
+	REPLIES['luci.vantage wireless'] = () => Promise.resolve({
+		radio0: { up: true, config: { band: '2g' }, interfaces: [ ifc('wl0'), ifc('wl0-1'), ifc('wl0-sta', 'sta') ] },
+		radio1: { up: true, config: { band: '5g' }, interfaces: [ ifc('wl1') ] }
+	});
+	REPLIES['iwinfo info'] = device => { asked.push(device); return Promise.resolve({ channel: 6, bssid: '00:00:5E:00:53:0' + device.length }); };
+	for (const ifn of [ 'wl0', 'wl0-1', 'wl0-sta', 'wl1' ])
+		REPLIES['hostapd.' + ifn + ' get_status'] = () => (ifn === 'wl0-sta' || hapdOff.has(ifn)) ? Promise.reject(new Error('not found')) : Promise.resolve({ bssid: '00:00:5e:00:53:a' + ifn.length, ssid: 'S-' + ifn });
+	const self = Object.create(view);
+	const savedL = global.L;
+	global.L = { resolveDefault: (p, d) => Promise.resolve(p).then(v => v == null ? d : v, () => d) };
+	try {
+		let r = await self.fetch();
+		assert.deepEqual(asked.splice(0).sort(), [ 'wl0', 'wl0-1', 'wl0-sta', 'wl1' ], 'the first poll asks every interface');
+		r = await self.fetch();
+		assert.deepEqual(asked.splice(0).sort(), [ 'wl0', 'wl0-sta', 'wl1' ], 'then a radio\'s first, and the one hostapd does not serve');
+		assert.equal(r.hapdStatus['wl0-1'].bssid, '00:00:5e:00:53:a5', 'its BSSID comes from hostapd');
+		hapdOff.add('wl0-1');
+		await self.fetch();
+		asked.splice(0);
+		await self.fetch();
+		assert.deepEqual(asked.splice(0).sort(), [ 'wl0', 'wl0-1', 'wl0-sta', 'wl1' ], 'hostapd gone quiet: asked again');
+	}
+	finally {
+		global.L = savedL;
+		for (const k of Object.keys(REPLIES)) if (/^(luci\.vantage wireless|iwinfo info|hostapd\.)/.test(k)) delete REPLIES[k];
+	}
+});
+
+/* Low-power router (#101): the slow parts once every 30 s, their last
+   replies in between; the rest every poll */
+test('Low-power router: Wi-Fi state, temperatures, wired hosts, iwinfo and client capabilities once every 30 s', async () => {
+	const count = {};
+	const reply = (key, v) => { REPLIES[key] = (...a) => { count[key] = (count[key] || 0) + 1; return Promise.resolve(typeof v === 'function' ? v(...a) : v); }; };
+	reply('luci.vantage wireless', { radio0: { up: true, config: { band: '2g' }, interfaces: [ { ifname: 'wl0', section: 'wl0', config: { mode: 'ap' } } ] } });
+	reply('luci.vantage thermal', [ { zone: 'thermal_zone0', type: 'cpu', temp: 50000 } ]);
+	reply('luci.vantage wired', { hosts: [ { mac: '00:00:5e:00:53:01', port: 'lan1', bridge: 'br-lan', seen: 1 } ] });
+	reply('iwinfo info', { channel: 6 });
+	reply('hostapd.wl0 get_clients', { clients: {} });
+	reply('hostapd.wl0 get_status', { bssid: '00:00:5e:00:53:aa' });
+	reply('system info', {});
+	const self = Object.create(view);
+	const saved = { L: global.L, document: global.document, now: Date.now };
+	let t = 1e12, power = 'low';
+	Date.now = () => t;
+	global.document = { hidden: false, documentElement: { getAttribute: n => n === 'data-vt-power' ? power : null } };
+	global.L = { resolveDefault: (p, d) => Promise.resolve(p).then(v => v == null ? d : v, () => d) };
+	const slowKeys = [ 'luci.vantage wireless', 'luci.vantage thermal', 'luci.vantage wired', 'iwinfo info', 'hostapd.wl0 get_clients' ];
+	const slowCount = () => slowKeys.map(k => count[k] || 0);
+	try {
+		const first = await self.fetch();
+		assert.deepEqual(slowCount(), [ 1, 1, 1, 1, 1 ]);
+		t += 10e3;
+		const kept = await self.fetch();
+		assert.deepEqual(slowCount(), [ 1, 1, 1, 1, 1 ], 'not again within 30 s');
+		assert.equal(count['system info'], 2, 'the rest every poll');
+		assert.equal(count['hostapd.wl0 get_status'], 2);
+		assert.deepEqual([ kept.wifi, kept.thermal, kept.fdb, kept.iwinfo, kept.hapd ], [ first.wifi, first.thermal, first.fdb, first.iwinfo, first.hapd ], 'their last replies');
+		t += 20e3;
+		await self.fetch();
+		assert.deepEqual(slowCount(), [ 2, 2, 2, 2, 2 ], 'again after 30 s');
+		power = 'normal';
+		t += 1e3;
+		await self.fetch();
+		assert.deepEqual(slowCount(), [ 3, 3, 3, 3, 3 ], 'off: every poll');
+	}
+	finally {
+		global.L = saved.L; Date.now = saved.now;
+		if (saved.document === undefined) delete global.document; else global.document = saved.document;
+		for (const k of Object.keys(REPLIES)) if (/^(luci\.vantage (wireless|thermal|wired)|iwinfo info|hostapd\.|system info)/.test(k)) delete REPLIES[k];
+	}
+});
+
 test('switch ports: LuCI is asked on the side for a switch with hosts behind it, at most every 30 s from the call; a failure is not known', async () => {
 	const calls = [], STATE = [ { port: 1, link: true, speed: 1000, duplex: true } ];
 	const lan = n => ({ num: n, role: 'lan', index: n + 1 });
@@ -854,4 +931,279 @@ test('other lines: hosts on a backup line\'s port are the way to its gateway, no
 	/* the backup's port unknown (the VLAN's own counters): nothing left out */
 	wanb.port = null;
 	assert.deepEqual(self.wiredPorts(), [ 'lan1', 'lan4' ]);
+});
+
+test('nothing moves while another window has the focus or Low-power router is on; the numbers go on', () => {
+	const saved = { L: global.L, document: global.document };
+	let power = 'normal';
+	const root = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return k === 'data-vt-power' ? power : null; } };
+	global.L = { env: { media: '/luci-static/vantage' } };
+	global.document = { hidden: false, documentElement: root };
+	const cls = new Set();
+	const self = Object.create(view);
+	self.st = { paused: false, lastErr: null, lastOk: Date.now() };
+	self.el = { live: { className: '', hidden: false, setAttribute() {} }, liveText: { textContent: '' },
+		root: { classList: { toggle: (c, on) => on ? cls.add(c) : cls.delete(c) } } };
+	self.backdrop = { paused: false, pause(on) { this.paused = on; } };
+	try {
+		POLL.on = true;
+		self.paintLive();
+		assert.ok(!cls.has('vt-still'));
+		self.focused = false;
+		self.paintLive();
+		assert.ok(cls.has('vt-still'), 'another window has the focus');
+		assert.equal(self.el.live.className, 'vt-livepill vt-live-ok', 'still live');
+		self.focused = true;
+		self.paintLive();
+		assert.ok(!cls.has('vt-still'));
+		power = 'low';
+		self.paintLive();
+		assert.ok(cls.has('vt-still'), 'Low-power router');
+		assert.equal(self.backdrop.paused, true);
+	} finally {
+		global.L = saved.L;
+		if (saved.document === undefined) delete global.document; else global.document = saved.document;
+	}
+});
+
+
+test('Low-power router: the same still picture as reduced motion, no backdrop, and back with the pick kept', () => {
+	const saved = { L: global.L, document: global.document };
+	let power = 'low';
+	const root = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return k === 'data-vt-power' ? power : null; } };
+	global.L = { env: { media: '/luci-static/vantage' } };
+	global.document = { hidden: false, documentElement: root };
+	const cls = new Set(), styles = [];
+	const self = Object.create(view);
+	self.st = { paused: false, lastErr: null, lastOk: Date.now() };
+	self.el = { live: { className: '', hidden: false, setAttribute() {} }, liveText: { textContent: '' },
+		root: { classList: { toggle: (c, on) => on ? cls.add(c) : cls.delete(c) } } };
+	self.backdrop = { paused: false, pause(on) { this.paused = on; }, style(v) { styles.push(v); } };
+	self.backdropStyle = 'stars';
+	let wired = 0;
+	self.paintWireState = () => { wired++; };
+	try {
+		POLL.on = true;
+		self.applyPower();
+		assert.ok(cls.has('vt-low') && cls.has('vt-still'));
+		assert.deepEqual(styles.splice(0), [ 'none' ], 'no backdrop');
+		assert.equal(wired, 1, 'the wires redrawn without flow dots');
+		self.showBackdrop('grid');
+		assert.deepEqual(styles.splice(0), [ 'none' ], 'a new pick waits');
+		power = 'normal';
+		self.applyPower();
+		assert.ok(!cls.has('vt-low') && !cls.has('vt-still'));
+		assert.deepEqual(styles, [ 'grid' ], 'the pick back');
+	} finally {
+		global.L = saved.L;
+		if (saved.document === undefined) delete global.document; else global.document = saved.document;
+	}
+});
+
+test('polls: the fast lane is registered before the full poll (#101: no second full poll on load)', () => {
+	const src = fs.readFileSync(path.join(RES, 'view/vantage/overview.js'), 'utf8');
+	const fast = src.indexOf('poll.add(L.bind(this.refreshFast, this), FAST_S);'), full = src.indexOf('poll.add(L.bind(this.refresh, this), POLL_S);');
+	assert.ok(fast > 0 && full > fast);
+	assert.ok(src.indexOf('this.inputAt = this.fullAt = Date.now();') > 0 && src.indexOf('this.inputAt = this.fullAt = Date.now();') < fast, 'load() counts as the last full poll');
+});
+
+test('Low-power router: after 5 minutes without input, the full poll every 30 s and no fast lane; the next input is live at once', async () => {
+	const saved = { L: global.L, document: global.document, now: Date.now };
+	let power = 'low', t = 1e12, reads = 0;
+	Date.now = () => t;
+	global.document = { hidden: false, documentElement: { getAttribute: k => k === 'data-vt-power' ? power : null, setAttribute() {} } };
+	global.L = { resolveDefault: (p, d) => Promise.resolve(p).then(v => v == null ? d : v, () => d), env: {} };
+	REPLIES['file read'] = () => { reads++; return Promise.resolve({ data: '' }); };
+	const self = Object.create(view);
+	let fetches = 0;
+	self.fetch = () => { fetches++; return Promise.resolve({}); };
+	self.ingest = () => {}; self.paint = () => {}; self.paintLive = () => {};
+	self.st = { lastOk: t, paused: false };
+	self.el = {};
+	self.m = { uplink: null };
+	self.inputAt = t;
+	try {
+		t += 60e3;
+		await self.refresh(); await self.refreshFast();
+		assert.deepEqual([ fetches, reads ], [ 1, 1 ], 'watched: as always');
+		t += 5 * 60e3;
+		assert.equal(self.idle(), true);
+		await self.refreshFast();
+		assert.equal(reads, 1, 'idle: no fast lane');
+		await self.refresh();
+		assert.equal(fetches, 2, 'the first idle poll');
+		t += 5e3; await self.refresh();
+		t += 20e3; await self.refresh();
+		assert.equal(fetches, 2, 'not within 30 s');
+		t += 6e3; await self.refresh();
+		assert.equal(fetches, 3, 'every 30 s');
+		t += 4e3;
+		self.noteInput();
+		assert.equal(fetches, 4, 'input: at once');
+		assert.equal(self.idle(), false);
+		await self.refreshFast();
+		assert.equal(reads, 2, 'and the fast lane again');
+		power = 'normal';
+		t += 60 * 60e3;
+		assert.equal(self.idle(), false, 'never idle when Low-power router is off');
+	} finally {
+		global.L = saved.L; Date.now = saved.now;
+		if (saved.document === undefined) delete global.document; else global.document = saved.document;
+		delete REPLIES['file read'];
+	}
+});
+
+/* the full poll: one at a time, 2 s from the last one's start, idle (Low-power
+   router) every 30 s, a clock stepped back as time gone; input while LuCI's
+   refresh is paused asks nothing */
+test('refresh: one at a time, spaced from the start, survives a clock step, input asks only while LuCI polls', async () => {
+	const saved = { L: global.L, document: global.document, now: Date.now };
+	let t = 1e12, power = 'normal', release = null, fetches = 0;
+	Date.now = () => t;
+	global.document = { hidden: false, documentElement: { getAttribute: k => k === 'data-vt-power' ? power : null } };
+	global.L = { env: {} };
+	const self = Object.create(view);
+	self.fetch = () => { fetches++; return new Promise(r => { release = r; }); };
+	self.ingest = () => {}; self.paint = () => {}; self.paintLive = () => {};
+	self.st = { lastOk: t, paused: false };
+	self.inputAt = self.fullAt = t;
+	const done = async () => { release({}); await new Promise(r => setImmediate(r)); };
+	try {
+		t += 1e3; self.refresh();
+		assert.equal(fetches, 0, 'within 2 s of load()');
+		t += 4e3; self.refresh();
+		assert.equal(fetches, 1);
+		t += 5e3; self.refresh();
+		assert.equal(fetches, 1, 'one at a time');
+		t += 1e3; await done();
+		t += 1e3; self.refresh();
+		assert.equal(fetches, 2, 'a slow fetch: spaced from its start, not its end');
+		await done();
+		t -= 3600e3; self.refresh();
+		assert.equal(fetches, 3, 'a clock stepped back an hour: not stopped');
+		await done();
+		/* hidden, then shown within the idle spacing: not "Paused while hidden" */
+		power = 'low'; self.inputAt = t - 10 * 60e3;
+		t += 30e3; self.refresh(); await done();
+		global.document.hidden = true; self.refresh();
+		assert.equal(self.st.paused, true);
+		global.document.hidden = false; t += 5e3; self.refresh();
+		assert.equal(self.st.paused, false, 'shown again: not paused, though the idle spacing holds the fetch');
+		/* LuCI's refresh paused: input asks nothing; resumed: it does */
+		const n = fetches;
+		POLL.on = false; t += 60e3; self.noteInput();
+		assert.equal(fetches, n, 'paused from its indicator');
+		self.inputAt = t - 10 * 60e3; POLL.on = true; self.noteInput();
+		assert.equal(fetches, n + 1);
+		await done();
+	} finally {
+		POLL.on = true;
+		global.L = saved.L; Date.now = saved.now;
+		if (saved.document === undefined) delete global.document; else global.document = saved.document;
+	}
+});
+
+test('Low-power router: a failed slow reply is asked again at the next poll; a radio read from the config keeps iwinfo on every interface', async () => {
+	const saved = { L: global.L, document: global.document, now: Date.now };
+	let t = 1e12, fail = true;
+	const count = {};
+	Date.now = () => t;
+	global.document = { hidden: false, documentElement: { getAttribute: k => k === 'data-vt-power' ? 'low' : null } };
+	global.L = { resolveDefault: (p, d) => Promise.resolve(p).then(v => v == null ? d : v, () => d) };
+	const cnt = k => { count[k] = (count[k] || 0) + 1; };
+	REPLIES['luci.vantage wireless'] = () => { cnt('wifi'); return fail ? Promise.reject(new Error('timeout')) : Promise.resolve({ radio0: { source: 'config', config: {}, interfaces: [ { ifname: 'ra0', config: {} }, { ifname: 'ra1', config: {} } ] } }); };
+	REPLIES['luci.vantage thermal'] = () => { cnt('thermal'); return Promise.resolve([]); };
+	REPLIES['luci.vantage wired'] = () => { cnt('wired'); return Promise.resolve({ hosts: [] }); };
+	REPLIES['iwinfo info'] = d => { cnt('iw ' + d); return Promise.resolve({ channel: 36 }); };
+	REPLIES['hostapd.ra0 get_status'] = () => Promise.resolve({ bssid: '00:00:5e:00:53:a0' });
+	REPLIES['hostapd.ra1 get_status'] = () => Promise.resolve({ bssid: '00:00:5e:00:53:a1' });
+	const self = Object.create(view);
+	try {
+		const first = await self.fetch();
+		assert.equal(first.wifi, null, 'no answer is not "no radios"');
+		t += 5e3; await self.fetch();
+		assert.equal(count.wifi, 2, 'asked again at once, not kept for 30 s');
+		fail = false;
+		t += 5e3; await self.fetch();
+		t += 5e3; await self.fetch();
+		assert.equal(count.wifi, 3, 'an answer is kept');
+		t += 30e3; await self.fetch();
+		t += 30e3; await self.fetch();
+		assert.deepEqual([ count['iw ra0'], count['iw ra1'] ], [ 3, 3 ], 'from the config: each interface says whether it is up');
+	} finally {
+		global.L = saved.L; Date.now = saved.now;
+		if (saved.document === undefined) delete global.document; else global.document = saved.document;
+		for (const k of Object.keys(REPLIES)) if (/^(luci\.vantage (wireless|thermal|wired)|iwinfo info|hostapd\.)/.test(k)) delete REPLIES[k];
+	}
+});
+
+test('#110: the weak filter leaves quiet stations out, as the card does; the quiet row keeps its error and busy state across rebuilds', async () => {
+	const self = Object.create(view);
+	self.quiet = { '00:00:5e:00:53:01': true };
+	self.ui = { chip: 'weak', filter: '' };
+	self.st = { staRates: {} };
+	const far = { mac: '00:00:5e:00:53:01', signal: -84, name: 'Far' }, near = { mac: '00:00:5e:00:53:02', signal: -80, name: 'Near' };
+	assert.equal(self.isWeak(far), false);
+	assert.equal(self.isWeak(near), true);
+	assert.equal(self.matches(far), false);
+	assert.equal(self.matches(near), true);
+	self.canWrite = true;
+	self.loadAliases = () => Promise.resolve({});
+	let painted = 0;
+	self.rehealth = () => { painted++; };
+	REPLIES['luci.vantage set_quiet'] = () => Promise.resolve({ ok: false, error: 'too-many' });
+	const savedL = global.L;
+	global.L = { resolveDefault: (p, d) => Promise.resolve(p).catch(() => d) };
+	try {
+		const busy = self.saveQuiet(near.mac, true);
+		assert.equal(await self.saveQuiet(near.mac, true), false, 'one save at a time');
+		await busy;
+		assert.equal(painted, 1);
+		assert.match(self.quietSaid['00:00:5e:00:53:02'], /already keeps 512/, 'the error waits for the rebuilt row');
+		assert.ok(!self.quietBusy['00:00:5e:00:53:02']);
+	} finally {
+		global.L = savedL;
+		delete REPLIES['luci.vantage set_quiet'];
+	}
+});
+
+test('#110: the quiet row, once shown for a station, stays while its signal crosses the line', () => {
+	const self = Object.create(view);
+	const shown = [];
+	self.quietRow = c => { shown.push(c.signal); return 'row'; };
+	const body = c => {
+		const quietOn = !!(self.quiet && self.quiet[c.mac]);
+		if (quietOn || (c.signal != null && c.signal < insight.WEAK_DBM)) self.quietShown = c.mac;
+		return !c.gone && (quietOn || self.quietShown === c.mac) ? self.quietRow(c, quietOn) : '';
+	};
+	/* the same rule as drawerClient, read from the source */
+	const src = fs.readFileSync(path.join(RES, 'view/vantage/overview.js'), 'utf8');
+	assert.ok(src.includes("if (quietOn || (c.signal != null && c.signal < insight.WEAK_DBM)) this.quietShown = c.mac;"));
+	assert.ok(src.includes("var quietRow = !c.gone && (quietOn || this.quietShown === c.mac) ? this.quietRow(c, quietOn) : '';"));
+	const insight = load('vantage.insight');
+	assert.equal(body({ mac: 'a', signal: -70 }), '', 'never weak: no row');
+	assert.equal(body({ mac: 'a', signal: -80 }), 'row');
+	assert.equal(body({ mac: 'a', signal: -70 }), 'row', 'kept');
+	assert.equal(body({ mac: 'b', signal: -60 }), '', 'another station: its own rule');
+});
+
+test('#110: a rebuilt quiet row shows the last attempt\'s error and stays disabled while a save is under way', () => {
+	const saved = { E: global.E };
+	global.E = (tag, attrs, children) => ({ tag, attrs: attrs || {}, children: [].concat(children == null ? [] : children), addEventListener() {} });
+	try {
+		const self = Object.create(view);
+		self.canWrite = true;
+		const mac = '00:00:5e:00:53:02';
+		self.quietSaid = { [mac]: 'The device could not write /etc/config/vantage.' };
+		self.quietBusy = { [mac]: true };
+		const row = self.quietRow({ mac: mac.toUpperCase() }, false);
+		const [ box, , err ] = row.children;
+		assert.equal(box.disabled, true, 'busy: disabled');
+		assert.equal(box.checked, false);
+		assert.deepEqual(err.children, [ 'The device could not write /etc/config/vantage.' ]);
+		self.canWrite = false;
+		assert.equal(self.quietRow({ mac }, false), '', 'no grant, not set: nothing');
+	} finally {
+		if (saved.E === undefined) delete global.E; else global.E = saved.E;
+	}
 });

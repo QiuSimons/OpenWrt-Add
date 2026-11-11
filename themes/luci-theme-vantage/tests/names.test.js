@@ -188,3 +188,17 @@ test('resolve: address is the secondary line, icon from alias or guessed', () =>
 	/* rdns entries for addresses the station does not have do not apply */
 	assert.equal(names.resolve({ mac: MAC, ips: [ '192.0.2.1' ], rdns: { '192.0.2.44': 'other' } }).source, 'mac');
 });
+
+test('quietSet: quiet sections only, normalised MACs, at most QUIET_MAX', () => {
+	const q = names.quietSet([
+		{ '.type': 'quiet', mac: '00-00-5E-00-53-21' },
+		{ '.type': 'client', mac: '00:00:5e:00:53:22', name: 'Named' },
+		{ '.type': 'quiet', mac: 'not a mac' },
+		{ '.type': 'quiet' }, null, 'x'
+	]);
+	assert.deepEqual(Object.keys(q), [ '00:00:5e:00:53:21' ]);
+	const many = [];
+	for (let i = 0; i < 600; i++) many.push({ '.type': 'quiet', mac: '02:00:5e:00:' + (i >> 8).toString(16).padStart(2, '0') + ':' + (i & 255).toString(16).padStart(2, '0') });
+	assert.equal(Object.keys(names.quietSet(many)).length, names.QUIET_MAX);
+	assert.equal(Object.keys(names.quietSet(null)).length, 0);
+});

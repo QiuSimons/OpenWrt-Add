@@ -39,29 +39,64 @@ test('shipped scripts: no escaped slash followed by * or another slash (jsmin re
    package build of the #88 change ("Unterminated set in Regular
    Expression literal") */
 const JSMIN_REGEX_START = '(,=:[!&|?{};+-~*/';
-function closingSlashPrev(line, from) {
+function closingSlash(line, from) {
 	let inSet = false;
 	for (let i = from; i < line.length; i++) {
 		const c = line[i];
 		if (c === '\\') { i++; continue; }
 		if (c === '[') inSet = true;
 		else if (c === ']') inSet = false;
-		else if (c === '/' && !inSet) return line[i - 1];
+		else if (c === '/' && !inSet) return i;
 	}
-	return null;
+	return -1;
 }
+function closingSlashPrev(line, from) {
+	const i = closingSlash(line, from);
+	return i < 0 ? null : line[i - 1];
+}
+/* where JavaScript starts a regular expression and jsmin reads a division */
+const JSMIN_DIVISION = /(?:=>|\b(?:return|typeof|case|do|else|in|instanceof|new|void|delete|throw))\s*\/(?![/*])/g;
 
-test('shipped scripts: no regular expression after return that ends in a character jsmin starts one after', () => {
+test('shipped scripts: no regular expression after return or => that ends in a character jsmin starts one after', () => {
 	const files = [ 'luci-app-vantage/htdocs', 'luci-theme-vantage/htdocs' ].flatMap(d => scripts(path.join(ROOT, d)));
 	const bad = [];
 	for (const f of files)
 		fs.readFileSync(f, 'utf8').split('\n').forEach((line, i) => {
-			for (const m of line.matchAll(/\b(?:return|typeof|case|do|else|in|instanceof|new|void|delete|throw)\s*\/(?![/*])/g)) {
+			for (const m of line.matchAll(JSMIN_DIVISION)) {
 				const prev = closingSlashPrev(line, m.index + m[0].length);
 				if (prev != null && JSMIN_REGEX_START.includes(prev)) bad.push(path.relative(ROOT, f) + ':' + (i + 1) + ': ' + line.trim().slice(0, 80));
 			}
 		});
 	assert.deepEqual(bad, []);
+});
+
+/* read as a division, the expression also loses its spaces: the update
+   check's /^Package: luci-theme-vantage$/m after => shipped as
+   /^Package:luci-theme-vantage$/m and never matched the list (1.0.17) */
+function spacedAfterDivision(line) {
+	for (const m of line.matchAll(JSMIN_DIVISION)) {
+		const from = m.index + m[0].length, to = closingSlash(line, from);
+		if (to > from && /\s/.test(line.slice(from, to))) return true;
+	}
+	return false;
+}
+
+test('shipped scripts: no regular expression with a space after return or =>', () => {
+	const files = [ 'luci-app-vantage/htdocs', 'luci-theme-vantage/htdocs' ].flatMap(d => scripts(path.join(ROOT, d)));
+	const bad = [];
+	for (const f of files)
+		fs.readFileSync(f, 'utf8').split('\n').forEach((line, i) => {
+			if (spacedAfterDivision(line)) bad.push(path.relative(ROOT, f) + ':' + (i + 1) + ': ' + line.trim().slice(0, 80));
+		});
+	assert.deepEqual(bad, []);
+});
+
+test('jsmin space check: catches the update check pattern, passes ordinary ones', () => {
+	assert.equal(spacedAfterDivision("find(b => /^Package: luci-theme-vantage$/m.test(b));"), true);
+	assert.equal(spacedAfterDivision("return /a b/.test(s);"), true);
+	assert.equal(spacedAfterDivision("find(b => /^Package:[^]/m.test(b));"), false);
+	assert.equal(spacedAfterDivision("const re = /^Package: luci-theme-vantage$/m;"), false);
+	assert.equal(spacedAfterDivision("split(/\\n\\s*\\n/).find(b => UPDATE_ENTRY.test(b));"), false);
 });
 
 test('jsmin regex check: catches the #88 pattern, passes ordinary ones', () => {

@@ -69,11 +69,16 @@ everywhere: theme dir `vantage`, media URL `/luci-static/vantage`, uci
 - **Host chip**: hostname · model (board name when the model string is a
   placeholder), from `system board` via rpc in the menu script; a name
   the other contains (compared without case and punctuation) is left
-  out.
+  out. The chip links to Status → Overview, which has the rest of the
+  system details.
 - **Theme toggle**: auto / light / dark, applied in `<head>` before CSS
-  (no flash), exposed as `html[data-darkmode]`. Appearance (this mode, what
+  (no flash), exposed as `html[data-darkmode]`. The top bar's switch
+  shows the pick (auto, sun, moon) and cycles auto → the look the system
+  doesn't have → the one it has → auto, so the first click always
+  changes the page; it saves as Appearance does. Appearance sits under
+  the gear next to it. Appearance (this mode, what
   shows next to the logo after login, the login and network path
-  backgrounds) is saved on the router for every
+  backgrounds and, with the dashboard, Low-power router) is saved on the router for every
   browser, in `/etc/config/vantage_theme` (section `appearance`), by
   sessions holding the theme's rpcd group `luci-theme-vantage` (uci `set`,
   `commit` and `revert` on that config only; rpcd refuses commit and
@@ -135,13 +140,21 @@ everywhere: theme dir `vantage`, media URL `/luci-static/vantage`, uci
   section's per-row name cell, which heads its card) and cells lose the
   fixed row height. Between 721 and 1180 px wide tables scroll inside
   their card, never the page.
+- **Wide screens**: the content column is 1320 px wide, centred; on
+  windows past about 1920 px it grows with them, keeping about 200 px
+  clear on each side, up to 2400 px, so a 2K or 4K screen at 100 %
+  scaling is not mostly margin.
 
 ### Pages
 
 - Own **login** (`sysauth.ut`): the mark and the router's hostname as the
   heading ("Authorization Required" without one), as LuCI's Bootstrap
   shows it too; generic error, contract-correct form. No other system
-  information (no model or version) for unauthenticated visitors.
+  information (no model or version) for unauthenticated visitors. With
+  LuCI's authentication plugins (luci-plugin-2fa, after 25.12) it shows
+  their fields and guidance (an error once a wrong code was sent), their
+  own HTML as Bootstrap prints it, and their scripts as plain script tags
+  (the login page has no LuCI runtime; luci-plugin-2fa needs none).
 - All core widgets per contract §5 (dropdown state machine, tabs, modals
   incl. apply countdown, tooltips, dynlist, progress bars, file browser,
   notifications with real fade-out transition, changes dialog).
@@ -273,13 +286,19 @@ text around it so it looks the same size.
 - **Entity search**: clients, interfaces, radios, SSIDs injected into the
   command palette.
 - **Health**: simple, explainable scores (e.g. signal < −75 dBm, uplink
-  down, memory > 90 %, radio disabled) each with a one-line reason and a
-  link to the page that fixes it. Each card carries its own icon (port,
+  down, memory > 90 %, a radio enabled but not up) each with a one-line
+  reason and a link to the page that fixes it. A radio switched off in
+  the configuration is a choice: the Wi-Fi card says so, plain, and it
+  never counts as needing attention. Each card carries its own icon (port,
   CPU, memory, Wi-Fi, signal, storage), plain while all is well and in
   the level's colour when it needs attention, and a small picture on its
   bottom edge: the last five minutes of uplink traffic and CPU, how full
   memory (in use, then cache) and storage are, each radio's airtime where
-  the driver reports it, and the clients by signal class.
+  the driver reports it, and the clients by signal class. A client far
+  away on purpose can be set not to warn about its signal (#110), from
+  its details, by a login that may name stations: it stays in the
+  lists, and the Signal card leaves it out, of the warning and of the
+  weakest. Kept on the router, beside the names.
 - **Layout**: tiles are packed into columns (four, two or one by width);
   each tile has a column, a width and a place in the order, and stacks
   under the earlier tiles in its columns. "Customize" lets the viewer drag
@@ -399,7 +418,28 @@ text around it so it looks the same size.
   their own every 2 s (`/proc/stat` and the uplink device's counters,
   about 3 KB a reply), with their own previous samples. While that lane
   answers, the full poll leaves both to it; if it stops, the full poll
-  samples them again.
+  samples them again. The page's own load is not a reading (#101): the
+  2 s lane is registered first, so the poll loop does not run the full
+  poll again right after the page fetched it, and two CPU samples under
+  a second apart give none. `iwinfo info` is asked once a radio (its
+  first interface: channel, power, noise); another network's BSSID and
+  SSID come from hostapd's `get_status`, which the poll asks anyway.
+- **Low-power router** (#101), under the theme's Appearance with the
+  dashboard, off by default: the live numbers as always (the 2 s lane and
+  the 5 s poll); Wi-Fi state, the radios' `iwinfo`, client capabilities,
+  temperatures and wired hosts once every 30 s, their last answers in
+  between. Nothing moves, and nothing stands still mid-move: no backdrop
+  (the dot grid stays; the pick is kept for when it is off), no flow dots
+  (busy wires as the still dotted line of reduced motion), no particles on
+  the login page, no pulse on the theme's refresh dot. After 5 minutes
+  without input (a page left open on a screen nobody touches) the full
+  poll runs every 30 s and the 2 s lane waits; the next input (pointer,
+  key, wheel, touch, the window's focus) is live at once. Saved like the
+  other picks; the login page reads it as it reads its background.
+- Motion stops while another window has the focus (the status circle's
+  ring, the Live beat, the flow dots, the backdrop and the theme's refresh
+  dot): a moving part keeps the browser drawing every frame. The numbers
+  still update.
   A poll updates only what changed and lays nothing out unless a tile
   changes size. Idle animations (the status circle's ring, the Live beat,
   the flow on busy wires)
@@ -417,8 +457,8 @@ text around it so it looks the same size.
   `luci-app-vantage-rdns` (read, optional): `network.rrdns lookup`, kept
   apart because its caller chooses the DNS server and port; the view
   checks the grant and skips reverse DNS without it.
-  `luci-app-vantage-names` (write): `luci.vantage set_alias` only; no
-  group of the app grants uci writes. `luci-theme-vantage` (write): uci
+  `luci-app-vantage-names` (write): `luci.vantage set_alias` and
+  `set_quiet` only; no group of the app grants uci writes. `luci-theme-vantage` (write): uci
   `set`, `commit` and `revert` on `/etc/config/vantage_theme`. The firewall overview's menu entry depends on
   LuCI's `luci-app-firewall` group, whose holder already reads and
   changes `firewall`; it reads that config with `uci get` (and the
@@ -462,7 +502,12 @@ text around it so it looks the same size.
   re-applies the view's rules on the device (unicast MAC, name of at most
   48 code points without control, bidi or invisible characters, icon from
   the fixed list), keeps one section per MAC, refuses a new name past 512,
-  and writes and commits config `vantage` only.
+  and writes and commits config `vantage` only. `set_quiet({mac, quiet})`
+  (#110) keeps one `quiet` section per unicast MAC while `quiet` is true
+  and none when false, refuses a new one past 512, and likewise writes
+  and commits config `vantage` only. The plugin's regular expressions
+  are module constants: ucode compiles a literal each time it is
+  reached, and a counted repeat costs milliseconds on a router.
 
 ## 5. Later
 
@@ -470,16 +515,21 @@ text around it so it looks the same size.
   each behind a separate narrow write ACL and a confirmation;
   optional rpcd plugin keeping a small ring buffer for history, alerts.
 - **v3**: topology view, luci-app-statistics integration.
-- **Low-performance mode** ("potato mode", #101): poll what changes
-  slowly (wired hosts, temperatures, radio details) every 30 s instead of
-  every 5 s, and the rest less often, for routers where a refresh costs
-  noticeable CPU.
+- **Wired hosts on DSA switches** (#101): the bridge's forwarding dump
+  may make a switch such as the MT7531 walk its hardware table on every
+  poll; measure on such a router before changing `wired`.
+- **Live per-device traffic for wired and mesh clients** (#110): a router
+  has no per-host counters for hosts behind a shared port; getting them
+  means counting rules in the firewall. If ever, as a separate opt-in
+  package, never in the read-only dashboard; how to package it is open.
 
 ## 6. Security requirements
 
 - Templates escape everything request-derived; never echo `fuser`; the
   theme's own markup for unauthenticated renders (login, 404, CSRF) adds
-  nothing about the device but the login page's hostname. Not in the theme's control: LuCI's core
+  nothing about the device but the login page's hostname, and of the
+  Appearance only the colour mode, the login background and whether
+  Low-power router is on. Not in the theme's control: LuCI's core
   `header.ut` prints `L = new LuCI({...})` after the theme header on every
   page, with the LuCI build and package-database time in the `luci.js`
   URL and `nodespec: dispatched`, which on an anonymous 404 is the whole
@@ -499,8 +549,9 @@ text around it so it looks the same size.
   The one object glob is `hostapd.*` (hostapd's ubus objects are named per
   interface), limited to `get_clients`/`get_status`. No group of the app
   grants a uci write or reads Wi-Fi keys (LuCI's own groups can, such as
-  `luci-base-network-status`); the only write is the plugin's `set_alias`,
-  whose validation `tests/plugin.test.js` checks against the view's.
+  `luci-base-network-status`); the only writes are the plugin's
+  `set_alias` and `set_quiet`, whose validation `tests/plugin.test.js`
+  checks against the view's and the replay's.
 - No private addresses or MACs in committed files
   (`security-tests/check_private_addresses.js`, which also looks for the
   hostnames/SSIDs recorded in the mirror when it is present); fixtures are

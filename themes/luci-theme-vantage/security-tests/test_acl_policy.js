@@ -10,8 +10,9 @@
  * - exactly three groups: `luci-app-vantage` (read-only),
  *   `luci-app-vantage-rdns` (optional: network.rrdns lookup, which lets
  *   the holder point the device's DNS queries at any server and port) and
- *   `luci-app-vantage-names` (station aliases through the app's own rpcd
- *   plugin method luci.vantage set_alias);
+ *   `luci-app-vantage-names` (station aliases, and stations whose weak
+ *   signal stays out of the warnings, through the app's own rpcd plugin
+ *   methods luci.vantage set_alias and set_quiet);
  * - the read group grants exactly the allowlisted ubus methods below, no
  *   write section, no `*` object or method, no method glob; the one object
  *   glob is `hostapd.*`, because hostapd's ubus objects are named per
@@ -22,7 +23,7 @@
  *   remove, list or stat, no cgi-io;
  * - uci is readable for `vantage` only and writable by nobody: no uci
  *   add/set/delete/commit/... method and no `uci` write list in any group;
- *   the only grant beyond reads is luci.vantage set_alias;
+ *   the only grants beyond reads are luci.vantage set_alias and set_quiet;
  * - the plugin (root/usr/share/rpcd/ucode/luci.vantage) registers exactly
  *   the luci.vantage methods the ACL grants, opens config `vantage`, and
  *   only loads and walks config `wireless` (luci.vantage wireless without
@@ -96,7 +97,7 @@ const READ_UBUS = {
 };
 const READ_FILES = { '/proc/stat': [ 'read' ] };
 const RDNS_UBUS = { 'network.rrdns': [ 'lookup' ] };
-const WRITE_UBUS = { 'luci.vantage': [ 'set_alias' ] };
+const WRITE_UBUS = { 'luci.vantage': [ 'set_alias', 'set_quiet' ] };
 const OBJECT_GLOBS = new Set([ 'hostapd.*' ]);
 const UCI_WRITE = /^(add|set|delete|commit|rename|order|apply|confirm|rollback|revert|changes)$/;
 /* calls the platform grants to every session (rpcd acl.d/unauthenticated.json) */
@@ -197,14 +198,14 @@ test('rdns group: network.rrdns lookup only, described honestly', () => {
 	assert.match(g.description, /any DNS server and port/);
 });
 
-test('names group: luci.vantage set_alias, uci read on vantage, no uci write', () => {
+test('names group: luci.vantage set_alias and set_quiet, uci read on vantage, no uci write', () => {
 	const g = acl[WRITE_GROUP];
 	assert.deepEqual(Object.keys(g).sort(), [ 'description', 'read', 'write' ]);
 	assert.deepEqual(g.read, { ubus: { uci: [ 'get' ] }, uci: [ 'vantage' ] });
 	assert.deepEqual(g.write, { ubus: WRITE_UBUS });
 });
 
-test('no uci write grant in the app; its only non-read grant is the plugin\'s set_alias', () => {
+test('no uci write grant in the app; its only non-read grants are the plugin\'s set_alias and set_quiet', () => {
 	const extra = [];
 	for (const [ name, g ] of Object.entries(acl)) {
 		for (const kind of [ 'read', 'write' ]) {
@@ -218,7 +219,7 @@ test('no uci write grant in the app; its only non-read grant is the plugin\'s se
 			if (kind === 'write') assert.equal(sec.file, undefined, `${name}: file write list`);
 		}
 	}
-	assert.deepEqual(extra, [ 'luci.vantage set_alias' ]);
+	assert.deepEqual(extra, [ 'luci.vantage set_alias', 'luci.vantage set_quiet' ]);
 });
 
 test('the plugin registers exactly the granted luci.vantage methods, writes config vantage only, reads wireless', () => {
@@ -231,10 +232,11 @@ test('the plugin registers exactly the granted luci.vantage methods, writes conf
 	for (const g of Object.values(acl)) for (const kind of [ 'read', 'write' ])
 		for (const m of ((g[kind] || {}).ubus || {})[PLUGIN_OBJECT] || []) granted.add(m);
 	assert.deepEqual(methods, [ ...granted ].sort());
-	assert.deepEqual(methods, [ 'routes', 'set_alias', 'thermal', 'wired', 'wireless' ]);
+	assert.deepEqual(methods, [ 'routes', 'set_alias', 'set_quiet', 'thermal', 'wired', 'wireless' ]);
 	assert.ok(pairs(acl[READ_GROUP].read.ubus).has(PLUGIN_OBJECT + ' wireless'));
 	assert.ok(pairs(acl[READ_GROUP].read.ubus).has(PLUGIN_OBJECT + ' thermal'));
 	assert.ok(pairs(acl[WRITE_GROUP].write.ubus).has(PLUGIN_OBJECT + ' set_alias'));
+	assert.ok(pairs(acl[WRITE_GROUP].write.ubus).has(PLUGIN_OBJECT + ' set_quiet'));
 
 	checkPluginSource(plugin);
 });
@@ -274,13 +276,13 @@ function checkPluginSource(src) {
 	assert.match(src, /^const BOARD_MAX = 65536; /m);
 	assert.match(src, /\breadfile\(BOARD, BOARD_MAX\)/, 'board.json read with its bound');
 
-	/* uci: three cursors made without arguments, `uci` on CONFIG
-	   ('vantage'), `wl`, which only loads and walks WIRELESS ('wireless'),
-	   and `nw`, which only loads NETWORK ('network') and walks its
-	   switch_vlan sections; every other mention of these names is one of
-	   those calls */
-	assert.deepEqual([ ...src.matchAll(/^.*\bcursor\b.*$/gm) ].map(m => m[0].trim()), [ 'import { cursor } from \'uci\';', 'let wl = cursor();', 'let uci = cursor();', 'let nw = cursor();' ],
-		`"cursor" may appear only on its import and the three cursor() lines${REWORD}`);
+	/* uci: four cursors made without arguments, `uci` on CONFIG
+	   ('vantage', set_alias and set_quiet), `wl`, which only loads and
+	   walks WIRELESS ('wireless'), and `nw`, which only loads NETWORK
+	   ('network') and walks its switch_vlan sections; every other mention
+	   of these names is one of those calls */
+	assert.deepEqual([ ...src.matchAll(/^.*\bcursor\b.*$/gm) ].map(m => m[0].trim()), [ 'import { cursor } from \'uci\';', 'let wl = cursor();', 'let uci = cursor();', 'let uci = cursor();', 'let nw = cursor();' ],
+		`"cursor" may appear only on its import and the four cursor() lines${REWORD}`);
 	const body = src.replace(/^.*\bcursor\b.*$/gm, '');
 	assert.match(src, /^const CONFIG = 'vantage';$/m);
 	const calls = [ ...body.matchAll(/\buci\b(?:\.(\w+)\(([^,)]*))?/g) ];

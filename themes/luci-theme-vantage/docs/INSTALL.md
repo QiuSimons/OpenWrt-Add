@@ -923,9 +923,10 @@ Then reload the page. To remove Vantage entirely, see
   swconfig switch's ports. It cannot
   run commands; for that link state LuCI's own method runs `swconfig dev
   <switch> show`, read-only. Its only write permission, in a
-  separate group (`luci-app-vantage-names`), is the plugin method
-  `luci.vantage set_alias`, which checks each name on the device and
-  writes nothing but `/etc/config/vantage` (at most 512 names). Details
+  separate group (`luci-app-vantage-names`), is the plugin methods
+  `luci.vantage set_alias` and `set_quiet`, which check each name and
+  station on the device and write nothing but `/etc/config/vantage` (at
+  most 512 names and 512 stations set not to warn about their signal). Details
   in the [spec](SPEC.md#6-security-requirements).
 - **The theme's Appearance.** The theme's own permission group,
   `luci-theme-vantage`, may write `/etc/config/vantage_theme` and nothing

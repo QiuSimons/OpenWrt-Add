@@ -19,12 +19,23 @@ test('parseStat: aggregate and per-core idle/total', () => {
 
 test('cpuUsage: percent from deltas, per core, null without progress', () => {
 	const a = model.parseStat('cpu  100 0 0 900 0 0 0 0\ncpu0 50 0 0 450\ncpu1 50 0 0 450\n');
-	const b = model.parseStat('cpu  150 0 0 950 0 0 0 0\ncpu0 100 0 0 450\ncpu1 50 0 0 500\n');
+	const b = model.parseStat('cpu  250 0 0 1050 0 0 0 0\ncpu0 200 0 0 450\ncpu1 50 0 0 600\n');
 	const u = model.cpuUsage(a, b);
 	assert.equal(u.pct, 50);
 	assert.deepEqual(u.cores, [ 100, 0 ]);
 	assert.equal(model.cpuUsage(a, a), null);
 	assert.equal(model.cpuUsage(null, b), null);
+});
+
+test('cpuUsage: samples under a second apart give no reading (#101: the page load\'s own burst)', () => {
+	const a = model.parseStat('cpu  100 0 0 900 0 0 0 0\ncpu0 50 0 0 450\ncpu1 50 0 0 450\n');
+	/* 2 cores: 200 ticks make a second */
+	const short = model.parseStat('cpu  290 0 0 909 0 0 0 0\ncpu0 145 0 0 455\ncpu1 145 0 0 454\n');
+	const second = model.parseStat('cpu  290 0 0 910 0 0 0 0\ncpu0 145 0 0 455\ncpu1 145 0 0 455\n');
+	assert.equal(model.cpuUsage(a, short), null, '199 ticks on 2 cores');
+	assert.equal(Math.round(model.cpuUsage(a, second).pct), 95, '200 ticks');
+	const one = model.parseStat('cpu  100 0 0 900 0 0 0 0\ncpu0 100 0 0 900\n');
+	assert.equal(model.cpuUsage(one, model.parseStat('cpu  150 0 0 949 0 0 0 0\ncpu0 150 0 0 949\n')), null, '99 ticks on 1 core');
 });
 
 test('memory: one bar of In use / Cache (reclaimable) / Free adding up to total', () => {

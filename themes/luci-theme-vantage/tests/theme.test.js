@@ -352,12 +352,18 @@ test('Appearance: the templates and the login page read the same keys, in the sa
 	const table = /\nconst LOOK = (\{[\s\S]*?\n\});\n/.exec(src);
 	assert.ok(table, 'found LOOK');
 	const LOOK = new Function('THEME_KEY', 'LOGIN_KEY', 'BACKDROP_KEY', 'return ' + table[1])('vantage.theme', 'vantage.login', 'vantage.backdrop.v1');
-	assert.deepEqual(Object.keys(LOOK), [ 'theme', 'login', 'backdrop', 'brand' ]);
+	assert.deepEqual(Object.keys(LOOK), [ 'theme', 'login', 'backdrop', 'power', 'brand' ]);
 	assert.ok(header.includes("look('brand', [ 'none', 'hostname', 'model' ])"), 'the template keeps the same brand values');
 	assert.ok(header.includes("look('theme', 'vantage.theme.own', 'vantage.theme', [ 'auto', 'light', 'dark' ])"));
 	assert.ok(header.includes("look('backdrop', 'vantage.backdrop.own', 'vantage.backdrop.v1', [ 'grid', 'stars', 'none' ])"));
+	assert.ok(header.includes("look('power', 'vantage.power.own', 'vantage.power', [ 'normal', 'low' ])"));
+	assert.ok(header.includes("look('power', [ 'normal', 'low' ])"), 'the template keeps the same power values');
 	assert.ok(login.includes("localStorage.getItem('vantage.theme.own'); v[2] = localStorage.getItem('vantage.theme')"));
 	assert.ok(loginJs.includes("localStorage.getItem('vantage.login.own'); v[2] = localStorage.getItem('vantage.login')"));
+	/* Low-power router: the login page draws no particles, picked the same way */
+	assert.ok(loginJs.includes("localStorage.getItem('vantage.power.own'); p[2] = localStorage.getItem('vantage.power')"));
+	assert.match(loginJs, /if \(pick === 'none' \|\| power === 'low'\) return;/);
+	assert.ok(login.includes("look('power', [ 'normal', 'low' ])") && login.includes('data-vt-look-power="{{ look_power }}"'));
 	for (const [ name, k ] of Object.entries(LOOK)) {
 		assert.match(k.own, /^vantage\.[a-z]+\.own$/, name);
 		assert.ok(header.includes(`data-vt-look-${name}="{{ look_${name} }}"`), `header hands over ${name}`);
@@ -365,6 +371,7 @@ test('Appearance: the templates and the login page read the same keys, in the sa
 	assert.deepEqual(LOOK.theme.ok, [ 'auto', 'light', 'dark' ]);
 	assert.deepEqual(LOOK.login.ok, [ 'grid', 'stars', 'none' ]);
 	assert.deepEqual(LOOK.backdrop.ok, [ 'grid', 'stars', 'none' ]);
+	assert.deepEqual(LOOK.power.ok, [ 'normal', 'low' ], 'Low-power router is off unless picked');
 	assert.deepEqual(LOOK.brand.ok, [ 'none', 'hostname', 'model' ], 'nothing next to the logo unless picked');
 	assert.ok(!login.includes('vt-look-brand'), 'the login page shows no device name');
 	/* saved in config vantage_theme, section appearance, and nowhere else */
@@ -385,7 +392,7 @@ test('Customize: the theme, the template and the dashboard keep the same chart s
 	assert.deepEqual(charts, series.CHART_STYLES);
 	assert.ok(header.includes(`look('chart', ${JSON.stringify(charts).replace(/"/g, "'").replace(/,/g, ', ').replace('[', '[ ').replace(']', ' ]')})`));
 	const form = /const VIEW_LAYOUT = (\/.*\/);/.exec(src)[1];
-	assert.ok(header.includes(`match(v, ${form})`), 'the template reads what the theme writes');
+	assert.ok(header.includes(`const form = ${form};`) && header.includes('match(v, form)'), 'the template reads what the theme writes');
 	const re = new Function('return ' + form)();
 	/* every tile of every default layout, shown and hidden, fits the form and comes back */
 	for (const tier of [ 'wide', 'mid', 'narrow' ]) for (const wired of [ false, true ]) {
@@ -428,8 +435,9 @@ test('Appearance: the theme\'s rpcd group writes config vantage_theme only, whic
 /* Check for updates (#102): only when asked, one known URL, only a version passes */
 test('update check: reads the theme\'s version from the package list, compares, builds its own link', () => {
 	const pick = name => { const s = src.indexOf('function ' + name + '('); return src.slice(s, src.indexOf('\n}\n', s) + 2); };
+	const entry = /^const UPDATE_ENTRY = .*$/m.exec(src)[0];
 	const { versionParts, newerVersion, listedVersion } = new Function(
-		[ 'versionParts', 'newerVersion', 'listedVersion' ].map(pick).join('\n') + '\nreturn { versionParts, newerVersion, listedVersion };')();
+		[ entry ].concat([ 'versionParts', 'newerVersion', 'listedVersion' ].map(pick)).join('\n') + '\nreturn { versionParts, newerVersion, listedVersion };')();
 	const list = [ 'Package: luci-app-vantage', 'Version: 9.9.9-r1', '', 'Package: luci-theme-vantage', 'Version: 1.0.17-r1', 'Depends: luci-base', '' ].join('\n');
 	assert.equal(listedVersion(list), '1.0.17', 'the theme\'s own entry, not the app\'s');
 	for (const odd of [ 'Version: 1.0.17<script>', 'Version: 1.0.17-r1 x', 'Version: javascript:1', 'Version: 1', 'Version: 1.0.17-rc1', 'Version: 12345.0.0' ])

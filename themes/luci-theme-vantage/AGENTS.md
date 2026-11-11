@@ -47,7 +47,8 @@ Two OpenWrt 25.12 LuCI packages plus offline tooling. No npm, no
    `entityencode(v, true)`, and `striptags()` for titles. Never output
    `fuser`. On pages for visitors who are not logged in (login, 404,
    CSRF) the theme adds nothing about the device, only the login page's
-   hostname heading (encoded), colour mode and background (LuCI's core header
+   hostname heading (encoded), colour mode, background and whether
+   Low-power router is on (which stills that background) (LuCI's core header
    still prints its `L.env` script; that is upstream, see
    `docs/luci-contract.md` section 2). Inline scripts carry no data. Stay within
    the ucode subset that `dev/replay/ut.js` compiles. `test_templates.js`
@@ -58,9 +59,9 @@ Two OpenWrt 25.12 LuCI packages plus offline tooling. No npm, no
    (wireless data comes from the plugin's `wireless` method; LuCI's own
    groups, such as `luci-base-network-status`, can); reverse DNS
    sits in its own optional group (`luci-app-vantage-rdns`); the names
-   group (`luci-app-vantage-names`) grants the plugin's `set_alias`, which
-   validates and writes `/etc/config/vantage` itself, and reading that
-   config. No group of the app grants uci writes; the theme's own group
+   group (`luci-app-vantage-names`) grants the plugin's `set_alias` and
+   `set_quiet`, which validate and write `/etc/config/vantage` themselves,
+   and reading that config. No group of the app grants uci writes; the theme's own group
    (`luci-theme-vantage`) writes `/etc/config/vantage_theme` and nothing
    else. No `file.exec`. The plugin's name rules must match
    `names.js` and `dev/replay/vantage-plugin.js` (`tests/plugin.test.js`).

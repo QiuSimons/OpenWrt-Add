@@ -106,6 +106,7 @@ function runShim(cases) {
 			? shim.wirelessReply((c.ubus || {})['network.wireless status'] ?? null, c.wireless_uci ?? null)
 			: c.method === 'wired' ? { hosts: shim.wired(c.fdb ?? null) }
 			: c.method === 'routes' ? { routes: shim.routes(c.lookup ?? null) }
+			: c.method === 'set_quiet' ? shim.setQuiet(cursor, c.args || {})
 			: shim.setAlias(cursor, c.args || {});
 		return { status: 0, reply, sections: committed ? sections : orig, reverted };
 	});
@@ -119,6 +120,7 @@ const norm = v => JSON.parse(JSON.stringify(v));
 
 const MAC = '00:00:5e:00:53:21';
 const client = (sid, mac, name, icon) => Object.assign({ '.name': sid, '.type': 'client', '.anonymous': true, mac, name }, icon ? { icon } : {});
+const quietSec = (sid, mac) => ({ '.name': sid, '.type': 'quiet', '.anonymous': true, mac });
 
 /* names: [ input, ok, value ] as validateAlias sees them */
 const NAMES = [
@@ -304,7 +306,21 @@ const BEHAVIOUR = [
 	{ method: 'routes', lookup: LOOKUPS.oddDev },
 	{ method: 'routes', lookup: LOOKUPS.notSent },
 	{ method: 'routes', lookup: LOOKUPS.junk },
-	{ method: 'routes', lookup: LOOKUPS.both, args: { table: 100 } }
+	{ method: 'routes', lookup: LOOKUPS.both, args: { table: 100 } },
+	/* set_quiet (#110): one quiet section per muted MAC, beside the names */
+	{ method: 'set_quiet', args: { mac: '00-00-5E-00-53-21', quiet: true } },
+	{ method: 'set_quiet', sections: [ client('a', MAC, 'TV'), quietSec('q', MAC) ], args: { mac: MAC, quiet: true } },
+	{ method: 'set_quiet', sections: [ client('a', MAC, 'TV'), quietSec('q', MAC), quietSec('r', MAC.toUpperCase()), quietSec('s', '00:00:5e:00:53:22') ], args: { mac: MAC, quiet: false } },
+	{ method: 'set_quiet', sections: [ client('a', MAC, 'TV') ], args: { mac: MAC, quiet: false } },
+	{ method: 'set_quiet', args: { mac: '01:00:5e:00:53:21', quiet: true } },
+	{ method: 'set_quiet', args: { quiet: true } },
+	{ method: 'set_quiet', args: { mac: MAC } },
+	{ method: 'set_quiet', args: { mac: MAC, quiet: true }, fail_commit: true },
+	{ method: 'set_quiet', args: { mac: MAC, quiet: 'yes' } },
+	{ method: 'set_quiet', args: { mac: MAC, quiet: 1 } },
+	{ method: 'set_quiet', args: { mac: MAC, quiet: true, name: 'x' } },
+	(() => { const s = []; for (let i = 0; i < 512; i++) s.push(quietSec('q' + i, '02:00:5e:00:' + (i >> 8).toString(16).padStart(2, '0') + ':' + (i & 255).toString(16).padStart(2, '0'))); return { method: 'set_quiet', sections: s, args: { mac: MAC, quiet: true } }; })(),
+	(() => { const s = []; for (let i = 0; i < 512; i++) s.push(client('s' + i, '02:00:5e:00:' + (i >> 8).toString(16).padStart(2, '0') + ':' + (i & 255).toString(16).padStart(2, '0'), 'n' + i)); return { method: 'set_quiet', sections: s, args: { mac: MAC, quiet: true } }; })()
 ];
 
 const NAME_CASES = NAMES.map(([ n ]) => ({ method: 'set_alias', args: { mac: MAC, name: n } }));
@@ -695,4 +711,41 @@ test('ucode plugin: compiles as rpcd loads it', { skip: NO_UCODE }, () => {
 	/* imports resolve against the test doubles; the device has the real modules */
 	const r = spawnSync(UCODE, [ '-L', path.join(__dirname, 'ucode/stubs'), '-c', '-o', '/dev/null', PLUGIN ], { encoding: 'utf8' });
 	assert.equal(r.status, 0, r.stderr);
+});
+
+/* ucode compiles a regular expression literal each time the code reaches it,
+   and musl takes milliseconds over a counted repeat on a router (8.5 ms
+   against 0.07 ms on an ARM access point): the plugin's patterns are module
+   constants, compiled once while rpcd keeps the module loaded */
+test('ucode plugin: every regular expression is a module constant', () => {
+	const bad = [];
+	fs.readFileSync(PLUGIN, 'utf8').split('\n').forEach((line, i) => {
+		const code = line.replace(/\/\/.*$/, '');
+		if (/^const RE_[A-Z0-9_]+ = \//.test(code)) return;
+		/* a "/" that starts an expression: after ( , = : ! & | ? or return */
+		if (/(?:[(,=:!&|?]|\breturn)\s*\/(?![/*])/.test(code)) bad.push((i + 1) + ': ' + line.trim().slice(0, 80));
+	});
+	assert.deepEqual(bad, []);
+});
+
+test('stand-in: set_quiet keeps one quiet section per MAC, beside the names; off removes them all; caps at 512; refuses bad input', () => {
+	const pick = c => runShim([ c ])[0];
+	const QUIET = BEHAVIOUR.filter(c => c.method === 'set_quiet');
+	let r = pick(QUIET[0]);
+	assert.deepEqual(r.reply, { ok: true, op: 'add', mac: MAC });
+	assert.deepEqual(r.sections.map(s => [ s['.type'], s.mac ]), [ [ 'quiet', MAC ] ], 'normalised MAC');
+	r = pick(QUIET[1]);
+	assert.deepEqual(r.reply, { ok: true, op: 'none', mac: MAC }, 'already quiet');
+	r = pick(QUIET[2]);
+	assert.deepEqual(r.reply.op, 'delete');
+	assert.deepEqual(r.sections.map(s => s['.name']), [ 'a', 's' ], 'both spellings of the MAC go; the name and another MAC stay');
+	assert.deepEqual(pick(QUIET[3]).reply, { ok: true, op: 'none', mac: MAC }, 'not quiet: nothing to do');
+	assert.deepEqual(pick(QUIET[4]).reply, { ok: false, error: 'invalid-mac' }, 'multicast');
+	assert.deepEqual(pick(QUIET[5]).reply, { ok: false, error: 'invalid-mac' });
+	assert.deepEqual(pick(QUIET[6]).reply, { ok: false, error: 'invalid-value' }, 'quiet missing');
+	r = pick(QUIET[7]);
+	assert.deepEqual([ r.reply, r.reverted, r.sections ], [ { ok: false, error: 'failed' }, true, [] ], 'a failed commit is reverted');
+	assert.deepEqual([ pick(QUIET[8]).status, pick(QUIET[9]).status, pick(QUIET[10]).status ], [ 2, 2, 2 ], 'rpcd refuses a string, a number, an unknown argument');
+	assert.deepEqual(pick(QUIET[11]).reply, { ok: false, error: 'too-many' }, '512 quiet sections');
+	assert.equal(pick(QUIET[12]).reply.op, 'add', '512 names do not count');
 });
