@@ -61,7 +61,7 @@ Target only tcp_bbr3.o in Makefile.
 +obj-m := tcp_bbr3.o
 --- a/bbr_compat.h
 +++ b/bbr_compat.h
-@@ -19,8 +19,49 @@
+@@ -19,8 +19,40 @@
  #include <net/tcp.h>
  #include <net/inet_connection_sock.h>
  
@@ -71,11 +71,6 @@ Target only tcp_bbr3.o in Makefile.
 +
 +#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
 +#define TCP_CONGESTION_OPS_CONG_CONTROL_HAS_4_ARGS 1
-+#endif
-+
-+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
-+#define HAVE_TCP_BBR_PHASE 1
-+#define HAVE_TCP_BBR_INFO_V2 1
 +#endif
 +
 +#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 2, 0)
@@ -101,15 +96,27 @@ Target only tcp_bbr3.o in Makefile.
 +#define HAVE_TCP_STAMP_US_DELTA 1
 +#endif
 +
-+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
-+#define TCP_CONGESTION_OPS_HAS_TSO_SEGS 1
-+#endif
-+
 +#define HAVE_RATE_SAMPLE_LOSSES 1
 +#define HAVE_RATE_SAMPLE_PRIOR_IN_FLIGHT 1
 +#define HAVE_TCP_SOCK_LOST_OUT 1
 +#define HAVE_TCP_ECN_OK 1
-+#define HAVE___TCP_SEND_ACK 1
++#define HAVE_TCP_CONG_NEEDS_ECN 1
  
  struct bbr;	/* defined in tcp_bbr3.c */
  
+@@ -266,6 +298,7 @@ static inline bool bbr_skb_tx_in_flight_is_suspicious(u32 pcount,
+  * extended struct tcp_bbr_info). Needed to fill bbr_phase on kernels whose
+  * UAPI lacks it.
+  * ------------------------------------------------------------------------ */
++#ifdef HAVE_TCP_BBR_INFO_V2
+ #ifndef HAVE_TCP_BBR_PHASE
+ enum tcp_bbr_phase {
+ 	BBR_PHASE_STARTUP,
+@@ -278,6 +311,7 @@ enum tcp_bbr_phase {
+ 	BBR_PHASE_INVALID,
+ };
+ #endif
++#endif
+ 
+ /* --------------------------------------------------------------------------
+  * DCTCP-style ECE ACK update (precise CE echoing). Mainline keeps the real

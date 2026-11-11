@@ -61,17 +61,13 @@ Target only tcp_bbrplus.o in Makefile.
 +obj-m := tcp_bbrplus.o
 --- a/tcp_bbrplus.c
 +++ b/tcp_bbrplus.c
-@@ -64,7 +64,18 @@
+@@ -64,7 +64,14 @@
  #include <linux/random.h>
  #include <linux/win_minmax.h>
  
 -#include "kernel_config.h"
 +#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
 +#define TCP_CONGESTION_OPS_CONG_CONTROL_HAS_4_ARGS 1
-+#endif
-+
-+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
-+#define TCP_CONGESTION_OPS_HAS_TSO_SEGS 1
 +#endif
 +
 +#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 2, 0)
@@ -81,3 +77,12 @@ Target only tcp_bbrplus.o in Makefile.
  
  /* Scale factor for rate in pkt/uSec unit to avoid truncation in bandwidth
   * estimation. The rate unit ~= (1500 bytes / 1 usec / 2^24) ~= 715 bps.
+@@ -1193,8 +1200,6 @@ static struct tcp_congestion_ops tcp_bbr_cong_ops __read_mostly = {
+     .ssthresh   = bbr_ssthresh,
+ #ifdef TCP_CONGESTION_OPS_HAS_TSO_SEGS
+ 	.tso_segs	= bbr_tso_segs,
+-#else
+-	.min_tso_segs	= bbr_min_tso_segs,
+ #endif
+     .get_info   = bbr_get_info,
+     .set_state  = bbr_set_state,
