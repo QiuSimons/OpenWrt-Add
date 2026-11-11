@@ -470,7 +470,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  
  	bbr->init_cwnd = min(0x7FU, tcp_snd_cwnd(tp));
  	bbr->prior_cwnd = bbr_init_prior_cwnd(tp);
-@@ -2467,9 +2791,94 @@
+@@ -2467,9 +2791,105 @@
  	.set_state	= bbr_set_state,
  };
  
@@ -503,6 +503,14 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	},
 +	{ }
 +};
++/*
++ * 6.11 made sysctl_check_table() walk exactly @table_size entries instead of
++ * stopping at the NULL-procname sentinel, so the sentinel must not be counted
++ * in.  Handing ARRAY_SIZE() to register_net_sysctl_sz() makes the kernel
++ * validate the empty terminator, reject the whole table (-EINVAL "procname is
++ * null"/"No proc_handler"), fail bbr_net_init() and abort the module load.
++ */
++#define BBR_SYSCTL_NENTRIES	(ARRAY_SIZE(bbr_sysctl_template) - 1)
 +#endif
 +
 +static int __net_init bbr_net_init(struct net *net)
@@ -519,11 +527,14 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	bn->table[0].data = &bn->loss_thresh_pct;
 +	bn->table[1].data = &bn->min_rtt_fresh_ms;
 +	bn->hdr = register_net_sysctl_sz(net, "net/ipv4", bn->table,
-+					 ARRAY_SIZE(bbr_sysctl_template));
++					 BBR_SYSCTL_NENTRIES);
 +	if (!bn->hdr) {
++		/* register_net_sysctl_sz() carries no errno; a rejected table
++		 * ends up here, so report the table, not memory, as the cause.
++		 */
 +		kfree(bn->table);
 +		bn->table = NULL;
-+		return -ENOMEM;
++		return -EINVAL;
 +	}
 +#endif
 +	return 0;
@@ -565,7 +576,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  
  	tcp_bbr_cong_ops.flags = TCP_CONG_NON_RESTRICTED;
  #ifdef HAVE_TCP_CONG_WANTS_CE_EVENTS
-@@ -2483,12 +2892,18 @@
+@@ -2483,12 +2903,18 @@
  	if (bbr_ecn_low)
  		tcp_bbr_cong_ops.flags |= TCP_CONG_NEEDS_ECN;
  #endif
