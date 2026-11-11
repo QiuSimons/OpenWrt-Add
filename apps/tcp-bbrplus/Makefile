@@ -20,6 +20,7 @@ define KernelPackage/tcp-bbrplus
   TITLE:=BBRplus TCP congestion control
   FILES:=$(PKG_BUILD_DIR)/tcp_bbrplus.ko
   AUTOLOAD:=$(call AutoLoad,60,tcp_bbrplus)
+  EXTRA_DEPENDS:=
 endef
 
 define KernelPackage/tcp-bbrplus/description
