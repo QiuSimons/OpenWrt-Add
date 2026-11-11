@@ -444,6 +444,17 @@ luci_update_sha_url() {
 	jsonfilter -i "$release" -e '@.assets[*].browser_download_url' 2>/dev/null | grep -E "$asset_regex" | head -n 1
 }
 
+luci_update_asset_digest() {
+	local release asset_url asset
+	release="$1"
+	asset_url="$2"
+	jsonfilter -i "$release" -e '@.assets[*]' 2>/dev/null | while IFS= read -r asset; do
+		[ "$(jsonfilter -s "$asset" -e '@.browser_download_url' 2>/dev/null)" = "$asset_url" ] || continue
+		jsonfilter -s "$asset" -e '@.digest' 2>/dev/null || true
+		break
+	done
+}
+
 luci_version_relation() {
 	local manager current target relation
 	manager="$1"
@@ -783,6 +794,9 @@ luci_update_retry() {
 	shift
 	attempt=1
 	while [ "$attempt" -le "$LUCI_UPDATE_MAX_ATTEMPTS" ]; do
+		if bounded_stage_expired; then
+			return 124
+		fi
 		if "$@"; then
 			if [ "$attempt" -gt 1 ]; then
 				log_line "LuCI 更新：${label}在第 ${attempt}/${LUCI_UPDATE_MAX_ATTEMPTS} 次尝试成功"
@@ -803,7 +817,7 @@ luci_update_retry() {
 }
 
 luci_update() {
-	local manager tmpdir release asset_url asset_version current_version version_relation sha_url package sha_file expected actual install_log tag rc install_excerpt
+	local manager tmpdir release asset_url asset_version current_version version_relation digest sha_url sha_source first_asset_url package sha_file expected actual install_log tag rc install_excerpt
 	log_line "LuCI 更新：开始"
 	if ! command -v jsonfilter >/dev/null 2>&1; then
 		fail "jsonfilter_missing" "需要 jsonfilter 解析 localclash-luci Release 信息。"
@@ -832,8 +846,7 @@ luci_update() {
 	fi
 	tag="$(jsonfilter -i "$release" -e '@.tag_name' 2>/dev/null)"
 	asset_url="$(luci_update_asset_url "$release" "$manager")"
-	sha_url="$(luci_update_sha_url "$release" "$manager")"
-	if [ -z "$asset_url" ] || [ -z "$sha_url" ]; then
+	if [ -z "$asset_url" ]; then
 		rm -rf "$tmpdir"
 		fail "luci_release_asset_missing" "最新 Release 中没有匹配当前包管理器的 LuCI 安装包。"
 		return 1
@@ -864,20 +877,46 @@ luci_update() {
 			return 0
 		fi
 	fi
-	log_line "LuCI 更新：正在下载 ${tag:-latest} 校验文件"
-	if ! luci_update_retry "下载校验文件" fetch_url_direct_first "$sha_url" "$sha_file"; then
-		rm -rf "$tmpdir"
-		fail "luci_package_download_failed" "无法下载 LuCI 安装包校验文件。"
-		return 1
-	fi
-	expected="$(sha256_expected_from_file "$sha_file")"
+	first_asset_url="$asset_url"
+	digest="$(luci_update_asset_digest "$release" "$asset_url")"
+	case "$digest" in
+		""|null)
+			sha_url="$(luci_update_sha_url "$release" "$manager")"
+			if [ -z "$sha_url" ]; then
+				rm -rf "$tmpdir"
+				fail "luci_release_asset_missing" "最新 Release 缺少 LuCI 安装包的 SHA-256 校验信息。"
+				return 1
+			fi
+			log_line "LuCI 更新：正在下载 ${tag:-latest} 校验文件"
+			if ! sha_source="$(luci_update_retry "下载校验文件" fetch_url_direct_first "$sha_url" "$sha_file")"; then
+				rm -rf "$tmpdir"
+				fail "luci_package_download_failed" "无法下载 LuCI 安装包校验文件。"
+				return 1
+			fi
+			expected="$(sha256_expected_from_file "$sha_file")"
+			if [ "$sha_url" = "$asset_url.sha256" ] && [ -n "$sha_source" ]; then
+				first_asset_url="${sha_source%.sha256}"
+			fi
+			;;
+		sha256:*)
+			expected="${digest#sha256:}"
+			case "$expected" in *[!0-9a-fA-F]*) expected="" ;; esac
+			if [ "${#expected}" -eq 64 ]; then
+				expected="$(printf '%s' "$expected" | tr 'A-F' 'a-f')"
+				log_line "LuCI 更新：使用 Release 安装包的 SHA-256"
+			else
+				expected=""
+			fi
+			;;
+		*) expected="" ;;
+	esac
 	if [ -z "$expected" ]; then
 		rm -rf "$tmpdir"
-		fail "luci_package_checksum_failed" "LuCI 安装包校验文件为空或格式错误。"
+		fail "luci_package_checksum_failed" "LuCI 安装包 SHA-256 校验信息为空或格式错误。"
 		return 1
 	fi
 	log_line "LuCI 更新：正在下载 ${tag:-latest} 安装包"
-	if ! luci_update_retry "下载并校验安装包" fetch_url_verified_direct_first "$asset_url" "$package" "$expected"; then
+	if ! luci_update_retry "下载并校验安装包" fetch_url_verified_direct_first "$asset_url" "$package" "$expected" "$first_asset_url"; then
 		rm -rf "$tmpdir"
 		fail_with_details "luci_package_checksum_failed" "LuCI 安装包下载失败或 sha256 校验失败，可能是 GitHub 镜像尚未同步最新 Release。" '"expected_sha":"'"$(json_escape "$expected")"'","target_version":"'"$(json_escape "$asset_version")"'"'
 		return 1
@@ -894,6 +933,10 @@ luci_update() {
 		rm -rf "$tmpdir"
 		fail_with_details "luci_package_metadata_invalid" "LuCI 安装包的套件名称或架构不兼容，已在调用包管理器前拒绝。" '"install_output":"'"$install_excerpt"'","package_manager":"'"$(json_escape "$manager")"'","target_version":"'"$(json_escape "$asset_version")"'"'
 		return 1
+	fi
+	if bounded_stage_expired; then
+		rm -rf "$tmpdir"
+		return 124
 	fi
 	log_line "LuCI 更新：sha256 校验通过，正在安装"
 	luci_update_install_package "$manager" "$package" "$install_log"
@@ -941,7 +984,7 @@ write_task_running() {
 	summary="$1"
 	task="${2:-task}"
 	extra=""
-	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ]; then
+	if [ "$task" = runtime_restart ] || [ "$task" = subscription_schedule ] || [ "$task" = pool_capability ]; then
 		extra=',"cancellable":false,"task_id":"'"$(json_escape "$3")"'"'
 	fi
 	printf '{"ok":true,"running":true,"done":false,"started_at":%s,"task":"%s","summary":"%s"%s}\n' "$(now_epoch)" "$(json_escape "$task")" "$(json_escape "$summary")" "$extra" > "${TASK_STATUS}.tmp.$$" && mv "${TASK_STATUS}.tmp.$$" "$TASK_STATUS"
@@ -1195,6 +1238,8 @@ task_cancel() {
 				fail "task_not_cancellable" "订阅已进入运行时重启和网络接管验证阶段，不能中途取消；关闭页面不会停止任务。"
 			elif [ "$task" = subscription_schedule ]; then
 				fail "task_not_cancellable" "订阅更新和热加载任务不能中途取消；关闭页面不会停止任务。"
+			elif [ "$task" = pool_capability ]; then
+				fail "task_not_cancellable" "线路池设置正在应用。关闭页面后任务会继续执行。"
 			else
 				fail "task_not_cancellable" "重启正在恢复运行时和网络接管，不能中途取消；关闭页面不会停止任务。"
 			fi
@@ -1250,36 +1295,85 @@ run_with_heartbeat_until_complete() {
 	run_with_heartbeat_timeout 0 "$@"
 }
 
+bounded_stage_expired() {
+	[ -n "${bounded_stage_deadline:-}" ] && [ "$(now_epoch)" -ge "$bounded_stage_deadline" ]
+}
+
+stage_heartbeat() {
+	local stage_pid label started sleeper elapsed
+	stage_pid="$1"
+	label="$2"
+	started="$3"
+	sleeper=""
+	trap '
+		if [ -n "$sleeper" ]; then
+			kill "$sleeper" 2>/dev/null || true
+			wait "$sleeper" 2>/dev/null || true
+		fi
+		exit 0
+	' TERM
+	while kill -0 "$stage_pid" 2>/dev/null; do
+		sleep "$TASK_HEARTBEAT_INTERVAL" &
+		sleeper="$!"
+		wait "$sleeper" || return 0
+		sleeper=""
+		if kill -0 "$stage_pid" 2>/dev/null; then
+			elapsed=$(($(now_epoch) - started))
+			log_line "${label}：仍在执行（${elapsed}s）"
+		fi
+	done
+}
+
 run_with_heartbeat_timeout() {
-	local timeout label output tmp_output pid elapsed rc
+	local timeout label output tmp_output pid started elapsed delay remaining rc timed_out bounded_stage_deadline heartbeat_pid
 	timeout="$1"
 	label="$2"
 	output="$3"
 	shift 3
-	elapsed=0
+	started="$(now_epoch)"
+	timed_out=false
+	bounded_stage_deadline=""
+	heartbeat_pid=""
+	if [ "$timeout" -gt 0 ]; then
+		bounded_stage_deadline=$((started + timeout))
+	fi
 	tmp_output="${output}.run.$$"
 	rm -f "$tmp_output"
 	( "$@" > "$tmp_output" ) &
 	pid="$!"
-	while kill -0 "$pid" 2>/dev/null; do
-		sleep "$TASK_HEARTBEAT_INTERVAL"
-		if kill -0 "$pid" 2>/dev/null; then
-			elapsed=$((elapsed + TASK_HEARTBEAT_INTERVAL))
+	if [ -z "$bounded_stage_deadline" ]; then
+		stage_heartbeat "$pid" "$label" "$started" </dev/null >/dev/null 2>&1 &
+		heartbeat_pid="$!"
+	else
+		while kill -0 "$pid" 2>/dev/null; do
+			delay="$TASK_HEARTBEAT_INTERVAL"
+			remaining=$((bounded_stage_deadline - $(now_epoch)))
+			[ "$remaining" -ge "$delay" ] || delay="$remaining"
+			[ "$delay" -le 0 ] || sleep "$delay"
+			kill -0 "$pid" 2>/dev/null || break
+			elapsed=$(($(now_epoch) - started))
 			log_line "${label}：仍在执行（${elapsed}s）"
-			if [ "$timeout" -gt 0 ] && [ "$elapsed" -ge "$timeout" ]; then
+			if bounded_stage_expired; then
 				log_line "${label}：超过 ${timeout}s，已停止等待"
+				timed_out=true
 				kill_process_tree -TERM "$pid"
 				sleep 2
 				kill_process_tree -KILL "$pid"
-				wait "$pid" 2>/dev/null || true
-				rm -f "$tmp_output"
-				printf '{"ok":false,"code":"step_timeout","message":"%s 超时，请检查路由器是否能访问下载源，或稍后重试。","details":{"timeout_seconds":%s},"next_actions":["确认路由器可以访问下载源后重试。"]}\n' "$(json_escape "$label")" "$timeout" > "$output"
-				return 124
+				break
 			fi
-		fi
-	done
-	wait "$pid"
-	rc="$?"
+		done
+	fi
+	rc=0
+	wait "$pid" || rc="$?"
+	if [ -n "$heartbeat_pid" ]; then
+		kill "$heartbeat_pid" 2>/dev/null || true
+		wait "$heartbeat_pid" 2>/dev/null || true
+	fi
+	if [ "$timed_out" = true ] || { [ "$rc" -ne 0 ] && bounded_stage_expired; }; then
+		rm -f "$tmp_output"
+		printf '{"ok":false,"code":"step_timeout","message":"%s 超时，请检查路由器是否能访问下载源，或稍后重试。","details":{"timeout_seconds":%s},"next_actions":["确认路由器可以访问下载源后重试。"]}\n' "$(json_escape "$label")" "$timeout" > "$output"
+		return 124
+	fi
 	if [ -f "$tmp_output" ]; then
 		mv "$tmp_output" "$output"
 	else
@@ -1289,32 +1383,42 @@ run_with_heartbeat_timeout() {
 }
 
 fetch_single_url() {
-	local url output downloader stderr_file started completed elapsed rc bytes host line failure_reason
+	local url output downloader stderr_file started completed elapsed rc bytes host line failure_reason timeout remaining
 	url="$1"
 	output="$2"
 	host="$(download_url_host "$url")"
 	stderr_file="${output}.fetch-stderr.$$"
 	started="$(now_epoch)"
+	timeout="$FETCH_TIMEOUT"
+	if [ -n "${bounded_stage_deadline:-}" ]; then
+		remaining=$((bounded_stage_deadline - started))
+		if [ "$remaining" -le 0 ]; then
+			log_line "下载：当前步骤已超时，未开始请求 host=$host"
+			return 124
+		fi
+		[ "$remaining" -ge "$timeout" ] || timeout="$remaining"
+	fi
 	rm -f "$stderr_file" "$output"
-	if command -v uclient-fetch >/dev/null 2>&1; then
+	if [ -n "${https_proxy:-}${HTTPS_PROXY:-}${http_proxy:-}${all_proxy:-}${ALL_PROXY:-}" ] && command -v curl >/dev/null 2>&1; then
+		# curl supports HTTPS downloads through the configured HTTP proxy.
+		downloader="curl"
+	elif command -v uclient-fetch >/dev/null 2>&1; then
 		downloader="uclient-fetch"
-		log_line "下载：开始 downloader=$downloader host=$host timeout=${FETCH_TIMEOUT}s"
-		fetch_with_watchdog "$url" uclient-fetch -T "$FETCH_TIMEOUT" -q -O "$output" "$url" 2>"$stderr_file"
-		rc=$?
 	elif command -v wget >/dev/null 2>&1; then
 		downloader="wget"
-		log_line "下载：开始 downloader=$downloader host=$host timeout=${FETCH_TIMEOUT}s"
-		fetch_with_watchdog "$url" wget -T "$FETCH_TIMEOUT" -q -O "$output" "$url" 2>"$stderr_file"
-		rc=$?
 	elif command -v curl >/dev/null 2>&1; then
 		downloader="curl"
-		log_line "下载：开始 downloader=$downloader host=$host timeout=${FETCH_TIMEOUT}s"
-		fetch_with_watchdog "$url" curl --max-time "$FETCH_TIMEOUT" -fsSL "$url" -o "$output" 2>"$stderr_file"
-		rc=$?
 	else
 		log_line "下载：失败 reason=downloader_missing host=$host"
 		return 1
 	fi
+	case "$downloader" in
+		curl) set -- curl --disable --max-time "$timeout" -fsSL "$url" -o "$output" ;;
+		*) set -- "$downloader" -T "$timeout" -q -O "$output" "$url" ;;
+	esac
+	log_line "下载：开始 downloader=$downloader host=$host timeout=${timeout}s"
+	fetch_with_watchdog "$url" "$timeout" "$@" 2>"$stderr_file"
+	rc=$?
 	if [ -s "$stderr_file" ]; then
 		while IFS= read -r line; do
 			log_line "下载器[$downloader]：$line"
@@ -1399,9 +1503,10 @@ log_download_dns_context() {
 }
 
 fetch_with_watchdog() {
-	local label pid watchdog elapsed rc watchdog_dir timeout_marker
+	local label timeout pid watchdog elapsed delay remaining rc watchdog_dir timeout_marker
 	label="$1"
-	shift
+	timeout="$2"
+	shift 2
 	watchdog_dir="$(mktemp -d /tmp/localclash-fetch-watchdog.XXXXXX)" || {
 		log_line "下载：失败 reason=watchdog_state_unavailable"
 		return 1
@@ -1412,13 +1517,16 @@ fetch_with_watchdog() {
 	(
 		elapsed=0
 		while kill -0 "$pid" 2>/dev/null; do
-			sleep 5
+			remaining=$((timeout - elapsed))
+			delay=5
+			[ "$remaining" -ge "$delay" ] || delay="$remaining"
+			sleep "$delay"
 			if kill -0 "$pid" 2>/dev/null; then
-				elapsed=$((elapsed + 5))
+				elapsed=$((elapsed + delay))
 				log_line "下载：等待 ${label}（${elapsed}s）"
-				if [ "$elapsed" -ge "$FETCH_TIMEOUT" ]; then
+				if [ "$elapsed" -ge "$timeout" ]; then
 					: > "$timeout_marker"
-					log_line "下载：超时 ${label} timeout=${FETCH_TIMEOUT}s"
+					log_line "下载：超时 ${label} timeout=${timeout}s"
 					kill "$pid" 2>/dev/null || exit 0
 					sleep 2
 					kill -9 "$pid" 2>/dev/null || true
@@ -1646,6 +1754,10 @@ commit_download_output() {
 	local tmp output
 	tmp="$1"
 	output="$2"
+	if bounded_stage_expired; then
+		rm -f "$tmp"
+		return 124
+	fi
 	if mv "$tmp" "$output"; then
 		return 0
 	fi
@@ -1686,6 +1798,7 @@ fetch_url_direct_first() {
 	log_line "下载：尝试 $url"
 	if fetch_single_url "$url" "$tmp"; then
 		commit_download_output "$tmp" "$output" || return 1
+		printf '%s\n' "$url"
 		return 0
 	fi
 	rm -f "$tmp"
@@ -1699,6 +1812,7 @@ fetch_url_direct_first() {
 		if fetch_single_url "$candidate" "$tmp"; then
 			commit_download_output "$tmp" "$output" || return 1
 			note_github_candidate_success "$url" "$candidate"
+			printf '%s\n' "$candidate"
 			return 0
 		fi
 		note_github_candidate_failure "$url" "$candidate"
@@ -1732,25 +1846,32 @@ fetch_manifest() {
 }
 
 fetch_url_verified_direct_first() {
-	local url output expected_sha tmp candidate actual_sha switched
+	local url output expected_sha first_url tmp candidate actual_sha switched
 	url="$1"
 	output="$2"
 	expected_sha="$3"
+	first_url="${4:-$url}"
 	switched=false
 	tmp="$output.download.$$"
 	rm -f "$tmp"
-	log_line "下载：尝试 $url"
-	if fetch_single_url "$url" "$tmp"; then
+	if [ "$first_url" != "$url" ]; then
+		log_line "下载：沿用校验文件的来源 $first_url"
+		switched=true
+	fi
+	log_line "下载：尝试 $first_url"
+	if fetch_single_url "$first_url" "$tmp"; then
 		actual_sha="$(sha256sum "$tmp" | cut -d ' ' -f 1)"
 		if [ "$actual_sha" = "$expected_sha" ]; then
 			commit_download_output "$tmp" "$output" || return 1
+			note_github_candidate_success "$url" "$first_url"
 			return 0
 		fi
-		log_line "下载：$url 校验和不匹配"
+		log_line "下载：$first_url 校验和不匹配"
 	fi
+	note_github_candidate_failure "$url" "$first_url"
 	rm -f "$tmp"
 	for candidate in $(github_download_candidates "$url"); do
-		[ "$candidate" = "$url" ] && continue
+		[ "$candidate" = "$first_url" ] && continue
 		if [ "$switched" = false ]; then
 			log_line "下载：正在切换 GitHub 镜像"
 			switched=true
@@ -1863,6 +1984,14 @@ call_takeover() {
 	fi
 	workdir="$(resolve_state_dir)" || return 1
 	(cd / && LOCALCLASH_CORE="$CORE" LOCALCLASH_WORKDIR="$workdir" "$TAKEOVER_MANAGER" "$@") 2>>"$LOG"
+}
+
+takeover_status() {
+	if [ ! -t 0 ] && [ "$(jsonfilter -e '@.probe_dns' 2>/dev/null)" = true ]; then
+		call_takeover status --json --probe-dns
+	else
+		call_takeover status --json
+	fi
 }
 
 runtime_stop() {
@@ -3916,6 +4045,106 @@ pool_schedule_config_value() {
 	"$UCI_BIN" -q get "localclash.pool_schedule.$1" 2>/dev/null || printf '%s\n' "$2"
 }
 
+pool_capability_disabled() {
+	[ "$(jsonfilter -i "$STATE_DIR/localclash-runtime.json" -e '@.pools_disabled' 2>/dev/null)" = true ]
+}
+
+pool_capability_get() {
+	local result enabled
+	if result="$(call_core config pools --json)"; then
+		enabled="$(jsonfilter -s "$result" -e '@.status.enabled' 2>/dev/null)"
+		case "$enabled" in
+			true|false) printf '%s\n' "$result"; return 0 ;;
+		esac
+	fi
+	if [ "$(jsonfilter -s "$result" -e '@.ok' 2>/dev/null)" = false ]; then
+		printf '%s\n' "$result"
+		return 1
+	fi
+	fail "pool_capability_unavailable" "更新 localClash 核心后可设置线路池开关。"
+	return 1
+}
+
+start_pool_capability_set() {
+	local payload enabled task_id bg_pid
+	payload="$(strip_ubus_rpc_session "$(cat)")"
+	enabled="$(jsonfilter -s "$payload" -e '@.enabled' 2>/dev/null)"
+	case "$enabled" in
+		true|false) ;;
+		*) fail "pool_capability_enabled_invalid" "请选择是否启用线路池。"; return 1 ;;
+	esac
+	clear_stale_lock
+	if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+		fail "task_locked" "另一个 localClash 操作正在运行，请稍后再试。"
+		return 1
+	fi
+	printf '%s\n' "$$" > "$LOCK_DIR/pid"
+	if task_pid_alive; then
+		rm -rf "$LOCK_DIR"
+		fail "task_locked" "另一个 localClash 后台任务正在收尾，请稍后再试。"
+		return 1
+	fi
+	task_id="$(now_epoch)-$$"
+	rm -f "$TASK_RESULT" "$TASK_INPUT" "$TASK_PID"
+	: > "$LOG"
+	if ! write_task_running "正在应用线路池设置。" pool_capability "$task_id"; then
+		rm -rf "$LOCK_DIR"
+		fail "task_status_write_failed" "无法记录线路池任务。"
+		return 1
+	fi
+	"$HELPER_SELF" call pool_capability_set_run "$task_id" "$enabled" </dev/null >>"$LOG" 2>&1 &
+	bg_pid="$!"
+	write_task_pid "$bg_pid"
+	printf '%s\n' "$bg_pid" > "$LOCK_DIR/pid"
+	ok '"started":true,"running":true,"task":"pool_capability","task_id":"'"$task_id"'","cancellable":false'
+}
+
+apply_pool_capability() {
+	local result enabled
+	enabled="$1"
+	if ! result="$(call_core config pools --enabled "$enabled" --json)"; then
+		if [ "$(jsonfilter -s "$result" -e '@.ok' 2>/dev/null)" = false ]; then
+			printf '%s\n' "$result"
+		else
+			fail "pool_capability_apply_failed" "应用线路池设置失败，请检查任务日志。"
+		fi
+		return 1
+	fi
+	if [ "$(jsonfilter -s "$result" -e '@.status.enabled' 2>/dev/null)" != "$enabled" ]; then
+		fail "pool_capability_readback_failed" "无法确认线路池设置已应用。"
+		return 1
+	fi
+	if [ -x "$POOL_SCHEDULER_SERVICE" ] &&
+		! pool_schedule_service_apply "$(pool_schedule_config_value enabled 0)" >>"$LOG" 2>&1; then
+		ok '"summary":"线路池设置已应用，定时更新服务未能同步。","schedule_applied":false,"pool_config":'"$result"
+		return 0
+	fi
+	printf '%s\n' "$result"
+}
+
+pool_capability_set_run() {
+	local task_id enabled waited result rc
+	task_id="$1"
+	enabled="$2"
+	waited=0
+	while [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" != "$$" ]; do
+		[ "$waited" -lt 5 ] || return 1
+		waited=$((waited + 1))
+		sleep 1
+	done
+	trap '[ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" != "$$" ] || rm -rf "$LOCK_DIR"' EXIT
+	trap 'exit 143' INT TERM
+	[ -n "$task_id" ] && [ "$(jsonfilter -i "$TASK_STATUS" -e '@.task_id' 2>/dev/null)" = "$task_id" ] || return 1
+	case "$enabled" in true|false) ;; *) return 1 ;; esac
+	log_line "线路池：正在应用能力开关"
+	result="$(apply_pool_capability "$enabled")"
+	rc=$?
+	printf '%s\n' "$result" > "$TASK_RESULT"
+	write_task_done "$rc" "$result"
+	rm -f "$TASK_PID"
+	return "$rc"
+}
+
 pool_schedule_period_valid() {
 	case "$1" in 5m|15m|30m|1h|daily-08) return 0 ;; esac
 	return 1
@@ -3954,7 +4183,7 @@ pool_schedule_get() {
 			fi
 		fi
 	fi
-	if [ "$enabled" != true ] || ! "$POOL_SCHEDULER_SERVICE" running >/dev/null 2>&1; then
+	if [ "$enabled" != true ] || pool_capability_disabled || ! "$POOL_SCHEDULER_SERVICE" running >/dev/null 2>&1; then
 		next_run=
 	fi
 	printf '{"ok":true,"available":%s,"schedule":{"enabled":%s,"period":"%s"},"next_run_at":"%s","last_run_at":"%s","outcome":"%s"}\n' \
@@ -3962,7 +4191,7 @@ pool_schedule_get() {
 }
 
 pool_schedule_service_apply() {
-	if [ "$1" = 1 ]; then
+	if [ "$1" = 1 ] && ! pool_capability_disabled; then
 		LOCALCLASH_STATE_DIR="$STATE_DIR" "$POOL_SCHEDULER_SERVICE" enable &&
 			LOCALCLASH_STATE_DIR="$STATE_DIR" "$POOL_SCHEDULER_SERVICE" restart
 	else
@@ -3991,7 +4220,7 @@ pool_schedule_set() {
 		fail "pool_scheduler_service_missing" "线路池定时更新服务未安装。"
 		return 1
 	}
-	if [ "$enabled" = 1 ]; then
+	if [ "$enabled" = 1 ] && ! pool_capability_disabled; then
 		if ! arch="$(router_arch)" || [ ! -x "$STATE_DIR/bin/linux-$arch/localclash-pools" ]; then
 			fail "pool_worker_missing" "请先更新 localClash 核心和基础资产，再启用线路池定时更新。"
 			return 1
@@ -4682,7 +4911,7 @@ reset() {
 }
 
 bootstrap_core() {
-	local arch tmpdir manifest binary asset_url asset_sha asset_version tmp_core service_result
+	local arch tmpdir manifest binary asset_url asset_sha asset_version tmp_core service_result changed summary
 	log_line "核心初始化：开始"
 	if ! command -v jsonfilter >/dev/null 2>&1; then
 		log_line "核心初始化：缺少 jsonfilter"
@@ -4716,24 +4945,31 @@ bootstrap_core() {
 		fail "manifest_asset_missing" "Release 清单中没有匹配此路由器的 Linux 二进制文件。"
 		return 1
 	fi
-	log_line "核心初始化：正在下载 localClash 核心 ${asset_version}（${arch}）"
-	if ! fetch_url_verified "$asset_url" "$binary" "$asset_sha"; then
-		rm -rf "$tmpdir"
-		log_line "核心初始化：核心下载失败"
-		fail "core_download_failed" "无法下载 localClash 核心二进制文件。"
-		return 1
-	fi
-	log_line "核心初始化：sha256 校验通过"
-	chmod 755 "$binary"
-	mkdir -p "$(dirname "$CORE")"
-	tmp_core="$CORE.tmp.$$"
-	log_line "核心初始化：正在安装 localClash 核心"
-	if ! cp "$binary" "$tmp_core" || ! chmod 755 "$tmp_core" || ! mv "$tmp_core" "$CORE"; then
-		rm -f "$tmp_core"
-		rm -rf "$tmpdir"
-		log_line "核心初始化：核心安装失败"
-		fail "core_install_failed" "无法安装 localClash 核心二进制文件。"
-		return 1
+	if core_installed && [ "$(sha256sum "$CORE" 2>/dev/null | cut -d ' ' -f 1)" = "$asset_sha" ]; then
+		changed=false
+		summary="localClash 核心已是当前版本。"
+		log_line "核心初始化：已安装的核心与 Release SHA-256 一致"
+	else
+		changed=true
+		summary="localClash 核心已安装。"
+		log_line "核心初始化：正在下载 localClash 核心 ${asset_version}（${arch}）"
+		if ! fetch_url_verified "$asset_url" "$binary" "$asset_sha"; then
+			rm -rf "$tmpdir"
+			log_line "核心初始化：核心下载失败"
+			fail "core_download_failed" "无法下载 localClash 核心二进制文件。"
+			return 1
+		fi
+		log_line "核心初始化：sha256 校验通过"
+		mkdir -p "$(dirname "$CORE")"
+		tmp_core="$CORE.tmp.$$"
+		log_line "核心初始化：正在安装 localClash 核心"
+		if ! cp "$binary" "$tmp_core" || ! chmod 755 "$tmp_core" || ! mv "$tmp_core" "$CORE"; then
+			rm -f "$tmp_core"
+			rm -rf "$tmpdir"
+			log_line "核心初始化：核心安装失败"
+			fail "core_install_failed" "无法安装 localClash 核心二进制文件。"
+			return 1
+		fi
 	fi
 	service_result="$(service_start)" || {
 		rm -rf "$tmpdir"
@@ -4750,12 +4986,12 @@ bootstrap_core() {
 		return 1
 	fi
 	rm -rf "$tmpdir"
-	log_line "已安装 localClash 核心 ${asset_version}（${arch}）"
-	ok "\"changed\":true,\"summary\":\"localClash 核心已安装。\",\"core\":{\"installed\":true,\"path\":\"$CORE\",\"version\":\"$(json_escape "$asset_version")\",\"arch\":\"$arch\"}"
+	log_line "$summary ${asset_version}（${arch}）"
+	ok "\"changed\":$changed,\"summary\":\"$summary\",\"core\":{\"installed\":true,\"path\":\"$CORE\",\"version\":\"$(json_escape "$asset_version")\",\"arch\":\"$arch\"}"
 }
 
 install_base_assets() {
-	local output
+	local output assets_changed
 	output="/tmp/localclash-base-assets.$$.json"
 	if ! core_installed; then
 		fail "bootstrap_core_missing" "localClash 核心尚未安装，无法初始化基础文件。"
@@ -4763,12 +4999,13 @@ install_base_assets() {
 	fi
 	mkdir -p "$STATE_DIR"
 	log_line "基础文件初始化：交由 localClash 核心安装基础文件"
-	if ! call_core component update assets --json > "$output"; then
+	if ! LOCALCLASH_RELEASE_MANIFEST_FILE="${1:-}" call_core component update assets --json > "$output"; then
 		log_line "基础文件初始化：核心安装基础文件失败"
 		cat "$output"
 		rm -f "$output"
 		return 1
 	fi
+	assets_changed="$(jsonfilter -i "$output" -e '@.changed' 2>/dev/null || true)"
 	if [ -x "$POOL_SCHEDULER_SERVICE" ] && [ "$(pool_schedule_config_value enabled 0)" = 1 ]; then
 		if ! pool_schedule_service_apply 1 >/dev/null 2>&1; then
 			rm -f "$output"
@@ -4776,7 +5013,11 @@ install_base_assets() {
 			return 1
 		fi
 	fi
-	log_line "基础文件初始化：已由 localClash 核心安装"
+	if [ "$assets_changed" = false ]; then
+		log_line "基础文件初始化：已安装文件与 Release 一致"
+	else
+		log_line "基础文件初始化：已由 localClash 核心安装"
+	fi
 	rm -f "$output"
 	return 0
 }
@@ -5736,6 +5977,8 @@ case "$method" in
 	  "subscription_schedule_get": {},
 	  "subscription_schedule_set": { "enabled": false, "update_hour": 0 },
 	  "subscription_schedule_run_now": {},
+	  "pool_capability_get": {},
+	  "pool_capability_set_async": { "enabled": false },
 	  "pool_schedule_get": {},
 	  "pool_schedule_set": { "enabled": false, "period": "" },
 	  "custom_sites_get": {},
@@ -5760,7 +6003,7 @@ case "$method" in
   "boot_restore_disable": {},
 	  "boot_restore_startup_run": {},
 	  "boot_restore_run": {},
-	  "takeover_status": {},
+	  "takeover_status": { "probe_dns": true },
 	  "takeover_logs": {},
 	  "takeover_apply": {},
   "takeover_restore": {},
@@ -5792,6 +6035,9 @@ JSON
 	subscription_schedule_get) subscription_schedule_get ;;
 	subscription_schedule_set) with_lock subscription_schedule_set ;;
 	subscription_schedule_run_now) start_subscription_schedule_run ;;
+	pool_capability_get) pool_capability_get ;;
+	pool_capability_set_async) start_pool_capability_set ;;
+	pool_capability_set_run) pool_capability_set_run "${3:-}" "${4:-}" ;;
 	pool_schedule_get) pool_schedule_get ;;
 	pool_schedule_set) with_lock pool_schedule_set ;;
 	subscription_schedule_run_task) subscription_schedule_run_task "${3:-}" ;;
@@ -5825,7 +6071,7 @@ JSON
 	boot_restore_disable) with_lock boot_restore_disable ;;
 	boot_restore_startup_run) with_lock boot_restore_startup_run ;;
 	boot_restore_run) with_lock boot_restore_run ;;
-	takeover_status) call_takeover status --json ;;
+	takeover_status) takeover_status ;;
 	takeover_logs) takeover_logs ;;
 	takeover_apply) with_lock takeover_apply ;;
 	takeover_restore) with_lock takeover_restore_run ;;
