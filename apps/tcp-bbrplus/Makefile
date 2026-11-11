@@ -28,22 +28,6 @@ define KernelPackage/tcp-bbrplus/description
   Automatically sets bbrplus as the default TCP congestion control algorithm.
 endef
 
-define Build/Prepare
-	$(call Build/Prepare/Default)
-	( \
-		grep -q 'cong_control.*int flag' "$(LINUX_DIR)/include/net/tcp.h" && \
-			echo '#define TCP_CONGESTION_OPS_CONG_CONTROL_HAS_4_ARGS 1'; \
-		grep -q '(\*tso_segs)' "$(LINUX_DIR)/include/net/tcp.h" && \
-			echo '#define TCP_CONGESTION_OPS_HAS_TSO_SEGS 1'; \
-		grep -q 'get_random_u32_below' "$(LINUX_DIR)/include/linux/random.h" || { \
-			echo '#include <linux/prandom.h>'; \
-			echo '#define get_random_u32_below(x) prandom_u32_max(x)'; \
-		}; \
-		true; \
-	) > $(PKG_BUILD_DIR)/kernel_config.h
-	$(CP) ./files/Makefile $(PKG_BUILD_DIR)/
-endef
-
 MAKE_OPTS:= \
 	$(KERNEL_MAKEOPTS) \
 	M="$(PKG_BUILD_DIR)"

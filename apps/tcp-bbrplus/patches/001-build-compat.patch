@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] tcp-bbrplus: adapt for out-of-tree build on OpenWrt
+
+Replace kernel_config.h with linux/version.h guards.
+Target only tcp_bbrplus.o in Makefile.
+
+---
+--- a/Makefile
++++ b/Makefile
+@@ -1,50 +1 @@
+-# BBRv3 (bbr3) backport module - build against any prepared kernel tree.
+-#
+-# Usage:
+-#   make                      # against /lib/modules/$(uname -r)/build
+-#   make KDIR=/path/to/linux  # against a specific (prepared) kernel tree
+-#   make KDIR=... ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
+-#
+-# The build first runs gen_kconfig.py, which test-compiles the probes in
+-# kapi_checklist against KDIR and writes kernel_config.h (HAVE_* macros).
+-# tcp_bbr3.c + bbr_compat.h adapt purely on those macros.
+-
+-# DKMS invokes make with KERNELRELEASE=$kernelver, which can differ from
+-# uname -r (e.g. building for a newly installed kernel before reboot).
+-KDIR           ?= $(if $(KERNELRELEASE),/lib/modules/$(KERNELRELEASE)/build,/lib/modules/$(shell uname -r)/build)
+-PWD            := $(shell pwd)
+-
+-# Compiler used for the probes; should match the one kbuild uses.
+-CC_PROBE       ?= $(CROSS_COMPILE)gcc
+-PROBE_J        ?= $(shell nproc 2>/dev/null || echo 4)
+-PROBE_ARCH     := $(if $(ARCH),-a $(ARCH),)
+-
+-obj-m          := tcp_nanqinlang.o tcp_tsunami.o tcp_bbrplus.o tcp_brutal.o tcp_bbr1.o tcp_bbr3.o
+-ccflags-y      := -I$(src)
+-
+-KBUILD_VARS    := $(if $(ARCH),ARCH=$(ARCH),) $(if $(CROSS_COMPILE),CROSS_COMPILE=$(CROSS_COMPILE),)
+-
+-.PHONY: all modules probe clean distclean
+-
+-all: modules
+-
+-kernel_config.h: kapi_checklist gen_kconfig.py
+-	python3 gen_kconfig.py $(KDIR) $@ $(CC_PROBE) kapi_checklist -j $(PROBE_J) $(PROBE_ARCH)
+-
+-probe: kernel_config.h
+-
+-modules: kernel_config.h
+-	$(MAKE) -C $(KDIR) M=$(PWD) $(KBUILD_VARS) modules
+-
+-clean:
+-	$(MAKE) -C $(KDIR) M=$(PWD) clean
+-
+-distclean: clean
+-	rm -f kernel_config.h
+-
+-dkms:
+-	dkms add .
+-	dkms install tcp_bbr_modules/1.0
+-
+-dkms-remove:
+-	dkms remove tcp_bbr_modules/1.0 --all
++obj-m := tcp_bbrplus.o
+--- a/tcp_bbrplus.c
++++ b/tcp_bbrplus.c
+@@ -64,7 +64,18 @@
+ #include <linux/random.h>
+ #include <linux/win_minmax.h>
+ 
+-#include "kernel_config.h"
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
++#define TCP_CONGESTION_OPS_CONG_CONTROL_HAS_4_ARGS 1
++#endif
++
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
++#define TCP_CONGESTION_OPS_HAS_TSO_SEGS 1
++#endif
++
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 2, 0)
++#include <linux/prandom.h>
++#define get_random_u32_below(x) prandom_u32_max(x)
++#endif
+ 
+ /* Scale factor for rate in pkt/uSec unit to avoid truncation in bandwidth
+  * estimation. The rate unit ~= (1500 bytes / 1 usec / 2^24) ~= 715 bps.
