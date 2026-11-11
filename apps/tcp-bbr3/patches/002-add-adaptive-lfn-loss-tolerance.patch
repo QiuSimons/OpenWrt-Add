@@ -63,7 +63,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  #include <net/tcp.h>
  #include <linux/inet_diag.h>
  #include <linux/inet.h>
-@@ -87,6 +91,22 @@
+@@ -87,6 +91,24 @@
  
  #define BBR_SCALE 8	/* scaling factor for fractions in BBR (e.g. gains) */
  #define BBR_UNIT (1 << BBR_SCALE)
@@ -79,6 +79,8 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +#define BBR_LFN_MARGIN_TENTHS	10	/* auto: floor + 1.0% */
 +#define BBR_LFN_AVG_MAX		63	/* 0.2% units: max 12.6% */
 +#define BBR_LFN_EWMA_GAIN	4	/* EWMA time constant, samples/rounds */
++#define BBR_LFN_QUEUE_DIV	20	/* "flat": queue <= 5% of min_rtt */
++#define BBR_LFN_QUEUE_MIN_US	1000	/* ...but 1ms of timer noise is fine */
 +
 +#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 +#define register_net_sysctl_sz(net, path, table, size) register_net_sysctl(net, path, table)
@@ -86,7 +88,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  
  /* BBR has the following modes for deciding how fast to send: */
  enum bbr_mode {
-@@ -123,14 +143,16 @@
+@@ -123,14 +145,16 @@
  		idle_restart:1,	     /* restarting after idle? */
  		probe_rtt_round_done:1,  /* a BBR_PROBE_RTT round at 4 pkts? */
  		init_cwnd:7,         /* initial cwnd */
@@ -105,7 +107,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  	u32	prior_cwnd;	/* prior cwnd upon entering loss recovery */
  	u32	full_bw;	/* recent bw, to estimate if pipe is full */
  
-@@ -145,7 +167,7 @@
+@@ -145,7 +169,7 @@
  		startup_ecn_rounds:2,	/* consecutive hi ECN STARTUP rounds */
  		loss_in_cycle:1,	/* packet loss in this cycle? */
  		ecn_in_cycle:1,		/* ECN in this cycle? */
@@ -114,7 +116,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  	u32	loss_round_delivered; /* scb->tx.delivered ending loss round */
  	u32	undo_bw_lo;	     /* bw_lo before latest losses */
  	u32	undo_inflight_lo;    /* inflight_lo before latest losses */
-@@ -1191,11 +1213,304 @@
+@@ -1191,11 +1215,317 @@
  		bbr_raise_inflight_hi_slope(sk);
  }
  
@@ -204,17 +206,27 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +
 +/* Is the path free of a persistent queue? Use srtt: a per-ACK RTT sample
 + * is too noisy on the wireless and satellite links this targets.
++ *
++ * A 1.2x ratio is too blunt: on a 100ms path it excuses 20ms of standing
++ * queue, so a shallow bottleneck can overflow and have its own drops
++ * learned as path loss. Compare the queueing delay itself against a small
++ * fraction of min_rtt instead.
 + */
 +static bool bbr_lfn_rtt_flat(const struct sock *sk)
 +{
 +	const struct bbr *bbr = bbr_ca(sk);
 +	u32 srtt_us = tcp_sk(sk)->srtt_us >> 3;
++	u32 slack_us;
 +
 +	if (bbr->min_rtt_us == ~0U || bbr->min_rtt_us < BBR_LFN_MIN_PATH_RTT_US)
 +		return false;
 +	if (!srtt_us)
 +		return false;
-+	return (u64)srtt_us * 5 < (u64)bbr->min_rtt_us * 6;
++	if (srtt_us <= bbr->min_rtt_us)
++		return true;
++	slack_us = max_t(u32, bbr->min_rtt_us / BBR_LFN_QUEUE_DIV,
++			 BBR_LFN_QUEUE_MIN_US);
++	return srtt_us - bbr->min_rtt_us <= slack_us;
 +}
 +
 +/* True while the loss samples still reflect our own bandwidth probing. The
@@ -270,11 +282,14 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	if (!thresh)
 +		return false;
 +	/* Probing is exempted only up to the loss rate already measured as
-+	 * uncongested: probe-induced drops must still cut inflight_hi.
++	 * uncongested: probe-induced drops must still cut inflight_hi. Never
++	 * go below the stock threshold though: with an unlearned floor the
++	 * min() would make PROBE_UP more trigger-happy than vanilla BBRv3.
 +	 */
 +	if (bbr_lfn_bw_probing(bbr))
-+		thresh = min_t(u32, thresh,
-+			       bbr->lfn_floor + BBR_LFN_MARGIN_TENTHS);
++		thresh = max_t(u32, BBR_LFN_STOCK_TENTHS,
++			       min_t(u32, thresh,
++				     bbr->lfn_floor + BBR_LFN_MARGIN_TENTHS));
 +	/* Any queued RTT or over-cap sample this round: stock response. */
 +	if (bbr->lfn_round_poison || bbr->lfn_round_congested)
 +		return false;
@@ -420,7 +435,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  				      const struct rate_sample *rs)
  {
  	const struct bbr *bbr = bbr_ca(sk);
-@@ -1206,7 +1521,8 @@
+@@ -1206,7 +1536,8 @@
  	if (rs_lost > 0 && rs_tx_in_flight) {
  		loss_thresh = (u64)rs_tx_in_flight * bbr_param(sk, loss_thresh) >>
  				BBR_SCALE;
@@ -430,7 +445,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  			return true;
  		}
  	}
-@@ -1420,8 +1736,11 @@
+@@ -1420,8 +1751,11 @@
  		bbr_ecn_lower_bounds(sk, &ecn_inflight_lo);
  	}
  
@@ -444,7 +459,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  		bbr_init_lower_bounds(sk, true);
  		bbr_loss_lower_bounds(sk, &bbr->bw_lo, &bbr->inflight_lo);
  	}
-@@ -2097,6 +2416,7 @@
+@@ -2097,6 +2431,7 @@
  	bbr->ecn_in_round  |= (bbr->ecn_eligible && bbr_rs_is_ece(rs));
  	bbr_calculate_bw_sample(sk, rs, &ctx);
  	bbr_update_latest_delivery_signals(sk, rs, &ctx);
@@ -452,7 +467,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  
  	if (bbr_run_fast_path(sk, &update_model, rs, &ctx))
  		goto out;
-@@ -2112,6 +2432,7 @@
+@@ -2112,6 +2447,7 @@
  	bbr_bound_cwnd_for_inflight_model(sk);
  
  out:
@@ -460,7 +475,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  	bbr_advance_latest_delivery_signals(sk, rs, &ctx);
  	bbr->prev_ca_state = inet_csk(sk)->icsk_ca_state;
  	bbr->loss_in_cycle |= bbr_rs_lost(rs) > 0;
-@@ -2135,6 +2456,9 @@
+@@ -2135,6 +2471,9 @@
  	}
  
  	bbr->initialized = 1;
@@ -470,7 +485,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  
  	bbr->init_cwnd = min(0x7FU, tcp_snd_cwnd(tp));
  	bbr->prior_cwnd = bbr_init_prior_cwnd(tp);
-@@ -2467,9 +2791,105 @@
+@@ -2467,9 +2806,105 @@
  	.set_state	= bbr_set_state,
  };
  
@@ -576,7 +591,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  
  	tcp_bbr_cong_ops.flags = TCP_CONG_NON_RESTRICTED;
  #ifdef HAVE_TCP_CONG_WANTS_CE_EVENTS
-@@ -2483,12 +2903,18 @@
+@@ -2483,12 +2918,18 @@
  	if (bbr_ecn_low)
  		tcp_bbr_cong_ops.flags |= TCP_CONG_NEEDS_ECN;
  #endif
