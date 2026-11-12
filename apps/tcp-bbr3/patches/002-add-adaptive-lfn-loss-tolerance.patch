@@ -22,10 +22,13 @@ specifically for OpenWrt default fq_codel (target 5ms, interval 100ms):
   Permit loss tolerance up to 5.0% during slow start only when queue delay
   is strictly <= 2ms (verifying physical unbuffered drops). Immediately exit
   STARTUP if queue exceeds 2ms or loss exceeds 5.0%.
-- Inflight_hi rapid recovery:
-  After transient queue spikes (> 5ms) resolve, restore inflight_hi back
-  to 1.0x BDP on subsequent rounds that verify clean queue (<= 2ms) and
-  loss within learned floor, eliminating multi-minute crawlbacks.
+- Inflight_hi rapid recovery after queue spikes:
+  Tag cuts that occur when round min_qd > 5ms (e.g. Starlink satellite
+  handoffs or transient burst bloat). On subsequent clean rounds (min_qd <= 2ms,
+  rate == 0 or within floor, slope normal), restore inflight_hi (and
+  inflight_lo) to 1.0x BDP and clear the flag. Distinguishes transient
+  queue-induced cuts from shallow buffers and policers, and operates even
+  when floor == 0.
 - Queue delay tracking tailored for fq_codel:
   Reject delayed ACKs and track minimum queuing delay (rtt_us - min_rtt_us)
   across each round. Floor learning is gated at <= 2ms (strictly no queue),
@@ -102,7 +105,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  /* BBR has the following modes for deciding how fast to send: */
  enum bbr_mode {
  	BBR_STARTUP,	/* ramp up sending rate rapidly to fill pipe */
-@@ -178,6 +211,16 @@ struct bbr {
+@@ -178,6 +211,17 @@ struct bbr {
  	u8	unused_4;		/* to preserve alignment */
  	struct tcp_plb_state plb;
  
@@ -115,11 +118,12 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	u16	lfn_p_cruise;		/* steady-state cruise loss rate in 0.1% */
 +	u16	lfn_p_probe;		/* bandwidth probe loss rate in 0.1% */
 +	u8	lfn_cruise_rounds;	/* consecutive clean cruise rounds */
-+	u8	lfn_slope_bad:1;	/* probe loss significantly > cruise loss */
++	u8	lfn_slope_bad:1,	/* probe loss significantly > cruise loss */
++		lfn_cut_by_queue:1;	/* last cut was caused by queue delay > 5ms */
  };
  
  struct bbr_context {
-@@ -1191,11 +1234,339 @@ static void bbr_probe_inflight_hi_upward
+@@ -1191,11 +1235,342 @@ static void bbr_probe_inflight_hi_upward
  		bbr_raise_inflight_hi_slope(sk);
  }
  
@@ -437,14 +441,17 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +		}
 +	}
 +
-+	/* 3. Inflight_hi rapid recovery after transient congestion */
-+	if (bbr->inflight_hi != ~0U && bdp &&
++	/* 3. Inflight_hi rapid recovery after queue-induced cut (e.g. Starlink handoff) */
++	if (bbr->lfn_cut_by_queue &&
++	    bbr->inflight_hi != ~0U && bdp &&
 +	    bbr->inflight_hi < bdp &&
-+	    bbr->lfn_floor > 0 &&
 +	    !bbr->lfn_slope_bad &&
-+	    measured && rate <= bbr->lfn_floor &&
++	    measured && (rate == 0 || rate <= bbr->lfn_floor) &&
 +	    qd != ~0U && qd <= BBR_LFN_LEARN_QDELAY_US) {
 +		bbr->inflight_hi = bdp;
++		if (bbr->inflight_lo != ~0U && bbr->inflight_lo < bdp)
++			bbr->inflight_lo = bdp;
++		bbr->lfn_cut_by_queue = 0;
 +	}
 +
 +reset:
@@ -460,7 +467,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  				      const struct rate_sample *rs)
  {
  	const struct bbr *bbr = bbr_ca(sk);
-@@ -1206,7 +1577,8 @@ static bool bbr_is_inflight_too_high(con
+@@ -1206,7 +1581,8 @@ static bool bbr_is_inflight_too_high(con
  	if (rs_lost > 0 && rs_tx_in_flight) {
  		loss_thresh = (u64)rs_tx_in_flight * bbr_param(sk, loss_thresh) >>
  				BBR_SCALE;
@@ -470,7 +477,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  			return true;
  		}
  	}
-@@ -1420,8 +1792,8 @@ static void bbr_adapt_lower_bounds(struc
+@@ -1420,8 +1796,10 @@ static void bbr_adapt_lower_bounds(struc
  		bbr_ecn_lower_bounds(sk, &ecn_inflight_lo);
  	}
  
@@ -478,10 +485,21 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 -	if (bbr->loss_in_round) {
 +	/* Loss response. LFN skips lower bound cut if this round is exempt. */
 +	if (bbr->loss_in_round && !bbr_lfn_round_exempt(sk, rs)) {
++		bbr->lfn_cut_by_queue = (bbr->lfn_round_min_qd != ~0U &&
++					 bbr->lfn_round_min_qd > BBR_LFN_ALLOW_QDELAY_US);
  		bbr_init_lower_bounds(sk, true);
  		bbr_loss_lower_bounds(sk, &bbr->bw_lo, &bbr->inflight_lo);
  	}
-@@ -2097,6 +2469,7 @@ static void bbr_main(struct sock *sk, co
+@@ -1675,6 +2053,8 @@ static void bbr_handle_inflight_too_high
+ 		bbr->inflight_hi = max_t(u32, bbr_rs_tx_in_flight(rs),
+ 					 (u64)bbr_target_inflight(sk) *
+ 					 (BBR_UNIT - beta) >> BBR_SCALE);
++		bbr->lfn_cut_by_queue = (bbr->lfn_round_min_qd != ~0U &&
++					 bbr->lfn_round_min_qd > BBR_LFN_ALLOW_QDELAY_US);
+ 	}
+ 	if (bbr->mode == BBR_PROBE_BW && bbr->cycle_idx == BBR_BW_PROBE_UP)
+ 		bbr_start_bw_probe_down(sk);
+@@ -2097,6 +2477,7 @@ static void bbr_main(struct sock *sk, co
  	bbr->ecn_in_round  |= (bbr->ecn_eligible && bbr_rs_is_ece(rs));
  	bbr_calculate_bw_sample(sk, rs, &ctx);
  	bbr_update_latest_delivery_signals(sk, rs, &ctx);
@@ -489,7 +507,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  
  	if (bbr_run_fast_path(sk, &update_model, rs, &ctx))
  		goto out;
-@@ -2112,6 +2485,7 @@ static void bbr_main(struct sock *sk, co
+@@ -2112,6 +2493,7 @@ static void bbr_main(struct sock *sk, co
  	bbr_bound_cwnd_for_inflight_model(sk);
  
  out:
@@ -497,7 +515,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  	bbr_advance_latest_delivery_signals(sk, rs, &ctx);
  	bbr->prev_ca_state = inet_csk(sk)->icsk_ca_state;
  	bbr->loss_in_cycle |= bbr_rs_lost(rs) > 0;
-@@ -2135,6 +2509,12 @@ __bpf_kfunc static void bbr_init(struct
+@@ -2135,6 +2517,13 @@ __bpf_kfunc static void bbr_init(struct
  	}
  
  	bbr->initialized = 1;
@@ -506,11 +524,12 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	bbr->lfn_p_probe = 0;
 +	bbr->lfn_cruise_rounds = 0;
 +	bbr->lfn_slope_bad = 0;
++	bbr->lfn_cut_by_queue = 0;
 +	bbr_lfn_round_reset(bbr);
  
  	bbr->init_cwnd = min(0x7FU, tcp_snd_cwnd(tp));
  	bbr->prior_cwnd = bbr_init_prior_cwnd(tp);
-@@ -2467,9 +2847,102 @@ static struct tcp_congestion_ops tcp_bbr
+@@ -2467,9 +2856,102 @@ static struct tcp_congestion_ops tcp_bbr
  	.set_state	= bbr_set_state,
  };
  
@@ -613,7 +632,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  
  	tcp_bbr_cong_ops.flags = TCP_CONG_NON_RESTRICTED;
  #ifdef HAVE_TCP_CONG_WANTS_CE_EVENTS
-@@ -2483,12 +2956,18 @@ static int __init bbr_register(void)
+@@ -2483,12 +2965,18 @@ static int __init bbr_register(void)
  	if (bbr_ecn_low)
  		tcp_bbr_cong_ops.flags |= TCP_CONG_NEEDS_ECN;
  #endif
