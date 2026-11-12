@@ -17,12 +17,12 @@ BBRv3 默认将丢包率 > 2%（源码中为 `inflight * 5 / 256`）判定为 `i
 ### 1. 整轮丢包统计
 主线内核仅提供 `rs->losses`（单次 ACK 新标记的丢包数），若按单个 ACK 计算丢包率，极易受 SACK 聚集和 RACK 突发标记影响。本补丁按轮聚合 `lfn_round_lost` 与 `lfn_round_acked`，以整轮结果结算真实丢包率，消除瞬时采样失真。
 
-### 2. fq_codel 排队时延判据与继承
-OpenWrt 默认 qdisc 为 `fq_codel`（target 5ms，interval 100ms）。本补丁过滤 Delayed ACK，以本轮采样最小排队时延 `min_qd` 判定拥塞：
+### 2. fq_codel 排队时延判据
+OpenWrt 默认 qdisc 为 `fq_codel`（target 5ms，interval 100ms）。本补丁过滤 Delayed ACK，以本轮纯净采样最小排队时延 `min_qd`（未获取到有效样本时为 `~0`）判定拥塞：
+* `min_qd == ~0`：本轮尚未获得有效 RTT 样本，暂停学习与豁免；
 * `min_qd <= 2ms`：确认无 CoDel 队列积压，允许向 `floor` 学习；
 * `2ms < min_qd <= 5ms`：存在轻度排队波动，不学习新 floor，但允许沿用已有容忍度；
-* `min_qd > 5ms`：触及 `fq_codel` 的 target 门限，立刻判定拥塞，撤销容忍并走原生降窗；
-* 引入跨轮排队继承，避免轮首未获得纯净采样时误判回退。
+* `min_qd > 5ms`：触及 `fq_codel` 的 target 门限，立刻判定拥塞，重置巡航置信并走原生降窗。
 
 ### 3. 探路斜率检查与自愈
 为防止把令牌桶限速（Policer）或瓶颈丢包误认作背景丢包，模块对比带宽探测丢包率（`p_probe`）与稳态巡航丢包率（`p_cruise`）。若 `p_probe > p_cruise + 1.0%`，判定丢包随发包量升高而加剧（限速/拥塞特征），标记 `slope_bad` 并限制探路；平稳巡航 4 轮后自动解除标记，避免偶发网络抖动导致永久死锁。
@@ -41,7 +41,7 @@ net.ipv4.tcp_bbr_lfn_min_rtt_fresh_ms  min_rtt 有效年龄(ms)，0=不校验（
 ```
 
 * **自动模式（`pct=1`）**：
-  长肥路径阈值等于 `min(5%, max(2%, floor + 1%))`；跨运营商等于 `min(3%, max(2%, floor + 0.5%))`。无丢包链路始终停在原生 2%。
+  在稳态巡航学出底噪前（或底噪 <= 2.0%、连续平稳巡航 < 4 轮时）严格回退原生 2% 整数比较式；确认稳定背景丢包后，长肥路径阈值等于 `min(5%, floor + 1.0%)`，跨运营商等于 `min(3%, floor + 0.5%)`。无背景丢包链路始终 100% 运行原生逻辑。
 * 模块参数 `lfn_loss_thresh_pct` / `lfn_min_rtt_fresh_ms` 作为各 netns 的初始值。
 
 ## 已知边界
