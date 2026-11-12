@@ -8,7 +8,7 @@ Relocate bbr_ca definition to tcp_bbr3.c to allow struct bbr access.
 ---
 --- a/Makefile
 +++ b/Makefile
-@@ -1,50 +1 @@
+@@ -1,50 +1,10 @@
 -# BBRv3 (bbr3) backport module - build against any prepared kernel tree.
 -#
 -# Usage:
@@ -19,12 +19,15 @@ Relocate bbr_ca definition to tcp_bbr3.c to allow struct bbr access.
 -# The build first runs gen_kconfig.py, which test-compiles the probes in
 -# kapi_checklist against KDIR and writes kernel_config.h (HAVE_* macros).
 -# tcp_bbr3.c + bbr_compat.h adapt purely on those macros.
--
++obj-m := tcp_bbr3.o
+
 -# DKMS invokes make with KERNELRELEASE=$kernelver, which can differ from
 -# uname -r (e.g. building for a newly installed kernel before reboot).
 -KDIR           ?= $(if $(KERNELRELEASE),/lib/modules/$(KERNELRELEASE)/build,/lib/modules/$(shell uname -r)/build)
 -PWD            := $(shell pwd)
--
++KDIR ?= /lib/modules/$(shell uname -r)/build
++PWD  := $(shell pwd)
+
 -# Compiler used for the probes; should match the one kbuild uses.
 -CC_PROBE       ?= $(CROSS_COMPILE)gcc
 -PROBE_J        ?= $(shell nproc 2>/dev/null || echo 4)
@@ -46,9 +49,11 @@ Relocate bbr_ca definition to tcp_bbr3.c to allow struct bbr access.
 -
 -modules: kernel_config.h
 -	$(MAKE) -C $(KDIR) M=$(PWD) $(KBUILD_VARS) modules
--
--clean:
--	$(MAKE) -C $(KDIR) M=$(PWD) clean
++default:
++	$(MAKE) -C $(KDIR) M=$(PWD) modules
+
+ clean:
+ 	$(MAKE) -C $(KDIR) M=$(PWD) clean
 -
 -distclean: clean
 -	rm -f kernel_config.h
@@ -59,7 +64,6 @@ Relocate bbr_ca definition to tcp_bbr3.c to allow struct bbr access.
 -
 -dkms-remove:
 -	dkms remove tcp_bbr_modules/1.0 --all
-+obj-m := tcp_bbr3.o
 --- a/bbr_compat.h
 +++ b/bbr_compat.h
 @@ -19,8 +19,40 @@
