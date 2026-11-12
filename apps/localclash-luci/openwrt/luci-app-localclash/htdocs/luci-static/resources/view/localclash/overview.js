@@ -3,7 +3,7 @@
 'require rpc';
 'require ui';
 'require localclash.style as localclashStyle';
-'require fs';
+'require localclash.task-logs as taskLogs';
 'require localclash.dashboard as dashboardAccess';
 'require localclash.takeover-issue-report as takeoverIssueReport';
 
@@ -32,12 +32,6 @@ var callBootstrapDefault = rpc.declare({
 	object: 'localclash',
 	method: 'bootstrap_default',
 	params: [ 'uris', 'core', 'template' ],
-	expect: { '': {} }
-});
-
-var callBootstrapLogs = rpc.declare({
-	object: 'localclash',
-	method: 'bootstrap_logs',
 	expect: { '': {} }
 });
 
@@ -130,13 +124,13 @@ var callLuciUpdateCheck = rpc.declare({
 var callMcpHelp = rpc.declare({
 	object: 'localclash',
 	method: 'mcp_help',
+	reject: true,
 	expect: { '': {} }
 });
 
 var lastOverviewStatusData = null;
 var oneClickUpdatePreferencesData = null;
 var dashboardURL = null;
-var DASHBOARD_CONFIG_PATH = '/root/localclash/.runtime/mihomo/config.yaml';
 
 function statusText(value) {
 	if (value === null || value === undefined || value === '')
@@ -173,21 +167,6 @@ function setText(id, text) {
 
 	if (node)
 		node.textContent = statusText(text);
-}
-
-function deferAfterPaint(fn, delay) {
-	var run = function() {
-		window.setTimeout(fn, delay || 0);
-	};
-
-	if (window.requestAnimationFrame) {
-		window.requestAnimationFrame(function() {
-			window.requestAnimationFrame(run);
-		});
-	}
-	else {
-		window.setTimeout(run, delay || 0);
-	}
 }
 
 function section(title, body, extraClass) {
@@ -247,13 +226,6 @@ function showResult(title, result, options) {
 
 function showError(err) {
 	ui.addNotification(null, E('p', {}, [ err.message || String(err) ]), 'danger');
-}
-
-function formatLogLines(lines) {
-	if (!lines || !lines.length)
-		return _('等待任务输出…');
-
-	return lines.join('\n');
 }
 
 function formatText(text) {
@@ -397,22 +369,17 @@ function trackTask(title, startPromise, options) {
 	var startedAt = options.startedAt ? options.startedAt * 1000 : Date.now();
 	var modal = showTaskModal(title, options.cancellable !== false, options);
 	var taskId = options.task && options.task.task_id;
-	var timer;
+	var logs;
 
-	function updateLogs() {
-		return callBootstrapLogs().then(function(result) {
-			var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
-			var lines = (result && result.logs) || [];
-			modal.statusLine.textContent = options.resume ? formatText(_('正在恢复任务进度，已等待 %s 秒。'), elapsed) : formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
-			modal.logOutput.textContent = formatLogLines(lines);
-			modal.logOutput.scrollTop = modal.logOutput.scrollHeight;
-		}).catch(function(err) {
-			if (transientTaskRpcError(err)) {
-				modal.statusLine.textContent = _('暂时无法连接路由器或会话已过期；请等待连接恢复，或重新登录查看后台任务。');
-				return;
-			}
-			modal.statusLine.textContent = formatText(_('无法读取任务输出：%s'), err.message || String(err));
-		});
+	function showProgress() {
+		var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+		modal.statusLine.textContent = options.resume ? formatText(_('正在恢复任务进度，已等待 %s 秒。'), elapsed) : formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
+	}
+
+	function showLogError(err) {
+		modal.statusLine.textContent = transientTaskRpcError(err)
+			? _('暂时无法连接路由器或会话已过期；请等待连接恢复，或重新登录查看后台任务。')
+			: formatText(_('无法读取任务输出：%s'), err.message || String(err));
 	}
 
 	function waitForTaskCompletion() {
@@ -441,18 +408,14 @@ function trackTask(title, startPromise, options) {
 			taskId = result.task_id;
 		if (result && result.cancellable === false)
 			modal.cancelButton.style.display = 'none';
-		var completion = (result && (result.started || result.running)) ? waitForTaskCompletion() : Promise.resolve(result);
-
-		timer = window.setInterval(updateLogs, 1000);
-		return updateLogs().then(function() {
-			return completion;
-		});
+		logs = taskLogs.monitor(modal.logOutput, showProgress, showLogError);
+		if (result && (result.started || result.running)) {
+			logs.start();
+			return waitForTaskCompletion();
+		}
+		return result;
 	}).then(function(finalResult) {
-		window.clearInterval(timer);
-		return updateLogs().then(function() {
-			return finalResult;
-		});
-	}).then(function(finalResult) {
+		var finalLogs = logs.finish();
 		if (finalResult && finalResult.ok === false)
 			modal.statusLine.textContent = formatText(_('任务失败：%s'), finalResult.message || finalResult.code || _('未知错误'));
 		else {
@@ -461,16 +424,16 @@ function trackTask(title, startPromise, options) {
 		}
 		modal.cancelButton.disabled = true;
 		modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
+		return finalLogs;
 	}).catch(function(err) {
-		window.clearInterval(timer);
-		if (!timer)
+		var finalLogs = logs && logs.finish();
+		if (!logs)
 			modal.logOutput.textContent = _('任务未启动。');
 
-		return (timer ? updateLogs() : Promise.resolve()).then(function() {
-			modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
-			modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
-			modal.cancelButton.disabled = true;
-		});
+		modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
+		modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
+		modal.cancelButton.disabled = true;
+		return finalLogs;
 	});
 }
 
@@ -608,12 +571,6 @@ function linkButton(label, href, extraClass) {
 			window.location.href = href;
 		}
 	}, [ label ]);
-}
-
-function loadDashboardURL() {
-	return fs.read(DASHBOARD_CONFIG_PATH).then(function(config) {
-		return dashboardAccess.buildURL(config, window.location);
-	});
 }
 
 function dashboardLink(extraClass) {
@@ -1144,7 +1101,7 @@ function statePanelActions(state) {
 
 	if (state.id === 'status_failed')
 		return [
-			commandButton(_('查看日志'), callBootstrapLogs, 'cbi-button-apply', { keepOpen: true }),
+			commandButton(_('查看日志'), taskLogs.read, 'cbi-button-apply', { keepOpen: true }),
 			linkButton(_('进入进阶'), L.url('admin/services/localclash/advanced'))
 		];
 
@@ -1186,7 +1143,7 @@ function primaryActions(state) {
 		return [
 			bootstrapSetupPanel(false),
 			actionRow([
-				commandButton(_('查看日志'), callBootstrapLogs, null, { keepOpen: true })
+				commandButton(_('查看日志'), taskLogs.read, null, { keepOpen: true })
 			])
 		];
 	}
@@ -1662,10 +1619,7 @@ function takeoverIssueReportBody() {
 }
 
 function mcpGuidanceBody(help) {
-	if (help && help.loading === true)
-		return E('p', { 'class': 'localclash-muted' }, [ _('正在加载 MCP 接入指令…') ]);
-
-	var text = (help && help.text) || '';
+	var text = help.text;
 	var rows = Math.max(10, text.split(/\r?\n/).length + 2);
 
 	return E('div', {}, [
@@ -1688,16 +1642,34 @@ function mcpGuidanceBody(help) {
 	]);
 }
 
-function supportAndDiagnostics(help) {
+function supportAndDiagnostics() {
+	var helpRequest;
+	var bodyId = 'localclash-overview-mcp-body';
+
 	return section(_('帮助与诊断'), E('div', { 'class': 'localclash-support-list' }, [
-		E('details', { 'class': 'localclash-support-item' }, [
+		E('details', {
+			'class': 'localclash-support-item',
+			'toggle': function(ev) {
+				if (!ev.currentTarget.open || helpRequest)
+					return;
+
+				replaceContent(bodyId, E('p', { 'class': 'localclash-muted' }, [ _('正在加载 MCP 接入指令…') ]));
+				helpRequest = callMcpHelp().then(function(help) {
+					if (!help || help.ok !== true || typeof help.text !== 'string')
+						throw new Error(help && (help.message || help.code) || _('未知错误'));
+					replaceContent(bodyId, mcpGuidanceBody(help));
+				}).catch(function(err) {
+					replaceContent(bodyId, E('p', {}, [ formatText(_('读取 MCP 接入指令失败：%s'), err.message || String(err)) ]));
+					helpRequest = null;
+				});
+				return helpRequest;
+			}
+		}, [
 			E('summary', {}, [
 				E('span', {}, [ _('Agent Skill 与 MCP 接入') ]),
 				E('small', {}, [ _('复制接入指令') ])
 			]),
-			E('div', { 'id': 'localclash-overview-mcp-body', 'class': 'localclash-support-body' }, [
-				mcpGuidanceBody(help)
-			])
+			E('div', { 'id': bodyId, 'class': 'localclash-support-body' })
 		]),
 		E('details', { 'class': 'localclash-support-item' }, [
 			E('summary', {}, [
@@ -1709,19 +1681,11 @@ function supportAndDiagnostics(help) {
 	]), 'localclash-support');
 }
 
-function refreshMcpGuidance() {
-	return callMcpHelp().catch(function(err) {
-		return { ok: false, text: '', message: err.message || String(err) };
-	}).then(function(help) {
-		replaceContent('localclash-overview-mcp-body', mcpGuidanceBody(help));
-	});
-}
-
 return view.extend({
 	load: function() {
 		return Promise.all([
 			callOneClickUpdatePreferences().catch(function() { return null; }),
-			loadDashboardURL().catch(function() { return null; })
+			dashboardAccess.loadURL(window.location).catch(function() { return null; })
 		]);
 	},
 
@@ -1734,8 +1698,7 @@ return view.extend({
 
 		oneClickUpdatePreferencesData = results[0] || null;
 		dashboardURL = results[1];
-		deferAfterPaint(refreshOverviewStatus, 600);
-		deferAfterPaint(refreshMcpGuidance, 1200);
+		window.setTimeout(refreshOverviewStatus, 0);
 
 		return E('main', {
 			'class': 'cbi-map localclash-view localclash-overview',
@@ -1755,7 +1718,7 @@ return view.extend({
 				summaryLoadingTable()
 			]), 'localclash-summary'),
 			oneClickUpdateSection(),
-			supportAndDiagnostics({ loading: true })
+			supportAndDiagnostics()
 		]);
 	}
 });

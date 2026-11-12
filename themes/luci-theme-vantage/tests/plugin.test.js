@@ -65,12 +65,13 @@ function spawnUcode(cases, source, entries, board) {
 		const src = source == null ? fs.readFileSync(PLUGIN, 'utf8') : source;
 		fs.writeFileSync(file, JSON.stringify(cases));
 		if (board != null) fs.writeFileSync(boardFile, typeof board === 'string' ? board : JSON.stringify(board));
-		fs.writeFileSync(plugin, src.replace(/^const NET = .*$/m, () => 'const NET = ' + JSON.stringify(fakeNet(dir, entries == null ? 3 : entries)) + ';')
+		const net = fakeNet(dir, entries == null ? 3 : entries);
+		fs.writeFileSync(plugin, src.replace(/^const NET = .*$/m, () => 'const NET = ' + JSON.stringify(net) + ';')
 			.replace(/^const BOARD = .*$/m, () => 'const BOARD = ' + JSON.stringify(boardFile) + ';'));
 		const args = [ '-L', path.join(__dirname, 'ucode/stubs') ];
 		const lib = path.join(path.dirname(UCODE), '../lib/ucode');
 		if (fs.existsSync(lib)) args.push('-L', lib);
-		args.push('-D', 'PLUGIN=' + plugin, '-D', 'CASES=' + file, path.join(__dirname, 'ucode/harness.uc'));
+		args.push('-D', 'PLUGIN=' + plugin, '-D', 'CASES=' + file, '-D', 'NET=' + net, path.join(__dirname, 'ucode/harness.uc'));
 		return spawnSync(UCODE, args, { encoding: 'utf8' });
 	} finally {
 		for (const f of [ file, plugin, boardFile ].concat(BRIDGES.map(b => path.join(dir, 'net', b, 'brforward')))) if (fs.existsSync(f)) fs.unlinkSync(f);
@@ -78,9 +79,36 @@ function spawnUcode(cases, source, entries, board) {
 	}
 }
 
-/* run cases through the real plugin: [ { status, reply, sections } ] */
+/* the bridges' sysfs brforward as the kernel would hold it beside an
+   rtnl-shaped dump: a 16-byte record (MAC, port number, is_local, ageing
+   in 1/100 s, the port number's high byte) for each entry a bridge
+   learned or owns, the switches' copies (self) left out. opts.age: every
+   record's ageing instead of the dump's; opts.be: written big-endian, as
+   on a big-endian router. { bridge: base64 } for the harness */
+const PORT_NO = { lan1: 1, lan2: 2, 'phy2g-ap0': 3, eth0: 4 };
+function brforward(list, opts) {
+	const o = opts || {}, out = {};
+	for (const b of BRIDGES) {
+		const recs = (Array.isArray(list) ? list : []).filter(n => n && typeof n === 'object' && !Array.isArray(n) && n.master === b &&
+			typeof n.lladdr === 'string' && /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/i.test(n.lladdr) && !(n.flags & 0x02));
+		const buf = Buffer.alloc(16 * recs.length);
+		recs.forEach((n, i) => {
+			n.lladdr.split(':').forEach((x, j) => buf[16 * i + j] = parseInt(x, 16));
+			buf[16 * i + 6] = PORT_NO[n.dev] || 9;
+			buf[16 * i + 7] = (n.state & 0x80) ? 1 : 0;
+			const u = n.cacheinfo && n.cacheinfo.updated;
+			const age = o.age != null ? o.age : (Number.isInteger(u) && u >= 0 ? u : 0);
+			if (o.be) buf.writeUInt32BE(age, 16 * i + 8); else buf.writeUInt32LE(age, 16 * i + 8);
+		});
+		out[b] = buf.toString('base64');
+	}
+	return out;
+}
+
+/* run cases through the real plugin: [ { status, reply, sections } ];
+   a wired case's bridges hold what its dump has */
 function runUcode(cases) {
-	const r = spawnUcode(cases);
+	const r = spawnUcode(cases.map(c => c.method === 'wired' && (Array.isArray(c.fdb) || c.fdb === null) && !c.brforward ? Object.assign({ brforward: brforward(c.fdb) }, c) : c));
 	assert.equal(r.status, 0, r.stderr);
 	return JSON.parse(r.stdout);
 }
@@ -494,6 +522,57 @@ test('ucode plugin: crowded bridges are counted, not dumped', { skip: NO_UCODE }
 	const dumped = spawnUcode([ { method: 'wired', fdb: 'no dump' } ], null, 0);
 	assert.notEqual(dumped.status, 0, 'the double does catch a dump');
 	assert.match(dumped.stderr, /rtnl stub: a dump where none may happen/);
+});
+
+/* #101: on a router with a switch chip the dump also has its driver read
+   the chip's own table (29 ms a dump on an MT7981): taken again only when
+   brforward shows a host arrive, leave or change port, or after 30 s */
+test('ucode plugin: wired dumps again only when the hosts move, or after FDB_DUMP_S', { skip: NO_UCODE }, () => {
+	const src = fs.readFileSync(PLUGIN, 'utf8');
+	assert.match(src, /^const FDB_DUMP_S = 30;/m);
+	const run = (cases, source) => { const r = spawnUcode(cases, source); assert.equal(r.status, 0, r.stderr); return JSON.parse(r.stdout).map(x => x.reply.hosts); };
+	const seen = hosts => hosts.map(h => h.mac + ' ' + h.port + ' ' + h.vlan + ' ' + h.seen);
+	const first = shim.wired(FDB);
+	const added = FDB.concat([ fdb('00:00:5e:00:53:40', 'lan2') ]);
+	const moved = FDB.map(n => n && n.lladdr === '00:00:5e:00:53:01' ? Object.assign({}, n, { dev: 'lan2' }) : n);
+	const gone = FDB.filter(n => !(n && n.lladdr === '00:00:5e:00:53:02'));
+	const [ a, b, c, d, e ] = run([
+		{ method: 'wired', fdb: FDB, brforward: brforward(FDB) },
+		/* the same hosts: the dump's, heard 2.5 s ago; 'no dump' stops the run on a dump */
+		{ method: 'wired', fdb: 'no dump', brforward: brforward(FDB, { age: 250 }) },
+		{ method: 'wired', fdb: added, brforward: brforward(added) },
+		{ method: 'wired', fdb: moved, brforward: brforward(moved) },
+		{ method: 'wired', fdb: gone, brforward: brforward(gone) }
+	]);
+	assert.deepEqual(a, first);
+	assert.deepEqual(seen(b), [ '00:00:5e:00:53:01 lan1 null 2', '00:00:5e:00:53:02 lan2 10 2', '00:00:5e:00:53:03 lan2 null null',
+		'00:00:5e:00:53:04 phy2g-ap0 null null', '00:00:5e:00:53:05 eth0 null null' ], 'static and unknown times stay unknown');
+	assert.deepEqual(c, shim.wired(added), 'a host arrived: dumped');
+	assert.deepEqual(d, shim.wired(moved), 'a host changed port: dumped');
+	assert.deepEqual(e, shim.wired(gone), 'a host left: dumped');
+	/* after FDB_DUMP_S (here 0): dumped though nothing moved, a VLAN changed */
+	const vlan = FDB.map(n => n && n.lladdr === '00:00:5e:00:53:02' ? Object.assign({}, n, { vlan: 20 }) : n);
+	const [ , late ] = run([ { method: 'wired', fdb: FDB, brforward: brforward(FDB) }, { method: 'wired', fdb: vlan, brforward: brforward(FDB) } ],
+		src.replace(/^const FDB_DUMP_S = 30;/m, 'const FDB_DUMP_S = 0;'));
+	assert.deepEqual(late, shim.wired(vlan));
+	/* a big-endian router: the byte order is learned from the dump */
+	const [ , be ] = run([ { method: 'wired', fdb: FDB, brforward: brforward(FDB, { be: true }) }, { method: 'wired', fdb: 'no dump', brforward: brforward(FDB, { be: true, age: 250 }) } ]);
+	assert.deepEqual(seen(be).slice(0, 2), [ '00:00:5e:00:53:01 lan1 null 2', '00:00:5e:00:53:02 lan2 10 2' ]);
+	/* a MAC on two ports of one bridge: each row's time is the dump's own,
+	   so it is dumped every call (one brforward key cannot tell them apart) */
+	const twice = FDB.concat([ fdb('00:00:5e:00:53:01', 'lan2', { vlan: 10, cacheinfo: { updated: 5000 } }) ]);
+	const twiceVlan = twice.map(n => n && n.dev === 'lan2' && n.lladdr === '00:00:5e:00:53:01' ? Object.assign({}, n, { vlan: 20 }) : n);
+	const [ , both ] = run([ { method: 'wired', fdb: twice, brforward: brforward(twice) }, { method: 'wired', fdb: twiceVlan, brforward: brforward(twice) } ]);
+	assert.deepEqual(both, shim.wired(twiceVlan), 'dumped again');
+	/* over FDB_PARSE records the tables are only counted: dumped each call */
+	const big = Array.from({ length: 513 }, (_, i) => fdb('02:00:5e:01:' + (i >> 8).toString(16).padStart(2, '0') + ':' + (i & 255).toString(16).padStart(2, '0'), 'lan1'));
+	const bigVlan = big.map((n, i) => i === 0 ? Object.assign({}, n, { vlan: 30 }) : n);
+	const [ , many ] = run([ { method: 'wired', fdb: big, brforward: brforward(big) }, { method: 'wired', fdb: bigVlan, brforward: brforward(big) } ]);
+	assert.deepEqual(many, shim.wired(bigVlan), 'dumped again');
+	assert.match(src, /^const FDB_PARSE = 512;/m);
+	/* a failed dump is not kept */
+	const [ , retry ] = run([ { method: 'wired', fdb: null, brforward: brforward(FDB) }, { method: 'wired', fdb: FDB, brforward: brforward(FDB) } ]);
+	assert.deepEqual(retry, first);
 });
 
 /* a swconfig switch as OpenWrt's board.json describes it: LAN 1-4 on

@@ -421,9 +421,23 @@ text around it so it looks the same size.
   samples them again. The page's own load is not a reading (#101): the
   2 s lane is registered first, so the poll loop does not run the full
   poll again right after the page fetched it, and two CPU samples under
-  a second apart give none. `iwinfo info` is asked once a radio (its
+  a second apart give none. The first reading's second sample is asked
+  1.1 s after the first, not at the lane's next tick; until then the
+  CPU tile shows this browser's last reading of the router (local
+  storage, every tab, saved at most every 10 s) when under ten minutes
+  old, else 0 %, once the first sample is in; a dash only while the
+  router has given none. `iwinfo info` is asked once a radio (its
   first interface: channel, power, noise); another network's BSSID and
   SSID come from hostapd's `get_status`, which the poll asks anyway.
+  `iwinfo info` (15-22 ms an interface on the NWA50BE) is asked again
+  after 30 s, or at the next poll when the interface's state moves (its
+  radio up, down, pending or reconfigured; its channel, frequency, BSSID
+  or SSID in hostapd's status); the noise floor comes every poll from
+  `iwinfo survey` (1.5-2 ms a radio), its entry for the radio's channel,
+  read as a signed byte (ath12k sends 146 for -110 dBm, 0 for none),
+  falling back to `iwinfo info`'s. The
+  host hints (DHCP leases, ARP) every 30 s, and on each of the three
+  polls after a station or wired host first appears.
 - **Low-power router** (#101), under the theme's Appearance with the
   dashboard, off by default: the live numbers as always (the 2 s lane and
   the 5 s poll); Wi-Fi state, the radios' `iwinfo`, client capabilities,
@@ -444,10 +458,15 @@ text around it so it looks the same size.
   changes size. Idle animations (the status circle's ring, the Live beat,
   the flow on busy wires)
   use transform and opacity only, so the compositor runs them; with
-  reduced motion they stop and busy wires show a static dotted line.
+  reduced motion they stop and busy wires show a static dotted line. The
+  ring, the Live beat and the backdrop move on one clock of the
+  dashboard's, 20 frames a second (the backdrop's own rate, up to 30,
+  while it draws), and the theme's refresh dot on its own 15 a second
+  (the dashboard's frames while it runs): left to the compositor, a
+  five-second pulse would have the browser draw sixty frames a second.
 - ACL: three groups for the app, and the theme's own, below. `luci-app-vantage` (read): `system info/board`,
   `network.interface dump`, `network.device status`, `iwinfo
-  info/assoclist`, `hostapd.* get_status/get_clients`, `luci-rpc
+  info/assoclist/survey`, `hostapd.* get_status/get_clients`, `luci-rpc
   getHostHints`, `luci.vantage wireless/thermal/wired/routes`, `umdns hosts`, `file read` of
   `/proc/stat`, `uci get` for `vantage`, and LuCI's own `luci
   getSwconfigPortState` (the link state of a swconfig switch's ports: LuCI
@@ -484,8 +503,18 @@ text around it so it looks the same size.
   bridges' entries through `/sys/class/net/<bridge>/brforward`, reading
   no more than 4,096 records in all, and dumps nothing (`crowded: true`)
   when they hold that many between them: a flood of made-up addresses
-  must not make rpcd build the whole table. The bridge forgets a host after about five
-  minutes without traffic.
+  must not make rpcd build the whole table. The dump also has a switch
+  driver read its chip's own table, which the plugin leaves out (29 ms a
+  dump on a MediaTek MT7981 router, #101), so it is taken again only
+  when brforward, read every call (MAC, port, time since heard), shows
+  a host arrive, leave or change port, or after 30 s; in between the
+  last dump's hosts with brforward's times. It dumps every call, as
+  before, when the bridges hold more than 512 entries between them (they
+  are then only counted, so a host making up addresses cannot make every
+  call parse thousands) or one MAC sits on two ports of a bridge (each
+  row's time since heard is the dump's own). brforward's byte order is
+  the host's, learned from the first dump. The bridge forgets a host
+  after about five minutes without traffic.
   `routes` returns the default route the kernel takes to the internet,
   for IPv4 and IPv6 (family, device and metric; no gateways): one
   read-only lookup a family (RTM_GETROUTE with RTM_F_FIB_MATCH, as `ip

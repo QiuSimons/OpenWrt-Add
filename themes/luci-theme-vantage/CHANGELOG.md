@@ -6,6 +6,35 @@ Each release ships both packages, `luci-theme-vantage` and
 <https://github.com/anothaDev/luci-theme-vantage/releases> and in the
 [signed repositories](https://anothadev.github.io/luci-theme-vantage/).
 
+## 1.0.19 - 2026-11-11
+
+- **Dashboard: less router work again** (#101,
+  [@Groupguanfang](https://github.com/Groupguanfang)). Radio details
+  (16-22 ms a radio on an access point) are asked every 30 seconds, or
+  at once when a radio's channel or state changes; the noise floor still
+  comes every poll, from the radio's channel survey (1.5-2 ms); device
+  names from the DHCP leases every 30 seconds, and right after a device
+  appears. On a 4-core access point a minute of polling went from about
+  850 ms of CPU to 490 ms. The dashboard's read permission
+  (`luci-app-vantage`) now also grants `iwinfo survey` (read-only).
+- **Dashboard: wired devices on routers with a switch chip** (#101). The
+  full read of the bridges' device table also has the switch driver read
+  its chip's own table (29 ms on a MediaTek MT7981); it now runs only
+  when a device joins, leaves or changes port, or every 30 seconds, and
+  most refreshes read the kernel's own copy (0.1 ms).
+- **Dashboard: the CPU card no longer says "Measuring"** (#101). Until
+  its first reading, about a second after the page opens, it shows this
+  browser's last reading of the router (under ten minutes old) or 0%.
+- **Dashboard: Wi-Fi clients on a router keep their IPv4 address**
+  (#110, [@MohdMusab](https://github.com/MohdMusab)). They were filtered
+  by the internet line's subnet, so they showed only an IPv6 address and
+  reverse DNS and mDNS could not name them.
+- **Lighter motion.** The pulses (the status circle's ring, the Live
+  beat, the top bar's refresh dot on every refreshing page) and the
+  network path's backdrop move 15-20 times a second instead of 60, and
+  look the same: the browser draws far fewer frames for them.
+- **Appearance: options of equal width**; "Grid packets" is now "Grid".
+
 ## 1.0.18 - 2026-11-10
 
 - **Dashboard: much less work for the router** (#101,

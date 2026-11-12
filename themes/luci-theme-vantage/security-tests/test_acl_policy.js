@@ -90,7 +90,7 @@ const READ_UBUS = {
 	/* LuCI's own: swconfig dev <switch> show, the switch name quoted */
 	'luci': [ 'getSwconfigPortState' ],
 	'luci.vantage': [ 'routes', 'thermal', 'wired', 'wireless' ],
-	'iwinfo': [ 'assoclist', 'info' ],
+	'iwinfo': [ 'assoclist', 'info', 'survey' ],
 	'hostapd.*': [ 'get_clients', 'get_status' ],
 	'umdns': [ 'hosts' ],
 	'uci': [ 'get' ]

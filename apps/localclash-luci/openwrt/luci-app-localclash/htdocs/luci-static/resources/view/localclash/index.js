@@ -3,7 +3,7 @@
 'require rpc';
 'require ui';
 'require localclash.style as localclashStyle';
-'require fs';
+'require localclash.task-logs as taskLogs';
 'require localclash.dashboard as dashboardAccess';
 
 var callStatus = rpc.declare({
@@ -13,16 +13,9 @@ var callStatus = rpc.declare({
 });
 
 var dashboardURL = null;
-var DASHBOARD_CONFIG_PATH = '/root/localclash/.runtime/mihomo/config.yaml';
 var callBootstrapCoreAsync = rpc.declare({
 	object: 'localclash',
 	method: 'bootstrap_core_async',
-	expect: { '': {} }
-});
-
-var callBootstrapLogs = rpc.declare({
-	object: 'localclash',
-	method: 'bootstrap_logs',
 	expect: { '': {} }
 });
 
@@ -132,6 +125,7 @@ var callLuciUpdate = rpc.declare({
 var callLuciUpdateCheck = rpc.declare({
 	object: 'localclash',
 	method: 'luci_update_check',
+	nobatch: true,
 	expect: { '': {} }
 });
 
@@ -201,21 +195,6 @@ function defaultPatchStatusText(baseAssets) {
 	if (baseAssets.default_patch_count)
 		return formatText(_('缺失（清单 %s 个）'), baseAssets.default_patch_count || 0);
 	return _('缺失');
-}
-
-function deferAfterPaint(fn, delay) {
-	var run = function() {
-		window.setTimeout(fn, delay || 0);
-	};
-
-	if (window.requestAnimationFrame) {
-		window.requestAnimationFrame(function() {
-			window.requestAnimationFrame(run);
-		});
-	}
-	else {
-		window.setTimeout(run, delay || 0);
-	}
 }
 
 function takeoverFailureText(failure) {
@@ -367,14 +346,14 @@ function takeoverDetails(takeover) {
 	];
 }
 
-function statusRow(item, value) {
+function statusRow(item, value, id) {
 	return E('tr', { 'class': 'tr cbi-rowstyle-1' }, [
 		E('td', { 'class': 'td', 'data-title': _('项目') }, [ item ]),
-		E('td', { 'class': 'td', 'data-title': _('目前状态') }, [ statusText(value) ])
+		E('td', { 'id': id, 'class': 'td', 'data-title': _('目前状态') }, [ statusText(value) ])
 	]);
 }
 
-function advancedStatusTable(data, takeover, updateCheck) {
+function advancedStatusTable(data, takeover) {
 	var core = data.core || {};
 	var baseAssets = data.base_assets || {};
 	var runtimeProfile = data.runtime_profile || {};
@@ -392,7 +371,7 @@ function advancedStatusTable(data, takeover, updateCheck) {
 			statusRow(_('localClash 核心'), statusWithDetails(core.installed ? _('已安装') : _('缺失'), [
 				core.path
 			])),
-			statusRow(_('LuCI 界面'), luciPackageSummary(data, updateCheck)),
+			statusRow(_('LuCI 界面'), luciPackageSummary(data), 'localclash-advanced-luci-version'),
 			statusRow(_('基础文件'), statusWithDetails(baseAssets.installed ? _('已安装') : _('缺失'), [
 				baseAssets.path,
 				baseAssets.missing ? 'missing=' + baseAssets.missing : null
@@ -510,10 +489,16 @@ function refreshStatus() {
 		var data = results[0] || {};
 		var takeover = results[1] || {};
 
+		replaceContent('localclash-advanced-status-body', data.ok === false ? advancedStatusErrorTable(statusFailureMessage(data)) : advancedStatusTable(data, takeover));
+		if (data.ok === false)
+			return;
+
 		return callLuciUpdateCheck().catch(function(err) {
 			return { ok: false, message: err.message || String(err) };
 		}).then(function(updateCheck) {
-			replaceContent('localclash-advanced-status-body', data.ok === false ? advancedStatusErrorTable(statusFailureMessage(data)) : advancedStatusTable(data, takeover, updateCheck || {}));
+			var version = document.getElementById('localclash-advanced-luci-version');
+			if (version)
+				version.textContent = luciPackageSummary(data, updateCheck);
 		});
 	});
 }
@@ -569,13 +554,6 @@ function showResult(title, result, options) {
 
 function showError(err) {
 	ui.addNotification(null, E('p', {}, [ err.message || String(err) ]), 'danger');
-}
-
-function formatLogLines(lines) {
-	if (!lines || !lines.length)
-		return _('等待任务输出…');
-
-	return lines.join('\n');
 }
 
 function formatText(text) {
@@ -747,22 +725,17 @@ function trackTask(title, startPromise, options) {
 	var startedAt = options.startedAt ? options.startedAt * 1000 : Date.now();
 	var modal = showTaskModal(title, options.cancellable !== false, options);
 	var taskId = options.task && options.task.task_id;
-	var timer;
+	var logs;
 
-	function updateLogs() {
-		return callBootstrapLogs().then(function(result) {
-			var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
-			var lines = (result && result.logs) || [];
-			modal.statusLine.textContent = options.resume ? formatText(_('正在恢复任务进度，已等待 %s 秒。'), elapsed) : formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
-			modal.logOutput.textContent = formatLogLines(lines);
-			modal.logOutput.scrollTop = modal.logOutput.scrollHeight;
-		}).catch(function(err) {
-			if (transientTaskRpcError(err)) {
-				modal.statusLine.textContent = _('暂时无法连接路由器或会话已过期；请等待连接恢复，或重新登录查看后台任务。');
-				return;
-			}
-			modal.statusLine.textContent = formatText(_('无法读取任务输出：%s'), err.message || String(err));
-		});
+	function showProgress() {
+		var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+		modal.statusLine.textContent = options.resume ? formatText(_('正在恢复任务进度，已等待 %s 秒。'), elapsed) : formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
+	}
+
+	function showLogError(err) {
+		modal.statusLine.textContent = transientTaskRpcError(err)
+			? _('暂时无法连接路由器或会话已过期；请等待连接恢复，或重新登录查看后台任务。')
+			: formatText(_('无法读取任务输出：%s'), err.message || String(err));
 	}
 
 	function waitForTaskCompletion() {
@@ -795,18 +768,14 @@ function trackTask(title, startPromise, options) {
 			taskId = result.task_id;
 		if (result && result.cancellable === false)
 			modal.cancelButton.style.display = 'none';
-		var completion = (result && (result.started || result.running)) ? waitForTaskCompletion() : Promise.resolve(result);
-
-		timer = window.setInterval(updateLogs, 1000);
-		return updateLogs().then(function() {
-			return completion;
-		});
+		logs = taskLogs.monitor(modal.logOutput, showProgress, showLogError);
+		if (result && (result.started || result.running)) {
+			logs.start();
+			return waitForTaskCompletion();
+		}
+		return result;
 	}).then(function(finalResult) {
-		window.clearInterval(timer);
-		return updateLogs().then(function() {
-			return finalResult;
-		});
-	}).then(function(finalResult) {
+		var finalLogs = logs.finish();
 		if (finalResult && finalResult.ok === false)
 			modal.statusLine.textContent = formatText(_('任务失败：%s'), finalResult.message || finalResult.code || _('未知错误'));
 		else {
@@ -818,16 +787,16 @@ function trackTask(title, startPromise, options) {
 			markTaskSeen(options.task);
 		modal.cancelButton.disabled = true;
 		modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
+		return finalLogs;
 	}).catch(function(err) {
-		window.clearInterval(timer);
-		if (!timer)
+		var finalLogs = logs && logs.finish();
+		if (!logs)
 			modal.logOutput.textContent = _('任务未启动。');
 
-		return (timer ? updateLogs() : Promise.resolve()).then(function() {
-			modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
-			modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
-			modal.cancelButton.disabled = true;
-		});
+		modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
+		modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
+		modal.cancelButton.disabled = true;
+		return finalLogs;
 	});
 }
 
@@ -988,12 +957,6 @@ function workspaceResetControls() {
 	]);
 }
 
-function loadDashboardURL() {
-	return fs.read(DASHBOARD_CONFIG_PATH).then(function(config) {
-		return dashboardAccess.buildURL(config, window.location);
-	});
-}
-
 function dashboardLink(extraClass) {
 	return E('a', {
 		'class': 'btn cbi-button localclash-button ' + (extraClass || ''),
@@ -1030,15 +993,15 @@ function bootRestoreControls() {
 
 return view.extend({
 	load: function() {
-		return loadDashboardURL().catch(function() { return null; });
+		return dashboardAccess.loadURL(window.location).catch(function() { return null; });
 	},
 
 	render: function(url) {
 		dashboardURL = url;
-		deferAfterPaint(function() {
+		window.setTimeout(function() {
 			refreshStatus();
 			resumeTaskIfNeeded();
-		}, 600);
+		}, 0);
 
 		return E('div', { 'class': 'cbi-map localclash-view localclash-advanced' }, [
 			localclashStyle.stylesheet(),
@@ -1052,7 +1015,7 @@ return view.extend({
 				actionRow([
 					liveTaskButton(_('安装 / 更新核心'), callBootstrapCoreAsync, 'cbi-button-action'),
 					commandButton(_('确保 MCP 服务'), callServiceEnsure),
-					commandButton(_('查看日志'), callBootstrapLogs, null, { keepOpen: true })
+					commandButton(_('查看日志'), taskLogs.read, null, { keepOpen: true })
 				])
 			])),
 			section(_('MCP 服务'), actionRow([

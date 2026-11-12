@@ -3,6 +3,7 @@
 'require rpc';
 'require ui';
 'require localclash.style as localclashStyle';
+'require localclash.task-logs as taskLogs';
 
 var callSubscriptionGet = rpc.declare({
 	object: 'localclash',
@@ -73,19 +74,6 @@ var callTaskCancel = rpc.declare({
 	method: 'task_cancel',
 	expect: { '': {} }
 });
-
-var callBootstrapLogs = rpc.declare({
-	object: 'localclash',
-	method: 'bootstrap_logs',
-	expect: { '': {} }
-});
-
-function formatLogLines(lines) {
-	if (!lines || !lines.length)
-		return _('等待任务输出…');
-
-	return lines.join('\n');
-}
 
 function formatText(text) {
 	var args = Array.prototype.slice.call(arguments, 1);
@@ -205,7 +193,7 @@ function liveTaskButton(label, handler, extraClass) {
 			var button = ev.currentTarget;
 			var startedAt = Date.now();
 			var modal;
-			var timer;
+			var logs;
 
 			if (button.disabled)
 				return null;
@@ -216,16 +204,13 @@ function liveTaskButton(label, handler, extraClass) {
 			button.textContent = _('查看任务输出…');
 			modal = showTaskModal(label, true);
 
-			function updateLogs() {
-				return callBootstrapLogs().then(function(result) {
-					var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
-					var lines = (result && result.logs) || [];
-					modal.statusLine.textContent = formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
-					modal.logOutput.textContent = formatLogLines(lines);
-					modal.logOutput.scrollTop = modal.logOutput.scrollHeight;
-				}).catch(function(err) {
-					modal.statusLine.textContent = formatText(_('无法读取任务输出：%s'), err.message || String(err));
-				});
+			function showProgress() {
+				var elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+				modal.statusLine.textContent = formatText(_('任务执行中，已等待 %s 秒。'), elapsed);
+			}
+
+			function showLogError(err) {
+				modal.statusLine.textContent = formatText(_('无法读取任务输出：%s'), err.message || String(err));
 			}
 
 			function waitForTaskCompletion() {
@@ -246,18 +231,14 @@ function liveTaskButton(label, handler, extraClass) {
 			}
 
 			return Promise.resolve().then(handler).then(function(result) {
-				var completion = (result && (result.started || result.running)) ? waitForTaskCompletion() : Promise.resolve(result);
-
-				timer = window.setInterval(updateLogs, 1000);
-				return updateLogs().then(function() {
-					return completion;
-				});
+				logs = taskLogs.monitor(modal.logOutput, showProgress, showLogError);
+				if (result && (result.started || result.running)) {
+					logs.start();
+					return waitForTaskCompletion();
+				}
+				return result;
 			}).then(function(finalResult) {
-				window.clearInterval(timer);
-				return updateLogs().then(function() {
-					return finalResult;
-				});
-			}).then(function(finalResult) {
+				var finalLogs = logs.finish();
 				if (finalResult && finalResult.ok === false)
 					modal.statusLine.textContent = formatText(_('任务失败：%s'), finalResult.message || finalResult.code || _('未知错误'));
 				else {
@@ -266,16 +247,16 @@ function liveTaskButton(label, handler, extraClass) {
 				}
 				modal.cancelButton.disabled = true;
 				modal.resultOutput.textContent = JSON.stringify(finalResult, null, 2);
+				return finalLogs;
 			}).catch(function(err) {
-				window.clearInterval(timer);
-				if (!timer)
+				var finalLogs = logs && logs.finish();
+				if (!logs)
 					modal.logOutput.textContent = _('任务未启动。');
 
-				return (timer ? updateLogs() : Promise.resolve()).then(function() {
-					modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
-					modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
-					modal.cancelButton.disabled = true;
-				});
+				modal.statusLine.textContent = formatText(_('任务失败：%s'), err.message || String(err));
+				modal.resultOutput.textContent = JSON.stringify({ ok: false, message: err.message || String(err) }, null, 2);
+				modal.cancelButton.disabled = true;
+				return finalLogs;
 			}).finally(function() {
 				button.disabled = false;
 				button.removeAttribute('aria-busy');
@@ -306,21 +287,6 @@ function requireSubscriptionUrls() {
 		throw new Error(_('请至少输入一个订阅 URI。'));
 
 	return uris;
-}
-
-function deferAfterPaint(fn, delay) {
-	var run = function() {
-		window.setTimeout(fn, delay || 0);
-	};
-
-	if (window.requestAnimationFrame) {
-		window.requestAnimationFrame(function() {
-			window.requestAnimationFrame(run);
-		});
-	}
-	else {
-		window.setTimeout(run, delay || 0);
-	}
 }
 
 function setSubscriptionLoadStatus(text, isError) {
@@ -354,6 +320,7 @@ function formatEpoch(value) {
 }
 
 function scheduleStatusText(result) {
+	var schedule = result && result.schedule;
 	var lastRun = result && result.last_run;
 	var runtime = result && result.runtime;
 	var lines = [];
@@ -365,8 +332,12 @@ function scheduleStatusText(result) {
 	else
 		lines.push(_('尚未执行订阅定时更新。'));
 
-	if (runtime && runtime.running)
-		lines.push(formatText(_('下次执行：%s'), formatEpoch(runtime.next_run_at)));
+	if (schedule && schedule.enabled) {
+		if (runtime && runtime.running && runtime.update_hour === schedule.update_hour)
+			lines.push(formatText(_('下次执行：%s'), formatEpoch(runtime.next_run_at)));
+		else
+			lines.push(_('暂未读取到下次执行时间。'));
+	}
 	return lines.join('\n');
 }
 
@@ -509,7 +480,7 @@ return view.extend({
 			'id': 'localclash-subscription-schedule-status',
 			'class': 'localclash-schedule-status'
 		}, [ scheduleStatusText(scheduleResult) ]);
-		deferAfterPaint(refreshSubscriptionInput, 600);
+		window.setTimeout(refreshSubscriptionInput, 0);
 
 		return E('div', { 'class': 'cbi-map localclash-view localclash-subscription' }, [
 			localclashStyle.stylesheet(),
@@ -564,10 +535,13 @@ return view.extend({
 									return;
 								}
 								button.disabled = true;
-								callSubscriptionScheduleSet(scheduleEnabled.checked, updateHour).then(function() {
-									return callSubscriptionScheduleGet();
-								}).then(function(updated) {
-									scheduleStatus.textContent = scheduleStatusText(updated);
+								return callSubscriptionScheduleSet(scheduleEnabled.checked, updateHour).then(function(updated) {
+									if (!updated || updated.ok !== true)
+										throw new Error(updated && (updated.message || updated.code) || _('未知错误'));
+									scheduleStatus.textContent = [
+										updated.summary || _('订阅定时更新配置已保存。'),
+										scheduleStatusText(updated)
+									].join('\n');
 								}).catch(function(err) {
 									scheduleStatus.textContent = formatText(_('保存定时更新设置失败：%s'), err.message || String(err));
 								}).finally(function() {

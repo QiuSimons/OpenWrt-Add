@@ -495,3 +495,24 @@ test('Interfaces: an open device tooltip escapes the scrolling table card (last 
 	const scroller = themeRules.findIndex((x) => !x.media && x.sel.includes('.cbi-tblsection') && /overflow-x:\s*auto/.test(x.body));
 	assert.ok(scroller >= 0 && themeRules.indexOf(r) > scroller);
 });
+
+/* Appearance: every option of a group one column of the same width, the
+   widest label's, and each label as wide as it is bold, picked, so a pick
+   moves no column (a label still never shrinks below its own width) */
+test('Appearance: equal columns, bold width kept for every label', () => {
+	const track = themeRules.find(r => r.sel.includes('.vt-appear-track'));
+	assert.ok(track, 'track rule');
+	assert.match(track.body, /display:\s*grid/);
+	assert.match(track.body, /grid-auto-flow:\s*column/);
+	assert.match(track.body, /grid-auto-columns:\s*1fr\b/);
+	const opt = themeRules.find(r => r.sel.includes('.vt-appear-opt'));
+	assert.doesNotMatch(opt.body, /min-width:\s*0/, 'a column keeps its label\'s width');
+	const after = themeRules.find(r => r.sel.includes('.vt-appear-opt > span::after'));
+	assert.ok(after, 'the bold copy');
+	assert.match(after.body, /content:\s*attr\(data-text\)\s*\/\s*""/, 'no second reading for screen readers');
+	assert.match(after.body, /font-weight:\s*600/);
+	assert.match(after.body, /visibility:\s*hidden/);
+	const picked = themeRules.find(r => r.sel.includes('.vt-appear-opt:has(> input:checked)'));
+	assert.match(picked.body, /font-weight:\s*600/, 'the same weight as the copy');
+	assert.match(menuJs, /E\('span', \{ 'data-text': o\[1\] \}, \[ o\[1\] \]\)/);
+});

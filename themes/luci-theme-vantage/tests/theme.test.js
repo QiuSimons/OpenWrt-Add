@@ -460,3 +460,18 @@ test('update check: reads the theme\'s version from the package list, compares, 
 	/* the link is a constant: nothing from the list reaches an attribute */
 	assert.match(src, /'href': 'https:\/\/github\.com\/anothaDev\/luci-theme-vantage\/releases\/latest',/);
 });
+
+/* the theme's clock: a pulse CSS cancelled since the last step (the dot's
+   state changed, the window lost the focus) is dropped, not stepped */
+test('theme motion clock: a cancelled pulse is dropped, not stepped', () => {
+	const src = fs.readFileSync(FILE, 'utf8');
+	const m = /\n\tstepPulses\(dt\) \{\n([\s\S]*?)\n\t\},\n/.exec(src);
+	assert.ok(m, 'stepPulses found');
+	const stepPulses = new Function('dt', m[1]);
+	const live = { playState: 'paused', currentTime: 0 }, gone = { playState: 'idle', currentTime: null };
+	const self = { clock: { anims: [ { a: live, dur: 1000, at: 0 }, { a: gone, dur: 1000, at: 0 } ] } };
+	stepPulses.call(self, 50);
+	assert.equal(live.currentTime, 50);
+	assert.equal(gone.currentTime, null, 'not written: it stays cancelled');
+	assert.deepEqual(self.clock.anims.map(x => x.a), [ live ]);
+});

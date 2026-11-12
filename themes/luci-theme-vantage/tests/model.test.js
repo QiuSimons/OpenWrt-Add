@@ -612,6 +612,33 @@ test('build: radios, SSIDs and stations with names, bands and generations', () =
 	assert.equal(phone.level.level, 'crit');
 });
 
+/* iwinfo survey: the noise floor every poll for 1.5-2 ms a radio, where
+   iwinfo info costs 15-22 ms; rpcd sends it as an unsigned byte */
+test('surveyNoise: the radio\'s channel, a signed byte, 0 as none', () => {
+	const sv = [ { mhz: 2412, noise: 0 }, { mhz: 2437, noise: 146 }, { mhz: 5180, noise: -95 }, { mhz: 5975, noise: 135 }, { mhz: 5200, noise: 300 } ];
+	assert.equal(model.surveyNoise(sv, 2437), -110, 'ath12k: 146 is -110 dBm');
+	assert.equal(model.surveyNoise(sv, 5180), -95, 'already signed');
+	assert.equal(model.surveyNoise(sv, 2412), null, '0: none');
+	assert.equal(model.surveyNoise(sv, 5200), null, 'out of range');
+	assert.equal(model.surveyNoise(sv, 2462), null, 'no entry for the channel');
+	assert.equal(model.surveyNoise(sv, 0), null);
+	assert.equal(model.surveyNoise(null, 2437), null);
+});
+
+test('build: the survey\'s noise floor wins, on the channel hostapd reports', () => {
+	const r = raw();
+	r.survey = { 'phy2g-ap0': [ { mhz: 2437, noise: 164 }, { mhz: 2462, noise: 160 } ] };
+	assert.equal(model.build(r).radios[0].noise, -92, 'iwinfo info said -87');
+	r.hapdStatus = { 'phy2g-ap0': { freq: 2462, channel: 11, bssid: '00:00:5e:00:53:aa' } };
+	assert.equal(model.build(r).radios[0].noiseRaw, -96, 'moved to channel 11 before iwinfo info knew');
+	r.survey = { 'phy2g-ap0': [ { mhz: 2462, noise: 0 } ] };
+	assert.equal(model.build(r).radios[0].noise, -87, 'nothing there: iwinfo info\'s');
+	r.survey = { 'phy6g-ap0': [ { mhz: 5975, noise: 135 } ] };
+	const m = model.build(r);
+	assert.equal(m.radios[1].noise, null, 'ath12k\'s placeholder stays unknown');
+	assert.equal(m.radios[1].noiseRaw, -121, 'and is shown as one');
+});
+
 test('build: user alias wins over every other source', () => {
 	const r = raw();
 	r.aliases = { '00:00:5e:00:53:01': { sid: 'cfg01', name: 'Hall printer', icon: 'printer' } };
@@ -910,4 +937,28 @@ test('PPPoE on a DSA port stays on that port: the conduit carries the other port
 	const devs = { wan: { devtype: 'dsa', 'hw-tc-offload': true, conduit: 'eth0' }, eth0: {}, 'pppoe-wan': {} };
 	const ifaces = [ { interface: 'wan', up: true, proto: 'pppoe', device: 'wan', l3_device: 'pppoe-wan', route: [ { target: '0.0.0.0', mask: 0, nexthop: '192.0.2.1' } ] } ];
 	assert.equal(model.resolveUplink(ifaces, devs, [], null, null).statsDev, 'wan');
+});
+
+/* #110: on a router the uplink is the WAN; a station's IPv4 address is in
+   its own network's subnet (the SSID's 'lan'), not the WAN's */
+test('build: on a router, stations keep their LAN IPv4 address (not only IPv6)', () => {
+	const r = raw();
+	r.ifaces = [
+		{ interface: 'loopback', up: true, l3_device: 'lo', device: 'lo' },
+		{ interface: 'wan', up: true, l3_device: 'eth1', device: 'eth1', proto: 'dhcp', uptime: 100,
+		  'ipv4-address': [ { address: '203.0.113.10', mask: 24 } ],
+		  route: [ { target: '0.0.0.0', mask: 0, nexthop: '203.0.113.1' } ], 'dns-server': [ '203.0.113.1' ] },
+		{ interface: 'lan', up: true, l3_device: 'br-lan', device: 'br-lan', proto: 'static', uptime: 100,
+		  'ipv4-address': [ { address: '192.0.2.1', mask: 24 } ] }
+	];
+	r.devs = Object.assign({}, DEVS, { eth1: { devtype: 'ethernet', speed: '1000F', carrier: true, statistics: { rx_bytes: 1, tx_bytes: 2 } } });
+	r.hints = { '00:00:5E:00:53:01': { name: 'office-printer', ipaddrs: [ '192.0.2.44' ], ip6addrs: [ '2001:db8::44' ] } };
+	const m = model.build(r);
+	assert.equal(m.uplink.iface, 'wan', 'a router: the WAN is the uplink');
+	const printer = m.clients.filter(c => c.mac === '00:00:5e:00:53:01')[0];
+	assert.deepEqual(printer.ips, [ '192.0.2.44', '2001:db8::44' ]);
+	/* a network without an IPv4 address of its own: the uplink's, as before */
+	r.ifaces[2]['ipv4-address'] = [];
+	r.ifaces[1]['ipv4-address'] = [ { address: '192.0.2.200', mask: 24 } ];
+	assert.deepEqual(model.build(r).clients.filter(c => c.mac === '00:00:5e:00:53:01')[0].ips[0], '192.0.2.44');
 });
