@@ -1,52 +1,43 @@
 From 7c1e5a88294a2176b6d859187ec51f5010b91cb2 Mon Sep 17 00:00:00 2001
 From: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 12:30:00 +0800
-Subject: [PATCH 2/2] net-tcp_bbr: add adaptive LFN loss tolerance via pernet
- sysctl
+Subject: [PATCH 2/2] net-tcp_bbr: add adaptive LFN loss tolerance optimized for fq_codel
 
 Paths with high bandwidth-delay products (satellite, wireless, WAN)
-frequently see random, non-congestive loss (e.g. 2-5%). BBRv3 keeps a
-fixed 2% loss threshold, so above it it cuts inflight_hi while probing and
-cuts the lower bounds once per loss round, which costs a lot of throughput
-on long-fat paths.
+frequently see random, non-congestive loss (2-5%). BBRv3 keeps a
+fixed 2% loss threshold, cutting inflight_hi while probing and cutting
+lower bounds once per loss round, causing severe throughput collapse.
 
-Add an adaptive LFN loss tolerance mechanism to tcp_bbr:
+This patch refactors the adaptive LFN loss tolerance mechanism, optimized
+specifically for OpenWrt default fq_codel (target 5ms, interval 100ms):
 
-- Learn the uncongested loss floor from rate samples that look
-  uncongested: srtt < 1.2 * min_rtt, min_rtt fresh, inflight within 1.15x
-  BDP, no bandwidth probing, PROBE_BW only. The floor is folded in once
-  per loss round, in CRUISE only, and only after the backoff decision of
-  that round.
-- The per-sample loss rate is BBRv3's rs->lost / rs->tx_in_flight, which
-  covers a full flight window (rs->lost is tp->lost at the skb's transmit
-  time). Both filters are integer EWMAs stepped once per sample with ceil
-  division; plain "/ 4" leaves steps of 3 units or less at a fixed point
-  and under-learns the loss rate. The floor is a mean filter: a per-round
-  peak would follow the noisiest sample and over-learn.
-- Tolerate min(floor + 1.0%, 8.0%), and keep the stock 2% on clean paths.
-  While probing, cap the tolerated rate at floor + 1.0% and tolerate
-  nothing beyond the stock response without a learned floor, so drops that
-  only appear when inflight is pushed above BDP still bound inflight_hi.
-- Restrict tolerance to loss rounds whose samples were all uncongested. A
-  queued RTT, an over-cap (> 8%) sample on a real flight, or a probe
-  poisons the round. Tolerance is also dropped when min_rtt is stale, on
-  short paths (< 10ms), and for flights above 1.15x BDP outside STARTUP.
-  STARTUP keeps the stock threshold; a manual ceiling also applies there.
-- Fold each sample into the loss round before the per-round decision, so
-  the ACK that starts a new round is counted in the round it closes, as
-  bbr_update_congestion_signals() does.
-- Over-threshold losses still cut inflight_hi normally; exempt rounds skip
-  the lower-bound cut without pinning inflight_lo. The ECN response is
-  unchanged.
-- Implemented per-netns via a tcp_bbr sysctl without modifying global tcp
-  structs or sysctl tables:
-    net.ipv4.tcp_bbr_lfn_loss_thresh_pct (0=off, 1=auto, 2-8=manual)
-    net.ipv4.tcp_bbr_lfn_min_rtt_fresh_ms (default 15000)
-  The module parameters of the same name are only defaults for network
-  namespaces created later; write the sysctl to change a running namespace
-  (including init_net).
-
-Default is 1 (auto): clean paths keep the stock 2% threshold.
+- Round-aggregated loss rate accounting:
+  Eliminate instantaneous per-ACK ratio distortion caused by mainline
+  rs->losses (losses per ACK) vs Google tree's window-level rs->lost.
+  Losses and delivered packets are summed across the loss round to compute
+  the true round loss rate (lfn_round_lost / (round_lost + round_acked)).
+- Queue delay tracking tailored for fq_codel:
+  Reject delayed ACKs and track minimum queuing delay (rtt_us - min_rtt_us)
+  across each round. Floor learning is gated at <= 2ms (strictly no queue),
+  while tolerance is revoked whenever minimum queue delay exceeds 5ms
+  (fq_codel target), ensuring AQM drops are never excused as path loss.
+  Inter-round delay inheritance prevents round-start blind spots.
+- Self-healing slope-based congestion detection:
+  Compare probe loss rate (p_probe) against steady-state cruise loss rate
+  (p_cruise). If probe loss exceeds cruise loss by 1.0%, slope_bad is flagged
+  to throttle probing against policers/bottlenecks. Self-heals after 4 clean
+  cruise rounds to prevent irreversible lockup from temporary noise.
+- Inflight roof and standing queue prevention:
+  Exempt rounds enforce strict inflight roofs (1.15x BDP for cross-carrier,
+  1.30x for LFN >= 80ms) to ensure steady-state cwnd never inflates to
+  cwnd_gain = 2.0 standing queues.
+- Path classification:
+  min_rtt < 20ms (LAN/DC/good WiFi) exits immediately, preserving fast-path
+  CPU efficiency and stock BBRv3 behavior. min_rtt 20-80ms caps tolerance at
+  3.0% (floor + 0.5%), while >= 80ms caps at 5.0% (floor + 1.0%).
+- Netns isolation via pernet_operations and Linux 6.11+ sysctl sentinel fix:
+  net.ipv4.tcp_bbr_lfn_loss_thresh_pct (0=off, 1=auto default, 2-5=manual)
+  net.ipv4.tcp_bbr_lfn_min_rtt_fresh_ms (default 15000)
 
 Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 ---
@@ -63,85 +54,67 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  #include <net/tcp.h>
  #include <linux/inet_diag.h>
  #include <linux/inet.h>
-@@ -87,6 +91,24 @@
- 
+@@ -88,6 +92,35 @@ static bool bbr_ecn_low;
  #define BBR_SCALE 8	/* scaling factor for fractions in BBR (e.g. gains) */
  #define BBR_UNIT (1 << BBR_SCALE)
-+
+ 
 +/* LFN loss tolerance for non-congestive loss on long-fat paths.
-+ * 0 disables. See bbr_lfn_* below. Values are tenths of a percent.
++ * Optimized for OpenWrt default fq_codel (target 5ms, interval 100ms).
++ * Values are tenths of a percent (0.1%).
 + */
-+#define BBR_LFN_MIN_PATH_RTT_US	10000	/* ignore DC / short paths */
-+#define BBR_LFN_MIN_TX		16	/* min packets in a ratio sample */
-+#define BBR_LFN_POISON_TX	64	/* smaller flights must not veto a round */
-+#define BBR_LFN_CAP_TENTHS	80	/* hard cap: 8.0% */
-+#define BBR_LFN_STOCK_TENTHS	20	/* BBRv3 loss_thresh: 2.0% */
-+#define BBR_LFN_MARGIN_TENTHS	10	/* auto: floor + 1.0% */
-+#define BBR_LFN_AVG_MAX		63	/* 0.2% units: max 12.6% */
-+#define BBR_LFN_EWMA_GAIN	4	/* EWMA time constant, samples/rounds */
-+#define BBR_LFN_QUEUE_DIV	20	/* "flat": queue <= 5% of min_rtt */
-+#define BBR_LFN_QUEUE_MIN_US	1000	/* ...but 1ms of timer noise is fine */
++#define BBR_LFN_MIN_PATH_RTT_US		20000	/* < 20ms: DC/LAN/good WiFi, LFN disabled */
++#define BBR_LFN_LFN_RTT_US		80000	/* >= 80ms: satellite / continental WAN */
++#define BBR_LFN_MIN_ROUND_PKTS		8	/* min packets to calculate round loss rate */
++#define BBR_LFN_CAP_TENTHS		50	/* LFN max cap: 5.0% */
++#define BBR_LFN_MID_CAP_TENTHS		30	/* Cross-carrier max cap: 3.0% */
++#define BBR_LFN_STOCK_TENTHS		20	/* BBRv3 stock loss_thresh: 2.0% */
++#define BBR_LFN_MARGIN_TENTHS		10	/* LFN auto margin: floor + 1.0% */
++#define BBR_LFN_MID_MARGIN_TENTHS	5	/* Cross-carrier margin: floor + 0.5% */
++#define BBR_LFN_SLOPE_TENTHS		10	/* Probe loss > cruise loss + 1.0% is congestion */
++#define BBR_LFN_EWMA_GAIN		4	/* EWMA gain per round */
++
++/* fq_codel specific delay thresholds (OpenWrt default target 5ms) */
++#define BBR_LFN_LEARN_QDELAY_US		2000	/* queue <= 2ms: definitely no CoDel queueing */
++#define BBR_LFN_ALLOW_QDELAY_US		5000	/* queue <= 5ms: within CoDel non-drop tolerance */
++
++/* Inflight roofs to prevent standing queues (1.0 = 100) */
++#define BBR_LFN_ROOF_MID		115	/* Cross-carrier max flight: 1.15x BDP */
++#define BBR_LFN_ROOF_LFN		130	/* LFN max flight: 1.30x BDP */
++#define BBR_LFN_CRUISE_NUM		110	/* Cruise flight ceiling: 1.10x BDP */
++#define BBR_LFN_PROBE_NUM		120	/* Probe flight trigger: 1.20x BDP */
 +
 +#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 +#define register_net_sysctl_sz(net, path, table, size) register_net_sysctl(net, path, table)
 +#endif
- 
++
  /* BBR has the following modes for deciding how fast to send: */
  enum bbr_mode {
-@@ -123,14 +145,16 @@
- 		idle_restart:1,	     /* restarting after idle? */
- 		probe_rtt_round_done:1,  /* a BBR_PROBE_RTT round at 4 pkts? */
- 		init_cwnd:7,         /* initial cwnd */
--		unused_1:10;
-+		lfn_floor:8,	/* uncongested loss floor, 0.1% units */
-+		lfn_round_poison:1, /* round saw probe or >cap loss */
-+		lfn_round_congested:1; /* round saw RTT >= 1.2*min */
- 	u32	pacing_gain:10,	/* current gain for setting pacing rate */
- 		cwnd_gain:10,	/* current gain for setting cwnd */
- 		full_bw_reached:1,   /* reached full bw in Startup? */
- 		full_bw_cnt:2,	/* number of rounds without large bw gains */
- 		cycle_idx:2,	/* current index in pacing_gain cycle array */
- 		has_seen_rtt:1, /* have we seen an RTT sample yet? */
--		unused_2:6;
-+		lfn_avg:6;	/* EWMA of uncongested sample loss, 0.2% units */
- 	u32	prior_cwnd;	/* prior cwnd upon entering loss recovery */
- 	u32	full_bw;	/* recent bw, to estimate if pipe is full */
+ 	BBR_STARTUP,	/* ramp up sending rate rapidly to fill pipe */
+@@ -178,6 +211,19 @@ struct bbr {
+ 	u8	unused_4;		/* to preserve alignment */
+ 	struct tcp_plb_state plb;
  
-@@ -145,7 +169,7 @@
- 		startup_ecn_rounds:2,	/* consecutive hi ECN STARTUP rounds */
- 		loss_in_cycle:1,	/* packet loss in this cycle? */
- 		ecn_in_cycle:1,		/* ECN in this cycle? */
--		unused_3:1;
-+		lfn_round_sampled:1;	/* round got an uncongested sample */
- 	u32	loss_round_delivered; /* scb->tx.delivered ending loss round */
- 	u32	undo_bw_lo;	     /* bw_lo before latest losses */
- 	u32	undo_inflight_lo;    /* inflight_lo before latest losses */
-@@ -1191,11 +1215,317 @@
++	/* LFN adaptive loss tolerance state (optimized for fq_codel) */
++	u32	lfn_round_lost;		/* packets marked lost in current round */
++	u32	lfn_round_acked;	/* packets delivered in current round */
++	u32	lfn_round_max_tx;	/* peak tx_in_flight in current round */
++	u32	lfn_round_min_qd;	/* min queue delay (us) in current round */
++	u32	lfn_prev_min_qd;	/* min queue delay (us) from previous round */
++	u16	lfn_floor;		/* learned physical loss floor in 0.1% */
++	u16	lfn_p_cruise;		/* steady-state cruise loss rate in 0.1% */
++	u16	lfn_p_probe;		/* bandwidth probe loss rate in 0.1% */
++	u8	lfn_cruise_rounds;	/* consecutive clean cruise rounds */
++	u8	lfn_slope_bad:1,	/* probe loss significantly > cruise loss */
++		lfn_round_poison:1,	/* round saw large loss or unexpected event */
++		lfn_round_congested:1;	/* round saw queue delay > allow threshold */
+ };
+ 
+ struct bbr_context {
+@@ -1191,11 +1237,318 @@ static void bbr_probe_inflight_hi_upward(struct sock *sk,
  		bbr_raise_inflight_hi_slope(sk);
  }
  
-+/* ----- LFN loss tolerance -------------------------------------------
-+ *
-+ * Physical loss on a long-fat path (satellite, some cross-border WANs) is
-+ * not a congestion signal, but BBRv3 still treats loss above 2% as
-+ * "inflight too high" (cutting inflight_hi while probing, leaving STARTUP
-+ * early) and cuts bw_lo/inflight_lo on any loss in a non-probing round.
-+ *
-+ * This is off when net.ipv4.tcp_bbr_lfn_loss_thresh_pct is 0. It defaults
-+ * to 1 (auto): tolerate min(floor + 1.0%, 8.0%), where the floor is an
-+ * EWMA of the loss rate of samples that look uncongested (srtt < 1.2 *
-+ * min_rtt, min_rtt fresh, inflight within 1.15x BDP, no bandwidth probe),
-+ * folded in at the end of a CRUISE loss round. Clean paths stay at the
-+ * stock 2%.
-+ *
-+ * While probing, the tolerated rate is capped at floor + 1.0%, so drops
-+ * that only appear when inflight is pushed above BDP still cut
-+ * inflight_hi. Loss above the tolerated rate takes the stock backoff, and
-+ * the ECN response is unchanged.
-+ *
-+ * pct sysctl: 0 off, 1 auto (threshold = floor + 1%), 2..8 manual ceiling
-+ *             in percent. The floor is learned in both modes.
-+ */
++/* ----- LFN loss tolerance (optimized for OpenWrt default fq_codel) ----- */
 +
 +struct bbr_net {
 +	struct ctl_table_header *hdr;
@@ -153,7 +126,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +};
 +
 +static unsigned int bbr_net_id;
-+static const int bbr_lfn_pct_max = 8;
++static const int bbr_lfn_pct_max = 5;
 +static const int bbr_lfn_fresh_max = 60000;
 +
 +static struct bbr_net *bbr_net(const struct sock *sk)
@@ -171,27 +144,31 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	return READ_ONCE(bbr_net(sk)->min_rtt_fresh_ms);
 +}
 +
-+/* Threshold in 0.1% units. 0 means the feature is off. */
-+static u32 bbr_lfn_thresh_tenths(const struct sock *sk)
++static u32 bbr_lfn_class_cap(const struct bbr *bbr)
 +{
-+	const struct bbr *bbr = bbr_ca(sk);
-+	int pct = bbr_lfn_pct(sk);
-+	u32 floor, thresh;
-+
-+	if (pct <= 0)
-+		return 0;
-+	if (pct > 1)
-+		return (u32)min_t(int, pct, bbr_lfn_pct_max) * 10;
-+
-+	/* Auto. Stay at the stock 2% until the learned floor exceeds it. */
-+	floor = bbr->lfn_floor;
-+	thresh = floor + BBR_LFN_MARGIN_TENTHS;
-+	if (thresh <= BBR_LFN_STOCK_TENTHS)
-+		return BBR_LFN_STOCK_TENTHS;
-+	return min_t(u32, thresh, BBR_LFN_CAP_TENTHS);
++	return bbr->min_rtt_us >= BBR_LFN_LFN_RTT_US ?
++		BBR_LFN_CAP_TENTHS : BBR_LFN_MID_CAP_TENTHS;
 +}
 +
-+/* tcp_jiffies32 is a u32 jiffies counter, so this delta is wrap-safe. */
++static u32 bbr_lfn_class_margin(const struct bbr *bbr)
++{
++	return bbr->min_rtt_us >= BBR_LFN_LFN_RTT_US ?
++		BBR_LFN_MARGIN_TENTHS : BBR_LFN_MID_MARGIN_TENTHS;
++}
++
++static u32 bbr_lfn_class_roof(const struct bbr *bbr)
++{
++	return bbr->min_rtt_us >= BBR_LFN_LFN_RTT_US ?
++		BBR_LFN_ROOF_LFN : BBR_LFN_ROOF_MID;
++}
++
++static u32 bbr_lfn_effective_qd(const struct bbr *bbr)
++{
++	if (bbr->lfn_round_min_qd != ~0U)
++		return bbr->lfn_round_min_qd;
++	return bbr->lfn_prev_min_qd;
++}
++
 +static bool bbr_lfn_min_rtt_fresh(const struct sock *sk)
 +{
 +	const struct bbr *bbr = bbr_ca(sk);
@@ -204,34 +181,6 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	return jiffies_to_msecs(tcp_jiffies32 - bbr->min_rtt_stamp) <= limit_ms;
 +}
 +
-+/* Is the path free of a persistent queue? Use srtt: a per-ACK RTT sample
-+ * is too noisy on the wireless and satellite links this targets.
-+ *
-+ * A 1.2x ratio is too blunt: on a 100ms path it excuses 20ms of standing
-+ * queue, so a shallow bottleneck can overflow and have its own drops
-+ * learned as path loss. Compare the queueing delay itself against a small
-+ * fraction of min_rtt instead.
-+ */
-+static bool bbr_lfn_rtt_flat(const struct sock *sk)
-+{
-+	const struct bbr *bbr = bbr_ca(sk);
-+	u32 srtt_us = tcp_sk(sk)->srtt_us >> 3;
-+	u32 slack_us;
-+
-+	if (bbr->min_rtt_us == ~0U || bbr->min_rtt_us < BBR_LFN_MIN_PATH_RTT_US)
-+		return false;
-+	if (!srtt_us)
-+		return false;
-+	if (srtt_us <= bbr->min_rtt_us)
-+		return true;
-+	slack_us = max_t(u32, bbr->min_rtt_us / BBR_LFN_QUEUE_DIV,
-+			 BBR_LFN_QUEUE_MIN_US);
-+	return srtt_us - bbr->min_rtt_us <= slack_us;
-+}
-+
-+/* True while the loss samples still reflect our own bandwidth probing. The
-+ * probe feedback outlives the PROBE_UP phase itself, hence bw_probe_samples.
-+ */
 +static bool bbr_lfn_bw_probing(const struct bbr *bbr)
 +{
 +	return bbr->bw_probe_samples ||
@@ -240,25 +189,16 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +		 bbr->cycle_idx == BBR_BW_PROBE_REFILL));
 +}
 +
-+/* Loss rate of one rate sample in 0.1% units, clamped to 100%. BBRv3 counts
-+ * lost over the flight window that tx_in_flight snapshots, so this
-+ * ratio already covers roughly one RTT rather than one ACK.
-+ */
-+static u32 bbr_lfn_sample_tenths(const struct rate_sample *rs)
++static u32 bbr_lfn_round_rate(const struct bbr *bbr)
 +{
-+	u32 lost = bbr_rs_lost(rs);
-+	u32 tx_in_flight = bbr_rs_tx_in_flight(rs);
++	u32 denom = bbr->lfn_round_acked + bbr->lfn_round_lost;
 +
-+	if (lost <= 0 || !tx_in_flight)
++	if (denom < BBR_LFN_MIN_ROUND_PKTS || !bbr->lfn_round_lost)
 +		return 0;
-+	return (u32)min_t(u64, div_u64((u64)lost * 1000, tx_in_flight),
++	return (u32)min_t(u64, div_u64((u64)bbr->lfn_round_lost * 1000, denom),
 +			  1000U);
 +}
 +
-+/* One EWMA step of @cur toward @sample, clamped to @max. Uses ceil division
-+ * so any non-zero distance moves the filter: with plain "/ 4" a sample
-+ * within 3 units of the current value is a fixed point.
-+ */
 +static u32 bbr_lfn_ewma_step(u32 cur, u32 sample, u32 max)
 +{
 +	if (sample > cur)
@@ -269,160 +209,215 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	return cur;
 +}
 +
-+/* True when this loss sample should not count as inflight-too-high.
-+ * Read-only: the floor is not updated here.
-+ */
++/* Threshold in 0.1% units. 0 means feature is off / fallback to stock. */
++static u32 bbr_lfn_thresh_tenths(const struct sock *sk)
++{
++	const struct bbr *bbr = bbr_ca(sk);
++	int pct = bbr_lfn_pct(sk);
++	u32 cap, margin, thresh, qd;
++
++	if (pct <= 0)
++		return 0;
++
++	/* DC / LAN / short WiFi: feature totally disabled */
++	if (bbr->min_rtt_us == ~0U || bbr->min_rtt_us < BBR_LFN_MIN_PATH_RTT_US)
++		return 0;
++
++	/* If queue delay exceeds CoDel 5ms target, must fallback to stock response */
++	qd = bbr_lfn_effective_qd(bbr);
++	if (qd != ~0U && qd > BBR_LFN_ALLOW_QDELAY_US)
++		return 0;
++
++	/* If probe slope proved bad (policer / bottleneck congestion), fallback */
++	if (bbr->lfn_slope_bad)
++		return 0;
++
++	cap = bbr_lfn_class_cap(bbr);
++
++	/* Manual mode (2..5%): clamped by path classification cap */
++	if (pct > 1)
++		return min_t(u32, (u32)pct * 10, cap);
++
++	/* Auto mode: stay at stock 2.0% until floor + margin exceeds it */
++	margin = bbr_lfn_class_margin(bbr);
++	thresh = bbr->lfn_floor + margin;
++	if (thresh <= BBR_LFN_STOCK_TENTHS)
++		return BBR_LFN_STOCK_TENTHS;
++
++	return min_t(u32, thresh, cap);
++}
++
 +static bool bbr_lfn_loss_tolerated(struct sock *sk, const struct rate_sample *rs)
 +{
 +	struct bbr *bbr = bbr_ca(sk);
-+	u32 thresh, tenths, pipe, roof;
++	u32 thresh, running, bdp, roof;
 +	u32 tx_in_flight = bbr_rs_tx_in_flight(rs);
 +
 +	thresh = bbr_lfn_thresh_tenths(sk);
 +	if (!thresh)
 +		return false;
-+	/* Probing is exempted only up to the loss rate already measured as
-+	 * uncongested: probe-induced drops must still cut inflight_hi. Never
-+	 * go below the stock threshold though: with an unlearned floor the
-+	 * min() would make PROBE_UP more trigger-happy than vanilla BBRv3.
-+	 */
-+	if (bbr_lfn_bw_probing(bbr))
-+		thresh = max_t(u32, BBR_LFN_STOCK_TENTHS,
-+			       min_t(u32, thresh,
-+				     bbr->lfn_floor + BBR_LFN_MARGIN_TENTHS));
-+	/* Any queued RTT or over-cap sample this round: stock response. */
-+	if (bbr->lfn_round_poison || bbr->lfn_round_congested)
-+		return false;
-+	if (!bbr_lfn_min_rtt_fresh(sk) || !bbr_lfn_rtt_flat(sk))
-+		return false;
-+	if (!tx_in_flight || tx_in_flight < BBR_LFN_MIN_TX)
++
++	if (bbr->lfn_round_poison || bbr->lfn_round_congested ||
++	    !bbr_lfn_min_rtt_fresh(sk))
 +		return false;
 +
-+	tenths = bbr_lfn_sample_tenths(rs);
-+	if (tenths > thresh)
-+		return false;
-+	/* The recent uncongested loss rate is already above what we tolerate. */
-+	if ((u32)bbr->lfn_avg * 2 > thresh)
-+		return false;
-+
-+	/* STARTUP sends above BDP on purpose; elsewhere a flight well above
-+	 * the pipe is our own queueing, not path loss.
-+	 */
-+	if (bbr->mode != BBR_STARTUP) {
-+		pipe = bbr_inflight(sk, bbr_max_bw(sk), BBR_UNIT);
-+		roof = div_u64((u64)pipe * 115, 100);
-+		if (tx_in_flight > roof)
-+			return false;
++	/* If bandwidth probing, only tolerate up to learned floor + slope margin */
++	if (bbr_lfn_bw_probing(bbr)) {
++		u32 probe_thresh = max_t(u32, BBR_LFN_STOCK_TENTHS,
++					 bbr->lfn_floor + BBR_LFN_SLOPE_TENTHS);
++		thresh = min_t(u32, thresh, probe_thresh);
 +	}
++
++	running = bbr_lfn_round_rate(bbr);
++	if (running > thresh)
++		return false;
++
++	/* STARTUP sends above BDP on purpose (only for long paths >= 80ms) */
++	if (bbr->mode == BBR_STARTUP) {
++		if (bbr->min_rtt_us < BBR_LFN_LFN_RTT_US)
++			return false;
++		return true;
++	}
++
++	/* In steady state, tx_in_flight must not exceed roof */
++	bdp = bbr_bdp(sk, bbr_max_bw(sk), BBR_UNIT);
++	roof = bbr_lfn_class_roof(bbr);
++	if (!bdp || tx_in_flight > div_u64((u64)bdp * roof, 100))
++		return false;
++
 +	return true;
 +}
 +
-+/* The recent uncongested loss rate is within tolerance. Used for the
-+ * once-per-round bw_lo cut, which upstream applies on any loss, not at the
-+ * 2% inflight threshold. Does not look at one ACK's rs->lost (that ACK is
-+ * often not the lossy one).
-+ */
 +static bool bbr_lfn_round_exempt(struct sock *sk, const struct rate_sample *rs)
 +{
 +	struct bbr *bbr = bbr_ca(sk);
-+	u32 thresh;
++	u32 thresh, running, bdp, roof;
 +
 +	thresh = bbr_lfn_thresh_tenths(sk);
-+	if (!thresh || !bbr->lfn_round_sampled || bbr->lfn_round_poison ||
-+	    bbr->lfn_round_congested)
++	if (!thresh || bbr->lfn_round_poison || bbr->lfn_round_congested ||
++	    !bbr_lfn_min_rtt_fresh(sk))
 +		return false;
++
 +	if (bbr->mode != BBR_PROBE_BW)
 +		return false;
-+	if ((u32)bbr->lfn_avg * 2 > thresh)
++
++	running = bbr_lfn_round_rate(bbr);
++	if (running > thresh)
 +		return false;
-+	return bbr_lfn_min_rtt_fresh(sk) && bbr_lfn_rtt_flat(sk);
++
++	/* Ensure inflight during this round didn't exceed roof */
++	bdp = bbr_bdp(sk, bbr_max_bw(sk), BBR_UNIT);
++	roof = bbr_lfn_class_roof(bbr);
++	if (!bdp || bbr->lfn_round_max_tx > div_u64((u64)bdp * roof, 100))
++		return false;
++
++	return true;
 +}
 +
-+/* Fold one rate sample into the uncongested-loss EWMA. Samples that look
-+ * congested, probing, tiny, or above the hard cap are not fed; a probe, an
-+ * over-cap sample on a real flight, or a queued RTT poisons the loss round.
-+ * Runs before the per-round decision, so the ACK that starts a new round is
-+ * counted in the round it closes; the floor is updated after the decision.
-+ */
 +static void bbr_lfn_note_sample(struct sock *sk, const struct rate_sample *rs)
 +{
 +	struct bbr *bbr = bbr_ca(sk);
-+	u32 tenths, pipe, roof;
-+	u32 tx_in_flight = bbr_rs_tx_in_flight(rs);
++	u32 tx = bbr_rs_tx_in_flight(rs);
++	u32 lost = bbr_rs_lost(rs);
 +
 +	if (bbr_lfn_pct(sk) <= 0)
 +		return;
-+	if (!tx_in_flight)
++
++	/* DC / LAN / short WiFi: early exit to preserve fast path efficiency */
++	if (bbr->min_rtt_us == ~0U || bbr->min_rtt_us < BBR_LFN_MIN_PATH_RTT_US)
 +		return;
 +
-+	/* Poison the round on signals the floor must not learn from. */
++	if (rs->interval_us <= 0 || rs->is_app_limited)
++		return;
++
++	bbr->lfn_round_lost += lost;
++	bbr->lfn_round_acked += rs->acked_sacked;
++	if (tx > bbr->lfn_round_max_tx)
++		bbr->lfn_round_max_tx = tx;
++
++	/* Track minimum queue delay among non-delayed ACKs */
++	if (rs->rtt_us > 0 && !rs->is_ack_delayed) {
++		u32 qd = (u32)rs->rtt_us > bbr->min_rtt_us ?
++			 (u32)rs->rtt_us - bbr->min_rtt_us : 0;
++		if (qd < bbr->lfn_round_min_qd)
++		bbr->lfn_round_min_qd = qd;
++		if (qd > BBR_LFN_ALLOW_QDELAY_US)
++			bbr->lfn_round_congested = 1;
++	}
++
 +	if (bbr_lfn_bw_probing(bbr))
 +		bbr->lfn_round_poison = 1;
-+	tenths = bbr_lfn_sample_tenths(rs);
-+	/* Above the hard cap: not an uncongested-loss sample, whatever the
-+	 * flight size. Only a real flight also poisons the round; a tiny
-+	 * flight at high loss is not evidence of an 8% floor.
-+	 */
-+	if (tenths > BBR_LFN_CAP_TENTHS) {
-+		if (tx_in_flight >= BBR_LFN_POISON_TX)
-+			bbr->lfn_round_poison = 1;
-+		return;
-+	}
-+	if (!bbr_lfn_rtt_flat(sk)) {
-+		bbr->lfn_round_congested = 1;
-+		return;
-+	}
-+
-+	/* Only a valid, steady-state PROBE_BW sample can teach the floor:
-+	 * inflight in STARTUP and DRAIN is above BDP by design, and
-+	 * PROBE_RTT sends 4 packets.
-+	 */
-+	if (rs->interval_us <= 0 || !rs->acked_sacked || rs->is_app_limited)
-+		return;
-+	if (bbr->mode != BBR_PROBE_BW)
-+		return;
-+	if (!bbr_lfn_min_rtt_fresh(sk) || tx_in_flight < BBR_LFN_MIN_TX)
-+		return;
-+	pipe = bbr_inflight(sk, bbr_max_bw(sk), BBR_UNIT);
-+	roof = div_u64((u64)pipe * 115, 100);
-+	if (tx_in_flight > roof)
-+		return;
-+
-+	/* Quantize up to 0.2% units so a small non-zero rate is not lost. */
-+	bbr->lfn_avg = bbr_lfn_ewma_step(bbr->lfn_avg, (tenths + 1) / 2,
-+					 BBR_LFN_AVG_MAX);
-+	bbr->lfn_round_sampled = 1;
 +}
 +
 +static void bbr_lfn_round_reset(struct bbr *bbr)
 +{
-+	bbr->lfn_round_sampled = 0;
++	bbr->lfn_round_lost = 0;
++	bbr->lfn_round_acked = 0;
++	bbr->lfn_round_max_tx = 0;
++	if (bbr->lfn_round_min_qd != ~0U)
++		bbr->lfn_prev_min_qd = bbr->lfn_round_min_qd;
++	bbr->lfn_round_min_qd = ~0U;
 +	bbr->lfn_round_poison = 0;
 +	bbr->lfn_round_congested = 0;
 +}
 +
-+/* Once per loss round, after the backoff decision: move the floor toward
-+ * the recent uncongested loss rate. Cruise only, so STARTUP and probes
-+ * cannot teach a high floor. 2 * lfn_avg converts 0.2% to 0.1% units.
-+ */
 +static void bbr_lfn_round_finish(struct sock *sk)
 +{
 +	struct bbr *bbr = bbr_ca(sk);
++	u32 rate, bdp, cap, qd;
 +
 +	if (!bbr->loss_round_start)
 +		return;
-+	if (bbr_lfn_pct(sk) > 0 &&
-+	    bbr->lfn_round_sampled &&
++
++	if (bbr_lfn_pct(sk) <= 0 ||
++	    bbr->min_rtt_us == ~0U ||
++	    bbr->min_rtt_us < BBR_LFN_MIN_PATH_RTT_US)
++		goto reset;
++
++	rate = bbr_lfn_round_rate(bbr);
++	bdp = bbr_bdp(sk, bbr_max_bw(sk), BBR_UNIT);
++	cap = bbr_lfn_class_cap(bbr);
++	qd = bbr_lfn_effective_qd(bbr);
++
++	/* 1. Cruise Phase learning */
++	if (bbr->mode == BBR_PROBE_BW &&
++	    bbr->cycle_idx == BBR_BW_PROBE_CRUISE &&
 +	    !bbr->lfn_round_poison &&
 +	    !bbr->lfn_round_congested &&
-+	    bbr->mode == BBR_PROBE_BW &&
-+	    bbr->cycle_idx == BBR_BW_PROBE_CRUISE &&
-+	    bbr->min_rtt_us != ~0U &&
-+	    bbr->min_rtt_us >= BBR_LFN_MIN_PATH_RTT_US &&
-+	    bbr_lfn_min_rtt_fresh(sk))
-+		bbr->lfn_floor = bbr_lfn_ewma_step(bbr->lfn_floor,
-+						   (u32)bbr->lfn_avg * 2,
-+						   BBR_LFN_CAP_TENTHS);
++	    qd != ~0U && qd <= BBR_LFN_LEARN_QDELAY_US &&
++	    bbr_lfn_min_rtt_fresh(sk) &&
++	    bdp &&
++	    bbr->lfn_round_max_tx <= div_u64((u64)bdp * BBR_LFN_CRUISE_NUM, 100) &&
++	    rate <= cap) {
++		bbr->lfn_p_cruise = bbr_lfn_ewma_step(bbr->lfn_p_cruise, rate, cap);
++		bbr->lfn_floor = bbr->lfn_p_cruise;
++		if (bbr->lfn_cruise_rounds < 255)
++			bbr->lfn_cruise_rounds++;
++
++		/* Self-healing: if we had a temporary bad slope, but now achieved
++		 * 4 consecutive clean, unqueued cruise rounds, clear slope_bad!
++		 */
++		if (bbr->lfn_slope_bad && bbr->lfn_cruise_rounds >= 4) {
++			bbr->lfn_slope_bad = 0;
++			bbr->lfn_p_probe = bbr->lfn_p_cruise;
++		}
++	} else if (bbr->lfn_round_congested || (qd != ~0U && qd > BBR_LFN_ALLOW_QDELAY_US)) {
++		/* Queueing detected: reset cruise confidence */
++		bbr->lfn_cruise_rounds = 0;
++	}
++
++	/* 2. Probe Phase slope check */
++	if (bdp &&
++	    bbr->lfn_round_max_tx >= div_u64((u64)bdp * BBR_LFN_PROBE_NUM, 100) &&
++	    qd != ~0U && qd <= BBR_LFN_ALLOW_QDELAY_US) {
++		bbr->lfn_p_probe = bbr_lfn_ewma_step(bbr->lfn_p_probe, rate, 1000);
++		if (bbr->lfn_cruise_rounds >= 2 &&
++		    bbr->lfn_p_probe > bbr->lfn_p_cruise + BBR_LFN_SLOPE_TENTHS) {
++			bbr->lfn_slope_bad = 1;
++		}
++	}
++
++reset:
 +	bbr_lfn_round_reset(bbr);
 +}
 +
@@ -435,7 +430,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  				      const struct rate_sample *rs)
  {
  	const struct bbr *bbr = bbr_ca(sk);
-@@ -1206,7 +1536,8 @@
+@@ -1206,7 +1559,8 @@ static bool bbr_is_inflight_too_high(const struct sock *sk,
  	if (rs_lost > 0 && rs_tx_in_flight) {
  		loss_thresh = (u64)rs_tx_in_flight * bbr_param(sk, loss_thresh) >>
  				BBR_SCALE;
@@ -445,21 +440,18 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  			return true;
  		}
  	}
-@@ -1420,8 +1751,11 @@
+@@ -1420,8 +1774,8 @@ static void bbr_adapt_lower_bounds(struct sock *sk,
  		bbr_ecn_lower_bounds(sk, &ecn_inflight_lo);
  	}
  
 -	/* Loss response. */
 -	if (bbr->loss_in_round) {
-+	/* Loss response. LFN, when enabled, skips the cut only for a whole
-+	 * round whose loss rate is within tolerance. Do not init the bounds
-+	 * in that case: init would install inflight_lo == cwnd and pin it.
-+	 */
++	/* Loss response. LFN skips lower bound cut if this round is exempt. */
 +	if (bbr->loss_in_round && !bbr_lfn_round_exempt(sk, rs)) {
  		bbr_init_lower_bounds(sk, true);
  		bbr_loss_lower_bounds(sk, &bbr->bw_lo, &bbr->inflight_lo);
  	}
-@@ -2097,6 +2431,7 @@
+@@ -2097,6 +2451,7 @@ static void bbr_main(struct sock *sk, const struct rate_sample *rs)
  	bbr->ecn_in_round  |= (bbr->ecn_eligible && bbr_rs_is_ece(rs));
  	bbr_calculate_bw_sample(sk, rs, &ctx);
  	bbr_update_latest_delivery_signals(sk, rs, &ctx);
@@ -467,7 +459,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  
  	if (bbr_run_fast_path(sk, &update_model, rs, &ctx))
  		goto out;
-@@ -2112,6 +2447,7 @@
+@@ -2112,6 +2467,7 @@ static void bbr_main(struct sock *sk, const struct rate_sample *rs)
  	bbr_bound_cwnd_for_inflight_model(sk);
  
  out:
@@ -475,17 +467,22 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  	bbr_advance_latest_delivery_signals(sk, rs, &ctx);
  	bbr->prev_ca_state = inet_csk(sk)->icsk_ca_state;
  	bbr->loss_in_cycle |= bbr_rs_lost(rs) > 0;
-@@ -2135,6 +2471,9 @@
+@@ -2135,6 +2491,14 @@ __bpf_kfunc static void bbr_init(struct sock *sk)
  	}
  
  	bbr->initialized = 1;
 +	bbr->lfn_floor = 0;
-+	bbr->lfn_avg = 0;
++	bbr->lfn_p_cruise = 0;
++	bbr->lfn_p_probe = 0;
++	bbr->lfn_cruise_rounds = 0;
++	bbr->lfn_slope_bad = 0;
++	bbr->lfn_round_min_qd = ~0U;
++	bbr->lfn_prev_min_qd = ~0U;
 +	bbr_lfn_round_reset(bbr);
  
  	bbr->init_cwnd = min(0x7FU, tcp_snd_cwnd(tp));
  	bbr->prior_cwnd = bbr_init_prior_cwnd(tp);
-@@ -2467,9 +2806,105 @@
+@@ -2467,9 +2831,102 @@ static struct tcp_congestion_ops tcp_bbr_cong_ops __read_mostly = {
  	.set_state	= bbr_set_state,
  };
  
@@ -493,7 +490,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +static int bbr_lfn_min_rtt_fresh_ms = 15000;
 +module_param_named(lfn_loss_thresh_pct, bbr_lfn_loss_thresh_pct, int, 0644);
 +MODULE_PARM_DESC(lfn_loss_thresh_pct,
-+		 "LFN loss tolerance: 0 off, 1 auto (default), 2-8 manual percent");
++		 "LFN loss tolerance: 0 off, 1 auto (default), 2-5 manual percent");
 +module_param_named(lfn_min_rtt_fresh_ms, bbr_lfn_min_rtt_fresh_ms, int, 0644);
 +MODULE_PARM_DESC(lfn_min_rtt_fresh_ms,
 +		 "max age (ms) of BBR min_rtt for LFN tolerance; 0 disables the check");
@@ -544,9 +541,6 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	bn->hdr = register_net_sysctl_sz(net, "net/ipv4", bn->table,
 +					 BBR_SYSCTL_NENTRIES);
 +	if (!bn->hdr) {
-+		/* register_net_sysctl_sz() carries no errno; a rejected table
-+		 * ends up here, so report the table, not memory, as the cause.
-+		 */
 +		kfree(bn->table);
 +		bn->table = NULL;
 +		return -EINVAL;
@@ -591,7 +585,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  
  	tcp_bbr_cong_ops.flags = TCP_CONG_NON_RESTRICTED;
  #ifdef HAVE_TCP_CONG_WANTS_CE_EVENTS
-@@ -2483,12 +2918,18 @@
+@@ -2483,12 +2940,18 @@ static int __init bbr_register(void)
  	if (bbr_ecn_low)
  		tcp_bbr_cong_ops.flags |= TCP_CONG_NEEDS_ECN;
  #endif
