@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-Subject: [PATCH 2/2] tcp-bbr3: add adaptive LFN loss tolerance and fix listener clone UAF
+Subject: [PATCH 2/2] tcp-bbr3: add adaptive LFN loss tolerance and fix listener lifecycle safety
 
 Adaptive loss tolerance for long-fat network (LFN) and cross-carrier paths,
 specifically for OpenWrt default fq_codel (target 5ms, interval 100ms):
@@ -7,12 +7,12 @@ specifically for OpenWrt default fq_codel (target 5ms, interval 100ms):
   bbr_lfn_round_measured() strictly separates zero loss from small sample rounds.
 - Cruise phase floor learning:
   Learns physical loss floor up to cap only during cruise rounds with
-  min_qd <= 2ms and rate <= cap. Requires 4 consecutive clean rounds before
-  relaxing tolerance.
+  min_qd <= 2ms, rate <= cap, and flight reaching at least 0.50x BDP to avoid
+  starved proxy rounds clearing slope_bad. Requires 4 consecutive clean rounds.
 - Probe phase slope protection:
-  Limits probe loss tolerance to max(2%, floor + 1%). If probe loss rate
-  exceeds cruise floor by >= 1%, trips lfn_slope_bad and resets cruise rounds.
-  Triggered when bw probing or when tx_in_flight exceeds cruise ceiling (1.05x BDP).
+  Tracks probing status directly in bbr_lfn_note_sample() before phase
+  transitions can overwrite cycle_idx on loss ACKs.
+  Trips lfn_slope_bad if probe loss exceeds cruise floor by >= 1%.
 - 5ms fq_codel hard cutoff:
   Rounds with min_qd > 5ms immediately deny loss tolerance and reset cruise rounds.
 - Starlink / burst queue drop recovery:
@@ -21,14 +21,11 @@ specifically for OpenWrt default fq_codel (target 5ms, interval 100ms):
 - Fast-path micro-optimizations:
   Check cached min_rtt < 20ms before querying netns sysctls to avoid pointer
   indirection on LAN/WiFi. Inline round-start check on round finish exit.
-- Fix listener socket shallow-copy UAF and stack overflow:
-  Record owning sk in struct bbr. On passive accepted child sockets where
-  icsk_ca_initialized is shallow-copied as 1, detect bbr->sk != sk on demand
-  and allocate an independent state block.
-  bbr_init() reads *bbr_ca_slot(sk) directly without calling bbr_ca(),
-  eliminating infinite recursion on accepted child sockets.
-  Detaches *slot = NULL before kzalloc to ensure allocation failure safely
-  returns NULL instead of falling back to the listener's state.
+- Listening socket lifecycle safety and retry on allocation failure:
+  Do not allocate struct bbr for TCP_CLOSE or TCP_LISTEN sockets. Cloned child
+  sockets inherit NULL and allocate their own block on first transmission.
+  If allocation fails under memory pressure, slot remains NULL and retries
+  on subsequent ACKs.
 
 Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 ---
@@ -88,7 +85,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  	u32	min_rtt_us;	        /* min RTT in min_rtt_win_sec window */
  	u32	min_rtt_stamp;	        /* timestamp of min_rtt_us */
  	u32	probe_rtt_done_stamp;   /* end time for BBR_PROBE_RTT mode */
-@@ -178,8 +211,33 @@
+@@ -178,8 +211,40 @@
  	u8	unused_4;		/* to preserve alignment */
  	struct tcp_plb_state plb;
  
@@ -102,7 +99,8 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	u16	lfn_p_probe;		/* bandwidth probe loss rate in 0.1% */
 +	u8	lfn_cruise_rounds;	/* consecutive clean cruise rounds */
 +	u8	lfn_slope_bad:1,	/* probe loss significantly > cruise loss */
-+		lfn_cut_by_queue:1;	/* last cut was caused by queue delay > 5ms */
++		lfn_cut_by_queue:1,	/* last cut was caused by queue delay > 5ms */
++		lfn_round_probing:1;	/* sampled probing conditions during round */
  };
  
 +static void bbr_init(struct sock *sk);
@@ -113,6 +111,12 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	struct bbr *bbr = *slot;
 +
 +	if (unlikely(bbr && bbr->sk != sk)) {
++		*slot = NULL;
++		bbr = NULL;
++	}
++	if (unlikely(!bbr) &&
++	    sk->sk_state != TCP_CLOSE &&
++	    sk->sk_state != TCP_LISTEN) {
 +		bbr_init((struct sock *)sk);
 +		bbr = *slot;
 +	}
@@ -122,7 +126,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  struct bbr_context {
  	u32 sample_bw;
  };
-@@ -1191,11 +1249,344 @@
+@@ -1191,11 +1256,355 @@
  		bbr_raise_inflight_hi_slope(sk);
  }
  
@@ -367,6 +371,16 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	if (tx > bbr->lfn_round_max_tx)
 +		bbr->lfn_round_max_tx = tx;
 +
++	if (bbr->mode == BBR_PROBE_BW && !bbr->lfn_round_probing) {
++		if (bbr_lfn_bw_probing(bbr)) {
++			bbr->lfn_round_probing = 1;
++		} else {
++			u32 bdp = bbr_bdp(sk, bbr_max_bw(sk), BBR_UNIT);
++			if (bdp && tx > div_u64((u64)bdp * BBR_LFN_CRUISE_NUM, 100))
++				bbr->lfn_round_probing = 1;
++		}
++	}
++
 +	/* Track minimum queue delay among non-delayed ACKs */
 +	if (rs->rtt_us > 0 && !rs->is_ack_delayed) {
 +		u32 qd = (u32)rs->rtt_us > bbr->min_rtt_us ?
@@ -382,6 +396,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	bbr->lfn_round_acked = 0;
 +	bbr->lfn_round_max_tx = 0;
 +	bbr->lfn_round_min_qd = ~0U;
++	bbr->lfn_round_probing = 0;
 +}
 +
 +static void bbr_lfn_round_finish(struct sock *sk)
@@ -406,10 +421,12 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	/* 1. Cruise Phase learning */
 +	if (bbr->mode == BBR_PROBE_BW &&
 +	    bbr->cycle_idx == BBR_BW_PROBE_CRUISE &&
++	    !bbr->lfn_round_probing &&
 +	    measured &&
 +	    qd != ~0U && qd <= BBR_LFN_LEARN_QDELAY_US &&
 +	    bbr_lfn_min_rtt_fresh(sk) &&
 +	    bdp &&
++	    bbr->lfn_round_max_tx * 2 >= bdp &&
 +	    bbr->lfn_round_max_tx <= div_u64((u64)bdp * BBR_LFN_CRUISE_NUM, 100) &&
 +	    rate <= cap) {
 +		bbr->lfn_p_cruise = bbr_lfn_ewma_step(bbr->lfn_p_cruise, rate, cap);
@@ -430,9 +447,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	}
 +
 +	/* 2. Probe Phase slope check */
-+	if (measured && bdp &&
-+	    (bbr_lfn_bw_probing(bbr) ||
-+	     bbr->lfn_round_max_tx > div_u64((u64)bdp * BBR_LFN_CRUISE_NUM, 100)) &&
++	if (measured && bbr->lfn_round_probing &&
 +	    qd != ~0U && qd <= BBR_LFN_ALLOW_QDELAY_US) {
 +		bbr->lfn_p_probe = bbr_lfn_ewma_step(bbr->lfn_p_probe, rate, 1000);
 +		if (bbr->lfn_cruise_rounds >= 4 &&
@@ -468,7 +483,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  				      const struct rate_sample *rs)
  {
  	const struct bbr *bbr = bbr_ca(sk);
-@@ -1206,7 +1597,8 @@
+@@ -1206,7 +1615,8 @@
  	if (rs_lost > 0 && rs_tx_in_flight) {
  		loss_thresh = (u64)rs_tx_in_flight * bbr_param(sk, loss_thresh) >>
  				BBR_SCALE;
@@ -478,7 +493,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  			return true;
  		}
  	}
-@@ -1420,8 +1812,8 @@
+@@ -1420,8 +1830,8 @@
  		bbr_ecn_lower_bounds(sk, &ecn_inflight_lo);
  	}
  
@@ -489,7 +504,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  		bbr_init_lower_bounds(sk, true);
  		bbr_loss_lower_bounds(sk, &bbr->bw_lo, &bbr->inflight_lo);
  	}
-@@ -1672,9 +2064,23 @@
+@@ -1672,9 +2082,23 @@
  	 * samples are not known to be robustly probing bw).
  	 */
  	if (!rs->is_app_limited) {
@@ -513,7 +528,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  	}
  	if (bbr->mode == BBR_PROBE_BW && bbr->cycle_idx == BBR_BW_PROBE_UP)
  		bbr_start_bw_probe_down(sk);
-@@ -2097,6 +2503,7 @@
+@@ -2097,6 +2521,7 @@
  	bbr->ecn_in_round  |= (bbr->ecn_eligible && bbr_rs_is_ece(rs));
  	bbr_calculate_bw_sample(sk, rs, &ctx);
  	bbr_update_latest_delivery_signals(sk, rs, &ctx);
@@ -521,7 +536,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  
  	if (bbr_run_fast_path(sk, &update_model, rs, &ctx))
  		goto out;
-@@ -2112,6 +2519,8 @@
+@@ -2112,6 +2537,8 @@
  	bbr_bound_cwnd_for_inflight_model(sk);
  
  out:
@@ -530,13 +545,22 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  	bbr_advance_latest_delivery_signals(sk, rs, &ctx);
  	bbr->prev_ca_state = inet_csk(sk)->icsk_ca_state;
  	bbr->loss_in_cycle |= bbr_rs_lost(rs) > 0;
-@@ -2121,20 +2530,35 @@
+@@ -2121,20 +2548,44 @@
  __bpf_kfunc static void bbr_init(struct sock *sk)
  {
  	struct tcp_sock *tp = tcp_sk(sk);
 -	struct bbr *bbr = bbr_ca(sk);
 +	struct bbr **slot = bbr_ca_slot(sk);
 +	struct bbr *bbr = *slot;
++
++	if (sk->sk_state == TCP_CLOSE || sk->sk_state == TCP_LISTEN) {
++		if (bbr) {
++			if (bbr->sk == sk)
++				kfree(bbr);
++			*slot = NULL;
++		}
++		return;
++	}
  
  	/* struct bbr (~200B) does not fit icsk_ca_priv (104B on mainline);
  	 * keep a pointer there and allocate the real block. Called in
@@ -551,8 +575,9 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  	if (unlikely(!bbr)) {
  		bbr = kzalloc(sizeof(*bbr), GFP_ATOMIC);
  		if (!bbr)
- 			return;  /* all entry points NULL-check bbr_ca() */
+-			return;  /* all entry points NULL-check bbr_ca() */
 -		*bbr_ca_slot(sk) = bbr;
++			return;  /* *slot remains NULL; callers retry on next packet */
 +		bbr->sk = sk;
 +		*slot = bbr;
  	}
@@ -568,7 +593,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  
  	bbr->init_cwnd = min(0x7FU, tcp_snd_cwnd(tp));
  	bbr->prior_cwnd = bbr_init_prior_cwnd(tp);
-@@ -2223,8 +2647,13 @@
+@@ -2223,8 +2674,13 @@
  {
  	struct bbr **slot = bbr_ca_slot(sk);
  
@@ -584,7 +609,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  }
  
  /* BBR marks the current round trip as a loss round. */
-@@ -2467,9 +2896,102 @@
+@@ -2467,9 +2923,102 @@
  	.set_state	= bbr_set_state,
  };
  
@@ -687,7 +712,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  
  	tcp_bbr_cong_ops.flags = TCP_CONG_NON_RESTRICTED;
  #ifdef HAVE_TCP_CONG_WANTS_CE_EVENTS
-@@ -2483,12 +3005,18 @@
+@@ -2483,12 +3032,18 @@
  	if (bbr_ecn_low)
  		tcp_bbr_cong_ops.flags |= TCP_CONG_NEEDS_ECN;
  #endif
