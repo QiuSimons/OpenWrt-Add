@@ -3,6 +3,7 @@ Subject: [PATCH 1/2] tcp-bbr3: adapt for out-of-tree build on OpenWrt
 
 Replace DKMS python probe and kernel_config.h with linux/version.h guards.
 Target only tcp_bbr3.o in Makefile.
+Relocate bbr_ca definition to tcp_bbr3.c to allow struct bbr access.
 
 ---
 --- a/Makefile
@@ -104,7 +105,30 @@ Target only tcp_bbr3.o in Makefile.
  
  struct bbr;	/* defined in tcp_bbr3.c */
  
-@@ -266,6 +298,7 @@ static inline bool bbr_skb_tx_in_flight_is_suspicious(u32 pcount,
+@@ -36,10 +68,6 @@
+ 	return (struct bbr **)inet_csk_ca(sk);
+ }
+ 
+-static inline struct bbr *bbr_ca(const struct sock *sk)
+-{
+-	return *(struct bbr **)inet_csk_ca(sk);
+-}
+ 
+ /* --------------------------------------------------------------------------
+  * snd_cwnd accessors (added in ~5.15; older kernels access tp->snd_cwnd)
+@@ -106,9 +134,11 @@
+ #define TCP_ECN_OK		1
+ #endif
+ 
++#ifndef TCP_ECN_LOW
+ #ifndef HAVE_TCP_ECN_LOW
+ #define TCP_ECN_LOW		0
+ #endif
++#endif
+ 
+ /* --------------------------------------------------------------------------
+  * enum tcp_ca_event: CA_EVENT_TLP_RECOVERY is Google-tree only. The core
+@@ -266,6 +296,7 @@
   * extended struct tcp_bbr_info). Needed to fill bbr_phase on kernels whose
   * UAPI lacks it.
   * ------------------------------------------------------------------------ */
@@ -112,7 +136,7 @@ Target only tcp_bbr3.o in Makefile.
  #ifndef HAVE_TCP_BBR_PHASE
  enum tcp_bbr_phase {
  	BBR_PHASE_STARTUP,
-@@ -278,6 +311,7 @@ enum tcp_bbr_phase {
+@@ -278,6 +309,7 @@
  	BBR_PHASE_INVALID,
  };
  #endif
