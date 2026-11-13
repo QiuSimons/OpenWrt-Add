@@ -1,12 +1,14 @@
 #!/bin/sh /etc/rc.common
-# ==============================================================================
-# OpenWrt-Add x86 核心与网络调优启动脚本
-# 由 core/scripts/custom.sh 注入到上游 sbwml/autocore-arm 中
-# ==============================================================================
 
 START=99
 
+boot() {
+    start
+}
+
 start() {
+    # 内存自适应套接字缓冲区与连接队列
+    local mem_kb t_max
     mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
     if [ "$mem_kb" -ge 4194304 ]; then
         t_max=134217728
@@ -31,7 +33,9 @@ start() {
     [ -d /sys/class/net/br-lan ] && \
         sysctl -qw net.ipv4.conf.br-lan.proxy_arp=1
 
-    uci_changed=0
+    # 物理网卡硬件卸载与 GRO
+    local uci_changed=0
+    local nic_path nic uci_name f
     for nic_path in /sys/class/net/*; do
         nic=$(basename "$nic_path")
 
@@ -56,7 +60,7 @@ start() {
             ethtool -K "$nic" tx-checksum-ipv4 on 2>/dev/null || true
             ethtool -K "$nic" tx-checksum-ipv6 on 2>/dev/null || true
         }
-        for f in sg tso ufo tx-scatter-gather; do
+        for f in gro sg tso tx-scatter-gather; do
             ethtool -K "$nic" "$f" on 2>/dev/null || true
         done
     done
@@ -65,4 +69,31 @@ start() {
         uci commit network
         ubus call network reload
     fi
+
+    # 规范化 DMI 型号
+    if [ ! -s /tmp/sysinfo/model ] || grep -qiE "Default string|To be filled|System manufacturer|Type2" /tmp/sysinfo/model 2>/dev/null; then
+        echo "Standard PC" > /tmp/sysinfo/model
+    fi
+
+    # Intel P-state HWP 调优
+    local pstate_file="/sys/devices/system/cpu/intel_pstate/status"
+    local cpu
+    if [ -f "$pstate_file" ]; then
+        [ "$(cat "$pstate_file")" = "passive" ] && echo "active" > "$pstate_file" 2>/dev/null
+        for cpu in /sys/devices/system/cpu/cpu*/cpufreq; do
+            [ -f "$cpu/scaling_governor" ] && echo "powersave" > "$cpu/scaling_governor" 2>/dev/null
+            [ -f "$cpu/energy_performance_preference" ] && echo "balance_performance" > "$cpu/energy_performance_preference" 2>/dev/null
+        done
+    fi
+
+    # ZRAM 交换动态优化
+    if [ -d /sys/block/zram0 ] || grep -q "zram" /proc/swaps 2>/dev/null; then
+        sysctl -qw vm.page-cluster=0 vm.swappiness=100
+    fi
+
+    # 补发网卡 cold-plug uevent 触发队列与中断调优
+    local u
+    for u in /sys/class/net/*/uevent; do
+        echo add > "$u" 2>/dev/null
+    done
 }

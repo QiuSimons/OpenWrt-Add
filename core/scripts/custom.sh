@@ -114,37 +114,6 @@ sync_openclash() {
     return 1
 }
 
-# ------------------------------------------------------------------------------
-# autocore-arm
-# ------------------------------------------------------------------------------
-sync_autocore_arm() {
-    local target="apps/autocore-arm"
-    log_info "正在同步: $target..."
-    local tmp_dir
-    tmp_dir="$(mktemp -d)"
-
-    if clone_repo "https://github.com/sbwml/autocore-arm" "$tmp_dir/autocore-arm"; then
-        local makefile="$tmp_dir/autocore-arm/Makefile"
-        sed -i '/init/d' "$makefile" 2>/dev/null || true
-        sed -i '/autocore.json/a\\	$(INSTALL_BIN) ./files/x86/autocore $(1)/etc/init.d/' "$makefile" 2>/dev/null || true
-        sed -i '/autocore.json/a\\	$(INSTALL_DIR) $(1)/etc/init.d' "$makefile" 2>/dev/null || true
-
-        mkdir -p "$tmp_dir/autocore-arm/files/x86"
-        if [ -f "$ASSET_DIR/autocore" ]; then
-            cp -f "$ASSET_DIR/autocore" "$tmp_dir/autocore-arm/files/x86/autocore"
-        fi
-
-        sed -i 's/png/svg/g' "$tmp_dir/autocore-arm/files/generic/29_ports.js" 2>/dev/null || true
-        sed -i "s|/sys/module/shortcut_fe/refcnt|/etc/init.d/shortcut-fe|" "$tmp_dir/autocore-arm/files/generic/luci" 2>/dev/null || true
-
-        deploy_dir "$tmp_dir/autocore-arm" "$REPO_ROOT/$target"
-        rm -rf "$tmp_dir"
-        return 0
-    fi
-    record_failure "$REPO_ROOT/$target"
-    rm -rf "$tmp_dir"
-    return 1
-}
 
 # ------------------------------------------------------------------------------
 # MentoHUST-OpenWrt-ipk (打补丁修复 GCC 14 类型错误)
@@ -502,7 +471,6 @@ run_all_custom_sync() {
         sync_helloworld
         sync_openwrt_pkgs
         sync_openclash
-        sync_autocore_arm
         sync_mentohust_openwrt_ipk
         sync_einat_ebpf
         sync_luci_einat

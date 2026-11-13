@@ -1,0 +1,15 @@
+#!/bin/sh
+
+dev="${DEVICENAME:-$DEVNAME}"
+case "$dev" in
+    zram*)
+        if [ "$ACTION" = "add" ]; then
+            sysctl -qw vm.page-cluster=0 vm.swappiness=100
+        elif [ "$ACTION" = "remove" ]; then
+            # 恢复默认配置
+            if ! ls /sys/block/zram* >/dev/null 2>&1; then
+                sysctl -qw vm.page-cluster=3 vm.swappiness=60
+            fi
+        fi
+        ;;
+esac

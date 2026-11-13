@@ -53,7 +53,7 @@ OpenWrt-Add/
 │   │   ├── smart_fanout.py   # 产物按架构分发
 │   │   └── verify_manifest.py# 包清单闸门，防止静默产出残缺 feed
 │   ├── patches/              # 离线补丁文件
-│   ├── assets/               # 静态文件 (autocore 启动脚本、直连域名、闸门 allowlist、变体摘除清单)
+│   ├── assets/               # 静态文件 (直连域名、闸门 allowlist、变体摘除清单)
 │   └── tools/                # 路由器端独立运维工具 (clean-overlay.sh 等)
 ├── themes/                   # 主题与外观配置
 ├── apps/                     # 独立应用、驱动与后台服务
