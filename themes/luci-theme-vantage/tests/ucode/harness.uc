@@ -3,7 +3,7 @@
 //
 //   ucode -L tests/ucode/stubs -D PLUGIN=<plugin> -D CASES=<cases.json> tests/ucode/harness.uc
 //
-// uci, ubus and rtnl are the test doubles in stubs/. Arguments are checked
+// uci, ubus, rtnl and nl80211 are the test doubles in stubs/. Arguments are checked
 // the way rpcd-mod-ucode does before a method runs (unknown name or wrong
 // type: UBUS_STATUS_INVALID_ARGUMENT). A case's brforward ({ bridge:
 // base64 }) is written to the fake /sys/class/net (-D NET=<dir>) before
@@ -33,7 +33,7 @@ for (let c in cases) {
 			if (type(NET) != 'string' || writefile(NET + '/' + br + '/brforward', b64dec(data)) == null)
 				die(sprintf('harness: cannot write brforward for %s', br));
 
-	global.STUB = { sections: json(sprintf('%J', orig)), seq: 0, committed: false, reverted: false, fail_commit: !!c.fail_commit, ubus: c.ubus ?? {}, wireless: c.wireless_uci, network: c.network_uci ?? 'no load', fdb: c.fdb, lookup: exists(c, 'lookup') ? c.lookup : 'no lookup' };
+	global.STUB = { sections: json(sprintf('%J', orig)), seq: 0, committed: false, reverted: false, fail_commit: !!c.fail_commit, ubus: c.ubus ?? {}, wireless: c.wireless_uci, network: c.network_uci ?? 'no load', fdb: c.fdb, lookup: exists(c, 'lookup') ? c.lookup : 'no lookup', survey: exists(c, 'survey') ? c.survey : 'no survey' };
 
 	let m = obj[c.method], status = 0, reply = null;
 

@@ -34,7 +34,7 @@ port in one click, finding anything by typing — not from their look.
 | Package | Contents | Depends |
 |---|---|---|
 | `luci-theme-vantage` | ucode templates, CSS, icons, `menu-vantage.js` (shell: rail, top bar, palette, tabs, indicators), login page, its rpcd ACL (`/etc/config/vantage_theme` only), that config | `+luci-base` |
-| `luci-app-vantage` | dashboard + inspector views under `admin/dashboard` (landing page), its rpcd ACL (reads + its own config only), its rpcd ucode plugin `luci.vantage` (key-free wireless status, temperatures, the bridges' wired hosts, validated alias writes), `/etc/config/vantage` | `+luci-base +rpcd +rpcd-mod-iwinfo +rpcd-mod-ucode +ucode-mod-uci +ucode-mod-ubus +ucode-mod-fs +ucode-mod-rtnl` (rpcd-mod-iwinfo, ucode-mod-fs and ucode-mod-rtnl beyond luci-base; Wi-Fi images already have rtnl, as wifi-scripts needs it); reverse DNS (`rpcd-mod-rrdns`), mDNS (`umdns`) and hostapd's ubus objects are optional and degrade |
+| `luci-app-vantage` | dashboard + inspector views under `admin/dashboard` (landing page), its rpcd ACL (reads + its own config only), its rpcd ucode plugin `luci.vantage` (key-free wireless status, temperatures, the bridges' wired hosts, the radios' channel survey, validated alias writes), `/etc/config/vantage` | `+luci-base +rpcd +rpcd-mod-iwinfo +rpcd-mod-ucode +ucode-mod-uci +ucode-mod-ubus +ucode-mod-fs +ucode-mod-rtnl +ucode-mod-nl80211` (rpcd-mod-iwinfo, ucode-mod-fs, ucode-mod-rtnl and ucode-mod-nl80211 beyond luci-base; Wi-Fi images already have rtnl and nl80211, as wifi-scripts needs them); reverse DNS (`rpcd-mod-rrdns`), mDNS (`umdns`) and hostapd's ubus objects are optional and degrade |
 
 The theme is useful alone; the app alone works under any theme but is
 designed for Vantage. With both installed and another theme selected, the
@@ -433,9 +433,11 @@ text around it so it looks the same size.
   after 30 s, or at the next poll when the interface's state moves (its
   radio up, down, pending or reconfigured; its channel, frequency, BSSID
   or SSID in hostapd's status); the noise floor comes every poll from
-  `iwinfo survey` (1.5-2 ms a radio), its entry for the radio's channel,
-  read as a signed byte (ath12k sends 146 for -110 dBm, 0 for none),
-  falling back to `iwinfo info`'s. The
+  `luci.vantage survey` (1.5-2.5 ms a radio), its entry for the radio's
+  channel (0 for none), falling back to `iwinfo info`'s. Not from
+  `iwinfo survey`, which 1.0.19 used: rpcd calls a function libiwinfo
+  has only for its nl80211 backend, so on any other (MediaTek's mtwifi
+  in the mt798x builds) it kills rpcd (#124), and no group grants it. The
   host hints (DHCP leases, ARP) every 30 s, and on each of the three
   polls after a station or wired host first appears.
 - **Low-power router** (#101), under the theme's Appearance with the
@@ -466,8 +468,8 @@ text around it so it looks the same size.
   five-second pulse would have the browser draw sixty frames a second.
 - ACL: three groups for the app, and the theme's own, below. `luci-app-vantage` (read): `system info/board`,
   `network.interface dump`, `network.device status`, `iwinfo
-  info/assoclist/survey`, `hostapd.* get_status/get_clients`, `luci-rpc
-  getHostHints`, `luci.vantage wireless/thermal/wired/routes`, `umdns hosts`, `file read` of
+  info/assoclist`, `hostapd.* get_status/get_clients`, `luci-rpc
+  getHostHints`, `luci.vantage wireless/thermal/wired/routes/survey`, `umdns hosts`, `file read` of
   `/proc/stat`, `uci get` for `vantage`, and LuCI's own `luci
   getSwconfigPortState` (the link state of a swconfig switch's ports: LuCI
   runs `swconfig dev <switch> show`, the switch name quoted; the view asks
@@ -527,6 +529,12 @@ text around it so it looks the same size.
   answer to tell whether a full-tunnel VPN or its line carries ordinary
   traffic. Where `network.wireless status` answers with
   no radios at all, `wireless` reads the configuration too.
+  `survey({device})` returns the channel survey of one Wi-Fi interface,
+  for the noise floor: `{ mhz, noise }` for each channel the driver gives
+  a noise value (dBm, a signed byte), at most 256, from one read-only
+  NL80211 survey dump (`ucode-mod-nl80211`, NL80211_CMD_GET_SURVEY), and
+  only for an interface that cfg80211 drives (`/sys/class/net/<if>/phy80211`);
+  any other device gets no channels without the kernel being asked.
   `set_alias({mac, name, icon})`
   re-applies the view's rules on the device (unicast MAC, name of at most
   48 code points without control, bidi or invisible characters, icon from

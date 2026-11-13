@@ -33,7 +33,9 @@ const READ = {
 	'network.device': [ 'status' ],
 	'network.wireless': [ 'status' ],
 	'uci': [ 'get', 'configs', 'changes', 'state' ],
-	'iwinfo': [ 'info', 'assoclist', 'freqlist', 'txpowerlist', 'countrylist', 'devices', 'phyname', 'survey' ],
+	/* not survey: rpcd calls a function libiwinfo has for its nl80211
+	   backend only, and dies on any other (MediaTek's mtwifi, #124) */
+	'iwinfo': [ 'info', 'assoclist', 'freqlist', 'txpowerlist', 'countrylist', 'devices', 'phyname' ],
 	'file': [ 'read', 'stat', 'list', 'md5' ],
 	'rc': [ 'list' ],
 	'service': [ 'list' ],

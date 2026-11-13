@@ -19,6 +19,10 @@
  *   interface (hostapd.phy0-ap0, ...), and it carries two read methods;
  * - Wi-Fi configuration comes from luci.vantage wireless (no keys):
  *   luci-rpc getWirelessDevices and network.wireless are granted nowhere;
+ * - iwinfo survey is granted nowhere: rpcd serves it by calling a
+ *   function libiwinfo has for its NL80211 backend only, so on any other
+ *   (MediaTek's mtwifi in the mt798x builds) the call kills rpcd (#124);
+ *   the noise floor comes from luci.vantage survey instead;
  * - `file` is limited to the `read` method on /proc/stat: no exec, write,
  *   remove, list or stat, no cgi-io;
  * - uci is readable for `vantage` only and writable by nobody: no uci
@@ -32,10 +36,12 @@
  *   vlan, vid and ports only (luci.vantage wired, behind a switch), and
  *   imports nothing but uci, ubus, fs's lsdir and readfile, which it
  *   calls on paths under /sys/class/thermal (luci.vantage thermal), on
- *   the bridges' brforward and on /etc/board.json only, and rtnl for one
- *   read-only dump of the bridge forwarding database (luci.vantage wired)
- *   and one route lookup a family, IPv4 and IPv6, of a documentation
- *   address (luci.vantage routes); no other file access, no other
+ *   the bridges' brforward and on /etc/board.json only, fs's access, on
+ *   an interface's phy80211 link only, rtnl for one read-only dump of the
+ *   bridge forwarding database (luci.vantage wired) and one route lookup
+ *   a family, IPv4 and IPv6, of a documentation address (luci.vantage
+ *   routes), and nl80211 for one read-only channel survey dump of an
+ *   interface (luci.vantage survey); no other file access, no other
  *   netlink request, no process execution, and no module, cursor or
  *   connection passed on under another name; altered copies of the
  *   plugin check that these rules catch each breach;
@@ -89,8 +95,9 @@ const READ_UBUS = {
 	'luci-rpc': [ 'getHostHints' ],
 	/* LuCI's own: swconfig dev <switch> show, the switch name quoted */
 	'luci': [ 'getSwconfigPortState' ],
-	'luci.vantage': [ 'routes', 'thermal', 'wired', 'wireless' ],
-	'iwinfo': [ 'assoclist', 'info', 'survey' ],
+	'luci.vantage': [ 'routes', 'survey', 'thermal', 'wired', 'wireless' ],
+	/* not survey (#124): luci.vantage survey reads it through nl80211 */
+	'iwinfo': [ 'assoclist', 'info' ],
 	'hostapd.*': [ 'get_clients', 'get_status' ],
 	'umdns': [ 'hosts' ],
 	'uci': [ 'get' ]
@@ -190,6 +197,12 @@ test('no group can read Wi-Fi keys: wireless configuration only through luci.van
 	assert.doesNotMatch(acl[READ_GROUP].description, /Wi-Fi keys/, 'the description no longer needs the warning');
 });
 
+test('no group grants iwinfo survey, which kills rpcd on drivers other than nl80211\'s (#124)', () => {
+	for (const [ name, g ] of Object.entries(acl)) for (const kind of [ 'read', 'write' ])
+		assert.ok(!pairs((g[kind] || {}).ubus).has('iwinfo survey'), `${name}.${kind}: iwinfo survey`);
+	assert.ok(pairs(acl[READ_GROUP].read.ubus).has(PLUGIN_OBJECT + ' survey'), 'the noise floor through the plugin');
+});
+
 test('rdns group: network.rrdns lookup only, described honestly', () => {
 	const g = acl[RDNS_GROUP];
 	assert.deepEqual(Object.keys(g).sort(), [ 'description', 'read' ]);
@@ -232,7 +245,7 @@ test('the plugin registers exactly the granted luci.vantage methods, writes conf
 	for (const g of Object.values(acl)) for (const kind of [ 'read', 'write' ])
 		for (const m of ((g[kind] || {}).ubus || {})[PLUGIN_OBJECT] || []) granted.add(m);
 	assert.deepEqual(methods, [ ...granted ].sort());
-	assert.deepEqual(methods, [ 'routes', 'set_alias', 'set_quiet', 'thermal', 'wired', 'wireless' ]);
+	assert.deepEqual(methods, [ 'routes', 'set_alias', 'set_quiet', 'survey', 'thermal', 'wired', 'wireless' ]);
 	assert.ok(pairs(acl[READ_GROUP].read.ubus).has(PLUGIN_OBJECT + ' wireless'));
 	assert.ok(pairs(acl[READ_GROUP].read.ubus).has(PLUGIN_OBJECT + ' thermal'));
 	assert.ok(pairs(acl[WRITE_GROUP].write.ubus).has(PLUGIN_OBJECT + ' set_alias'));
@@ -254,24 +267,27 @@ function checkPluginSource(src) {
 	assert.deepEqual([ ...src.matchAll(/^.*\bimport\b.*$/gm) ].map(m => m[0]), [
 		'import { cursor } from \'uci\';',
 		'import { connect } from \'ubus\';',
-		'import { lsdir, readfile } from \'fs\';',
-		'import * as rtnl from \'rtnl\';'
+		'import { access, lsdir, readfile } from \'fs\';',
+		'import * as rtnl from \'rtnl\';',
+		'import * as nl80211 from \'nl80211\';'
 	]);
 	const word = /\b(system|popen|exec|require|loadfile|loadstring|include|render|writefile|unlink|global)\b/.exec(src);
 	assert.equal(word, null, word && `"${word[1]}" is banned in the plugin, as a word${REWORD}`);
 	assert.doesNotMatch(src, /(^|[^.\w])call\s*\(/m, 'the call() builtin is banned in the plugin');
 	/* fs: only the thermal zones under /sys/class/thermal, the
-	   bridges' forwarding counts (brforward) under /sys/class/net and
-	   the board description */
+	   bridges' forwarding counts (brforward) under /sys/class/net, the
+	   board description, and whether an interface has a phy80211 link
+	   (access) */
 	assert.match(src, /^const THERMAL = '\/sys\/class\/thermal';$/m);
 	assert.match(src, /^const NET = '\/sys\/class\/net';$/m);
 	assert.match(src, /^const BOARD = '\/etc\/board\.json';$/m);
-	const fsCalls = [ ...src.matchAll(/\b(lsdir|readfile)\(([^,)]*)/g) ].map(m => m[1] + '(' + m[2]);
-	assert.ok(fsCalls.length >= 5, 'found the fs calls');
-	for (const c of fsCalls) assert.match(c, /^(lsdir\(THERMAL$|readfile\(THERMAL \+ '\/' \+ n \+ '\/(temp|type)'|lsdir\(NET$|readfile\(NET \+ '\/' \+ n \+ '\/brforward'|readfile\(BOARD)$/, c);
+	const fsCalls = [ ...src.matchAll(/\b(lsdir|readfile|access)\(([^,)]*)/g) ].map(m => m[1] + '(' + m[2]);
+	assert.ok(fsCalls.length >= 6, 'found the fs calls');
+	for (const c of fsCalls) assert.match(c, /^(lsdir\(THERMAL$|readfile\(THERMAL \+ '\/' \+ n \+ '\/(temp|type)'|lsdir\(NET$|readfile\(NET \+ '\/' \+ n \+ '\/brforward'|readfile\(BOARD|access\(NET \+ '\/' \+ dev \+ '\/phy80211')$/, c);
+	assert.equal([ ...src.matchAll(/\baccess\b/g) ].length, 2, `"access" may appear only on its import and the phy80211 check${REWORD}`);
 	/* each path constant only in its definition and those calls, so no
 	   `let BOARD = ...` can shadow one; board.json read up to BOARD_MAX */
-	for (const [ name, uses ] of [ [ 'THERMAL', 4 ], [ 'NET', 3 ], [ 'BOARD', 2 ] ])
+	for (const [ name, uses ] of [ [ 'THERMAL', 4 ], [ 'NET', 4 ], [ 'BOARD', 2 ] ])
 		assert.equal([ ...src.matchAll(new RegExp('\\b' + name + '\\b', 'g')) ].length, uses, `${name}: its definition and its ${uses - 1} fs calls${REWORD}`);
 	assert.match(src, /^const BOARD_MAX = 65536; /m);
 	assert.match(src, /\breadfile\(BOARD, BOARD_MAX\)/, 'board.json read with its bound');
@@ -332,6 +348,13 @@ function checkPluginSource(src) {
 	const CONSTS = [ 'NUD_PERMANENT', 'NUD_NOARP', 'NTF_SELF', 'AF_INET', 'AF_INET6', 'RT_TABLE_MAIN', 'RTN_UNICAST' ];
 	for (const m of rest.matchAll(/\brtnl\b(?:\.const\.(\w+))?/g))
 		assert.ok(CONSTS.includes(m[1]), `"${m[0]}": "rtnl" may appear only as rtnl.const.${CONSTS.join(', ')}${REWORD}`);
+
+	/* nl80211: one request, the read-only channel survey dump (a GET
+	   with NLM_F_DUMP, never a SET, NEW, DEL or TRIGGER) of the one
+	   interface asked about, and nothing else */
+	const survey = 'let res = nl80211.request(nl80211.const.NL80211_CMD_GET_SURVEY, nl80211.const.NLM_F_DUMP, { dev });';
+	assert.deepEqual([ ...src.matchAll(/^.*\bnl80211\b.*$/gm) ].map(m => m[0].trim()), [ 'import * as nl80211 from \'nl80211\';', survey ],
+		`"nl80211" may appear only on its import and the survey dump${REWORD}`);
 }
 
 test('the plugin source rules catch writes, other configs and calls, and names passed on', () => {
@@ -342,7 +365,7 @@ test('the plugin source rules catch writes, other configs and calls, and names p
 		'renamed import': add('let w = rw(); w.set(\'wireless\', \'x\', \'encryption\', \'none\'); w.commit(\'wireless\');')
 			.replace('import { cursor } from \'uci\';', 'import { cursor, cursor as rw } from \'uci\';'),
 		'second import': plugin.replace('import { connect } from \'ubus\';', 'import { connect } from \'ubus\';\nimport * as u from \'uci\';'),
-		'fs write': plugin.replace('import { lsdir, readfile } from \'fs\';', 'import { lsdir, readfile, writefile } from \'fs\';'),
+		'fs write': plugin.replace('import { access, lsdir, readfile } from \'fs\';', 'import { access, lsdir, readfile, writefile } from \'fs\';'),
 		'cursor by reference': add('let mk = cursor; mk().commit(WIRELESS);'),
 		'cursor on a directory': plugin.replace('let uci = cursor();', 'let uci = cursor(\'/etc/init.d\');'),
 		'third cursor': add('let w = cursor(); w.load(\'network\');'),
@@ -373,7 +396,13 @@ test('the plugin source rules catch writes, other configs and calls, and names p
 		'family changed in place': plugin.replace('\t\tlet r = rtnl.request(rtnl.const.RTM_GETROUTE', '\t\tq.family -= q.family;\n\t\tlet r = rtnl.request(rtnl.const.RTM_GETROUTE'),
 		'probe changed': plugin.replace("const PROBE4 = '198.51.100.1';", "const PROBE4 = '203.0.113.7';"),
 		'rtnl by reference': add('let nl = rtnl;'),
-		'other rtnl member': add('let e = rtnl.error();')
+		'other rtnl member': add('let e = rtnl.error();'),
+		'nl80211 write': plugin.replace('nl80211.const.NL80211_CMD_GET_SURVEY, nl80211.const.NLM_F_DUMP', 'nl80211.const.NL80211_CMD_SET_INTERFACE, 0'),
+		'second nl80211 request': add('nl80211.request(nl80211.const.NL80211_CMD_TRIGGER_SCAN, 0, { dev: \'phy0-ap0\' });'),
+		'survey of another interface': plugin.replace('nl80211.const.NLM_F_DUMP, { dev });', 'nl80211.const.NLM_F_DUMP, { dev: \'phy0-ap0\' });'),
+		'nl80211 by reference': add('let n = nl80211;'),
+		'access elsewhere': add('let seen = access(\'/etc/shadow\');'),
+		'access by reference': add('let a = access;')
 	};
 	for (const [ name, src ] of Object.entries(MUTANTS)) {
 		assert.notEqual(src, plugin, name + ': the mutation applies');

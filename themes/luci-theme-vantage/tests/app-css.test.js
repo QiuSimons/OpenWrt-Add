@@ -102,3 +102,27 @@ test('Customize\'s notes are not the hint, which phones hide', () => {
 	assert.match(view, /el\.editNote = E\('span', \{ 'class': 'vt-edit-note'/);
 	assert.ok(!/vt-edit-note[^{]*\{[^}]*display: none[^}]*\}/.test(css.replace(/\.vt-edit-note\[hidden\][^}]*\}/, '')));
 });
+
+test('network path: the radio column is 172px, wider when a radio\'s text needs it (#122)', () => {
+	const fixed = rules.find(r => r.sel === '.vt-app .vt-branch' && /minmax\(136px, 172px\)/.test(r.body));
+	assert.ok(fixed, 'without subgrid: the fixed column');
+	const sup = /@supports \(grid-template-columns: subgrid\)\s*\{([\s\S]*?)\n\}/.exec(css);
+	assert.ok(sup, 'the shared column needs subgrid');
+	assert.match(sup[1], /\.vt-app \.vt-branches \{[^}]*grid-template-columns: minmax\(172px, max-content\) minmax\(0, 1fr\)/);
+	assert.match(sup[1], /\.vt-app \.vt-branch \{ grid-template-columns: subgrid; \}/);
+	assert.match(sup[1], /\.vt-app \.vt-branch > \.vt-node:first-child:not\(\.vt-node-net\) \{ max-width: 240px; \}/, 'up to 240px');
+	const mid = /@container vthero \(max-width: 1020px\)\s*\{([\s\S]*?)\n\}/.exec(css);
+	assert.ok(mid.index > sup.index, 'medium widths come after and win');
+	assert.match(mid[1], /\.vt-app \.vt-branches \{ display: flex; \}/, 'medium widths keep the stacked branches');
+});
+
+test('health cards: a reason part goes whole to the next line, without its dot (#122)', () => {
+	const view = fs.readFileSync(path.join(__dirname, '..', 'luci-app-vantage/htdocs/luci-static/resources/view/vantage/overview.js'), 'utf8');
+	assert.match(view, /reason\.split\(' · '\)\.map\(function\(p\) \{ return E\('span', \{ 'class': 'vt-part' \}, \[ p \]\); \}\)/, 'parts as text, one span each');
+	assert.match(rules.find(r => r.sel === '.vt-app .vt-chip-reason').body, /overflow:\s*hidden/, 'the clip that hides the dot at the start of a line');
+	assert.match(rules.find(r => r.sel === '.vt-app .vt-chip-reason > .vt-parts').body, /margin-inline-start:\s*-\.9em/);
+	assert.match(rules.find(r => r.sel === '.vt-app .vt-chip-reason .vt-part').body, /display:\s*inline-block/, 'a part stays whole');
+	const dot = rules.find(r => r.sel === '.vt-app .vt-chip-reason .vt-part::before');
+	assert.match(dot.body, /content:\s*"·"/);
+	assert.match(dot.body, /width:\s*\.9em/, 'as wide as the shift');
+});

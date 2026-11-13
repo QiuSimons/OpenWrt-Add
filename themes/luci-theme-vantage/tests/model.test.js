@@ -612,8 +612,9 @@ test('build: radios, SSIDs and stations with names, bands and generations', () =
 	assert.equal(phone.level.level, 'crit');
 });
 
-/* iwinfo survey: the noise floor every poll for 1.5-2 ms a radio, where
-   iwinfo info costs 15-22 ms; rpcd sends it as an unsigned byte */
+/* the survey: the noise floor every poll for 1.5-2.5 ms a radio, where
+   iwinfo info costs 15-22 ms; luci.vantage survey sends it as a signed
+   byte, rpcd's iwinfo survey (1.0.19) sent some as an unsigned one */
 test('surveyNoise: the radio\'s channel, a signed byte, 0 as none', () => {
 	const sv = [ { mhz: 2412, noise: 0 }, { mhz: 2437, noise: 146 }, { mhz: 5180, noise: -95 }, { mhz: 5975, noise: 135 }, { mhz: 5200, noise: 300 } ];
 	assert.equal(model.surveyNoise(sv, 2437), -110, 'ath12k: 146 is -110 dBm');

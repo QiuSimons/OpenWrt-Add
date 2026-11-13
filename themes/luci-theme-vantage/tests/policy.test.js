@@ -32,6 +32,7 @@ test('policy: writes and everything not on an allowlist are refused', () => {
 	no('POST', '/ubus/', rpcBody(call('system', 'reboot')), JSONH);
 	no('POST', '/ubus/', rpcBody(call('session', 'list'), call('uci', 'set', { config: 'x' }, 2)), JSONH);
 	no('POST', '/ubus/', rpcBody(call('iwinfo', 'scan', { device: 'radio0' })), JSONH);
+	no('POST', '/ubus/', rpcBody(call('iwinfo', 'survey', { device: 'ra0' })), JSONH);
 	no('POST', '/ubus/', rpcBody(call('file', 'exec', { command: '/sbin/reboot' })), JSONH);
 	no('POST', '/ubus/', rpcBody(call('file', 'exec', { command: '/bin/dmesg', params: [ '-r' ], env: { A: '1' } })), JSONH);
 	/* uhttpd's REST routes and other ubus spellings */

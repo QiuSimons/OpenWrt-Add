@@ -40,11 +40,16 @@ const NO_UCODE = UCODE ? false : 'no ucode binary (set UCODE=/path/to/ucode, e.g
 
 /* a fake /sys/class/net: br-lan and br-guest with forwarding records
    in brforward (16 bytes each; `entries` is br-lan's count, or both as
-   [ lan, guest ]), eth0 without one */
+   [ lan, guest ]), eth0 without one, phy2g-ap0, a Wi-Fi interface that
+   cfg80211 drives (its phy80211), and ra0, one MediaTek's mtwifi drives
+   (no phy80211, #124) */
 const BRIDGES = [ 'br-lan', 'br-guest' ];
+const WIFI_NET = [ 'phy2g-ap0' ];
 function fakeNet(dir, entries) {
 	const net = path.join(dir, 'net'), n = [].concat(entries, 0);
 	fs.mkdirSync(path.join(net, 'eth0'), { recursive: true });
+	fs.mkdirSync(path.join(net, 'ra0'));
+	WIFI_NET.forEach(w => fs.mkdirSync(path.join(net, w, 'phy80211'), { recursive: true }));
 	BRIDGES.forEach((b, i) => {
 		fs.mkdirSync(path.join(net, b));
 		fs.writeFileSync(path.join(net, b, 'brforward'), Buffer.alloc(16 * n[i]));
@@ -75,7 +80,7 @@ function spawnUcode(cases, source, entries, board) {
 		return spawnSync(UCODE, args, { encoding: 'utf8' });
 	} finally {
 		for (const f of [ file, plugin, boardFile ].concat(BRIDGES.map(b => path.join(dir, 'net', b, 'brforward')))) if (fs.existsSync(f)) fs.unlinkSync(f);
-		for (const d of BRIDGES.map(b => 'net/' + b).concat([ 'net/eth0', 'net', '' ])) if (fs.existsSync(path.join(dir, d))) fs.rmdirSync(path.join(dir, d));
+		for (const d of BRIDGES.map(b => 'net/' + b).concat(WIFI_NET.map(w => 'net/' + w + '/phy80211'), WIFI_NET.map(w => 'net/' + w), [ 'net/ra0', 'net/eth0', 'net', '' ])) if (fs.existsSync(path.join(dir, d))) fs.rmdirSync(path.join(dir, d));
 	}
 }
 
@@ -134,6 +139,7 @@ function runShim(cases) {
 			? shim.wirelessReply((c.ubus || {})['network.wireless status'] ?? null, c.wireless_uci ?? null)
 			: c.method === 'wired' ? { hosts: shim.wired(c.fdb ?? null) }
 			: c.method === 'routes' ? { routes: shim.routes(c.lookup ?? null) }
+			: c.method === 'survey' ? { results: shim.survey((c.args || {}).device, (c.survey && typeof c.survey === 'object') ? c.survey[(c.args || {}).device] : null, d => WIFI_NET.includes(d)) }
 			: c.method === 'set_quiet' ? shim.setQuiet(cursor, c.args || {})
 			: shim.setAlias(cursor, c.args || {});
 		return { status: 0, reply, sections: committed ? sections : orig, reverted };
@@ -353,7 +359,52 @@ const BEHAVIOUR = [
 
 const NAME_CASES = NAMES.map(([ n ]) => ({ method: 'set_alias', args: { mac: MAC, name: n } }));
 const MAC_CASES = MACS.map(m => ({ method: 'set_alias', args: { mac: m, name: 'x' } }));
-const ALL = BEHAVIOUR.concat(NAME_CASES, MAC_CASES);
+/* survey: a channel survey dump as ucode's nl80211 gives it
+   (NL80211_CMD_GET_SURVEY, NLM_F_DUMP): one message per channel, the
+   noise a signed byte, 0 or missing when the driver has none */
+const SURVEY_DUMP = [
+	{ dev: 'phy2g-ap0', wiphy: 0, survey_info: { frequency: 2412, noise: 0, time: 1000 } },
+	{ dev: 'phy2g-ap0', wiphy: 0, survey_info: { frequency: 2437, noise: -110, time: 239619, busy: 54570, time_rx: 28406, time_tx: 20562 } },
+	{ dev: 'phy2g-ap0', survey_info: { frequency: 2462 } },
+	{ dev: 'phy2g-ap0', survey_info: { frequency: 2484, noise: -95.5 } },
+	{ dev: 'phy2g-ap0', survey_info: { frequency: 0, noise: -90 } },
+	{ dev: 'phy2g-ap0', survey_info: { frequency: 200000, noise: -90 } },
+	{ dev: 'phy2g-ap0', survey_info: { frequency: 5975, noise: 200 } },
+	{ dev: 'phy2g-ap0', survey_info: { frequency: 5955, noise: -129 } },
+	{ dev: 'phy2g-ap0', survey_info: { frequency: '5180', noise: -92 } },
+	{ dev: 'phy2g-ap0', survey_info: { frequency: 5200, noise: '-92' } },
+	{ dev: 'phy2g-ap0', survey_info: [ 2437, -110 ] },
+	{ dev: 'phy2g-ap0' },
+	'junk', null, [ 1 ],
+	{ dev: 'phy2g-ap0', survey_info: { frequency: 5180, noise: -92 } }
+];
+const SURVEY_MANY = Array.from({ length: 300 }, (_, i) => ({ dev: 'phy2g-ap0', survey_info: { frequency: 2000 + i, noise: -90 } }));
+const SURVEY_CASES = [
+	{ method: 'survey', args: { device: 'phy2g-ap0' }, survey: { 'phy2g-ap0': SURVEY_DUMP } },
+	{ method: 'survey', args: { device: 'phy2g-ap0' }, survey: { 'phy2g-ap0': SURVEY_DUMP[1] } },
+	{ method: 'survey', args: { device: 'phy2g-ap0' }, survey: { 'phy2g-ap0': null } },
+	{ method: 'survey', args: { device: 'phy2g-ap0' }, survey: { 'phy2g-ap0': false } },
+	{ method: 'survey', args: { device: 'phy2g-ap0' }, survey: { 'phy2g-ap0': true } },
+	{ method: 'survey', args: { device: 'phy2g-ap0' }, survey: { 'phy2g-ap0': SURVEY_MANY } },
+	/* not an interface cfg80211 drives, or not an interface name: the
+	   kernel is not asked (the nl80211 double stops the run if it is) */
+	{ method: 'survey', args: { device: 'ra0' } },
+	{ method: 'survey', args: { device: 'eth0' } },
+	{ method: 'survey', args: { device: 'br-lan' } },
+	{ method: 'survey', args: { device: 'nope0' } },
+	{ method: 'survey', args: { device: '..' } },
+	{ method: 'survey', args: { device: '.' } },
+	{ method: 'survey', args: { device: '../net/phy2g-ap0' } },
+	{ method: 'survey', args: { device: 'phy2g-ap0/' } },
+	{ method: 'survey', args: { device: '' } },
+	{ method: 'survey', args: { device: 'x'.repeat(16) } },
+	{ method: 'survey', args: {} },
+	/* rpcd's argument check */
+	{ method: 'survey', args: { device: 5 } },
+	{ method: 'survey', args: { device: [ 'phy2g-ap0' ] } },
+	{ method: 'survey', args: { device: 'phy2g-ap0', extra: 'x' } }
+];
+const ALL = BEHAVIOUR.concat(NAME_CASES, MAC_CASES, SURVEY_CASES);
 
 /* -------------------------------------------------------------- tests */
 
@@ -464,6 +515,21 @@ test('stand-in: disabled reads like config_get_bool, and a disabled section clai
 	const m = load('vantage.model').build({ wifi: r, iwinfo: { rai4: { channel: 36 }, rai5: { channel: 36 }, rai6: { channel: 36 } } });
 	assert.deepEqual(m.ssids.filter(s => s.ifname === 'rai4').map(s => [ s.ssid, s.security.short ]), [ [ 'Open', 'Open' ] ]);
 	assert.deepEqual(m.radios.map(x => [ x.id, x.disabled ]), [ [ 'r_no', false ], [ 'r_on', false ], [ 'r_true', true ], [ 'r_yes', true ] ]);
+});
+
+test('stand-in: survey keeps each channel with a noise value, and asks nothing of a device cfg80211 does not drive (#124)', () => {
+	const r = runShim(SURVEY_CASES);
+	assert.deepEqual(r[0].reply, { results: [ { mhz: 2437, noise: -110 }, { mhz: 5180, noise: -92 } ] }, 'no noise, a bad frequency or a noise outside a signed byte: left out');
+	assert.deepEqual(r[1].reply, { results: [ { mhz: 2437, noise: -110 } ] }, 'a single message');
+	assert.deepEqual([ r[2].reply, r[3].reply, r[4].reply ], [ { results: [] }, { results: [] }, { results: [] } ], 'an empty or failed dump (null), one cut short (false), an acknowledgement (true)');
+	assert.equal(r[5].reply.results.length, shim.MAX_SURVEY, 'at most MAX_SURVEY channels');
+	for (const x of r.slice(6, 17)) assert.deepEqual([ x.status, x.reply ], [ 0, { results: [] } ]);
+	assert.deepEqual(r.slice(17).map(x => x.status), [ 2, 2, 2 ], 'rpcd refuses a number, an array, an unknown argument');
+	/* the replay has no nl80211: no channels, and the model takes iwinfo info's noise */
+	assert.deepEqual(shim.call({}, 'survey', { device: 'phy2g-ap0' }), { result: [ 0, { results: [] } ] });
+	const m = load('vantage.model').build({ wifi: { radio0: { up: true, config: { band: '2g' }, interfaces: [ { ifname: 'phy2g-ap0', config: { mode: 'ap' } } ] } },
+		iwinfo: { 'phy2g-ap0': { channel: 6, frequency: 2437, noise: -95 } }, survey: { 'phy2g-ap0': r[0].reply.results } });
+	assert.equal(m.radios[0].noiseRaw, -110, 'the survey\'s noise floor, as the plugin gives it');
 });
 
 test('stand-in: wired keeps the hosts the bridges learned, with port, VLAN and seconds since heard', () => {
@@ -774,7 +840,9 @@ test('ucode plugin: the test doubles stop a copy that writes wireless, reads ano
 		'read network': "wl.load('network');",
 		'cursor on another directory': "cursor('/etc/init.d');",
 		'another ubus call': "connect().call('file', 'read', { path: '/etc/shadow' });",
-		'a netlink write': 'rtnl.request(rtnl.const.RTM_DELNEIGH, 0, { family: rtnl.const.AF_BRIDGE });'
+		'a netlink write': 'rtnl.request(rtnl.const.RTM_DELNEIGH, 0, { family: rtnl.const.AF_BRIDGE });',
+		'a survey where none was asked for': "nl80211.request(nl80211.const.NL80211_CMD_GET_SURVEY, nl80211.const.NLM_F_DUMP, { dev: 'phy2g-ap0' });",
+		'another nl80211 request': 'nl80211.request(nl80211.const.NL80211_CMD_SET_INTERFACE, 0, { dev: \'phy2g-ap0\', iftype: 2 });'
 	};
 	const run = [ BEHAVIOUR[24], BEHAVIOUR[0] ];      /* the config fallback and an alias write */
 	const ok = spawnUcode(run, src);
@@ -782,7 +850,7 @@ test('ucode plugin: the test doubles stop a copy that writes wireless, reads ano
 	for (const [ name, code ] of Object.entries(MUTANTS)) {
 		const r = spawnUcode(run, src.replace(at, at + '\t' + code + '\n'));
 		assert.notEqual(r.status, 0, name);
-		assert.match(r.stderr, /(uci|ubus|rtnl) stub: /, name);
+		assert.match(r.stderr, /(uci|ubus|rtnl|nl80211) stub: /, name);
 	}
 });
 

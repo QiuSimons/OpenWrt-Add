@@ -367,6 +367,7 @@ test('Low-power router: Wi-Fi state, temperatures, wired hosts, iwinfo and clien
 	reply('luci.vantage thermal', [ { zone: 'thermal_zone0', type: 'cpu', temp: 50000 } ]);
 	reply('luci.vantage wired', { hosts: [ { mac: '00:00:5e:00:53:01', port: 'lan1', bridge: 'br-lan', seen: 1 } ] });
 	reply('iwinfo info', { channel: 6 });
+	reply('luci.vantage survey', [ { mhz: 2437, noise: -110 } ]);
 	reply('iwinfo survey', [ { mhz: 2437, noise: 146 } ]);
 	reply('hostapd.wl0 get_clients', { clients: {} });
 	reply('hostapd.wl0 get_status', { bssid: '00:00:5e:00:53:aa' });
@@ -377,7 +378,7 @@ test('Low-power router: Wi-Fi state, temperatures, wired hosts, iwinfo and clien
 	Date.now = () => t;
 	global.document = { hidden: false, documentElement: { getAttribute: n => n === 'data-vt-power' ? power : null } };
 	global.L = { resolveDefault: (p, d) => Promise.resolve(p).then(v => v == null ? d : v, () => d) };
-	const slowKeys = [ 'luci.vantage wireless', 'luci.vantage thermal', 'luci.vantage wired', 'iwinfo survey', 'hostapd.wl0 get_clients' ];
+	const slowKeys = [ 'luci.vantage wireless', 'luci.vantage thermal', 'luci.vantage wired', 'luci.vantage survey', 'hostapd.wl0 get_clients' ];
 	const slowCount = () => slowKeys.map(k => count[k] || 0);
 	try {
 		const first = await self.fetch();
@@ -398,12 +399,13 @@ test('Low-power router: Wi-Fi state, temperatures, wired hosts, iwinfo and clien
 		const off = await self.fetch();
 		assert.deepEqual(slowCount(), [ 3, 3, 3, 3, 3 ], 'off: every poll');
 		assert.equal(count['iwinfo info'], 2, 'iwinfo info on its own 30 s');
-		assert.deepEqual(off.survey.wl0, [ { mhz: 2437, noise: 146 } ], 'the survey every poll');
+		assert.deepEqual(off.survey.wl0, [ { mhz: 2437, noise: -110 } ], 'the survey every poll');
+		assert.equal(count['iwinfo survey'], undefined, 'never rpcd\'s iwinfo survey, which crashes rpcd on drivers other than nl80211\'s (#124)');
 	}
 	finally {
 		global.L = saved.L; Date.now = saved.now;
 		if (saved.document === undefined) delete global.document; else global.document = saved.document;
-		for (const k of Object.keys(REPLIES)) if (/^(luci\.vantage (wireless|thermal|wired)|iwinfo (info|survey)|hostapd\.|system info)/.test(k)) delete REPLIES[k];
+		for (const k of Object.keys(REPLIES)) if (/^(luci\.vantage (wireless|thermal|wired|survey)|iwinfo (info|survey)|hostapd\.|system info)/.test(k)) delete REPLIES[k];
 	}
 });
 

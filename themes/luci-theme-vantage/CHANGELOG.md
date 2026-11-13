@@ -6,6 +6,35 @@ Each release ships both packages, `luci-theme-vantage` and
 <https://github.com/anothaDev/luci-theme-vantage/releases> and in the
 [signed repositories](https://anothadev.github.io/luci-theme-vantage/).
 
+## 1.0.20 - 2026-11-12
+
+- **rpcd no longer crashes on MediaTek mtwifi routers** (#124,
+  [@zy912172991-cell](https://github.com/zy912172991-cell)). 1.0.19's
+  dashboard asked rpcd for the radios' channel survey on every refresh,
+  and rpcd calls a function that only libiwinfo's nl80211 backend has:
+  on any other, such as MediaTek's mtwifi in the mt798x builds, each
+  refresh crashed rpcd and took LuCI down with it. Vantage's own plugin
+  now reads the survey from the kernel, and only for interfaces that
+  cfg80211 drives. The dashboard's read permission (`luci-app-vantage`)
+  no longer grants `iwinfo survey` and grants `luci.vantage survey`
+  instead; the app now depends on `ucode-mod-nl80211`. **If 1.0.19 took
+  LuCI down on your router, close every LuCI tab and upgrade over SSH:**
+  `apk update && apk add --upgrade luci-app-vantage luci-theme-vantage`
+  (24.10: `opkg update && opkg upgrade luci-app-vantage
+  luci-theme-vantage`), then `/etc/init.d/rpcd restart`.
+- **Dashboard: radio cards wide enough for their channel** (#122,
+  [@VIKINGYFY](https://github.com/VIKINGYFY)). The radio cards widen
+  together, up to 240 px, when a label such as "Ch 128 · 160 MHz" needs
+  it, instead of cutting it off.
+- **Dashboard: the uplink's link rate on a line of its own when needed**
+  (#122). When the uplink card's line does not fit, the link rate moves
+  whole to the next line instead of breaking after "Gbit/" or inside
+  "链路".
+- **Wireless: a tidier list** (#122). No empty band above the first
+  radio, a network's second line starts under its name, radios are
+  separated by one line instead of two, and the signal in a network's
+  status keeps one width, so the details beside it no longer move.
+
 ## 1.0.19 - 2026-11-11
 
 - **Dashboard: less router work again** (#101,
