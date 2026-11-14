@@ -15,6 +15,8 @@
 
 The browser suite also checks every bundled catalogue in the sidebar, the custom-logo hero, the settings page layout (`tests/fixtures/settings.html`), the language listbox, and the plugin adapters (DiskMan partition bar) against copied plugin markup. It serves the repository and a minified copy locally, runs `tests/navigation.html` at 390 × 844, loads the preview in Chinese/English × light/dark × desktop/phone (screenshots go to `.cache/screenshots/`), checks the dashboard data, the language switch, keyboard/touch behaviour of the rail and drawer, and compares computed styles of the minified release build with the sources.
 
+Device regressions cover DHCP-disabled side routers with static or DHCP-client LAN, failed DHCP RPC calls, retained leases, gateway labels, and separate static WAN neighbours. These use the production dashboard with simulated provider responses. `CARBON_TEST_BROWSER` can point to an installed Chromium executable instead of Playwright's bundled browser. On a real router, also verify ARP reads after logging out and back in following an upgrade; an older session may lack the dashboard permissions. An IPv6-only device without a lease or local Wi-Fi association is not discoverable: this provider reads IPv4 ARP, while IPv6 addresses come from leases and host hints.
+
 Render the templates with the real ucode runtime:
 
 ```bash

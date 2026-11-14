@@ -116,6 +116,76 @@ test('LAN devices exclude non-static uplinks but keep a dumb AP\'s static LAN', 
 	assert.equal(C.lanDevices(null), null);
 });
 
+test('DHCP-disabled side routers discover ARP clients even when LAN obtains its address by DHCP', () => {
+	const C = load();
+	const arp = 'IP address HW type Flags HW address Mask Device\n192.168.1.20 0x1 0x2 00:11:32:aa:bb:cc * br-lan';
+	for (const proto of ['static', 'dhcp']) {
+		const ifs = [
+			{ interface: 'lan', up: true, proto, device: 'br-lan', route: [{ target: '0.0.0.0', mask: 0, nexthop: '192.168.1.1' }] },
+			{ interface: 'guest', up: true, proto: 'static', device: 'br-guest' }
+		];
+		for (const leases of [[], null]) {
+			const list = C.mergeDevices({ leases, arp: C.parseArp(arp, C.lanDevices(ifs), ifs) });
+			assert.equal(list.length, 1, proto + ': empty or unavailable local DHCP must not hide ARP clients');
+			assert.equal(list[0].ipaddr, '192.168.1.20');
+			assert.equal(list[0].lease, false);
+		}
+	}
+});
+
+test('separate static and dynamic uplinks, including aliases, are not client networks', () => {
+	const C = load();
+	for (const proto of ['static', 'dhcp', 'pppoe']) {
+		const ifs = [
+			{ interface: 'lan', up: true, proto: 'static', device: 'br-lan' },
+			{ interface: 'internet', up: true, proto, device: 'eth1', l3_device: 'eth1', route: [{ target: '0.0.0.0', mask: 0 }] },
+			{ interface: 'internet6', up: true, proto: 'dhcpv6', device: 'eth1', l3_device: 'eth1', route: [] },
+			{ interface: 'guest', up: true, proto: 'static', device: 'br-guest' }
+		];
+		assert.deepEqual(Array.from(C.lanDevices(ifs)), ['br-lan', 'br-guest'], proto);
+	}
+	assert.deepEqual(Array.from(C.lanDevices([
+		{ interface: 'lan', up: false, device: 'br-lan' },
+		{ interface: 'wan', up: true, proto: 'dhcp', device: 'eth1', route: [{ target: '0.0.0.0', mask: 0 }] }
+	])), [], 'a disconnected LAN must not cause WAN neighbours to appear');
+});
+
+test('a single custom client link with IPv6 aliases remains discoverable', () => {
+	const C = load();
+	assert.deepEqual(Array.from(C.lanDevices([
+		{ interface: 'home', up: true, proto: 'dhcp', device: 'br-home', l3_device: 'br-home', route: [{ target: '0.0.0.0', mask: 0 }] },
+		{ interface: 'home6', up: true, proto: 'dhcpv6', device: 'br-home', l3_device: 'br-home', route: [{ target: '::', mask: 0 }] },
+		{ interface: 'loopback', up: true, proto: 'static', device: 'lo' }
+	])), ['br-home']);
+});
+
+test('custom side-router links are not discarded merely because a guest network exists', () => {
+	const C = load();
+	for (const proto of ['static', 'dhcp']) {
+		assert.deepEqual(Array.from(C.lanDevices([
+			{ interface: 'home', up: true, proto, device: 'br-home', route: [{ target: '0.0.0.0', mask: 0 }] },
+			{ interface: 'guest', up: true, proto: 'static', device: 'br-guest' }
+		])), ['br-home', 'br-guest']);
+	}
+});
+
+test('gateways are identified on their own interface and retained as discovered devices', () => {
+	const C = load();
+	const ifs = [{ interface: 'lan', up: true, proto: 'static', device: 'br-lan', route: [
+		{ target: '0.0.0.0', mask: 0, nexthop: '192.168.1.1' },
+		{ target: '10.0.0.0', mask: 8, nexthop: '192.168.1.2' }
+	] }];
+	const arp = C.parseArp([
+		'IP address HW type Flags HW address Mask Device',
+		'192.168.1.1 0x1 0x2 00:11:32:aa:bb:01 * br-lan',
+		'192.168.1.1 0x1 0x2 00:11:32:aa:bb:02 * br-guest',
+		'192.168.1.2 0x1 0x2 00:11:32:aa:bb:03 * br-lan'
+	].join('\n'), null, ifs);
+	const list = C.mergeDevices({ arp, leases: [{ macaddr: '00:11:32:aa:bb:01', ipaddr: '192.168.1.1' }] });
+	assert.equal(list.length, 3);
+	assert.deepEqual(Array.from(list, (d) => d.gateway), [true, false, false]);
+});
+
 test('traffic picker lists interfaces plus physical ports such as an xPON uplink', () => {
 	const C = load();
 	/* xPON router: internet and IPTV are PPPoE sessions on VLANs of pon0 */
@@ -166,6 +236,18 @@ test('devices merge leases, Wi-Fi stations, ARP and host hints by MAC', () => {
 	assert.equal(by['00:11:32:aa:bb:cc'].lease, false);
 	assert.equal(by['11:22:33:44:55:66'].wifi.signal, null);
 	assert.deepEqual(Array.from(C.mergeDevices({ leases: [{ macaddr: 'bad' }] })), []);
+});
+
+test('IPv6-only leases are known devices without claiming an ARP or Wi-Fi observation', () => {
+	const C = load();
+	const list = C.mergeDevices({ leases6: [
+		{ hostname: 'ipv6-client', macaddr: '00:11:32:aa:bb:cc', ip6addrs: ['fd00::20/128'], expires: 3600 }
+	] });
+	assert.equal(list.length, 1);
+	assert.equal(list[0].ip6addr, 'fd00::20');
+	assert.equal(list[0].lease, true);
+	assert.equal(list[0].expires, 3600);
+	assert.equal(list[0].active, false);
 });
 
 test('IPv6 uplink address ignores link-local and needs a default route', () => {

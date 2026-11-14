@@ -60,7 +60,7 @@
 	document.title = P.title(active).filter(Boolean).join(' · ') + ' — Carbon Demo';
 	document.querySelector('.cb-brand').href = P.url(overview);
 	document.querySelector('.cb-brand-text strong').textContent = P.settings.hostname;
-	document.getElementById('demo-banner').innerHTML = '<span><strong>CARBON DEMO</strong>' + T('Explore the theme with simulated data.', '使用模拟数据体验主题效果。') + '</span><div class="demo-links">' + link('admin/network/dhcp', T('Devices', '在线设备')) + link('admin/status/syslog', T('Logs', '系统日志')) + '<a href="https://github.com/mrjoechen/luci-theme-carbon" target="_blank" rel="noopener noreferrer">GitHub ↗</a></div>';
+	document.getElementById('demo-banner').innerHTML = '<span><strong>CARBON DEMO</strong>' + T('Explore the theme with simulated data.', '使用模拟数据体验主题效果。') + '</span><div class="demo-links">' + link('admin/network/dhcp', T('Devices', '设备')) + link('admin/status/syslog', T('Logs', '系统日志')) + '<a href="https://github.com/mrjoechen/luci-theme-carbon" target="_blank" rel="noopener noreferrer">GitHub ↗</a></div>';
 	document.getElementById('indicators').textContent = T('Demo', '演示模式');
 	C.initShell({
 		logoutUrl: 'login.html?lang=' + document.documentElement.lang,

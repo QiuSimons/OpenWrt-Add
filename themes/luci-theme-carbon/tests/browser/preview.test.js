@@ -48,7 +48,7 @@ test.before(async () => {
 	server = serve({ src: ROOT, min: minRoot });
 	await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 	base = 'http://127.0.0.1:' + server.address().port;
-	browser = await chromium.launch();
+	browser = await chromium.launch({ executablePath: process.env.CARBON_TEST_BROWSER || undefined });
 	fs.mkdirSync(SHOTS, { recursive: true });
 });
 
@@ -76,6 +76,64 @@ const dashboardReady = (page) => page.waitForFunction(() =>
 	document.querySelectorAll('.cb-card.span-8 .cb-list li').length >= 8 && document.querySelector('.cb-tag-wifi') &&
 	document.querySelectorAll('.cb-kv li').length >= 3 && document.querySelector('.cb-lang .cb-lb'));
 
+test('side-router discovery works without DHCP and distinguishes neighbours, gateways and lease records', async () => {
+	const mock = fs.readFileSync(path.join(ROOT, 'preview', 'mock.js'), 'utf8');
+	for (const scenario of [
+		{ proto: 'static', leases: 'empty', lang: 'en' },
+		{ proto: 'dhcp', leases: 'empty', lang: 'en' },
+		{ proto: 'dhcp', leases: 'unavailable', lang: 'en' },
+		{ proto: 'static', leases: 'retained', lang: 'en' },
+		{ proto: 'dhcp', leases: 'empty', lang: 'zh-Hans' }
+	]) {
+		const context = await browser.newContext();
+		const page = await context.newPage();
+		const errors = [];
+		page.on('pageerror', (e) => errors.push(e.message));
+		try {
+			await page.route('**/preview/mock.js', (route) => route.fulfill({
+				contentType: 'text/javascript',
+				body: mock + '\n(' + ((s) => {
+					Object.assign(window.CarbonPreview.provider, {
+						interfaces: async () => [
+							{ interface: 'lan', up: true, proto: s.proto, device: 'br-lan', route: [{ target: '0.0.0.0', mask: 0, nexthop: '192.168.1.1' }] },
+							{ interface: 'wan', up: true, proto: 'static', device: 'eth1', route: [{ target: '0.0.0.0', mask: 0, nexthop: '10.0.0.1' }] }
+						],
+						leases: async () => {
+							if (s.leases === 'unavailable') throw new Error('DHCP RPC unavailable');
+							return { dhcp_leases: s.leases === 'retained' ? [
+								{ hostname: 'lease-only', ipaddr: '192.168.1.30', macaddr: '00:11:32:aa:bb:30', expires: 3600 }
+							] : [], dhcp6_leases: [] };
+						},
+						wireless: async () => ({}),
+						hostHints: async () => ({}),
+						neighbors: async () => [
+							'IP address HW type Flags HW address Mask Device',
+							'192.168.1.1 0x1 0x2 00:11:32:aa:bb:01 * br-lan',
+							'192.168.1.20 0x1 0x2 00:11:32:aa:bb:20 * br-lan',
+							'10.0.0.1 0x1 0x2 00:11:32:aa:bb:91 * eth1',
+							'10.0.0.20 0x1 0x2 00:11:32:aa:bb:92 * eth1'
+						].join('\n')
+					});
+				}).toString() + ')(' + JSON.stringify(scenario) + ');'
+			}));
+			await page.goto(base + '/src/preview/index.html?lang=' + scenario.lang);
+			const count = scenario.leases === 'retained' ? '3' : '2';
+			await page.waitForFunction((n) => document.querySelector('.cb-count')?.textContent === n, count);
+			const zh = scenario.lang === 'zh-Hans';
+			const clients = await page.textContent('.cb-clients');
+			assert.match(clients, zh ? /已发现设备/ : /Discovered devices/);
+			assert.match(clients, zh ? /网关/ : /Gateway/);
+			assert.match(clients, zh ? /邻居记录/ : /Neighbor entry/);
+			assert.doesNotMatch(clients, /Fixed IP|固定 IP|10\.0\.0\./);
+			if (scenario.leases === 'retained') assert.match(clients, /DHCP lease · 1h 0m left/);
+			assert.equal(await page.textContent('.cb-tile-val'), count);
+			assert.equal(await page.textContent('.cb-tile-sub'), zh ? '本机已知设备' : 'Known to this router');
+			assert.equal(await page.getAttribute('.cb-tile-head span[title]', 'title'), zh ? '可能包含离线设备。' : 'May include offline devices.');
+			assert.deepEqual(errors, []);
+		} finally { await context.close(); }
+	}
+});
+
 test('navigation regression page passes at phone width', async () => {
 	const { page, context } = await open('/src/tests/navigation.html', { width: 390, height: 844 });
 	await page.waitForFunction(() => /^(PASS|FAIL)/.test(document.title));
@@ -91,6 +149,10 @@ for (const lang of ['zh-Hans', 'en']) {
 				const { page, context, errors } = await open(`/src/preview/index.html?lang=${lang}`, { width, height, appearance });
 				await dashboardReady(page);
 				assert.equal(await page.getAttribute('html', 'data-darkmode'), appearance === 'dark' ? 'true' : 'false');
+				if (device === 'phone') {
+					const widths = await page.$$eval('.cb-clients .cb-list-main', (els) => els.map((e) => e.getBoundingClientRect().width));
+					assert.ok(widths.every((w) => w >= 90), 'lease labels and badges leave room for device names: ' + widths);
+				}
 				await page.screenshot({ path: path.join(SHOTS, `overview-${lang}-${appearance}-${device}.png`), fullPage: true });
 				assert.deepEqual(errors, []);
 				await context.close();
