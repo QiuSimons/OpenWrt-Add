@@ -70,7 +70,11 @@ fn take_value<'a>(args: &'a [String], i: &mut usize, opt: &str) -> Result<&'a st
 }
 
 pub fn parse_args() -> Result<Config, String> {
-    let args: Vec<String> = std::env::args().collect();
+    parse_args_from(std::env::args())
+}
+
+pub fn parse_args_from<I: IntoIterator<Item = String>>(args: I) -> Result<Config, String> {
+    let args: Vec<String> = args.into_iter().collect();
     let mut cfg = Config::default();
 
     let mut i = 1;
@@ -178,8 +182,8 @@ pub fn parse_args() -> Result<Config, String> {
     if cfg.gc_interval_sec == 0 || cfg.gc_interval_sec > 3600 {
         return Err("Invalid --interval: expected 1..=3600".to_string());
     }
-    if !cfg.flowcone_mark.is_power_of_two() {
-        return Err("Invalid --mark: expected a single non-zero bit (e.g. 0x40000000)".to_string());
+    if cfg.flowcone_mark == 0 {
+        return Err("Invalid --mark: expected a non-zero mark".to_string());
     }
     if cfg.bypass_mark_val & !cfg.bypass_mark_mask != 0 {
         return Err("Invalid --bypass-mark: value has bits outside the mask".to_string());
@@ -205,7 +209,7 @@ pub fn print_help() {
     println!("      --timeout <SEC>        Binding timeout in seconds (default: 120)");
     println!("      --interval <SEC>       Expiry scheduler tick in seconds (default: 5)");
     println!("      --bypass-mark <VAL[/MASK]> Mark filter to bypass FlowCone (e.g. 0x1/0x1)");
-    println!("      --mark <VAL>           Inbound DNAT mark bit (default: 0x40000000)");
+    println!("      --mark <VAL>           Inbound DNAT mark (default: 0x04787000)");
     println!(
         "      --manage-nft <1|0>     Manage firewall nftables rules automatically (default: 1)"
     );
@@ -242,5 +246,18 @@ mod tests {
     fn test_timeout_minimum() {
         // The parser is exercised indirectly; keep the policy visible here.
         assert!(Config::default().timeout_sec >= 120);
+    }
+
+    #[test]
+    fn test_mark_validation() {
+        assert!(
+            parse_args_from(vec![
+                "flowcone".into(),
+                "--mark".into(),
+                "0x04787000".into()
+            ])
+            .is_ok()
+        );
+        assert!(parse_args_from(vec!["flowcone".into(), "--mark".into(), "0".into()]).is_err());
     }
 }

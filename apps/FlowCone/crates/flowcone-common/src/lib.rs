@@ -282,7 +282,7 @@ pub fn port_state_on_release(state: u8) -> (bool, u8) {
 
 /// Packet mark set on DNAT-translated inbound packets. The daemon can override
 /// this through GlobalConfig to avoid colliding with proxy/policy marks.
-pub const DEFAULT_FLOWCONE_MARK: u32 = 0x40000000;
+pub const DEFAULT_FLOWCONE_MARK: u32 = 0x04787000;
 
 #[cfg(test)]
 mod tests {

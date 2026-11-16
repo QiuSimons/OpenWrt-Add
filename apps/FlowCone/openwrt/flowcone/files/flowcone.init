@@ -33,7 +33,7 @@ resolve_device() {
 start_service() {
 	config_load flowcone
 
-	local enable_v4 enable_v6 interface min_port max_port timeout interval bypass_mark manage_nft
+	local enable_v4 enable_v6 interface min_port max_port timeout interval bypass_mark mark manage_nft
 	config_get_bool enable_v4 config enable_v4 1
 	config_get_bool enable_v6 config enable_v6 0
 	config_get_bool manage_nft config manage_nft 1
@@ -46,6 +46,7 @@ start_service() {
 	config_get timeout config timeout "120"
 	config_get interval config interval "5"
 	config_get bypass_mark config bypass_mark ""
+	config_get mark config mark ""
 
 	local dev
 	dev=$(resolve_device "$interface")
@@ -66,7 +67,8 @@ start_service() {
 		--timeout "$timeout" \
 		--interval "$interval" \
 		--manage-nft "$manage_nft" \
-		${bypass_mark:+--bypass-mark "$bypass_mark"}
+		${bypass_mark:+--bypass-mark "$bypass_mark"} \
+		${mark:+--mark "$mark"}
 	procd_set_param respawn
 	procd_set_param stdout 1
 	procd_set_param stderr 1

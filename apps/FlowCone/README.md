@@ -46,7 +46,7 @@ FlowCone 运行在网络接口的 TCX（Ingress / Egress）钩子上，实现符
 ```text
 入站 (WAN Ingress):
   外部报文 (dst: WAN_IP:Port)
-    └─► TCX Ingress (EIF 查表 DNAT -> LAN_IP:Port, 标记 mark 0x40000000)
+    └─► TCX Ingress (EIF 查表 DNAT -> LAN_IP:Port, 标记 mark 0x04787000)
           └─► Netfilter / Software Flowtable / 路由
                 └─► 发往 LAN 主机
 
@@ -182,7 +182,7 @@ Options:
       --timeout <SEC>        Binding timeout in seconds (default: 120, minimum 120)
       --interval <SEC>       Expiry scheduler tick in seconds (default: 5)
       --bypass-mark <VAL[/MASK]> Mark filter to bypass FlowCone (e.g. 0x1/0x1)
-      --mark <VAL>           Inbound DNAT mark bit (default: 0x40000000)
+      --mark <VAL>           Inbound DNAT mark (default: 0x04787000)
       --manage-nft <1|0>     Manage firewall nftables rules automatically (default: 1)
   -v, --verbose              Verbose output
   -h, --help                 Show help
