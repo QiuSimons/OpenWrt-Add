@@ -90,6 +90,11 @@ pub(crate) fn parse_has_ipv6_masq(nft_output: &str) -> bool {
 }
 
 pub(crate) fn is_ipv6_masq_enabled() -> bool {
+    if let Ok(out) = Command::new("nft").args(["-t", "list", "ruleset"]).output()
+        && out.status.success()
+    {
+        return parse_has_ipv6_masq(&String::from_utf8_lossy(&out.stdout));
+    }
     let Ok(out) = Command::new("nft").args(["list", "ruleset"]).output() else {
         return false;
     };
@@ -97,6 +102,23 @@ pub(crate) fn is_ipv6_masq_enabled() -> bool {
         return false;
     }
     parse_has_ipv6_masq(&String::from_utf8_lossy(&out.stdout))
+}
+
+pub(crate) fn write_atomic_if_changed(path: &str, content: &str) -> bool {
+    if let Ok(existing) = fs::read_to_string(path)
+        && existing == content
+    {
+        return true;
+    }
+    let tmp_path = format!("{}.tmp.{}", path, std::process::id());
+    if fs::write(&tmp_path, content).is_err() {
+        return false;
+    }
+    if fs::rename(&tmp_path, path).is_err() {
+        let _ = fs::remove_file(&tmp_path);
+        return false;
+    }
+    true
 }
 
 pub(crate) fn strip_fw4_user_block(content: &str) -> String {
@@ -120,14 +142,12 @@ pub(crate) fn clean_firewall4_user_file() {
     if let Ok(current) = fs::read_to_string(FW4_USER_PATH) {
         let cleaned = strip_fw4_user_block(&current);
         if cleaned != current {
-            let _ = fs::write(FW4_USER_PATH, cleaned);
+            let _ = write_atomic_if_changed(FW4_USER_PATH, &cleaned);
         }
     }
 }
 
-/// Set definitions live inside table inet fw4. fw4 includes
-/// /etc/nftables.d/*.nft inside the table before chains, so a rule loaded
-/// from chain-pre can reference these sets even when no daemon is running.
+/// Nftables set definitions for inet fw4 table.
 pub(crate) fn set_definitions() -> String {
     format!(
         "set {} {{
@@ -156,7 +176,7 @@ set {} {{
 
 pub(crate) fn write_fw4_set_definitions() -> bool {
     let _ = fs::create_dir_all(SET_DEFS_DIR);
-    fs::write(SET_DEFS_FILE, set_definitions()).is_ok()
+    write_atomic_if_changed(SET_DEFS_FILE, &set_definitions())
 }
 
 pub(crate) fn clean_fw4_set_definitions() {
@@ -181,8 +201,7 @@ fn add_fw4_set(set: &str, family: &str) -> bool {
     nft_apply(&script).is_ok()
 }
 
-/// Ensure the four liveness sets exist in the live kernel table. They may not
-/// exist on the first start or after a fw4 reload.
+/// Ensures liveness timeout sets exist in the kernel inet fw4 table.
 pub(crate) fn ensure_fw4_sets() -> bool {
     if !has_table_inet_fw4() {
         return false;
@@ -316,7 +335,7 @@ pub(crate) fn update_chain_pre_files_live(
         srcnat_lines.push(generate_live_srcnat_rule_v6(iface, bypass_mask, bypass_val));
     }
     if !srcnat_lines.is_empty() {
-        ok &= fs::write(FW4_CHAIN_PRE_SRCNAT_FILE, srcnat_lines.join("\n") + "\n").is_ok();
+        ok &= write_atomic_if_changed(FW4_CHAIN_PRE_SRCNAT_FILE, &(srcnat_lines.join("\n") + "\n"));
     } else {
         ok &= remove_persisted(FW4_CHAIN_PRE_SRCNAT_FILE);
     }
@@ -329,26 +348,78 @@ pub(crate) fn update_chain_pre_files_live(
         fwd_lines.push(generate_live_forward_rule_v6(iface, mark));
     }
     if !fwd_lines.is_empty() {
-        ok &= fs::write(FW4_CHAIN_PRE_FORWARD_FILE, fwd_lines.join("\n") + "\n").is_ok();
+        ok &= write_atomic_if_changed(FW4_CHAIN_PRE_FORWARD_FILE, &(fwd_lines.join("\n") + "\n"));
     } else {
         ok &= remove_persisted(FW4_CHAIN_PRE_FORWARD_FILE);
     }
     ok
 }
 
+static V4_LIVENESS_ELEMENTS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    flowcone_common::INTERNAL_V4_PREFIXES
+        .iter()
+        .map(|p| format!("{} timeout {}s", p, LIVENESS_TIMEOUT_SEC))
+        .collect::<Vec<_>>()
+        .join(", ")
+});
+
+pub(crate) fn build_liveness_script(
+    family: &str,
+    table: &str,
+    src_v4: bool,
+    fwd_v4: bool,
+    src_v6: bool,
+    fwd_v6: bool,
+    is_v6_masq: bool,
+) -> String {
+    let mut script = String::new();
+    if src_v4 {
+        script.push_str(&format!("flush set {} {} {}\n", family, table, SET_V4));
+        script.push_str(&format!(
+            "add element {} {} {} {{ {} }}\n",
+            family,
+            table,
+            SET_V4,
+            V4_LIVENESS_ELEMENTS.as_str()
+        ));
+    }
+    if fwd_v4 {
+        script.push_str(&format!("flush set {} {} {}\n", family, table, SET_FWD4));
+        script.push_str(&format!(
+            "add element {} {} {} {{ 0.0.0.0/0 timeout {}s }}\n",
+            family, table, SET_FWD4, LIVENESS_TIMEOUT_SEC
+        ));
+    }
+    if src_v6 {
+        script.push_str(&format!("flush set {} {} {}\n", family, table, SET_V6));
+        script.push_str(&format!(
+            "add element {} {} {} {{ {} }}\n",
+            family,
+            table,
+            SET_V6,
+            v6_elements(is_v6_masq)
+        ));
+    }
+    if fwd_v6 {
+        script.push_str(&format!("flush set {} {} {}\n", family, table, SET_FWD6));
+        script.push_str(&format!(
+            "add element {} {} {} {{ ::/0 timeout {}s }}\n",
+            family, table, SET_FWD6, LIVENESS_TIMEOUT_SEC
+        ));
+    }
+    script
+}
+
 pub(crate) fn v6_elements(is_masq: bool) -> &'static str {
     if is_masq {
-        // GUA plus ULA. eBPF excludes link-local, multicast and loopback
-        // sources itself, so no unrelated traffic is NATed.
+        // Include GUA (2000::/3) and ULA (fc00::/7).
         "2000::/3 timeout 15s, fc00::/7 timeout 15s"
     } else {
         "fc00::/7 timeout 15s"
     }
 }
 
-/// Refresh the kernel timeout of the liveness elements. The rule references
-/// the set, but the set is empty unless this is called: a crashed daemon
-/// therefore loses the exemption within LIVENESS_TIMEOUT_SEC.
+/// Refreshes element timeouts in the liveness sets.
 pub(crate) fn refresh_fw4_liveness(
     enable_v4: bool,
     enable_v6: bool,
@@ -366,37 +437,9 @@ pub(crate) fn refresh_fw4_liveness(
         Err(_) => {}
     }
 
-    let mut script = String::new();
-    if enable_v4 {
-        let elements = flowcone_common::INTERNAL_V4_PREFIXES
-            .iter()
-            .map(|p| format!("{} timeout {}s", p, LIVENESS_TIMEOUT_SEC))
-            .collect::<Vec<_>>()
-            .join(", ");
-        script.push_str(&format!("flush set inet fw4 {}\n", SET_V4));
-        script.push_str(&format!(
-            "add element inet fw4 {} {{ {} }}\n",
-            SET_V4, elements
-        ));
-        script.push_str(&format!("flush set inet fw4 {}\n", SET_FWD4));
-        script.push_str(&format!(
-            "add element inet fw4 {} {{ 0.0.0.0/0 timeout {}s }}\n",
-            SET_FWD4, LIVENESS_TIMEOUT_SEC
-        ));
-    }
-    if enable_v6 {
-        script.push_str(&format!("flush set inet fw4 {}\n", SET_V6));
-        script.push_str(&format!(
-            "add element inet fw4 {} {{ {} }}\n",
-            SET_V6,
-            v6_elements(is_v6_masq)
-        ));
-        script.push_str(&format!("flush set inet fw4 {}\n", SET_FWD6));
-        script.push_str(&format!(
-            "add element inet fw4 {} {{ ::/0 timeout {}s }}\n",
-            SET_FWD6, LIVENESS_TIMEOUT_SEC
-        ));
-    }
+    let script = build_liveness_script(
+        "inet", "fw4", enable_v4, enable_v4, enable_v6, enable_v6, is_v6_masq,
+    );
     if script.is_empty() {
         return true;
     }

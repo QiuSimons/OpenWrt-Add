@@ -46,7 +46,7 @@ pub struct BindingValue6 {
 #[cfg(not(target_arch = "bpf"))]
 unsafe impl aya::Pod for BindingValue6 {}
 
-/// One new session notification consumed by the user-space expiry scheduler.
+/// Session creation notification event.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SessionEvent4 {
@@ -69,7 +69,7 @@ pub struct SessionEvent6 {
 #[cfg(not(target_arch = "bpf"))]
 unsafe impl aya::Pod for SessionEvent6 {}
 
-/// Fragment cache key. id is kept in packet byte order; it is only a key.
+/// IPv4 fragment cache key.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FragKey4 {
@@ -140,22 +140,7 @@ pub struct GlobalConfig {
 #[cfg(not(target_arch = "bpf"))]
 unsafe impl aya::Pod for GlobalConfig {}
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ConfigStore {
-    pub active: u32,
-    pub slots: [GlobalConfig; 2],
-}
-
-#[cfg(not(target_arch = "bpf"))]
-unsafe impl aya::Pod for ConfigStore {}
-
-/// Non-routable IPv4 source ranges, as CIDR strings.
-///
-/// Must match is_private_ipv4(): the nftables srcnat exemption set is
-/// generated from this list, so the eBPF SNAT gate and the firewall can never
-/// drift apart. A range that is exempted from masquerade but not SNATed by the
-/// eBPF program would leak the private source address.
+/// Non-routable IPv4 source ranges matching `is_private_ipv4()` (RFC 6890).
 #[cfg(not(target_arch = "bpf"))]
 pub const INTERNAL_V4_PREFIXES: &[&str] = &[
     "0.0.0.0/8",
@@ -175,30 +160,28 @@ pub const INTERNAL_V4_PREFIXES: &[&str] = &[
     "240.0.0.0/4",
 ];
 
-/// Check if an IPv4 source must not leave the WAN untranslated.
-///
-/// Covers the private/CGNAT subnets and the IANA special-purpose ranges
-/// (RFC 6890). Expects the ip in raw packet byte representation.
+/// Checks if an IPv4 source address belongs to private, CGNAT, or special-purpose ranges (RFC 6890).
+/// Expects `raw_ip` in network byte order.
 #[inline(always)]
 pub fn is_private_ipv4(raw_ip: u32) -> bool {
     let b = raw_ip.to_ne_bytes();
 
+    if (b[0] == 192 && b[1] == 168) || b[0] == 10 || (b[0] == 172 && (16..=31).contains(&b[1])) {
+        return true;
+    }
+
     match b[0] {
-        // 0.0.0.0/8 ("this network"), 10.0.0.0/8, 127.0.0.0/8 (loopback)
-        0 | 10 | 127 => true,
+        // 0.0.0.0/8 ("this network"), 127.0.0.0/8 (loopback)
+        0 | 127 => true,
         // 100.64.0.0/10 (CGNAT, RFC 6598)
         100 => (64..=127).contains(&b[1]),
         // 169.254.0.0/16 (link-local)
         169 => b[1] == 254,
-        // 172.16.0.0/12
-        172 => (16..=31).contains(&b[1]),
         192 => match b[1] {
             // 192.0.0.0/24 (IETF protocol assignments), 192.0.2.0/24 (TEST-NET-1)
             0 => b[2] == 0 || b[2] == 2,
             // 192.88.99.0/24 (deprecated 6to4 relay anycast)
             88 => b[2] == 99,
-            // 192.168.0.0/16
-            168 => true,
             _ => false,
         },
         // 198.18.0.0/15 (benchmarking), 198.51.100.0/24 (TEST-NET-2)
@@ -217,13 +200,7 @@ pub fn is_ula_ipv6(addr: &[u8; 16]) -> bool {
     (addr[0] & 0xfe) == 0xfc
 }
 
-/// Check if IPv6 address is a valid routable internal unicast address.
-///
-/// In ULA-only mode (`allow_all_internal = false`), only ULA `fc00::/7` is allowed.
-/// In full NAT66 mode (`allow_all_internal = true`), Global Unicast `2000::/3`
-/// is also accepted. This aligns exactly with the firewall liveness exemption
-/// sets (`{2000::/3, fc00::/7}`), avoiding Double NAT while excluding multicast
-/// (`ff00::/8`), link-local (`fe80::/10`), loopback (`::1`), and unspecified (`::`).
+/// Checks if an IPv6 address is a routable internal unicast source (ULA fc00::/7, or GUA 2000::/3 if enabled).
 #[inline(always)]
 pub fn is_routable_internal_ipv6(addr: &[u8; 16], allow_all_internal: bool) -> bool {
     if is_ula_ipv6(addr) {
@@ -237,39 +214,27 @@ pub fn is_routable_internal_ipv6(addr: &[u8; 16], allow_all_internal: bool) -> b
 }
 
 pub const MAX_BINDINGS: u32 = 65536;
-/// Per-direction, per-family fragment cache capacity. Keep this the single
-/// source of truth for the eBPF LRU maps.
 pub const FRAG_MAP_ENTRIES: u32 = 1024;
-/// Capacity in bytes for the session event ring buffers.
-/// Must be a power of 2 and a multiple of page size (4096).
-/// 262,144 bytes (256 KiB) holds ~10,000 session creation events.
 pub const SESSION_EVENT_RINGBUF_BYTES: u32 = 262144;
-/// One byte of state per port; 65536 entries cover the full u16 port space.
 pub const PORT_STATE_ENTRIES: u32 = 65536;
-/// Each parity queue can hold the whole pool; duplicates are skipped via the
-/// per-port state, and a full queue sets a user-space rebuild flag.
 pub const PORT_QUEUE_ENTRIES: u32 = 65536;
 
 pub const PORT_FREE_BIT: u8 = 1;
 pub const PORT_QUEUED_BIT: u8 = 2;
 
-/// Port popped from queue. Clears `PORT_QUEUED_BIT`.
+/// Clears `PORT_QUEUED_BIT`.
 #[inline(always)]
 pub fn port_state_on_unqueue(state: u8) -> u8 {
     state & !PORT_QUEUED_BIT
 }
 
-/// Port bound to an active session. Clears `PORT_FREE_BIT`.
+/// Clears `PORT_FREE_BIT`.
 #[inline(always)]
 pub fn port_state_on_bound(state: u8) -> u8 {
     state & !PORT_FREE_BIT
 }
 
-/// Evaluate whether a released port needs to be pushed back to queue.
-/// Returns `(needs_queue_push, new_state)`.
-///
-/// If `PORT_QUEUED_BIT` is already set (e.g. redundant release or port preservation
-/// left a stale queue entry), no duplicate queue push is needed.
+/// Evaluates state on port release; returns `(needs_queue_push, new_state)`.
 #[inline(always)]
 pub fn port_state_on_release(state: u8) -> (bool, u8) {
     let next = state | PORT_FREE_BIT;
@@ -280,8 +245,7 @@ pub fn port_state_on_release(state: u8) -> (bool, u8) {
     }
 }
 
-/// Packet mark set on DNAT-translated inbound packets. The daemon can override
-/// this through GlobalConfig to avoid colliding with proxy/policy marks.
+/// Default packet mark applied to inbound DNAT-translated packets.
 pub const DEFAULT_FLOWCONE_MARK: u32 = 0x04787000;
 
 #[cfg(test)]
@@ -461,48 +425,35 @@ mod tests {
     fn test_global_config_layout() {
         assert_eq!(core::mem::size_of::<GlobalConfig>(), 56);
         assert_eq!(core::mem::align_of::<GlobalConfig>(), 4);
-        assert_eq!(core::mem::size_of::<ConfigStore>(), 116);
-        assert_eq!(core::mem::align_of::<ConfigStore>(), 4);
     }
 
     #[test]
     fn test_port_lifecycle_state_machine() {
-        // Initial state after pool rebuild: both FREE and QUEUED bits set.
         let initial = PORT_FREE_BIT | PORT_QUEUED_BIT;
         assert_eq!(initial, 0x03);
 
-        // 1. Normal allocation flow:
-        // Pop from queue -> unqueue clears QUEUED_BIT.
         let unqueued = port_state_on_unqueue(initial);
-        assert_eq!(unqueued, PORT_FREE_BIT); // 0x01: free but unqueued
+        assert_eq!(unqueued, PORT_FREE_BIT);
 
-        // Claim port -> bound clears FREE_BIT.
         let bound = port_state_on_bound(unqueued);
-        assert_eq!(bound, 0); // 0x00: fully bound to active session
+        assert_eq!(bound, 0);
 
-        // Session expires -> release:
         let (needs_push, released) = port_state_on_release(bound);
         assert!(needs_push);
-        assert_eq!(released, PORT_FREE_BIT | PORT_QUEUED_BIT); // 0x03: ready in queue
+        assert_eq!(released, PORT_FREE_BIT | PORT_QUEUED_BIT);
 
-        // 2. Port preservation flow (direct claim without pop):
-        // Preferred port claimed directly while stale entry remains in queue.
+        // Port preservation flow: bound directly from initial state
         let preserved_bound = port_state_on_bound(initial);
-        assert_eq!(preserved_bound, PORT_QUEUED_BIT); // 0x02: bound, but QUEUED_BIT remains
+        assert_eq!(preserved_bound, PORT_QUEUED_BIT);
 
-        // When the stale queue entry is popped later:
         let stale_popped = port_state_on_unqueue(preserved_bound);
-        assert_eq!(stale_popped, 0); // Both bits clear
-        // Inbound claim will fail (port already in use). The pop handler checks:
-        // `stale_popped & PORT_FREE_BIT != 0` -> false! Entry is discarded without requeueing.
+        assert_eq!(stale_popped, 0);
 
-        // If release is called while stale QUEUED_BIT was still present:
         let (needs_push, refreshed) = port_state_on_release(preserved_bound);
-        assert!(!needs_push); // Stale entry already in queue, do not push duplicate!
+        assert!(!needs_push);
         assert_eq!(refreshed, PORT_FREE_BIT | PORT_QUEUED_BIT);
 
-        // 3. Duplicate release guard:
-        // Calling release on an already free/queued port does not push a duplicate entry.
+        // Duplicate release guard
         let (needs_push, dup_state) = port_state_on_release(PORT_FREE_BIT | PORT_QUEUED_BIT);
         assert!(!needs_push);
         assert_eq!(dup_state, PORT_FREE_BIT | PORT_QUEUED_BIT);

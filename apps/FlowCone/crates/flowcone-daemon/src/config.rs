@@ -244,7 +244,6 @@ mod tests {
 
     #[test]
     fn test_timeout_minimum() {
-        // The parser is exercised indirectly; keep the policy visible here.
         assert!(Config::default().timeout_sec >= 120);
     }
 

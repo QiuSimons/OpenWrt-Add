@@ -1,9 +1,7 @@
 //! In-process Netfilter Netlink batch updates for nftables liveness sets.
-//!
-//! Replaces external `fork/exec /usr/sbin/nft` calls with atomic, in-process
-//! Netlink messages (`NFT_MSG_NEWSETELEM`) to refresh keepalive timeouts.
 
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use rustix::net::netlink::SocketAddrNetlink;
@@ -112,6 +110,19 @@ fn v6_range(cidr: &str) -> IpRange {
     }
 }
 
+static STATIC_V4_RANGES: LazyLock<Vec<IpRange>> = LazyLock::new(|| {
+    flowcone_common::INTERNAL_V4_PREFIXES
+        .iter()
+        .map(|&p| v4_range(p))
+        .collect()
+});
+
+static STATIC_FWD4_RANGE: LazyLock<[IpRange; 1]> = LazyLock::new(|| [v4_range("0.0.0.0/0")]);
+static STATIC_V6_MASQ_RANGES: LazyLock<[IpRange; 2]> =
+    LazyLock::new(|| [v6_range("2000::/3"), v6_range("fc00::/7")]);
+static STATIC_V6_ULA_RANGES: LazyLock<[IpRange; 1]> = LazyLock::new(|| [v6_range("fc00::/7")]);
+static STATIC_FWD6_RANGE: LazyLock<[IpRange; 1]> = LazyLock::new(|| [v6_range("::/0")]);
+
 pub(crate) struct NetlinkBatch {
     buf: Vec<u8>,
     seq: u32,
@@ -128,14 +139,13 @@ impl NetlinkBatch {
     }
 
     fn push_batch_begin(&mut self) {
-        // nlmsghdr (16 bytes)
         self.buf.extend_from_slice(&20u32.to_ne_bytes());
         self.buf
             .extend_from_slice(&NFNL_MSG_BATCH_BEGIN.to_ne_bytes());
         self.buf.extend_from_slice(&NLM_F_REQUEST.to_ne_bytes());
         self.buf.extend_from_slice(&self.seq.to_ne_bytes());
         self.buf.extend_from_slice(&0u32.to_ne_bytes());
-        // nfgenmsg (4 bytes): family=0, version=0, res_id=htons(NFNL_SUBSYS_NFTABLES)
+        // nfgenmsg: family=0, version=0, res_id=htons(NFNL_SUBSYS_NFTABLES)
         self.buf.push(0);
         self.buf.push(0);
         self.buf
@@ -213,7 +223,6 @@ impl NetlinkBatch {
         let mut elem_idx: u16 = 1;
 
         for range in ranges {
-            // Element 1: Start key + timeout
             let e1 = self.start_nested(elem_idx);
             self.push_nla(NFTA_SET_ELEM_TIMEOUT, &timeout_ms.to_be_bytes());
             let k1 = self.start_nested(NFTA_SET_ELEM_KEY);
@@ -222,7 +231,6 @@ impl NetlinkBatch {
             self.end_nested(e1);
             elem_idx += 1;
 
-            // Element 2: Interval end key + flags (if present)
             if let Some(end_bytes) = range.end {
                 let e2 = self.start_nested(elem_idx);
                 self.push_nla(
@@ -239,7 +247,6 @@ impl NetlinkBatch {
 
         self.end_nested(elems_nest);
 
-        // Fill nlmsghdr (16 bytes) + nfgenmsg (4 bytes)
         let msg_len = (self.buf.len() - msg_start) as u32;
         let msg_type = ((NFNL_SUBSYS_NFTABLES as u16) << 8) | NFT_MSG_NEWSETELEM;
         let flags = NLM_F_REQUEST | NLM_F_CREATE;
@@ -287,30 +294,24 @@ pub(crate) fn refresh_liveness_netlink(
     let mut batch = NetlinkBatch::new();
 
     if enable_v4 {
-        let v4_ranges: Vec<IpRange> = flowcone_common::INTERNAL_V4_PREFIXES
-            .iter()
-            .map(|&p| v4_range(p))
-            .collect();
         batch.flush_set(table, super::fw4::SET_V4);
-        batch.add_set_elements(table, super::fw4::SET_V4, &v4_ranges, timeout_ms);
+        batch.add_set_elements(table, super::fw4::SET_V4, &STATIC_V4_RANGES, timeout_ms);
 
-        let fwd4_range = [v4_range("0.0.0.0/0")];
         batch.flush_set(table, super::fw4::SET_FWD4);
-        batch.add_set_elements(table, super::fw4::SET_FWD4, &fwd4_range, timeout_ms);
+        batch.add_set_elements(table, super::fw4::SET_FWD4, &*STATIC_FWD4_RANGE, timeout_ms);
     }
 
     if enable_v6 {
-        let mut v6_ranges = Vec::with_capacity(2);
-        if is_v6_masq {
-            v6_ranges.push(v6_range("2000::/3"));
-        }
-        v6_ranges.push(v6_range("fc00::/7"));
+        let v6_ranges: &[IpRange] = if is_v6_masq {
+            &*STATIC_V6_MASQ_RANGES
+        } else {
+            &*STATIC_V6_ULA_RANGES
+        };
         batch.flush_set(table, super::fw4::SET_V6);
-        batch.add_set_elements(table, super::fw4::SET_V6, &v6_ranges, timeout_ms);
+        batch.add_set_elements(table, super::fw4::SET_V6, v6_ranges, timeout_ms);
 
-        let fwd6_range = [v6_range("::/0")];
         batch.flush_set(table, super::fw4::SET_FWD6);
-        batch.add_set_elements(table, super::fw4::SET_FWD6, &fwd6_range, timeout_ms);
+        batch.add_set_elements(table, super::fw4::SET_FWD6, &*STATIC_FWD6_RANGE, timeout_ms);
     }
 
     let batch_bytes = batch.finish();
@@ -431,8 +432,6 @@ mod tests {
 
     #[test]
     fn test_refresh_liveness_nonexistent_table_fails_gracefully() {
-        // If unprivileged, socket creation fails gracefully;
-        // if privileged, kernel rejects non-existent table gracefully.
         let res = refresh_liveness_netlink("non_existent_table_xyz", true, false, false);
         assert!(res.is_err());
     }

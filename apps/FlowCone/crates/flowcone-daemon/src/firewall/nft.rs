@@ -2,14 +2,13 @@
 //! systems without fw4.
 
 use super::FirewallConfig;
-use super::fw4::LIVENESS_TIMEOUT_SEC;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
 use super::fw4::{
-    SET_FWD4, SET_FWD6, SET_V4, SET_V6, generate_live_forward_rule_v4,
+    SET_FWD4, SET_FWD6, SET_V4, SET_V6, build_liveness_script, generate_live_forward_rule_v4,
     generate_live_forward_rule_v6, generate_live_srcnat_rule_v4, generate_live_srcnat_rule_v6,
-    set_definitions, v6_elements,
+    set_definitions,
 };
 
 use std::sync::Mutex;
@@ -235,10 +234,7 @@ pub(crate) fn build_generic_insert_script(
     script
 }
 
-/// Standalone NAT table used when the system has no nftables chains at all.
-/// It contains liveness sets, the FlowCone UDP exemption, and a normal
-/// masquerade fallback for TCP/ICMP and for the moments when the daemon is
-/// down (the set elements expire and the maquerade path takes over).
+/// Generates standalone inet flowcone table script for hosts without existing nftables rules.
 pub(crate) fn generate_standalone_script_live(cfg: &FirewallConfig<'_>) -> String {
     let FirewallConfig {
         iface,
@@ -307,49 +303,9 @@ pub(crate) fn generic_liveness_supported() -> bool {
 }
 
 fn refresh_generic_table_cli(t: &GenericTable, is_v6_masq: bool) -> bool {
-    let mut script = String::new();
-    if t.src_v4 {
-        let elements = flowcone_common::INTERNAL_V4_PREFIXES
-            .iter()
-            .map(|p| format!("{} timeout {}s", p, LIVENESS_TIMEOUT_SEC))
-            .collect::<Vec<_>>()
-            .join(", ");
-        script.push_str(&format!("flush set {} {} {}\n", t.family, t.table, SET_V4));
-        script.push_str(&format!(
-            "add element {} {} {} {{ {} }}\n",
-            t.family, t.table, SET_V4, elements
-        ));
-    }
-    if t.fwd_v4 {
-        script.push_str(&format!(
-            "flush set {} {} {}\n",
-            t.family, t.table, SET_FWD4
-        ));
-        script.push_str(&format!(
-            "add element {} {} {} {{ 0.0.0.0/0 timeout {}s }}\n",
-            t.family, t.table, SET_FWD4, LIVENESS_TIMEOUT_SEC
-        ));
-    }
-    if t.src_v6 {
-        script.push_str(&format!("flush set {} {} {}\n", t.family, t.table, SET_V6));
-        script.push_str(&format!(
-            "add element {} {} {} {{ {} }}\n",
-            t.family,
-            t.table,
-            SET_V6,
-            v6_elements(is_v6_masq)
-        ));
-    }
-    if t.fwd_v6 {
-        script.push_str(&format!(
-            "flush set {} {} {}\n",
-            t.family, t.table, SET_FWD6
-        ));
-        script.push_str(&format!(
-            "add element {} {} {} {{ ::/0 timeout {}s }}\n",
-            t.family, t.table, SET_FWD6, LIVENESS_TIMEOUT_SEC
-        ));
-    }
+    let script = build_liveness_script(
+        &t.family, &t.table, t.src_v4, t.fwd_v4, t.src_v6, t.fwd_v6, is_v6_masq,
+    );
     if script.is_empty() {
         return true;
     }
@@ -359,9 +315,7 @@ fn refresh_generic_table_cli(t: &GenericTable, is_v6_masq: bool) -> bool {
 fn refresh_generic_table(t: &GenericTable, is_v6_masq: bool, verbose: bool) -> bool {
     let v4 = t.src_v4 || t.fwd_v4;
     let v6 = t.src_v6 || t.fwd_v6;
-    // The netlink batch refreshes both the src and the forward set of an
-    // enabled family. Only use it when the table actually has both; a table
-    // with just one would fail every refresh and fall back to CLI anyway.
+    // Netlink batch requires matching src and forward sets.
     let netlink_sets_match = t.src_v4 == t.fwd_v4 && t.src_v6 == t.fwd_v6;
     if t.family == "inet" && netlink_sets_match {
         match super::netlink::refresh_liveness_netlink(&t.table, v4, v6, is_v6_masq) {
@@ -442,37 +396,9 @@ pub(crate) fn refresh_standalone_liveness(
         Err(_) => {}
     }
 
-    let mut script = String::new();
-    if enable_v4 {
-        let elements = flowcone_common::INTERNAL_V4_PREFIXES
-            .iter()
-            .map(|p| format!("{} timeout {}s", p, LIVENESS_TIMEOUT_SEC))
-            .collect::<Vec<_>>()
-            .join(", ");
-        script.push_str(&format!("flush set inet flowcone {}\n", SET_V4));
-        script.push_str(&format!(
-            "add element inet flowcone {} {{ {} }}\n",
-            SET_V4, elements
-        ));
-        script.push_str(&format!("flush set inet flowcone {}\n", SET_FWD4));
-        script.push_str(&format!(
-            "add element inet flowcone {} {{ 0.0.0.0/0 timeout {}s }}\n",
-            SET_FWD4, LIVENESS_TIMEOUT_SEC
-        ));
-    }
-    if enable_v6 {
-        script.push_str(&format!("flush set inet flowcone {}\n", SET_V6));
-        script.push_str(&format!(
-            "add element inet flowcone {} {{ {} }}\n",
-            SET_V6,
-            v6_elements(is_v6_masq)
-        ));
-        script.push_str(&format!("flush set inet flowcone {}\n", SET_FWD6));
-        script.push_str(&format!(
-            "add element inet flowcone {} {{ ::/0 timeout {}s }}\n",
-            SET_FWD6, LIVENESS_TIMEOUT_SEC
-        ));
-    }
+    let script = build_liveness_script(
+        "inet", "flowcone", enable_v4, enable_v4, enable_v6, enable_v6, is_v6_masq,
+    );
     if script.is_empty() {
         return true;
     }
@@ -663,7 +589,7 @@ pub(crate) fn nft_output(args: &[&str]) -> Option<String> {
     }
 }
 
-/// `nft -a list ruleset` is the only way to enumerate rule handles.
+/// Queries ruleset with handles (-a) for rule enumeration.
 pub(crate) fn nft_ruleset_text() -> Option<String> {
     nft_output(&["-a", "list", "ruleset"])
 }
@@ -729,7 +655,6 @@ pub(crate) fn delete_all_injected_rules(verbose: bool) {
     }
 }
 
-/// Insert statements for the srcnat chains of a generic Linux firewall.
 #[cfg(test)]
 mod tests {
     use super::*;

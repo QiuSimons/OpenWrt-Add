@@ -9,8 +9,8 @@ use aya::maps::{Array, HashMap, MapData, Queue, RingBuf};
 use aya::{EbpfLoader, VerifierLogLevel};
 use data_plane::DataPlane;
 use flowcone_common::{
-    BindingValue4, BindingValue6, ConfigStore, EndpointKey4, EndpointKey6, FragKey4, FragKey6,
-    FragValue4, FragValue6, GlobalConfig,
+    BindingValue4, BindingValue6, EndpointKey4, EndpointKey6, FragKey4, FragKey6, FragValue4,
+    FragValue6, GlobalConfig,
 };
 use session::{SessionManager, SessionMaps};
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -21,7 +21,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Safety net for link loss the ifindex cannot reveal (index reuse, ...).
+/// Interval for periodic TCX tail verification.
 const REATTACH_INTERVAL: Duration = Duration::from_secs(30);
 
 macro_rules! take_map {
@@ -36,8 +36,8 @@ macro_rules! take_map {
 static EBPF_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flowcone-ebpf.bin"));
 static RUNNING: AtomicBool = AtomicBool::new(true);
 static RESYNC_REQUESTED: AtomicBool = AtomicBool::new(false);
-/// A poisoned control-plane lock means a thread panicked while holding
-/// shared state. Fail fast instead of silently skipping config/GC forever.
+
+/// Acquires mutex lock or exits immediately if poisoned.
 fn lock_or_exit<'a, T>(mutex: &'a Mutex<T>, what: &str) -> std::sync::MutexGuard<'a, T> {
     match mutex.lock() {
         Ok(guard) => guard,
@@ -77,8 +77,7 @@ impl ShutdownNotifier {
     }
 }
 
-/// Install the signal handlers. They own their pipe ends, so a handler only
-/// touches an atomic and write(2); both are async-signal-safe.
+/// Installs async-signal-safe signal handlers.
 fn setup_signals(sig_write: OwnedFd, wake_write: OwnedFd) {
     let sig_write = Arc::new(sig_write);
     let wake_write = Arc::new(wake_write);
@@ -118,7 +117,7 @@ pub fn resolve_effective_v6(enable_v6: bool, wan_ip6: [u8; 16], has_masq: bool) 
     }
 }
 
-/// What the data plane and the firewall were last configured with.
+/// Applied configuration and interface state.
 struct AppliedState {
     l2_len: u32,
     l2_known: bool,
@@ -152,10 +151,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // Self-pipe for async-signal-safe shutdown notification
+    // Shutdown notification self-pipe.
     let (sig_read_end, sig_write_end) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)?;
 
-    // Second self-pipe: wakes the address/watch thread on SIGHUP and shutdown.
+    // Worker wake self-pipe.
     let (wake_read_end, wake_write_end) = rustix::pipe::pipe_with(
         rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
     )?;
@@ -196,10 +195,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let btf = btf::find_btf(config.btf_path.as_deref());
 
-    // Without the verifier log first: it does not fit aya's buffer (E2BIG).
-    // On failure retry with the log so the verifier reason is reported.
-    // FLOWCONE_VERIFIER_LOG=1 selects the DEBUG log for per-program loads,
-    // which is the only way to diagnose a late load_classifier() failure.
+    // Try loading with verifier logs disabled first; on error retry with verbose logging.
     let verifier_log = std::env::var_os("FLOWCONE_VERIFIER_LOG").is_some();
     let mut bpf = {
         let mut loader = EbpfLoader::new();
@@ -229,7 +225,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let session_mgr = Arc::new(Mutex::new(SessionManager::new(SessionMaps {
-        config_store: take_map!(bpf, "CONFIG_STORE", Array<MapData, ConfigStore>),
+        config_map: take_map!(bpf, "CONFIG", Array<MapData, GlobalConfig>),
+        active_map: take_map!(bpf, "ACTIVE_CONFIG", Array<MapData, u32>),
         ob_map4: take_map!(
             bpf,
             "OUTBOUND_BINDINGS_V4",
@@ -316,6 +313,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut flush_v6 = false;
         let mut l2_warned = initial_l2.is_none();
         let mut attach_timer = Instant::now();
+        let mut has_event = true;
+        let mut cur_ifindex = start_ifindex;
 
         loop {
             let mut config_dirty = false;
@@ -325,138 +324,146 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut resolved_ip4 = applied.ip4;
             let mut resolved_ip6 = applied.ip6;
 
-            match netlink::get_iface_l2_len(&ip_cfg.iface) {
-                Some(l2) => {
-                    if !applied.l2_known || applied.l2_len != l2 {
-                        applied.l2_len = l2;
-                        applied.l2_known = true;
-                        l2_warned = false;
-                        config_dirty = true;
-                    }
-                }
-                None => {
-                    if applied.l2_known {
-                        applied.l2_known = false;
-                        config_dirty = true;
-                    }
-                    if !l2_warned {
-                        eprintln!(
-                            "flowcone: interface {} TYPE unreadable; NAT stays disabled",
-                            ip_cfg.iface
-                        );
-                        l2_warned = true;
-                    }
-                }
-            }
-
-            // A re-created interface (PPPoE/WireGuard reconnect) lost its
-            // links; the periodic check below covers what the ifindex cannot.
-            let cur_ifindex = netlink::get_ifindex(&ip_cfg.iface).unwrap_or(0);
-            let present = cur_ifindex != 0;
-            if present && (!applied.present || cur_ifindex != applied.ifindex) {
-                println!(
-                    "flowcone: interface {} re-created (ifindex {} -> {}), re-attaching",
-                    ip_cfg.iface, applied.ifindex, cur_ifindex
-                );
-                reattach = true;
-                force_new_attach = true;
-                notable = true;
-                config_dirty = true;
-                attach_timer = Instant::now();
-            } else if present && attach_timer.elapsed() >= REATTACH_INTERVAL {
-                attach_timer = Instant::now();
-                reattach = true;
-            }
-            applied.present = present;
-
-            // Explicit resync request (SIGHUP from the init script).
+            // SIGHUP resync request.
             let resync = RESYNC_REQUESTED.swap(false, Ordering::Relaxed);
-            if resync {
-                config_dirty = true;
-            }
+            let reattach_due = applied.present && attach_timer.elapsed() >= REATTACH_INTERVAL;
+            let has_wan_addr = applied.ip4 != 0 || applied.ip6 != [0u8; 16];
+            let needs_full_probe = has_event
+                || resync
+                || reattach_due
+                || !applied.present
+                || !applied.l2_known
+                || !has_wan_addr;
 
-            // A failed query is transient, not "the interface lost its address".
-            let iface_addrs = netlink::get_iface_addrs(cur_ifindex);
-
-            if ip_cfg.enable_v4 {
-                match iface_addrs.as_ref().map(|a| a.v4) {
-                    Ok(Some(ip4_bytes)) => {
-                        let ip4 = u32::from_ne_bytes(ip4_bytes);
-                        if ip4 != applied.ip4 {
-                            println!(
-                                "flowcone: WAN IPv4 updated to {}",
-                                Ipv4Addr::from(ip4_bytes)
-                            );
-                            if applied.ip4 != 0 {
-                                println!("flowcone: flushing stale v4 mappings");
-                            }
-                            flush_v4 = true;
-                            frag_epoch = frag_epoch.wrapping_add(1);
-                            applied.ip4 = ip4;
-                            resolved_ip4 = ip4;
+            if needs_full_probe {
+                match netlink::get_iface_l2_len(&ip_cfg.iface) {
+                    Some(l2) => {
+                        if !applied.l2_known || applied.l2_len != l2 {
+                            applied.l2_len = l2;
+                            applied.l2_known = true;
+                            l2_warned = false;
                             config_dirty = true;
                         }
                     }
-                    Ok(None) => {
-                        if applied.ip4 != 0 {
-                            println!("flowcone: WAN interface lost IPv4");
-                            flush_v4 = true;
-                            frag_epoch = frag_epoch.wrapping_add(1);
-                            applied.ip4 = 0;
-                            resolved_ip4 = 0;
+                    None => {
+                        if applied.l2_known {
+                            applied.l2_known = false;
                             config_dirty = true;
                         }
-                    }
-                    Err(e) => {
-                        if ip_cfg.verbose {
+                        if !l2_warned {
                             eprintln!(
-                                "flowcone: warning: transient netlink address query error: {:?}",
-                                e
+                                "flowcone: interface {} TYPE unreadable; NAT stays disabled",
+                                ip_cfg.iface
                             );
+                            l2_warned = true;
                         }
                     }
                 }
-            }
 
-            if ip_cfg.enable_v6 {
-                match iface_addrs.as_ref().map(|a| a.v6) {
-                    Ok(Some(ip6)) => {
-                        if ip6 != applied.ip6 {
-                            println!("flowcone: WAN IPv6 updated to {}", Ipv6Addr::from(ip6));
-                            if applied.ip6 != [0u8; 16] {
-                                println!("flowcone: flushing stale v6 mappings");
+                // Detect interface re-creation.
+                cur_ifindex = netlink::get_ifindex(&ip_cfg.iface).unwrap_or(0);
+                let present = cur_ifindex != 0;
+                if present && (!applied.present || cur_ifindex != applied.ifindex) {
+                    println!(
+                        "flowcone: interface {} re-created (ifindex {} -> {}), re-attaching",
+                        ip_cfg.iface, applied.ifindex, cur_ifindex
+                    );
+                    reattach = true;
+                    force_new_attach = true;
+                    notable = true;
+                    config_dirty = true;
+                    attach_timer = Instant::now();
+                } else if present && attach_timer.elapsed() >= REATTACH_INTERVAL {
+                    attach_timer = Instant::now();
+                    reattach = true;
+                }
+                applied.present = present;
+
+                if resync {
+                    config_dirty = true;
+                }
+
+                let iface_addrs = netlink::get_iface_addrs(cur_ifindex);
+
+                if ip_cfg.enable_v4 {
+                    match iface_addrs.as_ref().map(|a| a.v4) {
+                        Ok(Some(ip4_bytes)) => {
+                            let ip4 = u32::from_ne_bytes(ip4_bytes);
+                            if ip4 != applied.ip4 {
+                                println!(
+                                    "flowcone: WAN IPv4 updated to {}",
+                                    Ipv4Addr::from(ip4_bytes)
+                                );
+                                if applied.ip4 != 0 {
+                                    println!("flowcone: flushing stale v4 mappings");
+                                }
+                                flush_v4 = true;
+                                frag_epoch = frag_epoch.wrapping_add(1);
+                                applied.ip4 = ip4;
+                                resolved_ip4 = ip4;
+                                config_dirty = true;
                             }
-                            flush_v6 = true;
-                            frag_epoch = frag_epoch.wrapping_add(1);
-                            applied.ip6 = ip6;
-                            resolved_ip6 = ip6;
-                            config_dirty = true;
+                        }
+                        Ok(None) => {
+                            if applied.ip4 != 0 {
+                                println!("flowcone: WAN interface lost IPv4");
+                                flush_v4 = true;
+                                frag_epoch = frag_epoch.wrapping_add(1);
+                                applied.ip4 = 0;
+                                resolved_ip4 = 0;
+                                config_dirty = true;
+                            }
+                        }
+                        Err(e) => {
+                            if ip_cfg.verbose {
+                                eprintln!(
+                                    "flowcone: warning: transient netlink address query error: {:?}",
+                                    e
+                                );
+                            }
                         }
                     }
-                    Ok(None) => {
-                        if applied.ip6 != [0u8; 16] {
-                            println!("flowcone: WAN interface lost IPv6");
-                            flush_v6 = true;
-                            frag_epoch = frag_epoch.wrapping_add(1);
-                            applied.ip6 = [0u8; 16];
-                            resolved_ip6 = [0u8; 16];
-                            config_dirty = true;
+                }
+
+                if ip_cfg.enable_v6 {
+                    match iface_addrs.as_ref().map(|a| a.v6) {
+                        Ok(Some(ip6)) => {
+                            if ip6 != applied.ip6 {
+                                println!("flowcone: WAN IPv6 updated to {}", Ipv6Addr::from(ip6));
+                                if applied.ip6 != [0u8; 16] {
+                                    println!("flowcone: flushing stale v6 mappings");
+                                }
+                                flush_v6 = true;
+                                frag_epoch = frag_epoch.wrapping_add(1);
+                                applied.ip6 = ip6;
+                                resolved_ip6 = ip6;
+                                config_dirty = true;
+                            }
                         }
-                    }
-                    Err(e) => {
-                        if ip_cfg.verbose {
-                            eprintln!(
-                                "flowcone: warning: transient netlink address query error: {:?}",
-                                e
-                            );
+                        Ok(None) => {
+                            if applied.ip6 != [0u8; 16] {
+                                println!("flowcone: WAN interface lost IPv6");
+                                flush_v6 = true;
+                                frag_epoch = frag_epoch.wrapping_add(1);
+                                applied.ip6 = [0u8; 16];
+                                resolved_ip6 = [0u8; 16];
+                                config_dirty = true;
+                            }
+                        }
+                        Err(e) => {
+                            if ip_cfg.verbose {
+                                eprintln!(
+                                    "flowcone: warning: transient netlink address query error: {:?}",
+                                    e
+                                );
+                            }
                         }
                     }
                 }
             }
 
             if config_dirty {
-                // Read the masquerade state once; the data plane and the
-                // firewall rules must make the same decision.
+                // Synchronize IPv6 masquerade state between data plane and firewall.
                 let is_v6_masq = firewall::is_ipv6_masq_enabled();
                 let effective_v6 = if applied.l2_known {
                     resolve_effective_v6(ip_cfg.enable_v6, resolved_ip6, is_v6_masq)
@@ -490,8 +497,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     verbose: ip_cfg.verbose,
                 };
 
-                // On a shrink, stage the stricter rules before disabling the
-                // data plane. On grow or SIGHUP, sync once after publishing.
+                // Stage stricter firewall rules before scaling down data plane.
                 if ip_cfg.manage_nft && shrinking {
                     stage_ok = firewall::sync_fw4_rules(&fw_cfg);
                     if !stage_ok {
@@ -591,9 +597,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 std::process::exit(1);
                             } else {
-                                // A/B rotation attaches the new pair first.
-                                // On failure the old pair is still active, so
-                                // this is a safe no-op until the next check.
+                                // Previous dispatchers remain active on rotation failure.
                                 eprintln!(
                                     "flowcone: TCX tail rotation failed: {}; old links retained",
                                     e
@@ -632,8 +636,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ip_cfg.verbose,
                 )
             {
-                // The sets can disappear on an fw4 reload; resync recreates
-                // them instead of letting the exemption expire silently.
+                // Re-sync firewall if liveness refresh fails.
                 if ip_cfg.verbose {
                     eprintln!("flowcone: liveness refresh failed; scheduling resync");
                 }
@@ -646,23 +649,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 Duration::from_secs(if has_wan_addr { 5 } else { 1 })
             };
-            match monitor {
+            has_event = match monitor {
                 Some(ref monitor) => {
-                    monitor.wait(wake_read_end.as_fd(), sleep_dur);
-                    // Drain the wake pipe (non blocking).
+                    let netlink_event = monitor.wait(wake_read_end.as_fd(), sleep_dur);
+                    // Drain wake pipe.
                     let mut buf = [0u8; 32];
+                    let mut pipe_event = false;
                     while let Ok(n) = rustix::io::read(&wake_read_end, &mut buf) {
                         if n == 0 {
                             break;
                         }
+                        pipe_event = true;
                     }
+                    netlink_event || pipe_event
                 }
                 None => {
                     if !ip_notifier.wait_timeout(sleep_dur) {
                         break;
                     }
+                    true
                 }
-            }
+            };
             if !RUNNING.load(Ordering::Relaxed) {
                 break;
             }
@@ -676,18 +683,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gc_interval = Duration::from_secs(config.gc_interval_sec.max(1));
 
     let gc_thread = thread::spawn(move || {
-        while gc_notifier.wait_timeout(gc_interval) {
+        let mut interval = gc_interval;
+        while gc_notifier.wait_timeout(interval) {
             let now = (get_monotonic_coarse_ns() / 1_000_000_000) as u32;
-            {
+            let has_more = {
                 let mut mgr = lock_or_exit(&gc_session, "session");
-                let (v4_swept, v6_swept) = mgr.gc_tick(now, timeout);
+                let (v4_swept, v6_swept, backlog) = mgr.gc_tick(now, timeout);
                 if verbose && (v4_swept > 0 || v6_swept > 0) {
                     println!(
                         "flowcone: swept {} v4 and {} v6 expired sessions",
                         v4_swept, v6_swept
                     );
                 }
-            }
+                backlog
+            };
+            interval = if has_more {
+                Duration::from_millis(50)
+            } else {
+                gc_interval
+            };
         }
     });
 
@@ -732,18 +746,13 @@ mod tests {
         ];
         let zero_ip = [0u8; 16];
 
-        // Disabled by config (false)
         assert_eq!(resolve_effective_v6(false, dummy_ip, false), 0);
         assert_eq!(resolve_effective_v6(false, dummy_ip, true), 0);
 
-        // Enabled (true), but no WAN IPv6 address available
         assert_eq!(resolve_effective_v6(true, zero_ip, false), 0);
         assert_eq!(resolve_effective_v6(true, zero_ip, true), 0);
 
-        // Enabled (true), Auto-adaptive mode:
-        // Without masquerade in nftables -> Mode 1 (ULA NAT66 + Native GUA direct wire-speed)
         assert_eq!(resolve_effective_v6(true, dummy_ip, false), 1);
-        // With masquerade in nftables -> Mode 2 (Full NAT66)
         assert_eq!(resolve_effective_v6(true, dummy_ip, true), 2);
     }
 }

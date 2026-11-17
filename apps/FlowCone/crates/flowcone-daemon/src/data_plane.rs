@@ -35,9 +35,7 @@ fn attach_classifier(
         TcAttachType::Egress => "egress",
     };
 
-    // bpf_link_update() is a no-op for a live link and fails with -ENOLINK once
-    // the net_device is gone, so the old link is taken either way and only
-    // updated while force_new is off (then the interface instance did not change).
+    // Reuse existing link if valid and interface instance has not changed.
     let old_link = previous
         .take()
         .and_then(|link_id| prog.take_link(link_id).ok());
@@ -126,12 +124,7 @@ fn tcx_is_tail(
     Ok(programs.last().map(|p| p.id() == prog_id).unwrap_or(false))
 }
 
-/// Loaded eBPF object plus the currently attached link ids.
-///
-/// The attached links are tiny A/B tail-call dispatchers. The real ingress/
-/// egress implementation is loaded once and referenced by two ProgramArray
-/// maps; both dispatchers call the same idempotent program, so a tail move can
-/// attach B, switch, and remove A without a WAN gap or double NAT.
+/// Manages loaded eBPF programs, target maps, and TCX A/B dispatchers.
 pub(crate) struct DataPlane {
     bpf: aya::Ebpf,
     iface: String,
@@ -182,7 +175,6 @@ impl DataPlane {
 
     pub(crate) fn start(bpf: aya::Ebpf, iface: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let mut bpf = bpf;
-        // Load the real programs once; they are tail-call targets, not links.
         load_classifier(&mut bpf, "flowcone_tcx_ingress").map_err(
             |e| -> Box<dyn std::error::Error> {
                 format!("load target flowcone_tcx_ingress: {e}").into()
@@ -253,7 +245,7 @@ impl DataPlane {
         Ok(data_plane)
     }
 
-    /// (Re-)attach the active dispatcher pair without loading them again.
+    /// Attaches the active dispatcher pair.
     pub(crate) fn attach(
         &mut self,
         force_new: bool,
@@ -284,9 +276,7 @@ impl DataPlane {
         Ok(())
     }
 
-    /// Attach the inactive dispatcher pair at the tail, then remove the old
-    /// pair. Both dispatchers tail-call the same idempotent target, so the
-    /// overlap is safe and there is no WAN gap.
+    /// Rotates active and standby dispatchers to reclaim tail position.
     fn rotate(&mut self, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
         let new = 1 - self.active;
         let (new_in_name, new_out_name) = if new == 0 {

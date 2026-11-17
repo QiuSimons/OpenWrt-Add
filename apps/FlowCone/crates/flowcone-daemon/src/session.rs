@@ -1,8 +1,8 @@
 use aya::maps::{Array, HashMap, MapData, Queue, RingBuf};
 use flowcone_common::{
-    BindingValue4, BindingValue6, ConfigStore, EndpointKey4, EndpointKey6, FragKey4, FragKey6,
-    FragValue4, FragValue6, GlobalConfig, MAX_BINDINGS, PORT_FREE_BIT, PORT_QUEUED_BIT,
-    SessionEvent4, SessionEvent6, port_state_on_release,
+    BindingValue4, BindingValue6, EndpointKey4, EndpointKey6, FragKey4, FragKey6, FragValue4,
+    FragValue6, GlobalConfig, MAX_BINDINGS, PORT_FREE_BIT, PORT_QUEUED_BIT, SessionEvent4,
+    SessionEvent6, port_state_on_release,
 };
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -42,21 +42,38 @@ fn parse_proc_udp_ports(text: &str) -> Vec<u16> {
 
 /// Added and removed ports between two sorted, deduplicated lists.
 fn reserved_delta(previous: &[u16], current: &[u16]) -> (Vec<u16>, Vec<u16>) {
-    let added = current
-        .iter()
-        .copied()
-        .filter(|p| previous.binary_search(p).is_err())
-        .collect();
-    let removed = previous
-        .iter()
-        .copied()
-        .filter(|p| current.binary_search(p).is_err())
-        .collect();
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < previous.len() && j < current.len() {
+        match previous[i].cmp(&current[j]) {
+            std::cmp::Ordering::Less => {
+                removed.push(previous[i]);
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                added.push(current[j]);
+                j += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    if i < previous.len() {
+        removed.extend_from_slice(&previous[i..]);
+    }
+    if j < current.len() {
+        added.extend_from_slice(&current[j..]);
+    }
     (added, removed)
 }
 
 pub struct SessionManager {
-    config_store: Array<MapData, ConfigStore>,
+    config_map: Array<MapData, GlobalConfig>,
+    active_map: Array<MapData, u32>,
     ob_map4: HashMap<MapData, EndpointKey4, BindingValue4>,
     ib_map4: HashMap<MapData, u16, BindingValue4>,
     ob_map6: HashMap<MapData, EndpointKey6, BindingValue6>,
@@ -82,12 +99,10 @@ pub struct SessionManager {
     min_port: u16,
     max_port: u16,
     freed_ports: Vec<u16>,
-    // Expiry scheduler: one heap entry per live session. A due entry is
-    // revalidated against last_seen before it is deleted, so a packet that
-    // arrives between scheduling and expiry simply reschedules the session.
+    // Expiry scheduler min-heaps.
     heap4: BinaryHeap<Expiry4>,
     heap6: BinaryHeap<Expiry6>,
-    // Reused only by the rare full sweep path (lost queue notification).
+    // Pre-allocated buffers for full-table sweeps.
     expired_v4: Vec<(EndpointKey4, u16)>,
     expired_v6: Vec<(EndpointKey6, u16)>,
     orphan_ports: Vec<u16>,
@@ -202,8 +217,7 @@ fn sweep_family<V: ConeBinding>(
 
     let mut swept = 0;
     for &(key, port_host) in expired_buf.iter() {
-        // Revalidate after collecting. A datapath refresh between the first
-        // scan and this point wins; the entry is kept.
+        // Revalidate against datapath refresh.
         if let Ok(cur_val) = ob_map.get(&key, 0) {
             let cur_ib_last = match ib_map.get(&port_host, 0) {
                 Ok(iv) if iv.matches_key(&key) => iv.last_seen(),
@@ -249,10 +263,10 @@ fn sweep_family<V: ConeBinding>(
     swept
 }
 
-/// All maps owned by the control plane. Grouping them keeps the manager
-/// constructor readable and makes the map-to-field wiring obvious.
+/// Collection of eBPF maps used by SessionManager.
 pub struct SessionMaps {
-    pub config_store: Array<MapData, ConfigStore>,
+    pub config_map: Array<MapData, GlobalConfig>,
+    pub active_map: Array<MapData, u32>,
     pub ob_map4: HashMap<MapData, EndpointKey4, BindingValue4>,
     pub ib_map4: HashMap<MapData, u16, BindingValue4>,
     pub ob_map6: HashMap<MapData, EndpointKey6, BindingValue6>,
@@ -282,7 +296,7 @@ enum ExpiryStep {
     Drop,
 }
 
-/// `None` means neither side matches; `Some(0)` is a valid timestamp.
+/// Calculates expiry action for binding.
 fn expiry_step(now: u32, timeout: u32, seen: Option<u32>, strike: u8) -> ExpiryStep {
     match seen {
         Some(last) if now.saturating_sub(last) <= timeout => ExpiryStep::Keep {
@@ -295,10 +309,19 @@ fn expiry_step(now: u32, timeout: u32, seen: Option<u32>, strike: u8) -> ExpiryS
     }
 }
 
+struct FamilyPortPool<'a> {
+    even: &'a mut Queue<MapData, u16>,
+    odd: &'a mut Queue<MapData, u16>,
+    free_state: &'a mut Array<MapData, u8>,
+    reserved_ports: &'a [u16],
+    port_flags: &'a mut Array<MapData, u32>,
+}
+
 impl SessionManager {
     pub fn new(maps: SessionMaps) -> Self {
         let SessionMaps {
-            config_store,
+            config_map,
+            active_map,
             ob_map4,
             ib_map4,
             ob_map6,
@@ -321,7 +344,8 @@ impl SessionManager {
             port_flags,
         } = maps;
         Self {
-            config_store,
+            config_map,
+            active_map,
             ob_map4,
             ib_map4,
             ob_map6,
@@ -374,122 +398,88 @@ impl SessionManager {
         while q.pop(0).is_ok() {}
     }
 
-    fn set_range_state(state: &mut Array<MapData, u8>, min: u16, max: u16) {
-        let mut p = min as u32;
-        while p <= max as u32 {
-            let _ = state.set(p, &1, 0);
-            p += 1;
-        }
-    }
-
-    fn sync_reserved4(&mut self, current: &[u16]) -> bool {
-        let (added, removed) = reserved_delta(&self.reserved4_ports, current);
+    fn sync_family_reserved(
+        reserved_ports: &mut Vec<u16>,
+        current: &[u16],
+        reserved_map: &mut Array<MapData, u8>,
+        free_state: &mut Array<MapData, u8>,
+        ib_map_contains: impl Fn(u16) -> bool,
+        to_release: &mut Vec<u16>,
+    ) -> bool {
+        let (added, removed) = reserved_delta(reserved_ports, current);
         if added.is_empty() && removed.is_empty() {
             return false;
         }
         for port in added {
-            let _ = self.reserved4.set(port as u32, &1, 0);
-            let _ = self.free_state4.set(port as u32, &0, 0);
+            let _ = reserved_map.set(port as u32, &1, 0);
+            let _ = free_state.set(port as u32, &0, 0);
         }
         for port in removed {
-            let _ = self.reserved4.set(port as u32, &0, 0);
-            if self.ib_map4.get(&port, 0).is_err() {
-                self.release_port4(port);
+            let _ = reserved_map.set(port as u32, &0, 0);
+            if !ib_map_contains(port) {
+                to_release.push(port);
             }
         }
-        self.reserved4_ports = current.to_vec();
+        *reserved_ports = current.to_vec();
         true
     }
 
-    fn sync_reserved6(&mut self, current: &[u16]) -> bool {
-        let (added, removed) = reserved_delta(&self.reserved6_ports, current);
-        if added.is_empty() && removed.is_empty() {
-            return false;
-        }
-        for port in added {
-            let _ = self.reserved6.set(port as u32, &1, 0);
-            let _ = self.free_state6.set(port as u32, &0, 0);
-        }
-        for port in removed {
-            let _ = self.reserved6.set(port as u32, &0, 0);
-            if self.ib_map6.get(&port, 0).is_err() {
-                self.release_port6(port);
-            }
-        }
-        self.reserved6_ports = current.to_vec();
-        true
-    }
-
-    /// Reconcile the reserved set with the current listening UDP sockets so a
-    /// stopped service returns its port to the pool. A port still held by a
-    /// live mapping stays out of the queue until that mapping expires.
+    /// Synchronizes reserved local UDP service ports from /proc/net/udp[6].
     pub fn reserve_local_ports(&mut self) {
-        // A transient read failure must not clear reservations: an empty list
-        // would return every port to the pool and could steal a live service.
+        // Ignore transient read errors to preserve existing reservations.
+        let mut to_release = Vec::new();
         if let Ok(text) = std::fs::read_to_string("/proc/net/udp") {
             let mut ports = parse_proc_udp_ports(&text);
             ports.sort_unstable();
             ports.dedup();
-            self.sync_reserved4(&ports);
+            Self::sync_family_reserved(
+                &mut self.reserved4_ports,
+                &ports,
+                &mut self.reserved4,
+                &mut self.free_state4,
+                |p| self.ib_map4.get(&p, 0).is_ok(),
+                &mut to_release,
+            );
+            for p in to_release.drain(..) {
+                self.release_port4(p);
+            }
         }
         if let Ok(text) = std::fs::read_to_string("/proc/net/udp6") {
             let mut ports = parse_proc_udp_ports(&text);
             ports.sort_unstable();
             ports.dedup();
-            self.sync_reserved6(&ports);
+            Self::sync_family_reserved(
+                &mut self.reserved6_ports,
+                &ports,
+                &mut self.reserved6,
+                &mut self.free_state6,
+                |p| self.ib_map6.get(&p, 0).is_ok(),
+                &mut to_release,
+            );
+            for p in to_release.drain(..) {
+                self.release_port6(p);
+            }
         }
     }
 
-    fn init_family4(&mut self) {
-        if !self.pool_ready() {
-            return;
-        }
-        Self::drain_queue(&mut self.free_even4);
-        Self::drain_queue(&mut self.free_odd4);
-        Self::set_range_state(&mut self.free_state4, self.min_port, self.max_port);
-        let mut p = self.min_port;
+    fn init_family_pool(min_port: u16, max_port: u16, pool: &mut FamilyPortPool<'_>) {
+        Self::drain_queue(pool.even);
+        Self::drain_queue(pool.odd);
+        let mut p = min_port;
         loop {
             let q = if (p & 1) == 0 {
-                &mut self.free_even4
+                &mut *pool.even
             } else {
-                &mut self.free_odd4
+                &mut *pool.odd
             };
             if q.push(&p, 0).is_err() {
-                let _ = self.port_flags.set(0, &1, 0);
+                let _ = pool.port_flags.set(0, &1, 0);
                 break;
             }
-            let _ = self
-                .free_state4
+            let _ = pool
+                .free_state
                 .set(p as u32, &(PORT_FREE_BIT | PORT_QUEUED_BIT), 0);
-            if p == self.max_port {
-                break;
-            }
-            p += 1;
-        }
-    }
-
-    fn init_family6(&mut self) {
-        if !self.pool_ready() {
-            return;
-        }
-        Self::drain_queue(&mut self.free_even6);
-        Self::drain_queue(&mut self.free_odd6);
-        Self::set_range_state(&mut self.free_state6, self.min_port, self.max_port);
-        let mut p = self.min_port;
-        loop {
-            let q = if (p & 1) == 0 {
-                &mut self.free_even6
-            } else {
-                &mut self.free_odd6
-            };
-            if q.push(&p, 0).is_err() {
-                let _ = self.port_flags.set(0, &1, 0);
-                break;
-            }
-            let _ = self
-                .free_state6
-                .set(p as u32, &(PORT_FREE_BIT | PORT_QUEUED_BIT), 0);
-            if p == self.max_port {
+            if p == max_port {
                 break;
             }
             p += 1;
@@ -499,71 +489,121 @@ impl SessionManager {
     pub fn init_port_pool(&mut self, enable_v4: bool, enable_v6: bool) {
         self.pool_enable_v4 = enable_v4;
         self.pool_enable_v6 = enable_v6;
+        if !self.pool_ready() {
+            return;
+        }
         if enable_v4 {
-            self.init_family4();
+            let mut pool = FamilyPortPool {
+                even: &mut self.free_even4,
+                odd: &mut self.free_odd4,
+                free_state: &mut self.free_state4,
+                reserved_ports: &self.reserved4_ports,
+                port_flags: &mut self.port_flags,
+            };
+            Self::init_family_pool(self.min_port, self.max_port, &mut pool);
         }
         if enable_v6 {
-            self.init_family6();
+            let mut pool = FamilyPortPool {
+                even: &mut self.free_even6,
+                odd: &mut self.free_odd6,
+                free_state: &mut self.free_state6,
+                reserved_ports: &self.reserved6_ports,
+                port_flags: &mut self.port_flags,
+            };
+            Self::init_family_pool(self.min_port, self.max_port, &mut pool);
+        }
+    }
+
+    fn release_family_port(port: u16, min_port: u16, max_port: u16, pool: &mut FamilyPortPool<'_>) {
+        if port < min_port || port > max_port {
+            return;
+        }
+        if pool.reserved_ports.binary_search(&port).is_ok() {
+            return;
+        }
+        let state = pool.free_state.get(&(port as u32), 0).unwrap_or(0);
+        let (needs_push, new_state) = port_state_on_release(state);
+        if !needs_push {
+            if new_state != state {
+                let _ = pool.free_state.set(port as u32, &new_state, 0);
+            }
+            return;
+        }
+        let q = if (port & 1) == 0 {
+            &mut *pool.even
+        } else {
+            &mut *pool.odd
+        };
+        if q.push(&port, 0).is_err() {
+            let _ = pool.port_flags.set(0, &1, 0);
+            let _ = pool
+                .free_state
+                .set(port as u32, &(state | PORT_FREE_BIT), 0);
+        } else {
+            let _ = pool.free_state.set(port as u32, &new_state, 0);
         }
     }
 
     fn release_port4(&mut self, port: u16) {
-        if port < self.min_port || port > self.max_port {
-            return;
-        }
-        if self.reserved4.get(&(port as u32), 0).unwrap_or(0) != 0 {
-            return;
-        }
-        let state = self.free_state4.get(&(port as u32), 0).unwrap_or(0);
-        let (needs_push, new_state) = port_state_on_release(state);
-        if !needs_push {
-            if new_state != state {
-                let _ = self.free_state4.set(port as u32, &new_state, 0);
-            }
-            return;
-        }
-        let q = if (port & 1) == 0 {
-            &mut self.free_even4
-        } else {
-            &mut self.free_odd4
+        let mut pool = FamilyPortPool {
+            even: &mut self.free_even4,
+            odd: &mut self.free_odd4,
+            free_state: &mut self.free_state4,
+            reserved_ports: &self.reserved4_ports,
+            port_flags: &mut self.port_flags,
         };
-        if q.push(&port, 0).is_err() {
-            let _ = self.port_flags.set(0, &1, 0);
-            let _ = self
-                .free_state4
-                .set(port as u32, &(state | PORT_FREE_BIT), 0);
-        } else {
-            let _ = self.free_state4.set(port as u32, &new_state, 0);
-        }
+        Self::release_family_port(port, self.min_port, self.max_port, &mut pool);
     }
 
     fn release_port6(&mut self, port: u16) {
-        if port < self.min_port || port > self.max_port {
-            return;
-        }
-        if self.reserved6.get(&(port as u32), 0).unwrap_or(0) != 0 {
-            return;
-        }
-        let state = self.free_state6.get(&(port as u32), 0).unwrap_or(0);
-        let (needs_push, new_state) = port_state_on_release(state);
-        if !needs_push {
-            if new_state != state {
-                let _ = self.free_state6.set(port as u32, &new_state, 0);
-            }
-            return;
-        }
-        let q = if (port & 1) == 0 {
-            &mut self.free_even6
-        } else {
-            &mut self.free_odd6
+        let mut pool = FamilyPortPool {
+            even: &mut self.free_even6,
+            odd: &mut self.free_odd6,
+            free_state: &mut self.free_state6,
+            reserved_ports: &self.reserved6_ports,
+            port_flags: &mut self.port_flags,
         };
-        if q.push(&port, 0).is_err() {
-            let _ = self.port_flags.set(0, &1, 0);
-            let _ = self
-                .free_state6
-                .set(port as u32, &(state | PORT_FREE_BIT), 0);
-        } else {
-            let _ = self.free_state6.set(port as u32, &new_state, 0);
+        Self::release_family_port(port, self.min_port, self.max_port, &mut pool);
+    }
+
+    fn rebuild_family_ports(
+        min_port: u16,
+        max_port: u16,
+        ib_keys: impl Iterator<Item = u16>,
+        pool: &mut FamilyPortPool<'_>,
+    ) {
+        let mut in_use = [0u64; 1024];
+        for key in ib_keys {
+            in_use[(key as usize) / 64] |= 1u64 << ((key as usize) % 64);
+        }
+        Self::drain_queue(pool.even);
+        Self::drain_queue(pool.odd);
+        let mut p = min_port;
+        loop {
+            let is_used = (in_use[(p as usize) / 64] & (1u64 << ((p as usize) % 64))) != 0;
+            if is_used {
+                let _ = pool.free_state.set(p as u32, &0, 0);
+            } else if pool.reserved_ports.binary_search(&p).is_err() {
+                let _ = pool
+                    .free_state
+                    .set(p as u32, &(PORT_FREE_BIT | PORT_QUEUED_BIT), 0);
+                let q = if (p & 1) == 0 {
+                    &mut *pool.even
+                } else {
+                    &mut *pool.odd
+                };
+                if q.push(&p, 0).is_err() {
+                    let _ = pool.free_state.set(p as u32, &0, 0);
+                    let _ = pool.port_flags.set(0, &1, 0);
+                    return;
+                }
+            } else {
+                let _ = pool.free_state.set(p as u32, &0, 0);
+            }
+            if p == max_port {
+                break;
+            }
+            p += 1;
         }
     }
 
@@ -571,76 +611,38 @@ impl SessionManager {
         if !self.pool_enable_v4 || !self.pool_ready() {
             return;
         }
-        let mut in_use: std::collections::HashSet<u16> = std::collections::HashSet::new();
-        for key in self.ib_map4.keys().flatten() {
-            in_use.insert(key);
-        }
-        Self::drain_queue(&mut self.free_even4);
-        Self::drain_queue(&mut self.free_odd4);
-        let mut p = self.min_port;
-        loop {
-            if in_use.contains(&p) {
-                let _ = self.free_state4.set(p as u32, &0, 0);
-            } else if self.reserved4.get(&(p as u32), 0).unwrap_or(0) == 0 {
-                let _ = self
-                    .free_state4
-                    .set(p as u32, &(PORT_FREE_BIT | PORT_QUEUED_BIT), 0);
-                let q = if (p & 1) == 0 {
-                    &mut self.free_even4
-                } else {
-                    &mut self.free_odd4
-                };
-                if q.push(&p, 0).is_err() {
-                    let _ = self.free_state4.set(p as u32, &0, 0);
-                    let _ = self.port_flags.set(0, &1, 0);
-                    return;
-                }
-            } else {
-                let _ = self.free_state4.set(p as u32, &0, 0);
-            }
-            if p == self.max_port {
-                break;
-            }
-            p += 1;
-        }
+        let mut pool = FamilyPortPool {
+            even: &mut self.free_even4,
+            odd: &mut self.free_odd4,
+            free_state: &mut self.free_state4,
+            reserved_ports: &self.reserved4_ports,
+            port_flags: &mut self.port_flags,
+        };
+        Self::rebuild_family_ports(
+            self.min_port,
+            self.max_port,
+            self.ib_map4.keys().flatten(),
+            &mut pool,
+        );
     }
 
     fn rebuild_family6(&mut self) {
         if !self.pool_enable_v6 || !self.pool_ready() {
             return;
         }
-        let mut in_use: std::collections::HashSet<u16> = std::collections::HashSet::new();
-        for key in self.ib_map6.keys().flatten() {
-            in_use.insert(key);
-        }
-        Self::drain_queue(&mut self.free_even6);
-        Self::drain_queue(&mut self.free_odd6);
-        let mut p = self.min_port;
-        loop {
-            if in_use.contains(&p) {
-                let _ = self.free_state6.set(p as u32, &0, 0);
-            } else if self.reserved6.get(&(p as u32), 0).unwrap_or(0) == 0 {
-                let _ = self
-                    .free_state6
-                    .set(p as u32, &(PORT_FREE_BIT | PORT_QUEUED_BIT), 0);
-                let q = if (p & 1) == 0 {
-                    &mut self.free_even6
-                } else {
-                    &mut self.free_odd6
-                };
-                if q.push(&p, 0).is_err() {
-                    let _ = self.free_state6.set(p as u32, &0, 0);
-                    let _ = self.port_flags.set(0, &1, 0);
-                    return;
-                }
-            } else {
-                let _ = self.free_state6.set(p as u32, &0, 0);
-            }
-            if p == self.max_port {
-                break;
-            }
-            p += 1;
-        }
+        let mut pool = FamilyPortPool {
+            even: &mut self.free_even6,
+            odd: &mut self.free_odd6,
+            free_state: &mut self.free_state6,
+            reserved_ports: &self.reserved6_ports,
+            port_flags: &mut self.port_flags,
+        };
+        Self::rebuild_family_ports(
+            self.min_port,
+            self.max_port,
+            self.ib_map6.keys().flatten(),
+            &mut pool,
+        );
     }
 
     fn rebuild_port_queues(&mut self) {
@@ -655,21 +657,14 @@ impl SessionManager {
         }
     }
 
-    /// Double-buffered config update.
-    ///
-    /// The update is executed in two stages so concurrent eBPF packet processing
-    /// never observes a torn (partially copied) GlobalConfig:
-    /// 1. Write the new configuration into the inactive slot while preserving `active`.
-    /// 2. Flip `active` to publish the freshly written slot.
+    /// Atomically updates active GlobalConfig via double-buffering.
     pub fn set_config(&mut self, cfg: GlobalConfig) -> bool {
-        let mut store = self.config_store.get(&0, 0).unwrap_or_default();
-        let next = 1 - (store.active & 1);
-        store.slots[next as usize] = cfg;
-        if self.config_store.set(0, &store, 0).is_err() {
+        let active = self.active_map.get(&0, 0).unwrap_or(0) & 1;
+        let next = 1 - active;
+        if self.config_map.set(next, &cfg, 0).is_err() {
             return false;
         }
-        store.active = next;
-        self.config_store.set(0, &store, 0).is_ok()
+        self.active_map.set(0, &next, 0).is_ok()
     }
 
     pub fn clear_v4_mappings(&mut self) {
@@ -677,9 +672,7 @@ impl SessionManager {
         for p in ports {
             self.release_port4(p);
         }
-        // A stale fragment entry would rewrite later fragments to the old WAN
-        // address after an address change; drop both directions with the
-        // sessions they belong to.
+        // Flush fragment translation caches.
         clear_map(&mut self.frag_in4);
         clear_map(&mut self.frag_out4);
         self.heap4.clear();
@@ -757,12 +750,42 @@ impl SessionManager {
         drained
     }
 
-    fn expiry_tick(&mut self, now: u32, timeout: u32) -> (usize, usize) {
+    fn last_seen4(&self, key: &EndpointKey4, port: u16) -> Option<u32> {
+        let mut last = None;
+        if let Ok(val) = self.ob_map4.get(key, 0)
+            && u16::from_be(val.port) == port
+        {
+            last = Some(val.last_seen);
+        }
+        if let Ok(iv) = self.ib_map4.get(&port, 0)
+            && iv.matches_key(key)
+        {
+            last = Some(last.map_or(iv.last_seen, |t| t.max(iv.last_seen)));
+        }
+        last
+    }
+
+    fn last_seen6(&self, key: &EndpointKey6, port: u16) -> Option<u32> {
+        let mut last = None;
+        if let Ok(val) = self.ob_map6.get(key, 0)
+            && u16::from_be(val.port) == port
+        {
+            last = Some(val.last_seen);
+        }
+        if let Ok(iv) = self.ib_map6.get(&port, 0)
+            && iv.matches_key(key)
+        {
+            last = Some(last.map_or(iv.last_seen, |t| t.max(iv.last_seen)));
+        }
+        last
+    }
+
+    fn expiry_tick(&mut self, now: u32, timeout: u32) -> (usize, usize, bool) {
         let mut swept4 = 0;
         let mut swept6 = 0;
-        let mut processed = 0;
+        let mut processed4 = 0;
 
-        while processed < GC_EXPIRY_MAX_PER_TICK {
+        while processed4 < GC_EXPIRY_MAX_PER_TICK {
             let Some(Reverse((deadline, key, port, strike))) = self.heap4.peek().copied() else {
                 break;
             };
@@ -772,19 +795,34 @@ impl SessionManager {
             self.heap4.pop();
 
             let ob = self.ob_map4.get(&key, 0);
-            let ib = self.ib_map4.get(&port, 0);
             let ob_matches = matches!(&ob, Ok(val) if u16::from_be(val.port) == port);
-            let ib_matches = matches!(&ib, Ok(iv) if iv.matches_key(&key));
             let mut seen = None;
+            let ib_matches;
+
             if ob_matches && let Ok(val) = ob {
+                if now.saturating_sub(val.last_seen) <= timeout {
+                    // Outbound active; skip inbound check (RFC 4787).
+                    self.schedule4(val.last_seen.saturating_add(timeout), key, port, 0);
+                    processed4 += 1;
+                    continue;
+                }
                 seen = Some(val.last_seen);
-            }
-            if ib_matches && let Ok(iv) = ib {
-                seen = Some(seen.map_or(iv.last_seen, |t| t.max(iv.last_seen)));
+                let ib = self.ib_map4.get(&port, 0);
+                ib_matches = matches!(&ib, Ok(iv) if iv.matches_key(&key));
+                if ib_matches && let Ok(iv) = ib {
+                    seen = Some(val.last_seen.max(iv.last_seen));
+                }
+            } else {
+                let ib = self.ib_map4.get(&port, 0);
+                ib_matches = matches!(&ib, Ok(iv) if iv.matches_key(&key));
+                if ib_matches && let Ok(iv) = ib {
+                    seen = Some(iv.last_seen);
+                }
             }
             if !ob_matches {
                 if ib_matches {
-                    if let Some(t) = seen.filter(|t| now.saturating_sub(*t) <= timeout) {
+                    let refreshed = self.last_seen4(&key, port);
+                    if let Some(t) = refreshed.filter(|t| now.saturating_sub(*t) <= timeout) {
                         self.schedule4(t.saturating_add(timeout), key, port, 0);
                     } else if self.ib_map4.remove(&port).is_ok() {
                         self.release_port4(port);
@@ -800,26 +838,31 @@ impl SessionManager {
                         self.schedule4(deadline, key, port, 1);
                     }
                     ExpiryStep::Drop => {
-                        let ob_removed = self.ob_map4.remove(&key).is_ok();
-                        let ib_removed = if ib_matches {
-                            self.ib_map4.remove(&port).is_ok()
+                        let refreshed = self.last_seen4(&key, port);
+                        if let Some(t) = refreshed.filter(|t| now.saturating_sub(*t) <= timeout) {
+                            self.schedule4(t.saturating_add(timeout), key, port, 0);
                         } else {
-                            false
-                        };
-                        if ib_removed {
-                            self.release_port4(port);
-                        }
-                        if ob_removed || ib_removed {
-                            swept4 += 1;
+                            let ob_removed = self.ob_map4.remove(&key).is_ok();
+                            let ib_removed = if ib_matches {
+                                self.ib_map4.remove(&port).is_ok()
+                            } else {
+                                false
+                            };
+                            if ib_removed {
+                                self.release_port4(port);
+                            }
+                            if ob_removed || ib_removed {
+                                swept4 += 1;
+                            }
                         }
                     }
                 }
             }
-            processed += 1;
+            processed4 += 1;
         }
 
-        processed = 0;
-        while processed < GC_EXPIRY_MAX_PER_TICK {
+        let mut processed6 = 0;
+        while processed6 < GC_EXPIRY_MAX_PER_TICK {
             let Some(Reverse((deadline, key, port, strike))) = self.heap6.peek().copied() else {
                 break;
             };
@@ -829,19 +872,34 @@ impl SessionManager {
             self.heap6.pop();
 
             let ob = self.ob_map6.get(&key, 0);
-            let ib = self.ib_map6.get(&port, 0);
             let ob_matches = matches!(&ob, Ok(val) if u16::from_be(val.port) == port);
-            let ib_matches = matches!(&ib, Ok(iv) if iv.matches_key(&key));
             let mut seen = None;
+            let ib_matches;
+
             if ob_matches && let Ok(val) = ob {
+                if now.saturating_sub(val.last_seen) <= timeout {
+                    // Outbound active; skip inbound check (RFC 4787).
+                    self.schedule6(val.last_seen.saturating_add(timeout), key, port, 0);
+                    processed6 += 1;
+                    continue;
+                }
                 seen = Some(val.last_seen);
-            }
-            if ib_matches && let Ok(iv) = ib {
-                seen = Some(seen.map_or(iv.last_seen, |t| t.max(iv.last_seen)));
+                let ib = self.ib_map6.get(&port, 0);
+                ib_matches = matches!(&ib, Ok(iv) if iv.matches_key(&key));
+                if ib_matches && let Ok(iv) = ib {
+                    seen = Some(val.last_seen.max(iv.last_seen));
+                }
+            } else {
+                let ib = self.ib_map6.get(&port, 0);
+                ib_matches = matches!(&ib, Ok(iv) if iv.matches_key(&key));
+                if ib_matches && let Ok(iv) = ib {
+                    seen = Some(iv.last_seen);
+                }
             }
             if !ob_matches {
                 if ib_matches {
-                    if let Some(t) = seen.filter(|t| now.saturating_sub(*t) <= timeout) {
+                    let refreshed = self.last_seen6(&key, port);
+                    if let Some(t) = refreshed.filter(|t| now.saturating_sub(*t) <= timeout) {
                         self.schedule6(t.saturating_add(timeout), key, port, 0);
                     } else if self.ib_map6.remove(&port).is_ok() {
                         self.release_port6(port);
@@ -857,32 +915,42 @@ impl SessionManager {
                         self.schedule6(deadline, key, port, 1);
                     }
                     ExpiryStep::Drop => {
-                        let ob_removed = self.ob_map6.remove(&key).is_ok();
-                        let ib_removed = if ib_matches {
-                            self.ib_map6.remove(&port).is_ok()
+                        let refreshed = self.last_seen6(&key, port);
+                        if let Some(t) = refreshed.filter(|t| now.saturating_sub(*t) <= timeout) {
+                            self.schedule6(t.saturating_add(timeout), key, port, 0);
                         } else {
-                            false
-                        };
-                        if ib_removed {
-                            self.release_port6(port);
-                        }
-                        if ob_removed || ib_removed {
-                            swept6 += 1;
+                            let ob_removed = self.ob_map6.remove(&key).is_ok();
+                            let ib_removed = if ib_matches {
+                                self.ib_map6.remove(&port).is_ok()
+                            } else {
+                                false
+                            };
+                            if ib_removed {
+                                self.release_port6(port);
+                            }
+                            if ob_removed || ib_removed {
+                                swept6 += 1;
+                            }
                         }
                     }
                 }
             }
-            processed += 1;
+            processed6 += 1;
         }
 
-        (swept4, swept6)
+        let backlog4 = processed4 == GC_EXPIRY_MAX_PER_TICK
+            && self.heap4.peek().is_some_and(|Reverse((d, ..))| *d <= now);
+        let backlog6 = processed6 == GC_EXPIRY_MAX_PER_TICK
+            && self.heap6.peek().is_some_and(|Reverse((d, ..))| *d <= now);
+
+        (swept4, swept6, backlog4 || backlog6)
     }
 
     fn rebuild_heaps(&mut self, timeout: u32) {
         self.heap4.clear();
         self.heap6.clear();
         if self.pool_enable_v4 {
-            let mut pending4: Vec<(u32, EndpointKey4, u16)> = Vec::new();
+            let mut entries4 = Vec::new();
             for (key, val) in self.ob_map4.iter().flatten() {
                 let port = u16::from_be(val.port_be());
                 let ib_last = self
@@ -893,15 +961,18 @@ impl SessionManager {
                     .map(|iv| iv.last_seen())
                     .unwrap_or(0);
                 let deadline = val.last_seen().max(ib_last).saturating_add(timeout);
-                pending4.push((deadline, key, port));
+                if entries4.len() < MAX_BINDINGS as usize {
+                    entries4.push(Reverse((deadline, key, port, 0)));
+                } else {
+                    self.lost_notifications = true;
+                    break;
+                }
             }
-            for (deadline, key, port) in pending4 {
-                self.schedule4(deadline, key, port, 0);
-            }
+            self.heap4 = BinaryHeap::from(entries4);
         }
 
         if self.pool_enable_v6 {
-            let mut pending6: Vec<(u32, EndpointKey6, u16)> = Vec::new();
+            let mut entries6 = Vec::new();
             for (key, val) in self.ob_map6.iter().flatten() {
                 let port = u16::from_be(val.port_be());
                 let ib_last = self
@@ -912,19 +983,21 @@ impl SessionManager {
                     .map(|iv| iv.last_seen())
                     .unwrap_or(0);
                 let deadline = val.last_seen().max(ib_last).saturating_add(timeout);
-                pending6.push((deadline, key, port));
+                if entries6.len() < MAX_BINDINGS as usize {
+                    entries6.push(Reverse((deadline, key, port, 0)));
+                } else {
+                    self.lost_notifications = true;
+                    break;
+                }
             }
-            for (deadline, key, port) in pending6 {
-                self.schedule6(deadline, key, port, 0);
-            }
+            self.heap6 = BinaryHeap::from(entries6);
         }
     }
 
-    /// Process new-session notifications and due expiries. No full-map scan is
-    /// performed unless a notification was lost.
-    pub fn gc_tick(&mut self, now: u32, timeout: u32) -> (usize, usize) {
+    /// Performs periodic session expiry and event ring buffer draining.
+    pub fn gc_tick(&mut self, now: u32, timeout: u32) -> (usize, usize, bool) {
         self.drain_events(now, timeout);
-        let (mut swept4, mut swept6) = self.expiry_tick(now, timeout);
+        let (mut swept4, mut swept6, has_backlog) = self.expiry_tick(now, timeout);
 
         let flag = self.gc_flags.get(&0, 0).unwrap_or(0);
         if flag != 0 || self.lost_notifications {
@@ -945,10 +1018,11 @@ impl SessionManager {
                 );
                 self.freed_ports.sort_unstable();
                 self.freed_ports.dedup();
-                let freed = core::mem::take(&mut self.freed_ports);
-                for p in freed {
+                for i in 0..self.freed_ports.len() {
+                    let p = self.freed_ports[i];
                     self.release_port4(p);
                 }
+                self.freed_ports.clear();
             }
             if self.pool_enable_v6 {
                 self.freed_ports.clear();
@@ -963,16 +1037,17 @@ impl SessionManager {
                 );
                 self.freed_ports.sort_unstable();
                 self.freed_ports.dedup();
-                let freed = core::mem::take(&mut self.freed_ports);
-                for p in freed {
+                for i in 0..self.freed_ports.len() {
+                    let p = self.freed_ports[i];
                     self.release_port6(p);
                 }
+                self.freed_ports.clear();
             }
             self.rebuild_heaps(timeout);
         }
 
         self.rebuild_port_queues();
-        (swept4, swept6)
+        (swept4, swept6, has_backlog)
     }
 
     pub fn disable_fail_open(&mut self) {

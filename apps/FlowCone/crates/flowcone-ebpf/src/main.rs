@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use aya_ebpf::{
     EbpfContext,
@@ -11,7 +12,7 @@ use aya_ebpf::{
 };
 use core::{ffi::c_void, mem};
 use flowcone_common::{
-    BindingValue4, BindingValue6, ConfigStore, EndpointKey4, EndpointKey6, FRAG_MAP_ENTRIES,
+    BindingValue4, BindingValue6, EndpointKey4, EndpointKey6, FRAG_MAP_ENTRIES,
     FragKey4, FragKey6, FragValue4, FragValue6, GlobalConfig, MAX_BINDINGS, PORT_FREE_BIT,
     PORT_QUEUE_ENTRIES, PORT_QUEUED_BIT, PORT_STATE_ENTRIES, SESSION_EVENT_RINGBUF_BYTES,
     SessionEvent4, SessionEvent6,
@@ -45,19 +46,20 @@ fn get_mark(ctx: &TcContext) -> u32 {
     unsafe { (*(ctx.as_ptr() as *const __sk_buff)).mark }
 }
 
-/// Double-buffered config in a single slot. `active & 1` selects the active slot.
+/// Double-buffered config: ACTIVE_CONFIG selects one of two immutable slots.
 #[map]
-static CONFIG_STORE: Array<ConfigStore> = Array::with_max_entries(1, 0);
+static CONFIG: Array<GlobalConfig> = Array::with_max_entries(2, 0);
+
+#[map]
+static ACTIVE_CONFIG: Array<u32> = Array::with_max_entries(1, 0);
 
 #[inline(always)]
 fn get_config() -> Option<&'static GlobalConfig> {
-    let store = CONFIG_STORE.get(0)?;
-    Some(&store.slots[(store.active & 1) as usize])
+    let active = *ACTIVE_CONFIG.get(0)? & 1;
+    CONFIG.get(active)
 }
 
-/// Tail-call targets for the tiny A/B dispatchers. The real FlowCone program
-/// is loaded once and is never attached directly; the dispatchers are the
-/// only TCX links.
+/// Tail-call targets for TC dispatchers.
 #[map]
 static INGRESS_TARGET: ProgramArray = ProgramArray::with_max_entries(1, 0);
 #[map]
@@ -73,10 +75,7 @@ static ICMP6_TARGET: ProgramArray = ProgramArray::with_max_entries(1, 0);
 
 const FRAG_TIMEOUT_SEC: u32 = 30;
 const LAST_SEEN_INTERVAL_SEC: u32 = 1;
-/// The free queue can contain stale entries for ports claimed by port
-/// preservation. `bpf_loop` walks up to PRIMARY + FALLBACK entries at runtime;
-/// the callback is verified once, so this bound does not expand the classifier
-/// verifier state like an unrolled loop would.
+/// Allocation retry limits for port queue lookup loops.
 const EGRESS_ALLOC_PRIMARY: usize = 32;
 const EGRESS_ALLOC_FALLBACK: usize = 32;
 const FRAG_ALLOC_PRIMARY: usize = 32;
@@ -114,7 +113,7 @@ static OUTBOUND_BINDINGS_V6: HashMap<EndpointKey6, BindingValue6> =
 static INBOUND_BINDINGS_V6: HashMap<u16, BindingValue6> =
     HashMap::with_max_entries(MAX_BINDINGS, BPF_F_NO_PREALLOC);
 
-/// Session-create notifications for the user-space expiry scheduler.
+/// Session creation ring buffers consumed by daemon.
 #[map]
 static SESSION_EVENTS_V4: RingBuf = RingBuf::with_byte_size(SESSION_EVENT_RINGBUF_BYTES, 0);
 
@@ -124,18 +123,14 @@ static SESSION_EVENTS_V6: RingBuf = RingBuf::with_byte_size(SESSION_EVENT_RINGBU
 #[map]
 static GC_FLAGS: Array<u32> = Array::with_max_entries(1, 0);
 
-/// Port pool: one free/claimed byte per port plus two parity queues. A port
-/// claimed by preservation leaves a stale queue entry behind; the pop path
-/// discards it and BPF_NOEXIST remains the authoritative claim.
+/// Port allocation bitmaps and parity queues.
 #[map]
 static PORT_FREE_V4: Array<u8> = Array::with_max_entries(PORT_STATE_ENTRIES, 0);
 
 #[map]
 static PORT_FREE_V6: Array<u8> = Array::with_max_entries(PORT_STATE_ENTRIES, 0);
 
-/// Ports bound by local UDP services (DNS, WireGuard, IPsec, proxy, ...).
-/// Reserve both families conservatively so FlowCone never steals a WAN
-/// service port via port preservation.
+/// Bitmap of ports reserved for host UDP services.
 #[map]
 static RESERVED_V4: Array<u8> = Array::with_max_entries(PORT_STATE_ENTRIES, 0);
 
@@ -322,8 +317,7 @@ fn is_link_local_v4(raw_ip: u32) -> bool {
 const DHCP_SERVER_PORT_BE: u16 = 67u16.to_be();
 const DHCP_CLIENT_PORT_BE: u16 = 68u16.to_be();
 
-/// DHCP client/relay and link-local/broadcast traffic must stay on the normal
-/// firewall path. The nftables exemption is generated with the same guards.
+/// Fast-path filter for DHCP, link-local, and broadcast traffic.
 #[inline(always)]
 fn bypass_special_udp4(src: u32, dst: u32, sport: u16, dport: u16) -> bool {
     src == 0
@@ -376,7 +370,7 @@ fn fixup_csum_v4(
                 .is_ok())
 }
 
-/// Fix up only the IPv4 header checksum (non-first fragments have no UDP header).
+/// Fix up IPv4 header checksum for non-initial fragments.
 #[inline(always)]
 fn fixup_l3_v4(ctx: &TcContext, data: usize, ip_off: usize, old_ip: u32, new_ip: u32) -> bool {
     ctx.skb
@@ -471,7 +465,7 @@ fn push_event_v6(key: &EndpointKey6, port: u16) {
 
 #[inline(always)]
 fn port_is_reserved(reserved: &Array<u8>, port: u16) -> bool {
-    reserved.get(port as u32).map(|v| *v).unwrap_or(0) != 0
+    reserved.get(port as u32).copied().unwrap_or(0) != 0
 }
 
 #[inline(always)]
@@ -624,9 +618,7 @@ fn pop_and_claim_v6(q: &Queue<u16>, in_val: &BindingValue6) -> Result<Option<u16
     Ok(None)
 }
 
-/// `bpf_loop` callback context. Keeping the retry state here keeps the
-/// classifier small: the verifier checks the callback once instead of
-/// unrolling 64 queue/claim sequences into the main program.
+/// State context passed to `bpf_loop` port allocation callbacks.
 #[repr(C)]
 struct PortAllocCtx4 {
     in_val: BindingValue4,
@@ -675,8 +667,6 @@ unsafe extern "C" fn alloc_cb_v4(_index: u32, ctx: *mut c_void) -> i64 {
         }
         Err(()) => {
             if primary {
-                // The primary parity queue is empty; skip straight to the
-                // fallback queue instead of burning the remaining iterations.
                 c.index = c.primary;
                 0
             } else {
@@ -731,9 +721,6 @@ fn alloc_port_v4<const PRIMARY: usize, const FALLBACK: usize>(
     in_val: &BindingValue4,
 ) -> Option<u16> {
     if pref >= min && pref <= max && claim_port_v4(pref, in_val) {
-        // Port preservation bypasses the queue. Clear the free bit so the
-        // stale queue entry is discarded on pop and release_port() can
-        // return the port after the mapping expires.
         port_state_bound(&PORT_FREE_V4, pref);
         return Some(pref);
     }
@@ -771,8 +758,6 @@ fn alloc_port_v6<const PRIMARY: usize, const FALLBACK: usize>(
     in_val: &BindingValue6,
 ) -> Option<u16> {
     if pref >= min && pref <= max && claim_port_v6(pref, in_val) {
-        // See alloc_port_v4(): clear the free bit; the queue entry can only
-        // be consumed lazily and is discarded when popped.
         port_state_bound(&PORT_FREE_V6, pref);
         return Some(pref);
     }
@@ -1287,10 +1272,7 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
                 }
                 return TC_ACT_SHOT;
             }
-            // Routing headers, AH/ESP and an over-long extension chain are
-            // not NAT-able here. Pass them to the normal stack: ULA sources
-            // are not routable on the WAN, and dropping a non-UDP packet is
-            // strictly worse than leaving it alone.
+            // Unsupported extension headers are passed to standard stack.
             Ipv6L4::NonUdp | Ipv6L4::Unsupported => return TC_ACT_UNSPEC,
         };
 
@@ -1419,7 +1401,7 @@ fn frag_v6_target(
                 && now.saturating_sub(v.last_seen) <= FRAG_TIMEOUT_SEC
             {
                 iph.dst_addr = v.ip;
-                let mark = get_mark(&ctx);
+                let mark = get_mark(ctx);
                 ctx.skb.set_mark(mark | cfg.flowcone_mark);
             }
             return TC_ACT_UNSPEC;
@@ -1457,7 +1439,7 @@ fn frag_v6_target(
         if more {
             let _ = FRAG_IN_V6.insert(&key, &value, BPF_ANY);
         }
-        let mark = get_mark(&ctx);
+        let mark = get_mark(ctx);
         ctx.skb.set_mark(mark | cfg.flowcone_mark);
         return TC_ACT_UNSPEC;
     }
@@ -1478,7 +1460,7 @@ fn frag_v6_target(
             return TC_ACT_SHOT;
         }
         iph.src_addr = v.ip;
-        let mark = get_mark(&ctx);
+        let mark = get_mark(ctx);
         ctx.skb.set_mark(mark | cfg.flowcone_mark);
         return TC_ACT_UNSPEC;
     }
@@ -1519,7 +1501,7 @@ fn frag_v6_target(
     if more {
         let _ = FRAG_OUT_V6.insert(&key, &value, BPF_ANY);
     }
-    let mark = get_mark(&ctx);
+    let mark = get_mark(ctx);
     ctx.skb.set_mark(mark | cfg.flowcone_mark);
     TC_ACT_UNSPEC
 }
@@ -1548,10 +1530,7 @@ pub fn flowcone_frag_v6(ctx: TcContext) -> i32 {
     frag_v6_target(&ctx, data, data_end, cfg, l2.ip_off)
 }
 
-/// IPv4 fragment NAT target. Called by the main target through FRAG_TARGET.
-/// First fragments create/use the normal UDP mapping; non-first fragments use
-/// the fragment cache. Out-of-order non-first fragments are passed/dropped
-/// until the first fragment teaches the cache.
+/// IPv4 fragment NAT handler invoked via FRAG_TARGET.
 #[classifier]
 pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
     let data = ctx.data();
@@ -1719,9 +1698,7 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
     let udph = unsafe { &mut *(udp_off as *mut UdpHdr) };
     let src_port = udph.src_port;
     if bypass_special_udp4(src_ip, iph.dst_addr, src_port, udph.dst_port) {
-        // The remaining fragments have no UDP header, so remember that this
-        // datagram must stay on the normal firewall path instead of dropping
-        // them for lack of a NAT cache entry.
+        // Cache zero-IP marker to let subsequent fragments bypass NAT.
         let key = FragKey4 {
             epoch: cfg.frag_epoch,
             src: src_ip,
@@ -1781,16 +1758,6 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
 }
 
 #[inline(always)]
-fn csum_fold(mut sum: u32) -> u16 {
-    let mut i = 0;
-    while i < 3 {
-        sum = (sum & 0xffff) + (sum >> 16);
-        i += 1;
-    }
-    !(sum as u16)
-}
-
-#[inline(always)]
 fn csum_replace(csum: u16, old: u16, new: u16) -> u16 {
     let mut sum = (!csum as u32) + (!old as u32) + new as u32;
     let mut i = 0;
@@ -1801,9 +1768,7 @@ fn csum_replace(csum: u16, old: u16, new: u16) -> u16 {
     !(sum as u16)
 }
 
-/// IPv4 ICMP error translation target. Rewrites the outer destination and the
-/// embedded UDP source using the inbound mapping, then updates the embedded
-/// IPv4/UDP and outer ICMP checksums.
+/// Inbound ICMP error translation target (RFC 5508).
 #[classifier]
 pub fn flowcone_icmp_target(ctx: TcContext) -> i32 {
     let data = ctx.data();
@@ -1891,19 +1856,23 @@ pub fn flowcone_icmp_target(ctx: TcContext) -> i32 {
     emb.src_addr = new_ip;
     udph.src_port = new_port;
 
-    // Embedded IPv4 header checksum.
-    emb.check = 0;
-    let mut sum = 0u32;
-    let mut i = 0usize;
-    while i < 10 {
-        let p = (emb_off + i * 2) as *const u8;
-        let w = u16::from_be_bytes([unsafe { *p }, unsafe { *p.add(1) }]);
-        sum += w as u32;
-        i += 1;
-    }
-    emb.check = u16::to_be(csum_fold(sum));
+    // Embedded IPv4 header checksum (RFC 1624).
+    let mut ec = u16::from_be(old_emb_check);
+    let ob = old_emb_src.to_ne_bytes();
+    let nb = new_ip.to_ne_bytes();
+    ec = csum_replace(
+        ec,
+        u16::from_be_bytes([ob[0], ob[1]]),
+        u16::from_be_bytes([nb[0], nb[1]]),
+    );
+    ec = csum_replace(
+        ec,
+        u16::from_be_bytes([ob[2], ob[3]]),
+        u16::from_be_bytes([nb[2], nb[3]]),
+    );
+    emb.check = u16::to_be(ec);
 
-    // Embedded UDP checksum: only the pseudo-header source and source port changed.
+    // Embedded UDP checksum.
     let new_udp_csum = if old_udp_csum != 0 {
         let mut c = u16::from_be(old_udp_csum);
         let ob = old_emb_src.to_ne_bytes();
@@ -1925,8 +1894,7 @@ pub fn flowcone_icmp_target(ctx: TcContext) -> i32 {
     };
     udph.check = new_udp_csum;
 
-    // Outer ICMP checksum: update it from the changed embedded fields. This
-    // avoids scanning a variable-length ICMP payload in eBPF.
+    // Update outer ICMP checksum for changed embedded IP/UDP fields.
     let icmp_csum_off = icmp_off - data + 2;
     let new_emb_check = emb.check;
     if ctx
@@ -1977,10 +1945,7 @@ pub fn flowcone_icmp_target(ctx: TcContext) -> i32 {
     TC_ACT_UNSPEC
 }
 
-/// Tiny TCX dispatchers. They are the only attached links; A/B differ only by
-/// program id so both can coexist during a zero-gap tail move. The target
-/// program is idempotent, so both dispatchers may run it for one packet while
-/// the handoff is in progress.
+/// TCX dispatchers for zero-gap atomic reload.
 #[classifier]
 pub fn flowcone_tcx_ingress_a(ctx: TcContext) -> i32 {
     unsafe {

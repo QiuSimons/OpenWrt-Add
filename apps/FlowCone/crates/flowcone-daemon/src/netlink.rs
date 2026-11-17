@@ -41,10 +41,7 @@ const IFA_F_DEPRECATED: u32 = 0x20;
 const IFA_F_TENTATIVE: u32 = 0x40;
 const IFA_F_PERMANENT: u32 = 0x80;
 
-/// Dump the local addresses of `ifindex` (0 = both families in one request).
-///
-/// IFA_LOCAL wins over IFA_ADDRESS, so a point-to-point WAN reports the local
-/// end rather than the peer; IFA_FLAGS supersedes the u8 header field.
+/// Dumps interface addresses for `ifindex` via RTM_GETADDR.
 fn dump_iface_addrs(ifindex: u32, family: u8) -> Result<Vec<IfaceAddr>, NetlinkError> {
     if ifindex == 0 {
         return Ok(Vec::new());
@@ -78,7 +75,7 @@ fn dump_iface_addrs(ifindex: u32, family: u8) -> Result<Vec<IfaceAddr>, NetlinkE
     }
 
     let mut addrs = Vec::new();
-    let mut buf = [0u8; 32768];
+    let mut buf = vec![0u8; 8192];
     loop {
         let (n, _) = recv(&sock, &mut buf, rustix::net::RecvFlags::empty())
             .map_err(|_| NetlinkError::Recv)?;
@@ -165,8 +162,7 @@ fn pick_gua_v6(addrs: &[IfaceAddr]) -> Option<[u8; 16]> {
     let mut fallback = None;
     let mut temporary = None;
     for a in addrs {
-        // 2000::/3 only: ULA (fc00::/7) is not a WAN address even though it
-        // is global scope.
+        // 2000::/3 only (exclude ULA and non-global scope)
         if a.family != 10 || a.scope != 0 || (a.addr[0] & 0xe0) != 0x20 {
             continue;
         }
@@ -263,7 +259,7 @@ impl EventMonitor {
         match poll(&mut fds, Some(&ts)) {
             Ok(n) if n > 0 => {
                 if fds[0].revents().contains(PollFlags::IN) {
-                    // Drain the socket, otherwise the next poll returns at once.
+                    // Drain pending notifications.
                     let mut buf = [0u8; 4096];
                     while let Ok((n, _)) =
                         recv(&self.sock, &mut buf, rustix::net::RecvFlags::DONTWAIT)
@@ -306,7 +302,6 @@ mod tests {
 
     #[test]
     fn test_pick_gua_v6_skips_non_global() {
-        // ULA is outside 2000::/3 and link-local is link scope.
         assert_eq!(pick_gua_v6(&[addr(2, 10, 0, 0)]), None);
         let addrs = [
             addr(10, 0xfd, IFA_F_PERMANENT, 0),
@@ -317,7 +312,6 @@ mod tests {
 
     #[test]
     fn test_pick_gua_v6_prefers_permanent() {
-        // Secondary, tentative and deprecated are skipped; permanent wins.
         let addrs = [
             addr(10, 0x24, 0x00, 0),
             addr(10, 0x25, IFA_F_SECONDARY, 0),
@@ -337,14 +331,12 @@ mod tests {
         let only_temporary = [addr(10, 0x24, IFA_F_TEMPORARY, 0)];
         assert_eq!(pick_gua_v6(&only_temporary).unwrap()[0], 0x24);
 
-        // A non-temporary dynamic address is still preferred over privacy.
         let mixed = [addr(10, 0x25, IFA_F_TEMPORARY, 0), addr(10, 0x26, 0, 0)];
         assert_eq!(pick_gua_v6(&mixed).unwrap()[0], 0x26);
     }
 
     #[test]
     fn test_pick_global_v4() {
-        // The first non-secondary global address wins.
         let addrs = [
             addr(2, 10, IFA_F_SECONDARY, 0),
             addr(2, 10, 0, 0),
@@ -373,7 +365,6 @@ mod tests {
 
     #[test]
     fn test_get_ifindex_loopback() {
-        // lo always exists and has ifindex 1.
         assert_eq!(get_ifindex("lo"), Some(1));
         assert_eq!(get_ifindex("does-not-exist-xyz"), None);
     }
