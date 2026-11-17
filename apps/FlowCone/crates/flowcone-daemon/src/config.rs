@@ -170,10 +170,13 @@ pub fn parse_args_from<I: IntoIterator<Item = String>>(args: I) -> Result<Config
             cfg.min_port, cfg.max_port
         ));
     }
+    if cfg.timeout_sec == 0 {
+        return Err("Invalid --timeout: expected a non-zero timeout".to_string());
+    }
     if cfg.timeout_sec < 120 {
-        return Err(
-            "Invalid --timeout: RFC 4787 REQ-5 requires a mapping timer of at least 120s"
-                .to_string(),
+        eprintln!(
+            "flowcone: warning: --timeout {}s is below RFC 4787 recommended 120s",
+            cfg.timeout_sec
         );
     }
     if cfg.timeout_sec > 604_800 {
@@ -245,6 +248,8 @@ mod tests {
     #[test]
     fn test_timeout_minimum() {
         assert!(Config::default().timeout_sec >= 120);
+        assert!(parse_args_from(vec!["flowcone".into(), "--timeout".into(), "30".into()]).is_ok());
+        assert!(parse_args_from(vec!["flowcone".into(), "--timeout".into(), "0".into()]).is_err());
     }
 
     #[test]

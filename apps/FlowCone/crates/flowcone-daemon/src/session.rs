@@ -7,12 +7,96 @@ use flowcone_common::{
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-type Expiry4 = Reverse<(u32, EndpointKey4, u16, u8)>;
-type Expiry6 = Reverse<(u32, EndpointKey6, u16, u8)>;
+type Expiry4 = Reverse<(u32, EndpointKey4, u16)>;
+type Expiry6 = Reverse<(u32, EndpointKey6, u16)>;
 
-const GC_QUEUE_DRAIN_MAX: usize = 8192;
-const GC_EXPIRY_STRIKE_SEC: u32 = 1;
+const GC_QUEUE_DRAIN_MAX: usize = 32768;
 const GC_EXPIRY_MAX_PER_TICK: usize = 1024;
+
+/// Queries listening UDP service ports via NETLINK_INET_DIAG binary interface.
+fn scan_netlink_udp_ports(family: u8) -> Option<Vec<u16>> {
+    use rustix::net::{AddressFamily, Protocol, SocketFlags, SocketType, recv, send, socket_with};
+    use std::num::NonZeroU32;
+    use std::time::Duration;
+
+    let proto = Protocol::from_raw(NonZeroU32::new(4)?);
+    let sock = socket_with(
+        AddressFamily::NETLINK,
+        SocketType::RAW,
+        SocketFlags::CLOEXEC,
+        Some(proto),
+    )
+    .ok()?;
+
+    let _ = rustix::net::sockopt::set_socket_timeout(
+        &sock,
+        rustix::net::sockopt::Timeout::Recv,
+        Some(Duration::from_millis(100)),
+    );
+
+    // 72-byte netlink dump request: 16-byte nlmsghdr + 56-byte inet_diag_req_v2
+    let mut req = [0u8; 72];
+    req[0..4].copy_from_slice(&(72u32).to_ne_bytes());
+    req[4..6].copy_from_slice(&(20u16).to_ne_bytes()); // SOCK_DIAG_BY_FAMILY
+    req[6..8].copy_from_slice(&(0x0001u16 | 0x0004u16).to_ne_bytes()); // NLM_F_REQUEST | NLM_F_DUMP
+    req[8..12].copy_from_slice(&(1u32).to_ne_bytes()); // nlmsg_seq
+    req[16] = family;
+    req[17] = 17; // IPPROTO_UDP
+    req[20..24].copy_from_slice(&(1u32 << 7).to_ne_bytes()); // TCP_CLOSE (listening UDP)
+
+    send(&sock, &req, rustix::net::SendFlags::empty()).ok()?;
+
+    let mut buf = [0u8; 8192];
+    let mut ports = Vec::new();
+    'recv_loop: loop {
+        let (n, _) = recv(&sock, &mut buf, rustix::net::RecvFlags::empty()).ok()?;
+        if n == 0 {
+            break;
+        }
+        let mut offset = 0;
+        while offset + 16 <= n {
+            let nlmsg_len =
+                u32::from_ne_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
+            let nlmsg_type = u16::from_ne_bytes(buf[offset + 4..offset + 6].try_into().unwrap());
+            if nlmsg_len < 16 || offset + nlmsg_len > n {
+                break;
+            }
+            if nlmsg_type == 2 {
+                // NLMSG_ERROR: request rejected or unsupported protocol; fallback to procfs
+                return None;
+            }
+            if nlmsg_type == 3 {
+                // NLMSG_DONE: multi-part dump finished normally
+                break 'recv_loop;
+            }
+            if nlmsg_type == 20 {
+                let payload = &buf[offset + 16..offset + nlmsg_len];
+                if payload.len() >= 72 && payload[1] == 7 {
+                    let sport = u16::from_be_bytes([payload[4], payload[5]]);
+                    if sport != 0 {
+                        ports.push(sport);
+                    }
+                }
+            }
+            offset += (nlmsg_len + 3) & !3; // NLMSG_ALIGN
+        }
+    }
+    if ports.is_empty() { None } else { Some(ports) }
+}
+
+/// Parses listening UDP service ports from Netlink INET_DIAG with procfs fallback.
+pub fn scan_local_udp_ports(family: u8, procfs_path: &str) -> Option<Vec<u16>> {
+    if let Some(mut ports) = scan_netlink_udp_ports(family) {
+        ports.sort_unstable();
+        ports.dedup();
+        return Some(ports);
+    }
+    let text = std::fs::read_to_string(procfs_path).ok()?;
+    let mut ports = parse_proc_udp_ports(&text);
+    ports.sort_unstable();
+    ports.dedup();
+    Some(ports)
+}
 
 /// Parse local UDP ports from /proc/net/udp[6]. Only state 07 (unconnected,
 /// i.e. a bound/listening service) is reserved; connected client sockets are
@@ -292,18 +376,15 @@ pub struct SessionMaps {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum ExpiryStep {
     Keep { deadline: u32 },
-    Strike { deadline: u32 },
     Drop,
 }
 
 /// Calculates expiry action for binding.
-fn expiry_step(now: u32, timeout: u32, seen: Option<u32>, strike: u8) -> ExpiryStep {
+#[inline]
+fn expiry_step(now: u32, timeout: u32, seen: Option<u32>) -> ExpiryStep {
     match seen {
         Some(last) if now.saturating_sub(last) <= timeout => ExpiryStep::Keep {
             deadline: last.saturating_add(timeout),
-        },
-        Some(_) if strike == 0 => ExpiryStep::Strike {
-            deadline: now.saturating_add(GC_EXPIRY_STRIKE_SEC),
         },
         _ => ExpiryStep::Drop,
     }
@@ -424,17 +505,13 @@ impl SessionManager {
         true
     }
 
-    /// Synchronizes reserved local UDP service ports from /proc/net/udp[6].
-    pub fn reserve_local_ports(&mut self) {
-        // Ignore transient read errors to preserve existing reservations.
+    /// Applies updated local listening UDP ports to reserved maps.
+    pub fn apply_reserved_ports(&mut self, ports4: Option<&[u16]>, ports6: Option<&[u16]>) {
         let mut to_release = Vec::new();
-        if let Ok(text) = std::fs::read_to_string("/proc/net/udp") {
-            let mut ports = parse_proc_udp_ports(&text);
-            ports.sort_unstable();
-            ports.dedup();
+        if let Some(ports) = ports4 {
             Self::sync_family_reserved(
                 &mut self.reserved4_ports,
-                &ports,
+                ports,
                 &mut self.reserved4,
                 &mut self.free_state4,
                 |p| self.ib_map4.get(&p, 0).is_ok(),
@@ -444,13 +521,10 @@ impl SessionManager {
                 self.release_port4(p);
             }
         }
-        if let Ok(text) = std::fs::read_to_string("/proc/net/udp6") {
-            let mut ports = parse_proc_udp_ports(&text);
-            ports.sort_unstable();
-            ports.dedup();
+        if let Some(ports) = ports6 {
             Self::sync_family_reserved(
                 &mut self.reserved6_ports,
-                &ports,
+                ports,
                 &mut self.reserved6,
                 &mut self.free_state6,
                 |p| self.ib_map6.get(&p, 0).is_ok(),
@@ -460,6 +534,13 @@ impl SessionManager {
                 self.release_port6(p);
             }
         }
+    }
+
+    /// Synchronizes reserved local UDP service ports from Netlink or /proc/net/udp[6].
+    pub fn reserve_local_ports(&mut self) {
+        let p4 = scan_local_udp_ports(2, "/proc/net/udp");
+        let p6 = scan_local_udp_ports(10, "/proc/net/udp6");
+        self.apply_reserved_ports(p4.as_deref(), p6.as_deref());
     }
 
     fn init_family_pool(min_port: u16, max_port: u16, pool: &mut FamilyPortPool<'_>) {
@@ -689,18 +770,18 @@ impl SessionManager {
     }
 
     #[inline]
-    fn schedule4(&mut self, deadline: u32, key: EndpointKey4, port: u16, strike: u8) {
+    fn schedule4(&mut self, deadline: u32, key: EndpointKey4, port: u16) {
         if self.heap4.len() < MAX_BINDINGS as usize {
-            self.heap4.push(Reverse((deadline, key, port, strike)));
+            self.heap4.push(Reverse((deadline, key, port)));
         } else {
             self.lost_notifications = true;
         }
     }
 
     #[inline]
-    fn schedule6(&mut self, deadline: u32, key: EndpointKey6, port: u16, strike: u8) {
+    fn schedule6(&mut self, deadline: u32, key: EndpointKey6, port: u16) {
         if self.heap6.len() < MAX_BINDINGS as usize {
-            self.heap6.push(Reverse((deadline, key, port, strike)));
+            self.heap6.push(Reverse((deadline, key, port)));
         } else {
             self.lost_notifications = true;
         }
@@ -722,7 +803,12 @@ impl SessionManager {
                     break;
                 };
                 if let Some(ev) = ev {
-                    self.schedule4(now.saturating_add(timeout), ev.key, ev.port, 0);
+                    let ev_timeout = if ev.is_short_lived() {
+                        flowcone_common::DEFAULT_SHORT_LIVED_TIMEOUT_SEC
+                    } else {
+                        timeout
+                    };
+                    self.schedule4(now.saturating_add(ev_timeout), ev.key, ev.port);
                     drained += 1;
                 }
             }
@@ -742,42 +828,17 @@ impl SessionManager {
                     break;
                 };
                 if let Some(ev) = ev {
-                    self.schedule6(now.saturating_add(timeout), ev.key, ev.port, 0);
+                    let ev_timeout = if ev.is_short_lived() {
+                        flowcone_common::DEFAULT_SHORT_LIVED_TIMEOUT_SEC
+                    } else {
+                        timeout
+                    };
+                    self.schedule6(now.saturating_add(ev_timeout), ev.key, ev.port);
                     drained += 1;
                 }
             }
         }
         drained
-    }
-
-    fn last_seen4(&self, key: &EndpointKey4, port: u16) -> Option<u32> {
-        let mut last = None;
-        if let Ok(val) = self.ob_map4.get(key, 0)
-            && u16::from_be(val.port) == port
-        {
-            last = Some(val.last_seen);
-        }
-        if let Ok(iv) = self.ib_map4.get(&port, 0)
-            && iv.matches_key(key)
-        {
-            last = Some(last.map_or(iv.last_seen, |t| t.max(iv.last_seen)));
-        }
-        last
-    }
-
-    fn last_seen6(&self, key: &EndpointKey6, port: u16) -> Option<u32> {
-        let mut last = None;
-        if let Ok(val) = self.ob_map6.get(key, 0)
-            && u16::from_be(val.port) == port
-        {
-            last = Some(val.last_seen);
-        }
-        if let Ok(iv) = self.ib_map6.get(&port, 0)
-            && iv.matches_key(key)
-        {
-            last = Some(last.map_or(iv.last_seen, |t| t.max(iv.last_seen)));
-        }
-        last
     }
 
     fn expiry_tick(&mut self, now: u32, timeout: u32) -> (usize, usize, bool) {
@@ -786,10 +847,10 @@ impl SessionManager {
         let mut processed4 = 0;
 
         while processed4 < GC_EXPIRY_MAX_PER_TICK {
-            let Some(Reverse((deadline, key, port, strike))) = self.heap4.peek().copied() else {
+            let Some(Reverse((deadline, key, port))) = self.heap4.peek().copied() else {
                 break;
             };
-            if deadline > now {
+            if deadline >= now {
                 break;
             }
             self.heap4.pop();
@@ -799,10 +860,26 @@ impl SessionManager {
             let mut seen = None;
             let ib_matches;
 
+            let item_timeout = if let Ok(val) = &ob {
+                if val.is_short_lived() {
+                    flowcone_common::DEFAULT_SHORT_LIVED_TIMEOUT_SEC
+                } else {
+                    timeout
+                }
+            } else if let Ok(iv) = self.ib_map4.get(&port, 0) {
+                if iv.is_short_lived() {
+                    flowcone_common::DEFAULT_SHORT_LIVED_TIMEOUT_SEC
+                } else {
+                    timeout
+                }
+            } else {
+                timeout
+            };
+
             if ob_matches && let Ok(val) = ob {
-                if now.saturating_sub(val.last_seen) <= timeout {
+                if now.saturating_sub(val.last_seen) <= item_timeout {
                     // Outbound active; skip inbound check (RFC 4787).
-                    self.schedule4(val.last_seen.saturating_add(timeout), key, port, 0);
+                    self.schedule4(val.last_seen.saturating_add(item_timeout), key, port);
                     processed4 += 1;
                     continue;
                 }
@@ -821,39 +898,30 @@ impl SessionManager {
             }
             if !ob_matches {
                 if ib_matches {
-                    let refreshed = self.last_seen4(&key, port);
-                    if let Some(t) = refreshed.filter(|t| now.saturating_sub(*t) <= timeout) {
-                        self.schedule4(t.saturating_add(timeout), key, port, 0);
+                    if let Some(t) = seen.filter(|t| now.saturating_sub(*t) <= item_timeout) {
+                        self.schedule4(t.saturating_add(item_timeout), key, port);
                     } else if self.ib_map4.remove(&port).is_ok() {
                         self.release_port4(port);
                         swept4 += 1;
                     }
                 }
             } else {
-                match expiry_step(now, timeout, seen, strike) {
+                match expiry_step(now, item_timeout, seen) {
                     ExpiryStep::Keep { deadline } => {
-                        self.schedule4(deadline, key, port, 0);
-                    }
-                    ExpiryStep::Strike { deadline } => {
-                        self.schedule4(deadline, key, port, 1);
+                        self.schedule4(deadline, key, port);
                     }
                     ExpiryStep::Drop => {
-                        let refreshed = self.last_seen4(&key, port);
-                        if let Some(t) = refreshed.filter(|t| now.saturating_sub(*t) <= timeout) {
-                            self.schedule4(t.saturating_add(timeout), key, port, 0);
+                        let ob_removed = self.ob_map4.remove(&key).is_ok();
+                        let ib_removed = if ib_matches {
+                            self.ib_map4.remove(&port).is_ok()
                         } else {
-                            let ob_removed = self.ob_map4.remove(&key).is_ok();
-                            let ib_removed = if ib_matches {
-                                self.ib_map4.remove(&port).is_ok()
-                            } else {
-                                false
-                            };
-                            if ib_removed {
-                                self.release_port4(port);
-                            }
-                            if ob_removed || ib_removed {
-                                swept4 += 1;
-                            }
+                            false
+                        };
+                        if ib_removed {
+                            self.release_port4(port);
+                        }
+                        if ob_removed || ib_removed {
+                            swept4 += 1;
                         }
                     }
                 }
@@ -863,10 +931,10 @@ impl SessionManager {
 
         let mut processed6 = 0;
         while processed6 < GC_EXPIRY_MAX_PER_TICK {
-            let Some(Reverse((deadline, key, port, strike))) = self.heap6.peek().copied() else {
+            let Some(Reverse((deadline, key, port))) = self.heap6.peek().copied() else {
                 break;
             };
-            if deadline > now {
+            if deadline >= now {
                 break;
             }
             self.heap6.pop();
@@ -876,10 +944,26 @@ impl SessionManager {
             let mut seen = None;
             let ib_matches;
 
+            let item_timeout = if let Ok(val) = &ob {
+                if val.is_short_lived() {
+                    flowcone_common::DEFAULT_SHORT_LIVED_TIMEOUT_SEC
+                } else {
+                    timeout
+                }
+            } else if let Ok(iv) = self.ib_map6.get(&port, 0) {
+                if iv.is_short_lived() {
+                    flowcone_common::DEFAULT_SHORT_LIVED_TIMEOUT_SEC
+                } else {
+                    timeout
+                }
+            } else {
+                timeout
+            };
+
             if ob_matches && let Ok(val) = ob {
-                if now.saturating_sub(val.last_seen) <= timeout {
+                if now.saturating_sub(val.last_seen) <= item_timeout {
                     // Outbound active; skip inbound check (RFC 4787).
-                    self.schedule6(val.last_seen.saturating_add(timeout), key, port, 0);
+                    self.schedule6(val.last_seen.saturating_add(item_timeout), key, port);
                     processed6 += 1;
                     continue;
                 }
@@ -898,39 +982,30 @@ impl SessionManager {
             }
             if !ob_matches {
                 if ib_matches {
-                    let refreshed = self.last_seen6(&key, port);
-                    if let Some(t) = refreshed.filter(|t| now.saturating_sub(*t) <= timeout) {
-                        self.schedule6(t.saturating_add(timeout), key, port, 0);
+                    if let Some(t) = seen.filter(|t| now.saturating_sub(*t) <= item_timeout) {
+                        self.schedule6(t.saturating_add(item_timeout), key, port);
                     } else if self.ib_map6.remove(&port).is_ok() {
                         self.release_port6(port);
                         swept6 += 1;
                     }
                 }
             } else {
-                match expiry_step(now, timeout, seen, strike) {
+                match expiry_step(now, item_timeout, seen) {
                     ExpiryStep::Keep { deadline } => {
-                        self.schedule6(deadline, key, port, 0);
-                    }
-                    ExpiryStep::Strike { deadline } => {
-                        self.schedule6(deadline, key, port, 1);
+                        self.schedule6(deadline, key, port);
                     }
                     ExpiryStep::Drop => {
-                        let refreshed = self.last_seen6(&key, port);
-                        if let Some(t) = refreshed.filter(|t| now.saturating_sub(*t) <= timeout) {
-                            self.schedule6(t.saturating_add(timeout), key, port, 0);
+                        let ob_removed = self.ob_map6.remove(&key).is_ok();
+                        let ib_removed = if ib_matches {
+                            self.ib_map6.remove(&port).is_ok()
                         } else {
-                            let ob_removed = self.ob_map6.remove(&key).is_ok();
-                            let ib_removed = if ib_matches {
-                                self.ib_map6.remove(&port).is_ok()
-                            } else {
-                                false
-                            };
-                            if ib_removed {
-                                self.release_port6(port);
-                            }
-                            if ob_removed || ib_removed {
-                                swept6 += 1;
-                            }
+                            false
+                        };
+                        if ib_removed {
+                            self.release_port6(port);
+                        }
+                        if ob_removed || ib_removed {
+                            swept6 += 1;
                         }
                     }
                 }
@@ -939,9 +1014,9 @@ impl SessionManager {
         }
 
         let backlog4 = processed4 == GC_EXPIRY_MAX_PER_TICK
-            && self.heap4.peek().is_some_and(|Reverse((d, ..))| *d <= now);
+            && self.heap4.peek().is_some_and(|Reverse((d, ..))| *d < now);
         let backlog6 = processed6 == GC_EXPIRY_MAX_PER_TICK
-            && self.heap6.peek().is_some_and(|Reverse((d, ..))| *d <= now);
+            && self.heap6.peek().is_some_and(|Reverse((d, ..))| *d < now);
 
         (swept4, swept6, backlog4 || backlog6)
     }
@@ -960,9 +1035,14 @@ impl SessionManager {
                     .filter(|iv| iv.matches_key(&key))
                     .map(|iv| iv.last_seen())
                     .unwrap_or(0);
-                let deadline = val.last_seen().max(ib_last).saturating_add(timeout);
+                let item_timeout = if val.is_short_lived() {
+                    flowcone_common::DEFAULT_SHORT_LIVED_TIMEOUT_SEC
+                } else {
+                    timeout
+                };
+                let deadline = val.last_seen().max(ib_last).saturating_add(item_timeout);
                 if entries4.len() < MAX_BINDINGS as usize {
-                    entries4.push(Reverse((deadline, key, port, 0)));
+                    entries4.push(Reverse((deadline, key, port)));
                 } else {
                     self.lost_notifications = true;
                     break;
@@ -982,9 +1062,14 @@ impl SessionManager {
                     .filter(|iv| iv.matches_key(&key))
                     .map(|iv| iv.last_seen())
                     .unwrap_or(0);
-                let deadline = val.last_seen().max(ib_last).saturating_add(timeout);
+                let item_timeout = if val.is_short_lived() {
+                    flowcone_common::DEFAULT_SHORT_LIVED_TIMEOUT_SEC
+                } else {
+                    timeout
+                };
+                let deadline = val.last_seen().max(ib_last).saturating_add(item_timeout);
                 if entries6.len() < MAX_BINDINGS as usize {
-                    entries6.push(Reverse((deadline, key, port, 0)));
+                    entries6.push(Reverse((deadline, key, port)));
                 } else {
                     self.lost_notifications = true;
                     break;
@@ -1086,17 +1171,15 @@ mod port_parser_tests {
     #[test]
     fn expiry_step_treats_zero_as_a_valid_timestamp() {
         let cases = [
-            (10, 120, Some(0), 0, ExpiryStep::Keep { deadline: 120 }),
-            (0, 120, Some(0), 0, ExpiryStep::Keep { deadline: 120 }),
-            (130, 120, Some(0), 0, ExpiryStep::Strike { deadline: 131 }),
-            (130, 120, Some(0), 1, ExpiryStep::Drop),
-            (200, 120, Some(100), 0, ExpiryStep::Keep { deadline: 220 }),
-            (230, 120, Some(100), 0, ExpiryStep::Strike { deadline: 231 }),
-            (230, 120, Some(100), 1, ExpiryStep::Drop),
-            (10, 120, None, 0, ExpiryStep::Drop),
+            (10, 120, Some(0), ExpiryStep::Keep { deadline: 120 }),
+            (0, 120, Some(0), ExpiryStep::Keep { deadline: 120 }),
+            (130, 120, Some(0), ExpiryStep::Drop),
+            (200, 120, Some(100), ExpiryStep::Keep { deadline: 220 }),
+            (230, 120, Some(100), ExpiryStep::Drop),
+            (10, 120, None, ExpiryStep::Drop),
         ];
-        for (now, timeout, seen, strike, want) in cases {
-            assert_eq!(expiry_step(now, timeout, seen, strike), want);
+        for (now, timeout, seen, want) in cases {
+            assert_eq!(expiry_step(now, timeout, seen), want);
         }
     }
 
@@ -1107,5 +1190,18 @@ mod port_parser_tests {
         assert!(ports.contains(&0x1450));
         assert!(ports.contains(&0x35));
         assert!(!ports.contains(&0xC000));
+    }
+
+    #[test]
+    fn test_scan_local_udp_ports_procfs_fallback() {
+        let temp_dir = std::env::temp_dir();
+        let temp_file = temp_dir.join("test_proc_net_udp");
+        let content = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n 0: 00000000:1450 00000000:0000 07 00000000:00000000 00:00000000 00000000  0 0 1 1\n";
+        let _ = std::fs::write(&temp_file, content);
+        // Valid file parsed correctly via parse_proc_udp_ports
+        let text = std::fs::read_to_string(&temp_file).unwrap();
+        let ports = parse_proc_udp_ports(&text);
+        assert_eq!(ports, vec![0x1450]);
+        let _ = std::fs::remove_file(&temp_file);
     }
 }

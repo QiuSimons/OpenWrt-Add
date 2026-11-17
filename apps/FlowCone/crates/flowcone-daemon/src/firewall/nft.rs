@@ -589,9 +589,9 @@ pub(crate) fn nft_output(args: &[&str]) -> Option<String> {
     }
 }
 
-/// Queries ruleset with handles (-a) for rule enumeration.
+/// Queries ruleset with handles (-a) and terse set suppression (-t) for rule enumeration.
 pub(crate) fn nft_ruleset_text() -> Option<String> {
-    nft_output(&["-a", "list", "ruleset"])
+    nft_output(&["-a", "-t", "list", "ruleset"])
 }
 
 pub(crate) fn nft_table_exists(family: &str, table: &str) -> bool {

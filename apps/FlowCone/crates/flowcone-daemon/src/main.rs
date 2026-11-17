@@ -623,7 +623,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if last_reserve_scan.elapsed() >= Duration::from_secs(30) {
-                lock_or_exit(&ip_session, "session").reserve_local_ports();
+                let p4 = session::scan_local_udp_ports(2, "/proc/net/udp");
+                let p6 = session::scan_local_udp_ports(10, "/proc/net/udp6");
+                lock_or_exit(&ip_session, "session")
+                    .apply_reserved_ports(p4.as_deref(), p6.as_deref());
                 last_reserve_scan = Instant::now();
             }
 
@@ -684,6 +687,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let gc_thread = thread::spawn(move || {
         let mut interval = gc_interval;
+        let mut rng_state = get_monotonic_coarse_ns() ^ 0x9e3779b97f4a7c15;
         while gc_notifier.wait_timeout(interval) {
             let now = (get_monotonic_coarse_ns() / 1_000_000_000) as u32;
             let has_more = {
@@ -697,11 +701,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 backlog
             };
-            interval = if has_more {
-                Duration::from_millis(50)
+            if has_more {
+                interval = Duration::from_millis(5);
             } else {
-                gc_interval
-            };
+                rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let jitter_ms = ((rng_state >> 33) % 501) as i64 - 250;
+                let target_ms = (gc_interval.as_millis() as i64 + jitter_ms).max(500) as u64;
+                interval = Duration::from_millis(target_ms);
+            }
         }
     });
 
