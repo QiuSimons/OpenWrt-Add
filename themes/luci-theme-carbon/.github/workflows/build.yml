@@ -99,7 +99,9 @@ jobs:
 
   browser:
     name: Browser tests
-    runs-on: ubuntu-latest
+    # Match the pinned Playwright 1.59.1; ubuntu-latest can select Ubuntu 26,
+    # which has no supported Chromium headless shell in this version.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
