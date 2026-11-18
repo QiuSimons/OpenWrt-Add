@@ -64,6 +64,7 @@ impl BindingValue6 {
 unsafe impl aya::Pod for BindingValue6 {}
 
 /// Session creation notification event.
+/// `key.port` is in network byte order; `port` is allocated in host byte order.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SessionEvent4 {
@@ -77,11 +78,23 @@ impl SessionEvent4 {
     pub fn is_short_lived(&self) -> bool {
         self._pad & BINDING_FLAG_SHORT_LIVED != 0
     }
+
+    #[inline(always)]
+    pub fn internal_port_host(&self) -> u16 {
+        u16::from_be(self.key.port)
+    }
+
+    #[inline(always)]
+    pub fn external_port_host(&self) -> u16 {
+        self.port
+    }
 }
 
 #[cfg(not(target_arch = "bpf"))]
 unsafe impl aya::Pod for SessionEvent4 {}
 
+/// Session creation notification event for IPv6.
+/// `key.port` is in network byte order; `port` is allocated in host byte order.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SessionEvent6 {
@@ -94,6 +107,16 @@ impl SessionEvent6 {
     #[inline(always)]
     pub fn is_short_lived(&self) -> bool {
         self._pad[0] & BINDING_FLAG_SHORT_LIVED != 0
+    }
+
+    #[inline(always)]
+    pub fn internal_port_host(&self) -> u16 {
+        u16::from_be(self.key.port)
+    }
+
+    #[inline(always)]
+    pub fn external_port_host(&self) -> u16 {
+        self.port
     }
 }
 
@@ -192,11 +215,14 @@ pub const INTERNAL_V4_PREFIXES: &[&str] = &[
 ];
 
 /// Checks if an IPv4 source address belongs to private, CGNAT, or special-purpose ranges (RFC 6890).
-/// Expects `raw_ip` in network byte order.
+/// Expects `raw_ip` loaded from wire octets in native memory order [b0, b1, b2, b3].
 #[inline(always)]
 pub fn is_private_ipv4(raw_ip: u32) -> bool {
-    let b = raw_ip.to_ne_bytes();
+    is_private_ipv4_octets(raw_ip.to_ne_bytes())
+}
 
+#[inline(always)]
+pub fn is_private_ipv4_octets(b: [u8; 4]) -> bool {
     if (b[0] == 192 && b[1] == 168) || b[0] == 10 || (b[0] == 172 && (16..=31).contains(&b[1])) {
         return true;
     }
@@ -278,6 +304,199 @@ pub fn port_state_on_release(state: u8) -> (bool, u8) {
 
 /// Default packet mark applied to inbound DNAT-translated packets.
 pub const DEFAULT_FLOWCONE_MARK: u32 = 0x04787000;
+
+pub const IPPROTO_ICMP: u8 = 1;
+pub const IPPROTO_UDP: u8 = 17;
+pub const IPPROTO_HOPOPTS: u8 = 0;
+pub const IPPROTO_ROUTING: u8 = 43;
+pub const IPPROTO_FRAGMENT: u8 = 44;
+pub const IPPROTO_DSTOPTS: u8 = 60;
+pub const IPPROTO_ICMPV6: u8 = 58;
+
+pub const ETH_P_IP: u16 = 0x0800;
+pub const ETH_P_IPV6: u16 = 0x86dd;
+pub const ETH_P_8021Q: u16 = 0x8100;
+pub const ETH_P_8021AD: u16 = 0x88a8;
+pub const ETH_P_PPPOE: u16 = 0x8864;
+pub const PPP_IPV4: u16 = 0x0021;
+pub const PPP_IPV6: u16 = 0x0057;
+
+/// RFC 1624 incremental 16-bit one's complement checksum update.
+#[inline(always)]
+pub fn csum_replace(csum: u16, old: u16, new: u16) -> u16 {
+    let mut sum = (!csum as u32) + (!old as u32) + new as u32;
+    let mut i = 0;
+    while i < 3 {
+        sum = (sum & 0xffff) + (sum >> 16);
+        i += 1;
+    }
+    !(sum as u16)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct L2Info {
+    pub proto: u16,
+    pub ip_off: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ipv6L4 {
+    Udp(usize),
+    Fragment,
+    NonUdp,
+    Unsupported,
+}
+
+#[inline(always)]
+pub fn parse_ppp_slice(data: &[u8], mut off: usize) -> Option<L2Info> {
+    if off + 2 > data.len() {
+        return None;
+    }
+    if data[off] == 0xff && off + 2 <= data.len() && data[off + 1] == 0x03 {
+        off += 2;
+    }
+    if off + 2 > data.len() {
+        return None;
+    }
+    let b0 = data[off];
+    if (b0 & 1) != 0 {
+        let proto = match b0 as u16 {
+            0x21 => ETH_P_IP,
+            0x57 => ETH_P_IPV6,
+            _ => return None,
+        };
+        return Some(L2Info {
+            proto,
+            ip_off: off + 1,
+        });
+    }
+    if off + 2 > data.len() {
+        return None;
+    }
+    let raw = u16::from_be_bytes([data[off], data[off + 1]]);
+    let proto = match raw {
+        PPP_IPV4 => ETH_P_IP,
+        PPP_IPV6 => ETH_P_IPV6,
+        _ => return None,
+    };
+    Some(L2Info {
+        proto,
+        ip_off: off + 2,
+    })
+}
+
+#[inline(always)]
+pub fn parse_l2_slice(data: &[u8], l2_len: u32) -> Option<L2Info> {
+    if l2_len == 14 {
+        if data.len() < 14 {
+            return None;
+        }
+        let mut proto = u16::from_be_bytes([data[12], data[13]]);
+        let mut ip_off = 14;
+        let mut tags = 0;
+        while (proto == ETH_P_8021Q || proto == ETH_P_8021AD) && tags < 2 {
+            if ip_off + 4 > data.len() {
+                return None;
+            }
+            proto = u16::from_be_bytes([data[ip_off + 2], data[ip_off + 3]]);
+            ip_off += 4;
+            tags += 1;
+        }
+        if proto == ETH_P_PPPOE {
+            if ip_off + 6 > data.len() {
+                return None;
+            }
+            return parse_ppp_slice(data, ip_off + 6);
+        }
+        if proto == ETH_P_IP || proto == ETH_P_IPV6 {
+            return Some(L2Info { proto, ip_off });
+        }
+        return None;
+    }
+
+    if data.len() < 2 {
+        return None;
+    }
+    let ver = data[0] >> 4;
+    let proto = match ver {
+        4 => ETH_P_IP,
+        6 => ETH_P_IPV6,
+        _ => return None,
+    };
+    Some(L2Info { proto, ip_off: 0 })
+}
+
+#[inline(always)]
+pub fn locate_ipv6_l4_slice(data: &[u8], ip_off: usize, mut nh: u8) -> Ipv6L4 {
+    let mut cur_off = ip_off + 40;
+    let mut iter = 0;
+    while iter < 4 {
+        if nh == IPPROTO_UDP {
+            return Ipv6L4::Udp(cur_off);
+        }
+        if nh == IPPROTO_HOPOPTS || nh == IPPROTO_DSTOPTS {
+            if cur_off + 2 > data.len() {
+                return Ipv6L4::NonUdp;
+            }
+            let next = data[cur_off];
+            let ext_len = (data[cur_off + 1] as usize + 1) * 8;
+            if cur_off + ext_len > data.len() {
+                return Ipv6L4::NonUdp;
+            }
+            nh = next;
+            cur_off += ext_len;
+        } else if nh == IPPROTO_ROUTING {
+            return Ipv6L4::Unsupported;
+        } else if nh == IPPROTO_FRAGMENT {
+            return Ipv6L4::Fragment;
+        } else {
+            return Ipv6L4::NonUdp;
+        }
+        iter += 1;
+    }
+
+    if nh == IPPROTO_UDP {
+        Ipv6L4::Udp(cur_off)
+    } else {
+        Ipv6L4::Unsupported
+    }
+}
+
+#[inline(always)]
+pub fn ipv6_fragment_offset_slice(data: &[u8], ip_off: usize, mut nh: u8) -> Option<usize> {
+    if nh == IPPROTO_FRAGMENT {
+        let cur = ip_off + 40;
+        if cur + 8 <= data.len() {
+            return Some(cur);
+        }
+        return None;
+    }
+    let mut cur = ip_off + 40;
+    let mut iter = 0;
+    while iter < 4 {
+        if nh == IPPROTO_FRAGMENT {
+            if cur + 8 <= data.len() {
+                return Some(cur);
+            }
+            return None;
+        }
+        if nh != IPPROTO_HOPOPTS && nh != IPPROTO_DSTOPTS {
+            return None;
+        }
+        if cur + 2 > data.len() {
+            return None;
+        }
+        let next = data[cur];
+        let len = (data[cur + 1] as usize + 1) * 8;
+        if cur + len > data.len() {
+            return None;
+        }
+        nh = next;
+        cur += len;
+        iter += 1;
+    }
+    None
+}
 
 #[cfg(test)]
 mod tests {
@@ -488,5 +707,75 @@ mod tests {
         let (needs_push, dup_state) = port_state_on_release(PORT_FREE_BIT | PORT_QUEUED_BIT);
         assert!(!needs_push);
         assert_eq!(dup_state, PORT_FREE_BIT | PORT_QUEUED_BIT);
+    }
+
+    #[test]
+    fn test_rfc1624_csum_replace() {
+        // Identity: replacing with same value must yield same checksum
+        let original_csum: u16 = 0x55aa;
+        assert_eq!(csum_replace(original_csum, 0x1234, 0x1234), original_csum);
+
+        // Replacing zero with a value, then reversing it, must yield original checksum
+        let new_csum = csum_replace(original_csum, 0x0000, 0x5678);
+        assert_ne!(new_csum, original_csum);
+        let restored = csum_replace(new_csum, 0x5678, 0x0000);
+        assert_eq!(restored, original_csum);
+    }
+
+    #[test]
+    fn test_parse_l2_slice_ethernet_and_raw_ip() {
+        let raw_v4 = [0x45, 0x00, 0x00, 0x28];
+        let l2_raw4 = parse_l2_slice(&raw_v4, 0).expect("raw ipv4");
+        assert_eq!(l2_raw4.proto, ETH_P_IP);
+        assert_eq!(l2_raw4.ip_off, 0);
+
+        let raw_v6 = [0x60, 0x00, 0x00, 0x00];
+        let l2_raw6 = parse_l2_slice(&raw_v6, 0).expect("raw ipv6");
+        assert_eq!(l2_raw6.proto, ETH_P_IPV6);
+        assert_eq!(l2_raw6.ip_off, 0);
+
+        let mut eth_v4 = [0u8; 14 + 20];
+        eth_v4[12] = 0x08;
+        eth_v4[13] = 0x00;
+        let l2_eth4 = parse_l2_slice(&eth_v4, 14).expect("eth ipv4");
+        assert_eq!(l2_eth4.proto, ETH_P_IP);
+        assert_eq!(l2_eth4.ip_off, 14);
+
+        let mut vlan_v6 = [0u8; 18 + 40];
+        vlan_v6[12] = 0x81;
+        vlan_v6[13] = 0x00;
+        vlan_v6[14] = 0x00;
+        vlan_v6[15] = 100;
+        vlan_v6[16] = 0x86;
+        vlan_v6[17] = 0xdd;
+        let l2_vlan = parse_l2_slice(&vlan_v6, 14).expect("vlan ipv6");
+        assert_eq!(l2_vlan.proto, ETH_P_IPV6);
+        assert_eq!(l2_vlan.ip_off, 18);
+    }
+
+    #[test]
+    fn test_locate_ipv6_l4_slice() {
+        let mut pkt_udp = [0u8; 40 + 8];
+        pkt_udp[6] = IPPROTO_UDP;
+        let l4 = locate_ipv6_l4_slice(&pkt_udp, 0, IPPROTO_UDP);
+        match l4 {
+            Ipv6L4::Udp(off) => assert_eq!(off, 40),
+            _ => panic!("expected UDP at offset 40"),
+        }
+
+        let mut pkt_hbh = [0u8; 40 + 8 + 8];
+        pkt_hbh[40] = IPPROTO_UDP;
+        pkt_hbh[41] = 0;
+        let l4_hbh = locate_ipv6_l4_slice(&pkt_hbh, 0, IPPROTO_HOPOPTS);
+        match l4_hbh {
+            Ipv6L4::Udp(off) => assert_eq!(off, 48),
+            _ => panic!("expected UDP at offset 48 after HBH"),
+        }
+
+        let l4_frag = locate_ipv6_l4_slice(&pkt_hbh, 0, IPPROTO_FRAGMENT);
+        match l4_frag {
+            Ipv6L4::Fragment => {}
+            _ => panic!("expected Fragment"),
+        }
     }
 }

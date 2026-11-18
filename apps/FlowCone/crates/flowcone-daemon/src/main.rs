@@ -145,11 +145,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "flowcone: modes: v4={}, v6={}, port range {}-{}, timeout {}s",
         config.enable_v4, config.enable_v6, config.min_port, config.max_port, config.timeout_sec
     );
-    if env!("FLOWCONE_EBPF_STALE") == "1" {
-        eprintln!(
-            "flowcone: embedded eBPF object is older than crates/flowcone-ebpf/src/main.rs or flowcone-common; rebuild it and copy to crates/flowcone-daemon/ebpf/flowcone-ebpf.bin, or set FLOWCONE_EBPF_PATH"
-        );
-    }
 
     // Shutdown notification self-pipe.
     let (sig_read_end, sig_write_end) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)?;
@@ -712,6 +707,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    let (event_wake_read, event_wake_write) = rustix::pipe::pipe_with(
+        rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
+    )?;
+    let (ev4_raw, ev6_raw) = lock_or_exit(&session_mgr, "session").event_fds();
+    let event_session = Arc::clone(&session_mgr);
+    let event_timeout = config.timeout_sec as u32;
+    let event_thread = thread::spawn(move || {
+        use rustix::event::{PollFd, PollFlags, poll};
+        use std::os::fd::BorrowedFd;
+
+        let ev4_fd = unsafe { BorrowedFd::borrow_raw(ev4_raw) };
+        let ev6_fd = unsafe { BorrowedFd::borrow_raw(ev6_raw) };
+
+        let mut fds = [
+            PollFd::new(&ev4_fd, PollFlags::IN),
+            PollFd::new(&ev6_fd, PollFlags::IN),
+            PollFd::new(&event_wake_read, PollFlags::IN),
+        ];
+
+        while RUNNING.load(Ordering::Relaxed) {
+            match poll(&mut fds, None) {
+                Ok(n) if n > 0 => {
+                    if fds[2].revents().contains(PollFlags::IN) {
+                        break;
+                    }
+                    let now = (get_monotonic_coarse_ns() / 1_000_000_000) as u32;
+                    let mut mgr = lock_or_exit(&event_session, "session");
+                    mgr.drain_events(now, event_timeout);
+                }
+                Ok(_) => {}
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(_) => break,
+            }
+        }
+    });
+
     let mut sig_buf = [0u8; 1];
     while RUNNING.load(Ordering::SeqCst) {
         match rustix::io::read(&sig_read_end, &mut sig_buf) {
@@ -727,15 +758,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("flowcone: stopping");
     notifier.notify_shutdown();
+    let _ = rustix::io::write(&event_wake_write, &[1u8]);
 
     if config.manage_nft {
         firewall::remove_rules(config.verbose);
     }
 
     lock_or_exit(&session_mgr, "session").disable_fail_open();
+    lock_or_exit(&data_plane, "data-plane").detach();
+    if config.verbose {
+        println!("flowcone: detached TCX classifiers");
+    }
 
     let _ = ip_thread.join();
     let _ = gc_thread.join();
+    let _ = event_thread.join();
 
     println!("flowcone: stopped");
     Ok(())

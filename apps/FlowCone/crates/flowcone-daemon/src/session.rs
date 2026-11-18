@@ -787,7 +787,12 @@ impl SessionManager {
         }
     }
 
-    fn drain_events(&mut self, now: u32, timeout: u32) -> usize {
+    pub fn event_fds(&self) -> (std::os::fd::RawFd, std::os::fd::RawFd) {
+        use std::os::fd::AsRawFd;
+        (self.events4.as_raw_fd(), self.events6.as_raw_fd())
+    }
+
+    pub fn drain_events(&mut self, now: u32, timeout: u32) -> usize {
         let mut drained = 0;
         if self.pool_enable_v4 {
             while drained < GC_QUEUE_DRAIN_MAX {
