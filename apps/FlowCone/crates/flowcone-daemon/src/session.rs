@@ -38,7 +38,7 @@ fn scan_netlink_udp_ports(family: u8) -> Option<Vec<u16>> {
     let mut req = [0u8; 72];
     req[0..4].copy_from_slice(&(72u32).to_ne_bytes());
     req[4..6].copy_from_slice(&(20u16).to_ne_bytes()); // SOCK_DIAG_BY_FAMILY
-    req[6..8].copy_from_slice(&(0x0001u16 | 0x0004u16).to_ne_bytes()); // NLM_F_REQUEST | NLM_F_DUMP
+    req[6..8].copy_from_slice(&(0x0001u16 | 0x0300u16).to_ne_bytes()); // NLM_F_REQUEST | NLM_F_DUMP
     req[8..12].copy_from_slice(&(1u32).to_ne_bytes()); // nlmsg_seq
     req[16] = family;
     req[17] = 17; // IPPROTO_UDP
@@ -905,7 +905,11 @@ impl SessionManager {
                 if ib_matches {
                     if let Some(t) = seen.filter(|t| now.saturating_sub(*t) <= item_timeout) {
                         self.schedule4(t.saturating_add(item_timeout), key, port);
-                    } else if self.ib_map4.remove(&port).is_ok() {
+                    } else if let Ok(cur_ib) = self.ib_map4.get(&port, 0)
+                        && cur_ib.matches_key(&key)
+                        && now.saturating_sub(cur_ib.last_seen) > item_timeout
+                        && self.ib_map4.remove(&port).is_ok()
+                    {
                         self.release_port4(port);
                         swept4 += 1;
                     }
@@ -916,6 +920,41 @@ impl SessionManager {
                         self.schedule4(deadline, key, port);
                     }
                     ExpiryStep::Drop => {
+                        if let Ok(cur_ob) = self.ob_map4.get(&key, 0) {
+                            if u16::from_be(cur_ob.port) != port {
+                                if let Ok(cur_ib) = self.ib_map4.get(&port, 0)
+                                    && cur_ib.matches_key(&key)
+                                    && now.saturating_sub(cur_ib.last_seen) > item_timeout
+                                    && self.ib_map4.remove(&port).is_ok()
+                                {
+                                    self.release_port4(port);
+                                    swept4 += 1;
+                                }
+                                processed4 += 1;
+                                continue;
+                            }
+                            if now.saturating_sub(cur_ob.last_seen) <= item_timeout {
+                                self.schedule4(
+                                    cur_ob.last_seen.saturating_add(item_timeout),
+                                    key,
+                                    port,
+                                );
+                                processed4 += 1;
+                                continue;
+                            }
+                        }
+                        if let Ok(cur_ib) = self.ib_map4.get(&port, 0)
+                            && cur_ib.matches_key(&key)
+                            && now.saturating_sub(cur_ib.last_seen) <= item_timeout
+                        {
+                            self.schedule4(
+                                cur_ib.last_seen.saturating_add(item_timeout),
+                                key,
+                                port,
+                            );
+                            processed4 += 1;
+                            continue;
+                        }
                         let ob_removed = self.ob_map4.remove(&key).is_ok();
                         let ib_removed = if ib_matches {
                             self.ib_map4.remove(&port).is_ok()
@@ -989,7 +1028,11 @@ impl SessionManager {
                 if ib_matches {
                     if let Some(t) = seen.filter(|t| now.saturating_sub(*t) <= item_timeout) {
                         self.schedule6(t.saturating_add(item_timeout), key, port);
-                    } else if self.ib_map6.remove(&port).is_ok() {
+                    } else if let Ok(cur_ib) = self.ib_map6.get(&port, 0)
+                        && cur_ib.matches_key(&key)
+                        && now.saturating_sub(cur_ib.last_seen) > item_timeout
+                        && self.ib_map6.remove(&port).is_ok()
+                    {
                         self.release_port6(port);
                         swept6 += 1;
                     }
@@ -1000,6 +1043,41 @@ impl SessionManager {
                         self.schedule6(deadline, key, port);
                     }
                     ExpiryStep::Drop => {
+                        if let Ok(cur_ob) = self.ob_map6.get(&key, 0) {
+                            if u16::from_be(cur_ob.port) != port {
+                                if let Ok(cur_ib) = self.ib_map6.get(&port, 0)
+                                    && cur_ib.matches_key(&key)
+                                    && now.saturating_sub(cur_ib.last_seen) > item_timeout
+                                    && self.ib_map6.remove(&port).is_ok()
+                                {
+                                    self.release_port6(port);
+                                    swept6 += 1;
+                                }
+                                processed6 += 1;
+                                continue;
+                            }
+                            if now.saturating_sub(cur_ob.last_seen) <= item_timeout {
+                                self.schedule6(
+                                    cur_ob.last_seen.saturating_add(item_timeout),
+                                    key,
+                                    port,
+                                );
+                                processed6 += 1;
+                                continue;
+                            }
+                        }
+                        if let Ok(cur_ib) = self.ib_map6.get(&port, 0)
+                            && cur_ib.matches_key(&key)
+                            && now.saturating_sub(cur_ib.last_seen) <= item_timeout
+                        {
+                            self.schedule6(
+                                cur_ib.last_seen.saturating_add(item_timeout),
+                                key,
+                                port,
+                            );
+                            processed6 += 1;
+                            continue;
+                        }
                         let ob_removed = self.ob_map6.remove(&key).is_ok();
                         let ib_removed = if ib_matches {
                             self.ib_map6.remove(&port).is_ok()
@@ -1208,5 +1286,18 @@ mod port_parser_tests {
         let ports = parse_proc_udp_ports(&text);
         assert_eq!(ports, vec![0x1450]);
         let _ = std::fs::remove_file(&temp_file);
+    }
+
+    #[test]
+    fn test_scan_netlink_udp_ports_live() {
+        use std::net::UdpSocket;
+        let socket = UdpSocket::bind("127.0.0.1:0").expect("bind test socket");
+        let port = socket.local_addr().expect("local addr").port();
+        if let Some(ports) = super::scan_netlink_udp_ports(2) {
+            assert!(
+                ports.contains(&port),
+                "netlink should contain bound port {port}, got {ports:?}"
+            );
+        }
     }
 }

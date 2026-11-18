@@ -434,7 +434,7 @@ pub fn locate_ipv6_l4_slice(data: &[u8], ip_off: usize, mut nh: u8) -> Ipv6L4 {
         if nh == IPPROTO_UDP {
             return Ipv6L4::Udp(cur_off);
         }
-        if nh == IPPROTO_HOPOPTS || nh == IPPROTO_DSTOPTS {
+        if nh == IPPROTO_HOPOPTS || nh == IPPROTO_DSTOPTS || nh == IPPROTO_ROUTING {
             if cur_off + 2 > data.len() {
                 return Ipv6L4::NonUdp;
             }
@@ -445,8 +445,6 @@ pub fn locate_ipv6_l4_slice(data: &[u8], ip_off: usize, mut nh: u8) -> Ipv6L4 {
             }
             nh = next;
             cur_off += ext_len;
-        } else if nh == IPPROTO_ROUTING {
-            return Ipv6L4::Unsupported;
         } else if nh == IPPROTO_FRAGMENT {
             return Ipv6L4::Fragment;
         } else {
@@ -776,6 +774,15 @@ mod tests {
         match l4_frag {
             Ipv6L4::Fragment => {}
             _ => panic!("expected Fragment"),
+        }
+
+        let mut pkt_routing = [0u8; 40 + 8 + 8];
+        pkt_routing[40] = IPPROTO_UDP;
+        pkt_routing[41] = 0;
+        let l4_routing = locate_ipv6_l4_slice(&pkt_routing, 0, IPPROTO_ROUTING);
+        match l4_routing {
+            Ipv6L4::Udp(off) => assert_eq!(off, 48),
+            _ => panic!("expected UDP at offset 48 after Routing header"),
         }
     }
 }
