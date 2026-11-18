@@ -685,7 +685,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut rng_state = get_monotonic_coarse_ns() ^ 0x9e3779b97f4a7c15;
         while gc_notifier.wait_timeout(interval) {
             let now = (get_monotonic_coarse_ns() / 1_000_000_000) as u32;
-            let has_more = {
+            let (has_more, is_idle) = {
                 let mut mgr = lock_or_exit(&gc_session, "session");
                 let (v4_swept, v6_swept, backlog) = mgr.gc_tick(now, timeout);
                 if verbose && (v4_swept > 0 || v6_swept > 0) {
@@ -694,10 +694,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         v4_swept, v6_swept
                     );
                 }
-                backlog
+                let idle = mgr.is_idle();
+                (backlog, idle)
             };
             if has_more {
                 interval = Duration::from_millis(5);
+            } else if is_idle {
+                interval = (interval * 2).min(Duration::from_secs(10));
             } else {
                 rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
                 let jitter_ms = ((rng_state >> 33) % 501) as i64 - 250;

@@ -1218,6 +1218,10 @@ impl SessionManager {
         (swept4, swept6, has_backlog)
     }
 
+    pub fn is_idle(&self) -> bool {
+        self.heap4.is_empty() && self.heap6.is_empty()
+    }
+
     pub fn disable_fail_open(&mut self) {
         let empty_cfg = GlobalConfig {
             wan_ip4: 0,

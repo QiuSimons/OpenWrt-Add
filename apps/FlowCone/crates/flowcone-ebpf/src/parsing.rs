@@ -133,6 +133,18 @@ pub fn is_link_local_v4(raw_ip: u32) -> bool {
 
 pub const DHCP_SERVER_PORT_BE: u16 = 67u16.to_be();
 pub const DHCP_CLIENT_PORT_BE: u16 = 68u16.to_be();
+pub const DHCPV6_CLIENT_PORT_BE: u16 = 546u16.to_be();
+pub const DHCPV6_SERVER_PORT_BE: u16 = 547u16.to_be();
+
+#[inline(always)]
+pub fn is_multicast_v6(addr: &[u8; 16]) -> bool {
+    addr[0] == 0xff
+}
+
+#[inline(always)]
+pub fn is_link_local_v6(addr: &[u8; 16]) -> bool {
+    addr[0] == 0xfe && (addr[1] & 0xc0) == 0x80
+}
 
 /// Fast-path filter for DHCP, link-local, and broadcast traffic.
 #[inline(always)]
@@ -144,6 +156,16 @@ pub fn bypass_special_udp4(src: u32, dst: u32, sport: u16, dport: u16) -> bool {
         || dport == DHCP_CLIENT_PORT_BE
         || is_multicast_or_broadcast_v4(dst)
         || is_link_local_v4(dst)
+}
+
+#[inline(always)]
+pub fn bypass_special_udp6(dst: &[u8; 16], sport: u16, dport: u16) -> bool {
+    sport == DHCPV6_CLIENT_PORT_BE
+        || sport == DHCPV6_SERVER_PORT_BE
+        || dport == DHCPV6_CLIENT_PORT_BE
+        || dport == DHCPV6_SERVER_PORT_BE
+        || is_multicast_v6(dst)
+        || is_link_local_v6(dst)
 }
 
 /// Parse the PPP protocol field (optional 0xff 0x03 address/control, optional

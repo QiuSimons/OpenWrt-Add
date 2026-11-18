@@ -233,6 +233,11 @@ pub(crate) fn special_v4_clause() -> &'static str {
     " ip saddr != 0.0.0.0 udp sport != { 67, 68 } udp dport != { 67, 68 } ip daddr != 255.0.0.0/8 ip daddr != 224.0.0.0/4 ip daddr != 169.254.0.0/16"
 }
 
+/// Extra guards matching the eBPF bypass_special_udp6() checks.
+pub(crate) fn special_v6_clause() -> &'static str {
+    " udp sport != { 546, 547 } udp dport != { 546, 547 } ip6 daddr != ff00::/8 ip6 daddr != fe80::/10"
+}
+
 pub(crate) fn generate_live_srcnat_rule_v4(
     iface: &str,
     bypass_mask: u32,
@@ -252,9 +257,10 @@ pub(crate) fn generate_live_srcnat_rule_v6(
     bypass_val: u32,
 ) -> String {
     format!(
-        "oifname \"{iface}\" meta nfproto ipv6 meta l4proto udp ip6 saddr @{}{} counter return comment \"flowcone\"",
+        "oifname \"{iface}\" meta nfproto ipv6 meta l4proto udp ip6 saddr @{}{}{} counter return comment \"flowcone\"",
         SET_V6,
-        bypass_clause(bypass_mask, bypass_val)
+        bypass_clause(bypass_mask, bypass_val),
+        special_v6_clause()
     )
 }
 
@@ -545,6 +551,11 @@ table ip6 nat {
         assert!(r4.contains("ip saddr != 0.0.0.0"));
         assert!(r4.contains("255.0.0.0/8"));
         assert!(!r4.contains("255.255.255.255"));
+        let r6_srcnat = generate_live_srcnat_rule_v6("eth1", 0, 0);
+        assert!(r6_srcnat.contains("ip6 saddr @flowcone_v6"));
+        assert!(r6_srcnat.contains("udp sport != { 546, 547 }"));
+        assert!(r6_srcnat.contains("ip6 daddr != ff00::/8"));
+        assert!(r6_srcnat.contains("ip6 daddr != fe80::/10"));
         let r6 = generate_live_forward_rule_v6("eth1", 0x40000000);
         assert!(r6.contains("ct state new"));
         assert!(r6.contains("ip6 saddr @flowcone_fwd6"));
