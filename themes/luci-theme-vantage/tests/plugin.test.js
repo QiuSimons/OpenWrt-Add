@@ -45,10 +45,14 @@ const NO_UCODE = UCODE ? false : 'no ucode binary (set UCODE=/path/to/ucode, e.g
    (no phy80211, #124) */
 const BRIDGES = [ 'br-lan', 'br-guest' ];
 const WIFI_NET = [ 'phy2g-ap0' ];
+/* Qualcomm qcawificfg80211's interfaces, named as their uci sections */
+const QCA_NET = [ 'ath0', 'ath1' ];
+const NETDEVS = [ 'eth0', 'ra0' ].concat(BRIDGES, WIFI_NET, QCA_NET);
 function fakeNet(dir, entries) {
 	const net = path.join(dir, 'net'), n = [].concat(entries, 0);
 	fs.mkdirSync(path.join(net, 'eth0'), { recursive: true });
 	fs.mkdirSync(path.join(net, 'ra0'));
+	QCA_NET.forEach(q => fs.mkdirSync(path.join(net, q)));
 	WIFI_NET.forEach(w => fs.mkdirSync(path.join(net, w, 'phy80211'), { recursive: true }));
 	BRIDGES.forEach((b, i) => {
 		fs.mkdirSync(path.join(net, b));
@@ -80,7 +84,7 @@ function spawnUcode(cases, source, entries, board) {
 		return spawnSync(UCODE, args, { encoding: 'utf8' });
 	} finally {
 		for (const f of [ file, plugin, boardFile ].concat(BRIDGES.map(b => path.join(dir, 'net', b, 'brforward')))) if (fs.existsSync(f)) fs.unlinkSync(f);
-		for (const d of BRIDGES.map(b => 'net/' + b).concat(WIFI_NET.map(w => 'net/' + w + '/phy80211'), WIFI_NET.map(w => 'net/' + w), [ 'net/ra0', 'net/eth0', 'net', '' ])) if (fs.existsSync(path.join(dir, d))) fs.rmdirSync(path.join(dir, d));
+		for (const d of BRIDGES.map(b => 'net/' + b).concat(WIFI_NET.map(w => 'net/' + w + '/phy80211'), WIFI_NET.map(w => 'net/' + w), QCA_NET.map(q => 'net/' + q), [ 'net/ra0', 'net/eth0', 'net', '' ])) if (fs.existsSync(path.join(dir, d))) fs.rmdirSync(path.join(dir, d));
 	}
 }
 
@@ -136,7 +140,7 @@ function runShim(cases) {
 		if (!Object.prototype.hasOwnProperty.call(shim.POLICY, c.method)) return { status: 3, reply: null, sections: orig, reverted };
 		if (!shim.argsOk(c.method, c.args)) return { status: 2, reply: null, sections: orig, reverted };
 		const reply = c.method === 'wireless'
-			? shim.wirelessReply((c.ubus || {})['network.wireless status'] ?? null, c.wireless_uci ?? null)
+			? shim.wirelessReply((c.ubus || {})['network.wireless status'] ?? null, c.wireless_uci ?? null, d => NETDEVS.includes(d))
 			: c.method === 'wired' ? { hosts: shim.wired(c.fdb ?? null) }
 			: c.method === 'routes' ? { routes: shim.routes(c.lookup ?? null) }
 			: c.method === 'survey' ? { results: shim.survey((c.args || {}).device, (c.survey && typeof c.survey === 'object') ? c.survey[(c.args || {}).device] : null, d => WIFI_NET.includes(d)) }
@@ -241,6 +245,23 @@ const BOOLS = [
 	dev('r_true', '2g', '1', 'EHT20', { disabled: 'true' }),
 	dev('r_yes', '6g', '37', 'EHT160', { disabled: 'yes' }),
 	dev('r_no', '2g', '6', 'EHT20', { disabled: 'false' })
+];
+
+/* uci wireless of Qualcomm's qcawificfg80211 (QSDK firmware such as
+   QWRT): wifi-iface sections named after their interface with no ifname,
+   and htmode HT20 to HT160 whatever the standard, which hwmode carries */
+const qdev = (name, hwmode, htmode, channel) => ({ '.name': name, '.type': 'wifi-device', type: 'qcawificfg80211', hwmode, htmode, channel, country: 'US', macaddr: '02:00:5E:00:53:C0' });
+const qwif = (name, device, extra) => Object.assign({ '.name': name, '.type': 'wifi-iface', device, mode: 'ap', network: 'lan' }, SECRETS, extra);
+const QCA = [
+	qdev('wifi0', '11axa', 'HT160', '44'),
+	qwif('ath0', 'wifi0', { ssid: 'Home', encryption: 'psk2+ccmp' }),
+	qdev('wifi1', '11axg', 'HT40', 'auto'),
+	qwif('ath1', 'wifi1', { ssid: 'Home', encryption: 'psk-mixed' }),
+	qwif('ath9', 'wifi0', { ssid: 'Not created' }),
+	qwif('guest', 'wifi1', { ssid: 'Taken', ifname: 'ath1' }),
+	qdev('wifi2', '11ac', 'HT80', '149'),
+	qwif('ath2', 'wifi2', { ssid: 'Off', disabled: '1' }),
+	qdev('wifi3', '11ng', 'VHT80', '1')
 ];
 
 /* a route lookup's answer as ucode's rtnl gives it (RTM_GETROUTE with
@@ -404,7 +425,8 @@ const SURVEY_CASES = [
 	{ method: 'survey', args: { device: [ 'phy2g-ap0' ] } },
 	{ method: 'survey', args: { device: 'phy2g-ap0', extra: 'x' } }
 ];
-const ALL = BEHAVIOUR.concat(NAME_CASES, MAC_CASES, SURVEY_CASES);
+const QCA_CASES = [ { method: 'wireless', ubus: {}, wireless_uci: QCA } ];
+const ALL = BEHAVIOUR.concat(NAME_CASES, MAC_CASES, SURVEY_CASES, QCA_CASES);
 
 /* -------------------------------------------------------------- tests */
 
@@ -765,6 +787,37 @@ test('model: a radio from the config shows its configured Wi-Fi 7 mode and is up
 		[ 'rai0', 'Home', true ], [ 'rai4', 'Guest MLO', true ], [ 'rax0', 'Home', true ] ]);
 	/* nothing answers: down, not up */
 	assert.deepEqual(model.build({ wifi, iwinfo: { ra0: {}, ra2: {} } }).radios.map(r => r.up), [ false, false, false, false ]);
+});
+
+test('stand-in: qcawificfg80211 sections without ifname are named after their interface, and HT modes follow hwmode', () => {
+	const r = runShim(QCA_CASES)[0].reply;
+	assert.deepEqual(Object.keys(r), [ 'wifi0', 'wifi1', 'wifi2', 'wifi3' ]);
+	assert.doesNotMatch(JSON.stringify(r), /SECRET/);
+	assert.deepEqual(r.wifi0, {
+		up: false, pending: false, disabled: false, source: 'config',
+		config: { band: null, channel: '44', htmode: 'HE160', country: 'US', txpower: null, disabled: null },
+		interfaces: [
+			{ ifname: 'ath0', section: 'ath0', config: { ssid: 'Home', mode: 'ap', hidden: null, encryption: 'psk2+ccmp',
+				ieee80211w: null, ieee80211r: null, ieee80211k: null, ieee80211v: null, network: [ 'lan' ], macaddr: null } }
+		]
+	}, 'ath9 is not a device: left out');
+	assert.deepEqual(r.wifi1.interfaces.map(i => [ i.ifname, i.section, i.config.ssid ]), [ [ 'ath1', 'ath1', 'Home' ] ], 'the first section to claim ath1 wins');
+	assert.deepEqual([ 'wifi1', 'wifi2', 'wifi3' ].map(n => r[n].config.htmode), [ 'HE40', 'VHT80', 'VHT80' ], 'hwmode gives the standard; other htmodes stay');
+	assert.deepEqual(r.wifi2.interfaces, [], 'a disabled section claims nothing');
+	/* only qcawificfg80211: mtkwifi's sections without ifname stay out */
+	assert.ok(!runShim([ BEHAVIOUR[24] ])[0].reply.MT7990_1_2.interfaces.some(i => i.section === 'noname'));
+});
+
+test('model: a qcawificfg80211 radio from the config reads as Wi-Fi 6 on the band iwinfo reports', () => {
+	const model = load('vantage.model');
+	const wifi = runShim(QCA_CASES)[0].reply;
+	const iw = (channel, frequency, bssid) => ({ mode: 'Master', ssid: 'Home', bssid, channel, frequency, txpower: 20 });
+	const m = model.build({ wifi, iwinfo: { ath0: iw(44, 5220, '02:00:5E:00:53:C1'), ath1: iw(6, 2437, '02:00:5E:00:53:C2') } });
+	assert.deepEqual(m.radios.filter(x => x.up).map(x => [ x.id, x.band, x.gen, x.width, x.htmode ]), [
+		[ 'wifi0', '5g', 'Wi-Fi 6', 160, 'HE160' ],
+		[ 'wifi1', '2g', 'Wi-Fi 6', 40, 'HE40' ]
+	]);
+	assert.deepEqual(m.ssids.map(x => [ x.ifname, x.ssid, x.band, x.up ]), [ [ 'ath0', 'Home', '5g', true ], [ 'ath1', 'Home', '2g', true ] ]);
 });
 
 test('model: a radio netifd reports keeps iwinfo\'s mode over the configured one', () => {

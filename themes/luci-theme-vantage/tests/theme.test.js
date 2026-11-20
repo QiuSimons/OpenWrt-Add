@@ -352,7 +352,7 @@ test('Appearance: the templates and the login page read the same keys, in the sa
 	const table = /\nconst LOOK = (\{[\s\S]*?\n\});\n/.exec(src);
 	assert.ok(table, 'found LOOK');
 	const LOOK = new Function('THEME_KEY', 'LOGIN_KEY', 'BACKDROP_KEY', 'return ' + table[1])('vantage.theme', 'vantage.login', 'vantage.backdrop.v1');
-	assert.deepEqual(Object.keys(LOOK), [ 'theme', 'login', 'backdrop', 'power', 'brand' ]);
+	assert.deepEqual(Object.keys(LOOK), [ 'theme', 'login', 'backdrop', 'power', 'unfocused', 'brand' ]);
 	assert.ok(header.includes("look('brand', [ 'none', 'hostname', 'model' ])"), 'the template keeps the same brand values');
 	assert.ok(header.includes("look('theme', 'vantage.theme.own', 'vantage.theme', [ 'auto', 'light', 'dark' ])"));
 	assert.ok(header.includes("look('backdrop', 'vantage.backdrop.own', 'vantage.backdrop.v1', [ 'grid', 'stars', 'none' ])"));
@@ -364,6 +364,18 @@ test('Appearance: the templates and the login page read the same keys, in the sa
 	assert.ok(loginJs.includes("localStorage.getItem('vantage.power.own'); p[2] = localStorage.getItem('vantage.power')"));
 	assert.match(loginJs, /if \(pick === 'none' \|\| power === 'low'\) return;/);
 	assert.ok(login.includes("look('power', [ 'normal', 'low' ])") && login.includes('data-vt-look-power="{{ look_power }}"'));
+	/* Motion when not in focus (#131): the dashboard's attribute, the refresh dot and the login page follow the pick */
+	assert.ok(header.includes("look('unfocused', 'vantage.unfocused.own', 'vantage.unfocused', [ 'still', 'moving' ])"));
+	assert.ok(header.includes("look('unfocused', [ 'still', 'moving' ])"), 'the template keeps the same values');
+	assert.ok(login.includes("look('unfocused', [ 'still', 'moving' ])") && login.includes('data-vt-look-unfocused="{{ look_unfocused }}"'));
+	assert.ok(loginJs.includes("localStorage.getItem('vantage.unfocused.own'); u[2] = localStorage.getItem('vantage.unfocused')"));
+	assert.match(loginJs, /if \(unfocused !== 'moving'\) \{\n\t\twindow\.addEventListener\('blur'/, 'the login page pauses on blur unless picked');
+	assert.ok(src.includes("root.toggleAttribute('data-vt-blur', !document.hasFocus() && root.getAttribute('data-vt-unfocused') !== 'moving')"));
+	assert.ok(src.includes("window.addEventListener(UNFOCUSED_EVENT, focus);"), 'the dot follows a pick made while the page is open');
+	assert.equal(src.split('this.applyUnfocused();').length, 3, 'applied when the page opens and when another tab picks');
+	assert.ok(src.includes("else if (name === 'unfocused') root.setAttribute('data-vt-look-unfocused', value);"), 'a saved pick becomes the page\'s');
+	assert.equal(src.split("'vt-unfocused': 'unfocused'").length, 2, 'a failed save can be tried again');
+	assert.ok(src.includes("'vt-unfocused': this.unfocusedPref()"), 'the panel shows the pick in force');
 	for (const [ name, k ] of Object.entries(LOOK)) {
 		assert.match(k.own, /^vantage\.[a-z]+\.own$/, name);
 		assert.ok(header.includes(`data-vt-look-${name}="{{ look_${name} }}"`), `header hands over ${name}`);
@@ -372,6 +384,7 @@ test('Appearance: the templates and the login page read the same keys, in the sa
 	assert.deepEqual(LOOK.login.ok, [ 'grid', 'stars', 'none' ]);
 	assert.deepEqual(LOOK.backdrop.ok, [ 'grid', 'stars', 'none' ]);
 	assert.deepEqual(LOOK.power.ok, [ 'normal', 'low' ], 'Low-power router is off unless picked');
+	assert.deepEqual(LOOK.unfocused.ok, [ 'still', 'moving' ], 'nothing moves without the focus unless picked');
 	assert.deepEqual(LOOK.brand.ok, [ 'none', 'hostname', 'model' ], 'nothing next to the logo unless picked');
 	assert.ok(!login.includes('vt-look-brand'), 'the login page shows no device name');
 	/* saved in config vantage_theme, section appearance, and nowhere else */
@@ -474,4 +487,55 @@ test('theme motion clock: a cancelled pulse is dropped, not stepped', () => {
 	assert.equal(live.currentTime, 50);
 	assert.equal(gone.currentTime, null, 'not written: it stays cancelled');
 	assert.deepEqual(self.clock.anims.map(x => x.a), [ live ]);
+});
+
+/* #111: vantage.css keeps cells of numbers and addresses on one line by
+   English words in their data-title, which is the column's title as shown;
+   under a translated title the theme marks the same columns .vt-nowrap */
+test('translated column titles: the columns the English rule keeps on one line take .vt-nowrap in any language (#111)', () => {
+	const list = new Function('return ' + /\nconst NOWRAP_TITLES = (\[[\s\S]*?\]);\n/.exec(src)[1])();
+	const body = [ 'nowrapTitles', 'titleKey' ].map(n => {
+		const start = src.indexOf('function ' + n + '(');
+		return src.slice(start, src.indexOf('\n}\n', start) + 3);
+	}).join('\n');
+	const { nowrapTitles, titleKey } = new Function('NOWRAP_TITLES', body + '\nreturn { nowrapTitles, titleKey };')(list);
+	/* every title is one the English rule matches, so no language gets more than English does */
+	const css = fs.readFileSync(path.join(__dirname, '..', 'luci-theme-vantage/htdocs/luci-static/vantage/vantage.css'), 'utf8');
+	const rule = /\n(\.td\.vt-nowrap:not\(\.cbi-value-field\),\n[^{]*)\{([^}]*)\}/.exec(css);
+	assert.ok(rule, 'one rule for .vt-nowrap and the English titles');
+	const words = [ ...rule[1].matchAll(/\[data-title\*?="([^"]+)" ?i?\]/g) ].map(m => m[1].toLowerCase());
+	assert.ok(words.length >= 10, 'found the English words');
+	for (const t of list) assert.ok(words.some(w => t.toLowerCase().includes(w)), t + ' is matched in English');
+	assert.match(rule[2], /white-space:\s*nowrap/);
+	/* LuCI 25.12 and 24.10 column titles, the whole list: one dropped from it would wrap again in every language but English */
+	assert.deepEqual(list, [ 'CPU usage (%)', 'DUID', 'Gateway', 'IP address', 'IPv4 address', 'IPv6 address', 'IPv6 addresses', 'Lease time remaining', 'MAC address',
+		'Memory usage (%)', 'Metric', 'PID', 'Priority', 'Remaining time', 'Source', 'Start priority', 'Target' ]);
+	/* English: nothing to add, the CSS has it */
+	assert.equal(nowrapTitles(t => t).size, 0);
+	/* Chinese, as LuCI's catalogue has it; uppercase, as the theme shows titles */
+	const zh = { 'Remaining time': '剩余时间', 'IPv4 address': 'IPv4 地址', 'Gateway': '网关' };
+	const keys = nowrapTitles(t => zh[t] || t);
+	assert.deepEqual([ ...keys ].sort(), [ 'IPV4 地址', '剩余时间', '网关' ].sort());
+	assert.ok(keys.has(titleKey('IPV4  地址 ')), 'data-title from innerText: uppercase, spaces collapsed');
+	/* a script with case: the theme's uppercase title still matches */
+	const ru = nowrapTitles(t => (t === 'Remaining time' ? 'Оставшееся время' : t));
+	assert.ok(ru.has(titleKey('ОСТАВШЕЕСЯ ВРЕМЯ')) && ru.has(titleKey('Оставшееся время')));
+	assert.ok(nowrapTitles(t => (t === 'Source' ? 'Straße' : t)).has(titleKey('STRASSE')), 'ß as CSS uppercases it');
+	/* the browser uppercases a heading by the page's language, and innerText gives that: Turkish i, Greek accents */
+	const tr = nowrapTitles(t => (t === 'IPv4 address' ? 'IPv4 adresi' : t), 'tr');
+	assert.ok(tr.has(titleKey('IPV4 ADRESİ', 'tr')) && !tr.has('IPV4 ADRESI'), 'as Chromium shows it under lang="tr"');
+	const el = nowrapTitles(t => (t === 'IPv4 address' ? 'Διεύθυνση IPv4' : t), 'el');
+	assert.ok(el.has(titleKey('ΔΙΕΥΘΥΝΣΗ IPV4', 'el')), 'as Chromium shows it under lang="el"');
+	/* LuCI's language codes (zh-cn, pt-br) are taken; one the browser refuses falls back to plain uppercase */
+	assert.ok(nowrapTitles(t => zh[t] || t, 'zh-cn').has('IPV4 地址'));
+	assert.equal(titleKey('Straße', 'not a language'), 'STRASSE');
+	/* an empty or missing translation adds nothing */
+	assert.equal(nowrapTitles(t => (t === 'PID' ? '' : t === 'DUID' ? null : t)).size, 0);
+	/* the numerals scan marks them, once a cell, never a form field */
+	const scan = src.slice(src.indexOf('\tsetupNumerals() {'), src.indexOf('\t/* --------------------------------------------------------- tooltips */'));
+	assert.match(scan, /const lang = document\.documentElement\.lang, nowrap = nowrapTitles\(_, lang\);/);
+	assert.match(scan, /cell\._vtNowrap = !cell\.classList\.contains\('cbi-value-field'\) && nowrap\.has\(titleKey\(cell\.getAttribute\('data-title'\), lang\)\);/);
+	assert.match(scan, /if \(cell\._vtNowrap\) cell\.classList\.add\('vt-nowrap'\);/);
+	/* LuCI's own catalogue translates them: no literal _('...') of these titles in the theme */
+	for (const t of list) assert.ok(!src.includes("_('" + t + "')"), t + ' stays out of the theme catalogue');
 });

@@ -549,3 +549,25 @@ test('a network\'s status keeps its details in place as the signal reading chang
 	assert.match(sig.body, /min-width:\s*8\.5em/);
 	assert.match(sig.body, /flex:\s*none/);
 });
+
+test('a plain dialog is sized by max-width, so a page can widen it; LuCI\'s own kinds keep a fixed width (#128)', () => {
+	/* the dialog's own rules: its classes and states, not its children or ::before/::after */
+	const own = themeRules.filter(r => r.sel.some(s => /^#modal_overlay > \.modal(\.[\w-]+|:has\([^)]*\)|:not\([^)]*\))*$/.test(s)));
+	const base = own.find(r => r.sel.length === 1 && r.sel[0] === '#modal_overlay > .modal' && !r.media);
+	assert.match(base.body, /(^|;)\s*width:\s*100%\s*;/, 'a plain dialog fills the overlay up to its max-width, which an inline one replaces (banIP\'s map: 90%)');
+	assert.match(base.body, /max-width:\s*720px/);
+	/* an inline max-width stays after its dialog closes (Wireless -> Scan
+	   sets 90%, its Join form reuses the dialog): these keep their width */
+	const KINDS = [ [ '#modal_overlay > .modal.cbi-modal', 960 ], [ '#modal_overlay > .modal.uci-dialog', 720 ],
+		[ '#modal_overlay > .modal:has(> textarea[readonly])', 1080 ], [ '#modal_overlay > .modal.alert-message', 520 ] ];
+	for (const [ sel, px ] of KINDS) {
+		const r = own.find(x => x.sel.length === 1 && x.sel[0] === sel && !x.media);
+		assert.match(r.body, new RegExp(`(^|;)\\s*width:\\s*min\\(${px}px, 100%\\)`), sel);
+		assert.match(r.body, /max-width:\s*none/, `${sel}: the base max-width does not cap it`);
+	}
+	for (const r of own.filter(x => x !== base && !KINDS.some(([ sel ]) => x.sel.length === 1 && x.sel[0] === sel)))
+		assert.doesNotMatch(r.body, /(^|[;\s])(width|inline-size)\s*:/, `${r.sel.join(', ')}: no other width, which would outweigh a page's inline max-width`);
+	/* showModal(null, ...) adds an empty title: no bar for it */
+	const empty = themeRules.find(r => r.sel.includes('#modal_overlay > .modal > h4:first-child:empty'));
+	assert.match(empty.body, /display:\s*none/);
+});

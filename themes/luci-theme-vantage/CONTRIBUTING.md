@@ -123,7 +123,13 @@ Rules for translations:
   position), and keep numbers and units as the code writes them:
   `"(configured %d dBm, limited by regulatory rules)"` becomes
   `"(eingestellt %d dBm, durch Vorschriften begrenzt)"`: the words change,
-  `%d dBm` does not. `tests/i18n.test.js` checks the placeholders.
+  `%d dBm` does not. `tests/i18n.test.js` checks the placeholders. A
+  language whose own LuCI translation writes unit symbols in its script
+  may do the same (Russian: `%d дБм`, `Мбит/с`), for every unit alike; the
+  numbers stay as they are (`2.4`, not `2,4`).
+- A short text LuCI itself uses without a context (`Upload`, `Status`,
+  `On`) is shared with LuCI's catalogue, and a router may show either
+  translation on either side: keep LuCI's wording for those.
 - No markup: a translation may not add `<` or `>`.
 - Labels, table headers and pills have little room; keep them short.
 

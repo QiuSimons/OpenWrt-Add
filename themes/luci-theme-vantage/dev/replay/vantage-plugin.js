@@ -170,19 +170,39 @@ function uciTrue(v) {
 	return [ '1', 'on', 'true', 'yes', 'enabled' ].includes(v);
 }
 
+/* qcawificfg80211 (QSDK firmware such as QWRT), as the plugin's
+   qca_ifname() and qca_htmode(): a section without ifname is named after
+   its interface, taken when exists(name) says the device is there; htmode
+   is HT20 to HT160 whatever the standard, which hwmode carries */
+function qcaIfname(s, exists) {
+	const n = s['.name'];
+	return (typeof n === 'string' && /^[A-Za-z0-9_.-]{1,15}$/.test(n) && n !== '.' && n !== '..' && exists(n)) ? n : null;
+}
+
+function qcaHtmode(c) {
+	const ht = typeof c.htmode === 'string' ? /^HT(20|40|80|160)$/.exec(c.htmode) : null;
+	const hw = typeof c.hwmode === 'string' ? c.hwmode.toLowerCase() : '';
+	if (!ht) return c.htmode;
+	return hw.includes('be') ? 'EHT' + ht[1] : hw.includes('ax') ? 'HE' + ht[1] : hw.includes('ac') ? 'VHT' + ht[1] : c.htmode;
+}
+
 /* The same reply from uci wireless sections ([ { '.name', '.type', ... } ]
    in config order; null without the config), as the plugin's
-   wireless_from_config(): enabled interfaces that name their ifname, the
-   first section per name, no run state, no txpower */
-function wirelessFromConfig(sections) {
+   wireless_from_config(): enabled interfaces that name their ifname (or,
+   on qcawificfg80211, are named after one that exists(name)), the first
+   section per name, no run state, no txpower */
+function wirelessFromConfig(sections, exists) {
 	const radios = new Map(), taken = new Set(), out = {};
+	const there = typeof exists === 'function' ? exists : () => false;
 	const list = Array.isArray(sections) ? sections.filter(s => s && typeof s === 'object') : [];
 	for (const s of list)
 		if (s['.type'] === 'wifi-device' && /^[A-Za-z0-9_.-]{1,64}$/.test(s['.name']))
-			radios.set(s['.name'], { disabled: uciTrue(s.disabled), config: Object.assign({}, s, { txpower: null }), interfaces: [] });
+			radios.set(s['.name'], { disabled: uciTrue(s.disabled),
+				config: Object.assign({}, s, { txpower: null, htmode: s.type === 'qcawificfg80211' ? qcaHtmode(s) : s.htmode }), interfaces: [] });
 	for (const s of list) {
 		if (s['.type'] !== 'wifi-iface') continue;
-		const r = typeof s.device === 'string' ? radios.get(s.device) : null, ifname = s.ifname;
+		const r = typeof s.device === 'string' ? radios.get(s.device) : null;
+		const ifname = (s.ifname == null && r && r.config.type === 'qcawificfg80211') ? qcaIfname(s, there) : s.ifname;
 		if (!r || uciTrue(s.disabled) || typeof ifname !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(ifname) || taken.has(ifname)) continue;
 		taken.add(ifname);
 		r.interfaces.push({ ifname, section: s['.name'],
@@ -196,8 +216,8 @@ function wirelessFromConfig(sections) {
    object is missing (status null), the wireless config */
 /* netifd's status, unless it is missing or skipped every radio (no
    handler for the vendor's driver type): then the config */
-function wirelessReply(status, sections) {
-	return (status && typeof status === 'object' && !Array.isArray(status) && Object.keys(status).length) ? reduceWireless(status) : wirelessFromConfig(sections);
+function wirelessReply(status, sections, exists) {
+	return (status && typeof status === 'object' && !Array.isArray(status) && Object.keys(status).length) ? reduceWireless(status) : wirelessFromConfig(sections, exists);
 }
 
 /* uci sections of one config from the store, in config order; null when
@@ -427,7 +447,8 @@ function call(store, method, args) {
 	if (method === 'wireless') {
 		const status = store.data('network.wireless', 'status', {});
 		const empty = status && typeof status === 'object' && !Object.keys(status).length;
-		return { result: [ 0, wirelessReply(status, status == null || empty ? storeSections(store, 'wireless') : null) ] };
+		const devs = obj(store.data('network.device', 'status', {}));
+		return { result: [ 0, wirelessReply(status, status == null || empty ? storeSections(store, 'wireless') : null, n => Object.prototype.hasOwnProperty.call(devs, n)) ] };
 	}
 	if (method === 'thermal') return { result: [ 0, { zones: thermal(store.fixtures) } ] };
 	if (method === 'survey') return { result: [ 0, { results: survey(args.device, null, () => false) } ] };

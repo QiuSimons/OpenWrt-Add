@@ -120,7 +120,7 @@ test('stars: stream from the origin, respawn inside the band, ease to the rate\'
 test('mount: one frame loop, 20 a second on a quiet uplink, none in the background, nothing left after stop()', () => {
 	const saved = {}, names = [ 'performance', 'requestAnimationFrame', 'cancelAnimationFrame', 'setTimeout', 'clearTimeout', 'ResizeObserver', 'IntersectionObserver', 'MutationObserver', 'document', 'window', 'getComputedStyle' ];
 	names.forEach(n => { saved[n] = Object.getOwnPropertyDescriptor(global, n); });
-	let now = 0, id = 1, painted = 0, io = null, reduced = false, themeFlip = null, observing = false, colour = 'rgb(1, 2, 3)';
+	let now = 0, id = 1, painted = 0, io = null, reduced = false, themeFlip = null, observing = false, colour = 'rgb(1, 2, 3)', moves = false;
 	const mq = {};
 	const rafs = new Map(), timers = new Map(), on = { doc: {}, win: {} };
 	const add = t => (ev, fn) => { (t[ev] = t[ev] || []).push(fn); };
@@ -155,7 +155,7 @@ test('mount: one frame loop, 20 a second on a quiet uplink, none in the backgrou
 		/* mounted before the tile is in the page, as render() does: the
 		   theme's colours are read once it is */
 		canvas.isConnected = false;
-		const b = bd.mount(host, band, 'grid');
+		const b = bd.mount(host, band, 'grid', { unfocused: () => moves });
 		canvas.isConnected = true;
 		b.update({ down: 2e4, up: 1e4 });
 		const quiet = frames(1000);
@@ -175,6 +175,10 @@ test('mount: one frame loop, 20 a second on a quiet uplink, none in the backgrou
 		assert.equal(pending, 1, 'never more than one frame or wait pending');
 		fire(on.win, 'blur'); run(40);
 		assert.equal(frames(1000), 0, 'another window has the focus');
+		/* Motion when not in focus (#131): the caller says, asked when it runs */
+		moves = true; b.pause(false); assert.ok(frames(500) > 5, 'on without the focus when picked');
+		moves = false; b.pause(false); run(40);
+		assert.equal(frames(1000), 0, 'and off again');
 		fire(on.win, 'focus'); assert.ok(frames(500) > 5, 'back on focus');
 		document.hidden = true; fire(on.doc, 'visibilitychange'); run(40);
 		assert.equal(frames(1000), 0, 'tab hidden');

@@ -318,7 +318,7 @@ test('login: fuser is never echoed, hostile inputs change no markup, the hostnam
 	assert.match(evil.html, /<h1 class="vt-login-title">SECRET-HOSTNAME&#34;&#62;&#60;script&#62;/, 'a hostile hostname is encoded');
 	assert.match(renderLogin({ path: ADMIN, noHostname: true }).html, /<h1 class="vt-login-title">Authorization Required<\/h1>/, 'none: as before');
 	assert.deepEqual(evil.calls.ubus, [], 'login page called ubus');
-	assert.deepEqual(evil.calls.uci, [ 'uhttpd.main.listen_https', 'vantage_theme.appearance.theme', 'vantage_theme.appearance.login', 'vantage_theme.appearance.power', 'system.@system.hostname' ],
+	assert.deepEqual(evil.calls.uci, [ 'uhttpd.main.listen_https', 'vantage_theme.appearance.theme', 'vantage_theme.appearance.login', 'vantage_theme.appearance.power', 'vantage_theme.appearance.unfocused', 'system.@system.hostname' ],
 		'login page read more than the HTTPS ports, the Appearance saved for every browser and the hostname');
 	assert.match(evil.html, /role="alert">Invalid username and\/or password! Please try again\.</, 'generic error for a failed login');
 	assert.ok(!renderLogin({ path: ADMIN }).html.includes('role="alert"'), 'no error before a login attempt');
@@ -382,6 +382,15 @@ test('Appearance saved for every browser: only values the theme knows reach the 
 	for (const odd of [ HOSTILE, 'Low', ' low', 'on', '' ]) {
 		assert.equal(power(renderLogin({ path: ADMIN, look: { power: odd } }).html), '', `login power ${JSON.stringify(odd)}`);
 		assert.equal(power(renderPage({ path: ADMIN, authed: true, look: { power: odd } }).html), '', `header power ${JSON.stringify(odd)}`);
+	}
+	/* Motion when not in focus (#131): the login page's particles follow it (login.js) */
+	const unfocused = html => attrOf(html, 'html', 'data-vt-look-unfocused');
+	assert.equal(unfocused(renderLogin({ path: ADMIN, look: { unfocused: 'moving' } }).html), 'moving');
+	assert.equal(unfocused(renderPage({ path: ADMIN, authed: true, look: { unfocused: 'moving' } }).html), 'moving');
+	assert.equal(unfocused(renderPage({ path: ADMIN, look: { unfocused: 'moving' } }).html), '', 'not on a page without a login other than the login page');
+	for (const odd of [ HOSTILE, 'Moving', ' moving', 'on', '' ]) {
+		assert.equal(unfocused(renderLogin({ path: ADMIN, look: { unfocused: odd } }).html), '', `login unfocused ${JSON.stringify(odd)}`);
+		assert.equal(unfocused(renderPage({ path: ADMIN, authed: true, look: { unfocused: odd } }).html), '', `header unfocused ${JSON.stringify(odd)}`);
 	}
 	assert.deepEqual(looks(renderPage({ path: ADMIN, authed: true, look }).html),
 		{ 'data-vt-look-theme': 'dark', 'data-vt-look-login': 'stars', 'data-vt-look-backdrop': 'none', 'data-vt-look-brand': 'hostname' });

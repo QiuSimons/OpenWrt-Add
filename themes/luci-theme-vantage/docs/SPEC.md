@@ -78,7 +78,7 @@ everywhere: theme dir `vantage`, media URL `/luci-static/vantage`, uci
   changes the page; it saves as Appearance does. Appearance sits under
   the gear next to it. Appearance (this mode, what
   shows next to the logo after login, the login and network path
-  backgrounds and, with the dashboard, Low-power router) is saved on the router for every
+  backgrounds, Motion when not in focus and, with the dashboard, Low-power router) is saved on the router for every
   browser, in `/etc/config/vantage_theme` (section `appearance`), by
   sessions holding the theme's rpcd group `luci-theme-vantage` (uci `set`,
   `commit` and `revert` on that config only; rpcd refuses commit and
@@ -250,7 +250,11 @@ text around it so it looks the same size.
   Clients tile lists Wi-Fi stations or wired hosts, switched in its head
   where a device has both, and folds its quick filters (bands, active,
   weak signal, new; per port for wired hosts) into a menu at the end of
-  the search box, the one in force shown as a tag in the box. A wired
+  the search box, the one in force shown as a tag in the box. Both lists
+  are in name order until a column's header is clicked; that pick is
+  kept per browser (`localStorage`), each list its own (#132: in order
+  of live traffic the rows changed places at every poll). The cards of
+  the narrow layout have no header and keep that order. A wired
   host alone on its port gets the port's link speed and traffic as its
   own; hosts sharing a port (a switch or another access point behind it)
   show the port as shared, with no speed or traffic of their own; their
@@ -341,8 +345,8 @@ text around it so it looks the same size.
   draws over the path's height only, 20 frames a second up to
   100 kbit/s and up to 30 from 10 Mbit/s (each frame is asked for when
   it is drawn, not on every display refresh), and stops while another
-  window has the focus, the tab is hidden, the tile is out of view or
-  folded; with
+  window has the focus (unless Motion when not in focus is on), the tab
+  is hidden, the tile is out of view or folded; with
   reduced motion it is one still frame. Under the Vantage theme it is
   saved with the theme's Appearance (on the router for every browser);
   otherwise in `localStorage` like the chart style.
@@ -455,7 +459,11 @@ text around it so it looks the same size.
 - Motion stops while another window has the focus (the status circle's
   ring, the Live beat, the flow dots, the backdrop and the theme's refresh
   dot): a moving part keeps the browser drawing every frame. The numbers
-  still update.
+  still update. **Motion when not in focus** (#131), under the theme's
+  Appearance and off by default, lets it all go on, for a dashboard kept
+  in view beside other work; the login page's particles follow it too. A
+  hidden tab, reduced motion and Low-power router stop motion as before.
+  Saved like the other picks.
   A poll updates only what changed and lays nothing out unless a tile
   changes size. Idle animations (the status circle's ring, the Live beat,
   the flow on busy wires)
@@ -565,8 +573,8 @@ text around it so it looks the same size.
 - Templates escape everything request-derived; never echo `fuser`; the
   theme's own markup for unauthenticated renders (login, 404, CSRF) adds
   nothing about the device but the login page's hostname, and of the
-  Appearance only the colour mode, the login background and whether
-  Low-power router is on. Not in the theme's control: LuCI's core
+  Appearance only the colour mode, the login background, whether
+  Low-power router is on and Motion when not in focus. Not in the theme's control: LuCI's core
   `header.ut` prints `L = new LuCI({...})` after the theme header on every
   page, with the LuCI build and package-database time in the `luci.js`
   URL and `nodespec: dispatched`, which on an anonymous 404 is the whole

@@ -356,6 +356,14 @@ test('extraUplinks: a backup on a bridge VLAN takes the port its gateway was lea
 	assert.deepEqual([ b.dev, b.statsDev, b.port ], [ 'lan4', 'lan4', 'lan4' ]);
 	assert.deepEqual(b.speed, { mbps: 1000, duplex: 'full' });
 	assert.equal(m.wiredHosts.find(h => h.mac === gw).gateway, false, 'the main line\'s gateway only');
+	/* a LAN host (VLAN 1 of the same bridge, on lan2) with that address gives the line no port: alone (an idle
+	   backup line's gateway is in no hint), and beside the gateway, whose port the line keeps */
+	const liar = '00:00:5e:00:53:66', other = { mac: liar, port: 'lan2', bridge: 'br-lan', vlan: 1, seen: 1 }, hop = { ipaddrs: [ '203.0.113.21' ] };
+	const there = { mac: gw, port: 'lan4', bridge: 'br-lan', vlan: 20, seen: 3 };
+	assert.equal(model.build({ ifaces, devs, hints: { [liar.toUpperCase()]: hop }, fdb: [ other ] }).uplinks[1].port, null);
+	assert.equal(model.build({ ifaces, devs, hints: { [liar.toUpperCase()]: hop }, fdb: [ there, other ] }).uplinks[1].port, null);
+	for (const hints of [ { [gw.toUpperCase()]: hop, [liar.toUpperCase()]: hop }, { [liar.toUpperCase()]: hop, [gw.toUpperCase()]: hop } ])
+		assert.equal(model.build({ ifaces, devs, hints, fdb: [ there, other ] }).uplinks[1].port, 'lan4');
 	/* a bridge with one wired port still leads to it */
 	const one = { ...devs, 'br-wan': { type: 'bridge', 'bridge-members': [ 'lan3' ] } };
 	assert.equal(model.build({ ifaces: [ ifaces[1], wanIf('wanb', 'br-wan', 20) ], devs: one }).uplinks[1].dev, 'lan3');
@@ -796,6 +804,108 @@ test('build: an access point on a bridge with several ports takes the uplink whe
 	assert.deepEqual([ n.uplink.dev, n.uplink.port ], [ 'lan2', null ]);
 	/* one wired member: that one leads to the gateway */
 	assert.equal(model.resolveUplink(IFACES, DEVS).port, 'eth0');
+});
+
+/* The gateway is the one plausible holder of the next hop's address in the host hints (macOf): any device gets its
+   MAC listed under any address with one ARP request. Bridge entries here are as the plugin gives them: each has a
+   bridge, and a port that is in no bridge (a router's wan) has none at all */
+test('build: among the hosts that hold the gateway\'s address, the bridges\' entries say which one is the gateway', () => {
+	const eth = { devtype: 'ethernet', speed: '1000F', carrier: true };
+	const devs = { 'br-lan': { type: 'bridge', devtype: 'bridge', 'bridge-members': [ 'lan1', 'lan2', 'phy0-ap0' ] }, lan1: eth, lan2: eth, wan: eth, 'phy0-ap0': { devtype: 'wlan' } };
+	const GW = '00:00:5e:00:53:01', LIAR = '00:00:5e:00:53:66', STA = '00:00:5e:00:53:20', MADEUP = '00:00:5e:00:53:99';
+	const U = m => m.toUpperCase();
+	const flags = m => m.wiredHosts.map(h => [ h.mac, h.gateway ]);
+	const orders = (a, b, hop) => [ { [U(a)]: hop, [U(b)]: hop }, { [U(b)]: hop, [U(a)]: hop } ];
+
+	/* a router: the LAN on a bridge, the line on a port of its own, so the bridges have no entry for the gateway */
+	const lan = { interface: 'lan', up: true, l3_device: 'br-lan', device: 'br-lan', 'ipv4-address': [ { address: '192.0.2.1', mask: 24 } ], route: [] };
+	const wan = { interface: 'wan', up: true, l3_device: 'wan', device: 'wan', 'ipv4-address': [ { address: '198.51.100.2', mask: 24 } ],
+		route: [ { target: '0.0.0.0', mask: 0, nexthop: '198.51.100.1' } ] };
+	const hop = { ipaddrs: [ '198.51.100.1' ] }, onLan = { mac: LIAR, port: 'lan1', bridge: 'br-lan', seen: 1 };
+	/* a LAN host with the address, listed after the gateway or before it: a host of the LAN, and the line stays */
+	for (const hints of orders(GW, LIAR, hop)) {
+		const m = model.build({ ifaces: [ lan, wan ], devs, hints, fdb: [ onLan ] });
+		assert.deepEqual([ flags(m), m.uplink.iface, m.uplink.port ], [ [ [ LIAR, false ] ], 'wan', 'wan' ]);
+	}
+	/* a line whose far end has no MAC (PPPoE: no hint ever lists its peer): a host of a bridge is never its gateway, by the device's kind or its name */
+	const ppp = Object.assign({}, wan, { proto: 'pppoe', l3_device: 'pppoe-wan' });
+	for (const kind of [ { devtype: 'ppp', carrier: true }, { carrier: true } ])
+		assert.deepEqual(flags(model.build({ ifaces: [ lan, ppp ], devs: Object.assign({ 'pppoe-wan': kind }, devs), hints: { [U(LIAR)]: hop }, fdb: [ onLan ] })), [ [ LIAR, false ] ]);
+	/* a known limit, as in 1.0.20: alone with the address of an Ethernet line whose gateway no hint lists, a host
+	   heard elsewhere is believed. The bridges of a wire's other VLANs hear the real gateway in just that way (below) */
+	assert.deepEqual(flags(model.build({ ifaces: [ lan, wan ], devs, hints: { [U(LIAR)]: hop }, fdb: [ onLan ] })), [ [ LIAR, true ] ]);
+
+	/* an access point: gateway and hosts share the bridge the line leaves through */
+	const ap = [ { interface: 'lan', up: true, l3_device: 'br-lan', device: 'br-lan', 'ipv4-address': [ { address: '192.0.2.10', mask: 24 } ],
+		route: [ { target: '0.0.0.0', mask: 0, nexthop: '192.0.2.1' } ] } ];
+	const gwHop = { ipaddrs: [ '192.0.2.1' ] }, gwRow = { mac: GW, port: 'lan2', bridge: 'br-lan', seen: 1 }, liarRow = { mac: LIAR, port: 'lan1', bridge: 'br-lan', seen: 1 };
+	const A = (hints, fdb, more) => model.build(Object.assign({ ifaces: ap, devs, hints, fdb }, more));
+	const got = m => [ m.uplink.port, flags(m) ];
+	/* one holder: the gateway and its port, as before */
+	assert.deepEqual(got(A({ [U(GW)]: gwHop }, [ gwRow, liarRow ])), [ 'lan2', [ [ GW, true ], [ LIAR, false ] ] ]);
+	/* two the line's bridge hears: neither, and no port is said to lead to the gateway */
+	for (const hints of orders(GW, LIAR, gwHop))
+		assert.deepEqual(got(A(hints, [ gwRow, liarRow ])), [ null, [ [ GW, false ], [ LIAR, false ] ] ]);
+	/* a MAC no bridge has heard (made up as the sender of an ARP request) beside the gateway, which the line's bridge hears: the gateway */
+	for (const hints of orders(GW, MADEUP, gwHop))
+		assert.deepEqual(got(A(hints, [ gwRow ])), [ 'lan2', [ [ GW, true ] ] ]);
+	/* a station of this device's own SSID with the address, beside the gateway or in its place: never the gateway */
+	const wifi = { radio0: { up: true, config: { band: '2g', channel: '1', htmode: 'HE20' }, interfaces: [ { ifname: 'phy0-ap0', config: { ssid: 'Home', mode: 'ap', network: [ 'lan' ] } } ] } };
+	const air = { wifi, assoc: { 'phy0-ap0': [ { mac: U(STA), signal: -50 } ] } }, staRow = { mac: STA, port: 'phy0-ap0', bridge: 'br-lan', seen: 1 };
+	for (const hints of orders(GW, STA, gwHop)) {
+		const s = A(hints, [ gwRow, staRow ], air);
+		assert.deepEqual([ got(s), s.clients.length ], [ [ 'lan2', [ [ GW, true ] ] ], 1 ]);
+	}
+	assert.deepEqual(got(A({ [U(STA)]: gwHop }, [ gwRow, staRow ], air)), [ null, [ [ GW, false ] ] ]);
+
+	/* the far end of this device's own client or mesh interface is in that interface's station list, and many routers
+	   answer for their address from the MAC their radio uses. It is no station of an access point interface: still a
+	   holder, so a wired host of the same bridge with the address is one of two, and is not flagged in either order */
+	const linked = Object.assign({}, devs, { 'br-lan': { type: 'bridge', devtype: 'bridge', 'bridge-members': [ 'lan1', 'phy0-link0' ] }, 'phy0-link0': { devtype: 'wlan', carrier: true } });
+	for (const mode of [ 'sta', 'mesh' ]) {
+		const more = { wifi: { radio0: { up: true, config: { band: '5g' }, interfaces: [ { ifname: 'phy0-link0', config: { ssid: 'bh', mode, network: [ 'lan' ] } } ] } },
+			assoc: { 'phy0-link0': [ { mac: U(GW), signal: -50 } ] } };
+		for (const hints of orders(GW, LIAR, gwHop))
+			assert.deepEqual(flags(model.build(Object.assign({ ifaces: ap, devs: linked, hints, fdb: [ { mac: GW, port: 'phy0-link0', bridge: 'br-lan', seen: 1 }, liarRow ] }, more))), [ [ LIAR, false ] ], mode);
+	}
+
+	/* two bridges on one wire (a guest VLAN beside the LAN): the gateway's MAC is on both, and the entry kept for
+	   the host list is the one heard last, the guest bridge's here. The gateway all the same, and the uplink is the
+	   port of its entry on the line's bridge, not of the one kept */
+	const trunk = Object.assign({ 'br-guest': { type: 'bridge', devtype: 'bridge', 'bridge-members': [ 'lan2.20' ] }, 'lan2.20': { devtype: 'vlan', carrier: true } }, devs);
+	const both2 = [ { mac: GW, port: 'lan2', bridge: 'br-lan', seen: 9 }, { mac: GW, port: 'lan2.20', bridge: 'br-guest', seen: 1 } ];
+	const wire = model.build({ ifaces: ap, devs: trunk, hints: { [U(GW)]: gwHop }, fdb: both2 });
+	assert.deepEqual([ wire.uplink.port, wire.wiredHosts.map(h => [ h.mac, h.bridge, h.gateway ]) ], [ 'lan2', [ [ GW, 'br-guest', true ] ] ]);
+	/* a host of the guest bridge with the address: the gateway is the one the line's bridge hears */
+	for (const hints of orders(GW, LIAR, gwHop)) {
+		const guest = model.build({ ifaces: ap, devs: trunk, hints, fdb: both2.concat([ { mac: LIAR, port: 'lan2.20', bridge: 'br-guest', seen: 1 } ]) });
+		assert.deepEqual([ guest.uplink.port, guest.wiredHosts.map(h => [ h.mac, h.gateway ]) ], [ 'lan2', [ [ GW, true ], [ LIAR, false ] ] ]);
+	}
+
+	/* the line on a VLAN of a bridge (br-lan.10), entries with their VLAN: the gateway is in the line's VLAN */
+	const tagged = Object.assign({ 'br-lan.10': { devtype: 'vlan', carrier: true }, 'br-lan.20': { devtype: 'vlan', carrier: true } }, devs);
+	const mgmt = [ Object.assign({}, ap[0], { l3_device: 'br-lan.10', device: 'br-lan.10' }),
+		{ interface: 'guest', up: true, l3_device: 'br-lan.20', device: 'br-lan.20', 'ipv4-address': [ { address: '203.0.113.1', mask: 24 } ], route: [] } ];
+	const in10 = { mac: GW, port: 'lan2', bridge: 'br-lan', vlan: 10, seen: 1 }, in20 = { mac: LIAR, port: 'lan1', bridge: 'br-lan', vlan: 20, seen: 1 };
+	const V = (hints, fdb) => model.build({ ifaces: mgmt, devs: tagged, hints, fdb });
+	assert.deepEqual(got(V({ [U(GW)]: gwHop }, [ in10 ])), [ 'lan2', [ [ GW, true ] ] ]);
+	/* a host in another VLAN of that bridge with the address: not on the line, beside the gateway or alone */
+	for (const hints of orders(GW, LIAR, gwHop))
+		assert.deepEqual(got(V(hints, [ in10, in20 ])), [ 'lan2', [ [ GW, true ], [ LIAR, false ] ] ]);
+	assert.deepEqual(got(V({ [U(LIAR)]: gwHop }, [ in10, in20 ])), [ null, [ [ GW, false ], [ LIAR, false ] ] ]);
+	/* entries without a VLAN (a bridge that does not filter): on the line */
+	assert.deepEqual(got(V({ [U(GW)]: gwHop }, [ gwRow ])), [ 'lan2', [ [ GW, true ] ] ]);
+	/* the line on the bridge itself, the guests on its VLAN 20: an entry in VLAN 20 is the guest network's */
+	const untagged = [ ap[0], mgmt[1] ];
+	for (const hints of orders(GW, LIAR, gwHop))
+		assert.deepEqual(got(model.build({ ifaces: untagged, devs: tagged, hints, fdb: [ gwRow, in20 ] })), [ 'lan2', [ [ GW, true ], [ LIAR, false ] ] ]);
+
+	/* no attacker: the line on a device that is no bridge, while a bridge on the same wire hears the gateway
+	   (management on eth0.99, eth0 itself in br-lan). The one holder is the gateway, as in 1.0.20 */
+	const split = { 'br-lan': { type: 'bridge', devtype: 'bridge', 'bridge-members': [ 'eth0' ] }, eth0: eth, 'eth0.99': { devtype: 'vlan', carrier: true } };
+	const own = [ { interface: 'lan', up: true, l3_device: 'br-lan', device: 'br-lan', route: [] }, Object.assign({}, ap[0], { interface: 'mgmt', l3_device: 'eth0.99', device: 'eth0.99' }) ];
+	const n2 = model.build({ ifaces: own, devs: split, hints: { [U(GW)]: gwHop }, fdb: [ { mac: GW, port: 'eth0', bridge: 'br-lan', seen: 1 } ] });
+	assert.deepEqual([ n2.uplink.iface, flags(n2) ], [ 'mgmt', [ [ GW, true ] ] ]);
 });
 
 test('build: the uplink port through a bridge VLAN, an IPv6 gateway, and a port with a link before one without', () => {

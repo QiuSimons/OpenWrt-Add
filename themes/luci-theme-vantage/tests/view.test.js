@@ -812,32 +812,104 @@ test('other lines: a deep link opens a line the device has, the main one by its 
 	assert.deepEqual(withLocation('', c => { self.openDrawer('uplink', ''); self.openDrawer('uplink', 'uplink'); return c; }), [ '#uplink', '#uplink=uplink' ]);
 });
 
-test('other lines: each node shows its name, gateway and live rates, wired into the device; the main one is marked', () => {
+/* a node of the path as updateHero writes to it */
+const pathEl = () => ({ textContent: '', attrs: {}, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; } });
+const pathHero = lines => new Proxy({ lines: lines || [], radios: [] }, { get: (t, k) => k in t ? t[k] : (t[k] = pathEl()) });
+const LAN = { name: 'lan', proto: 'static', dev: 'br-lan', up: true, ipv4: '192.0.2.1/24' };
+
+test('other lines: each node shows its name, its own address and live rates, wired into the device; the main one is marked', () => {
 	const self = Object.create(view);
-	const el = () => ({ textContent: '', attrs: {}, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }, setAttribute(k, v) { this.attrs[k] = v; } });
+	const el = pathEl;
 	const ln = id => ({ id, el: el(), kicker: el(), title: el(), dn: el(), up: el() });
-	const wan = LINE('wan', 'eth1', 10), wanb = LINE('wanb', 'eth2', 20), lte = Object.assign(LINE('lte', 'wwan0', 30), { gateway: null, carrier: false, speed: null });
-	const h = new Proxy({ lines: [ ln('wanb'), ln('lte'), ln('gone') ], radios: [] }, { get: (t, k) => k in t ? t[k] : (t[k] = el()) });
+	const wan = LINE('wan', 'eth1', 10), wanb = LINE('wanb', 'eth2', 20), lte = Object.assign(LINE('lte', 'wwan0', 30), { ipv4: [], gateway: null, carrier: false, speed: null });
+	const h = pathHero([ ln('wanb'), ln('lte'), ln('gone') ]);
 	self.hero = h;
-	self.m = { wired: true, networks: [], radios: [], ssids: [], wiredHosts: [], device: { model: 'Router', uptime: 1 }, uplink: wan, uplinks: [ wan, wanb, lte ] };
+	self.m = { wired: true, networks: [ LAN ], radios: [], ssids: [], wiredHosts: [], device: { model: 'Router', uptime: 1 }, uplink: wan, uplinks: [ wan, wanb, lte ] };
 	self.st = { uplinkRate: { rx: 2e6, tx: 1e5 }, devRates: { eth2: { rx: 12345678, tx: 3000 }, wwan0: { rx: 0, tx: 0 } } };
 	self.updateHero();
 	assert.equal(h.gwKicker.textContent, 'wan', 'beside other lines the main one goes by its name');
+	assert.deepEqual([ h.gwTitle.textContent, h.gw.attrs.title ], [ '203.0.113.12', 'Gateway 203.0.113.11' ], 'the main line: its own address, the gateway in the tooltip');
 	const [ b, l ] = h.lines;
-	assert.deepEqual([ b.kicker.textContent, b.title.textContent, b.dn.textContent, b.up.textContent ], [ 'wanb', '203.0.113.21', '↓ 12.3 Mbit/s', '↑ 3 kbit/s' ]);
-	assert.equal(b.el.attrs.title, 'wanb · eth2 · 1 Gbit/s · full duplex');
+	assert.deepEqual([ b.kicker.textContent, b.title.textContent, b.dn.textContent, b.up.textContent ], [ 'wanb', '203.0.113.22', '↓ 12.3 Mbit/s', '↑ 3 kbit/s' ]);
+	assert.equal(b.el.attrs.title, 'wanb · eth2 · 1 Gbit/s · full duplex · Gateway 203.0.113.21');
 	assert.equal(b.el.attrs['class'], 'vt-node vt-node-gw vt-node-line');
-	assert.deepEqual([ l.title.textContent, l.dn.textContent, l.up.textContent ], [ 'wwan0', 'idle', '' ], 'no gateway address: the device; nothing moving: idle');
+	assert.deepEqual([ l.title.textContent, l.el.attrs.title, l.dn.textContent, l.up.textContent ], [ 'wwan0', 'lte · wwan0', 'idle', '' ], 'no address and no gateway: the device; nothing moving: idle');
 	assert.equal(l.el.attrs['class'], 'vt-node vt-node-gw vt-node-line vt-node-off', 'no carrier');
 	assert.deepEqual([ b.active, l.active ], [ true, false ]);
 	/* one wire per line into the device, numbered for nesting */
 	assert.deepEqual(self.wireList().filter(w => w.line != null).map(w => [ w.key, w.from === h.lines[w.line].el, w.to === h.ap, w.speed ]),
 		[ [ 'l:wanb', true, true, 2 ], [ 'l:lte', true, true, 1 ], [ 'l:gone', true, true, 1 ] ]);
+	/* a line with an address and no gateway (a point-to-point modem): its address, and no gateway in the tooltip */
+	self.m.uplinks = [ wan, wanb, Object.assign({}, lte, { ipv4: [ '203.0.113.32/30' ] }) ];
+	self.updateHero();
+	assert.deepEqual([ l.title.textContent, l.el.attrs.title ], [ '203.0.113.32', 'lte · wwan0' ]);
 	/* one line: the gateway's own kicker */
 	h.lines = [];
 	self.m.uplinks = [ wan ];
 	self.updateHero();
 	assert.equal(h.gwKicker.textContent, 'Internet');
+});
+
+test('the path: a line shows its own address and this device its LAN address; an access point shows its gateway as before (#88)', () => {
+	const run = (m, lines) => {
+		const self = Object.create(view), h = pathHero(lines);
+		self.hero = h;
+		self.m = Object.assign({ wired: true, networks: [ LAN ], radios: [], ssids: [], wiredHosts: [], device: { model: 'Router', uptime: 1 } }, m);
+		self.st = { uplinkRate: null, devRates: {} };
+		self.updateHero();
+		return h;
+	};
+	const node = h => [ h.gwKicker.textContent, h.gwTitle.textContent, h.gwSub.textContent, h.gw.getAttribute('title'), h.apAddr.textContent ];
+	const ln = id => ({ id, el: pathEl(), kicker: pathEl(), title: pathEl(), dn: pathEl(), up: pathEl() });
+
+	/* one line: its own address where the gateway was, the gateway in the tooltip, this device at its LAN address */
+	const wan = Object.assign(LINE('wan', 'eth1', 10), { dns: [ '198.51.100.53' ] });
+	assert.deepEqual(node(run({ uplink: wan, uplinks: [ wan ] })), [ 'Internet', '203.0.113.12', 'DNS 198.51.100.53', 'Gateway 203.0.113.11', '192.0.2.1' ]);
+
+	/* two lines of one provider end at one gateway: told apart by their own addresses */
+	const a = Object.assign(LINE('wan', 'pppoe-wan', 10), { proto: 'pppoe', ipv4: [ '198.51.100.7/32' ], gateway: '203.0.113.1' });
+	const b = Object.assign(LINE('wan2', 'pppoe-wan2', 20), { proto: 'pppoe', ipv4: [ '198.51.100.9/32' ], gateway: '203.0.113.1' });
+	const two = run({ uplink: a, uplinks: [ a, b ] }, [ ln('wan2') ]);
+	assert.deepEqual([ two.gwTitle.textContent, two.lines[0].title.textContent ], [ '198.51.100.7', '198.51.100.9' ]);
+	assert.deepEqual([ two.gw.attrs.title, two.lines[0].el.attrs.title ], [ 'Gateway 203.0.113.1', 'wan2 · pppoe-wan2 · 1 Gbit/s · full duplex · Gateway 203.0.113.1' ]);
+	assert.equal(two.apAddr.textContent, '192.0.2.1');
+
+	/* no network called lan: the first one that is up; none with an address: a dash, never the line's again */
+	const nets = [ { name: 'guest', up: false, ipv4: '192.0.2.129/25' }, { name: 'home', up: true, ipv4: '192.0.2.65/26' } ];
+	assert.equal(run({ uplink: wan, uplinks: [ wan ], networks: nets }).apAddr.textContent, '192.0.2.65');
+	assert.equal(run({ uplink: wan, uplinks: [ wan ], networks: [] }).apAddr.textContent, '—');
+	/* a LAN by another name beside a container bridge that sorts before it: the network the SSIDs and wired hosts are on */
+	const beside = [ { name: 'docker', up: true, ipv4: '198.51.100.1/24' }, { name: 'home', up: true, ipv4: '192.0.2.65/26' }, { name: 'iot', up: true, ipv4: '192.0.2.129/26' } ];
+	const at = extra => run(Object.assign({ uplink: wan, uplinks: [ wan ], networks: beside }, extra)).apAddr.textContent;
+	assert.equal(at({}), '198.51.100.1', 'nothing known of any: the first that is up, as before');
+	assert.equal(at({ wiredHosts: [ { mac: '00:00:5e:00:53:01', network: 'home' }, { mac: '00:00:5e:00:53:02', network: null } ] }), '192.0.2.65', 'its wired hosts');
+	assert.equal(at({ ssids: [ { networks: [ 'home' ], clients: 0 } ] }), '192.0.2.65', 'an SSID on it, without clients');
+	assert.equal(at({ ssids: [ { networks: [ 'iot' ], clients: 1 }, { networks: [ 'home' ], clients: 4 } ], wiredHosts: [ { network: 'iot' } ] }), '192.0.2.65', 'the one with more on it');
+	assert.equal(at({ ssids: [ { networks: [ 'gone', 7 ], clients: 9 } ], wiredHosts: [ { network: 'gone' } ] }), '198.51.100.1', 'a network that is not there counts for nothing');
+	assert.equal(at({ networks: beside.concat(LAN), wiredHosts: [ { network: 'home' } ] }), '192.0.2.1', 'lan by its name, whatever is on the others');
+
+	/* a line without an IPv4 address of its own: its gateway, as before */
+	const v6 = Object.assign(LINE('wan', 'eth1', 10), { ipv4: [], gateway: 'fe80::1' });
+	assert.deepEqual(node(run({ uplink: v6, uplinks: [ v6 ] })), [ 'Internet', 'fe80::1', 'Reachability not probed', null, '—' ]);
+	/* the same node over two polls: the line loses its address, and the tooltip goes with it */
+	const again = Object.create(view), kept = pathHero();
+	again.hero = kept;
+	again.st = { uplinkRate: null, devRates: {} };
+	again.m = { wired: true, networks: [ LAN ], radios: [], ssids: [], wiredHosts: [], device: { model: 'Router', uptime: 1 }, uplink: wan, uplinks: [ wan ] };
+	again.updateHero();
+	assert.equal(kept.gw.getAttribute('title'), 'Gateway 203.0.113.11');
+	again.m = Object.assign({}, again.m, { uplink: v6, uplinks: [ v6 ] });
+	again.updateHero();
+	assert.deepEqual(node(kept), [ 'Internet', 'fe80::1', 'Reachability not probed', null, '—' ]);
+	/* a gateway this device knows by name (a bridged WAN): the name under the line's own address, not instead of it */
+	const named = { mac: '00:00:5e:00:53:fe', name: 'isp-box', nameSource: 'dhcp', port: 'wan', gateway: true };
+	assert.deepEqual(node(run({ uplink: wan, uplinks: [ wan ], wiredHosts: [ named ] })).slice(0, 4), [ 'Internet', '203.0.113.12', 'isp-box', 'Gateway 203.0.113.11' ]);
+
+	/* an access point: one line that is no WAN. The gateway by its name and address, its own address on its node, no tooltip */
+	const lan = Object.assign(LINE('lan', 'br-lan', 0), { isWan: false, ipv4: [ '192.0.2.4/24' ], gateway: '192.0.2.1' });
+	const gw = { mac: '00:00:5e:00:53:fe', name: 'home-router', nameSource: 'dhcp', port: 'lan1', gateway: true };
+	assert.deepEqual(node(run({ wired: false, uplink: lan, uplinks: [ lan ], networks: [], wiredHosts: [ gw ] })), [ 'Gateway', 'home-router', '192.0.2.1', null, '192.0.2.4' ]);
+	assert.deepEqual(node(run({ wired: false, uplink: lan, uplinks: [ lan ], networks: [], wiredHosts: [] })), [ 'Gateway', '192.0.2.1', 'Reachability not probed', null, '192.0.2.4' ]);
 });
 
 test('no Wi-Fi: the path has the Wired branch too, even beside a network called wired (#98)', t => {
@@ -1074,8 +1146,8 @@ test('other lines: hosts on a backup line\'s port are the way to its gateway, no
 
 test('nothing moves while another window has the focus or Low-power router is on; the numbers go on', () => {
 	const saved = { L: global.L, document: global.document };
-	let power = 'normal';
-	const root = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return k === 'data-vt-power' ? power : null; } };
+	let power = 'normal', unfocused = 'still';
+	const root = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return k === 'data-vt-power' ? power : k === 'data-vt-unfocused' ? unfocused : null; } };
 	global.L = { env: { media: '/luci-static/vantage' } };
 	global.document = { hidden: false, documentElement: root };
 	const cls = new Set();
@@ -1092,6 +1164,13 @@ test('nothing moves while another window has the focus or Low-power router is on
 		self.paintLive();
 		assert.ok(cls.has('vt-still'), 'another window has the focus');
 		assert.equal(self.el.live.className, 'vt-livepill vt-live-ok', 'still live');
+		/* Motion when not in focus (#131), the theme's Appearance */
+		unfocused = 'moving';
+		self.paintLive();
+		assert.ok(!cls.has('vt-still'), 'on without the focus when picked');
+		unfocused = 'still';
+		self.paintLive();
+		assert.ok(cls.has('vt-still'));
 		self.focused = true;
 		self.paintLive();
 		assert.ok(!cls.has('vt-still'));
@@ -1099,6 +1178,10 @@ test('nothing moves while another window has the focus or Low-power router is on
 		self.paintLive();
 		assert.ok(cls.has('vt-still'), 'Low-power router');
 		assert.equal(self.backdrop.paused, true);
+		unfocused = 'moving';
+		self.focused = false;
+		self.paintLive();
+		assert.ok(cls.has('vt-still'), 'Low-power router stops it whatever the focus');
 	} finally {
 		global.L = saved.L;
 		if (saved.document === undefined) delete global.document; else global.document = saved.document;
@@ -1404,4 +1487,53 @@ test('motion clock: a cancelled pulse is dropped, not stepped', () => {
 		assert.equal(gone.currentTime, null, 'not written: it stays cancelled');
 		assert.deepEqual(self.clock.anims.map(x => x.a), [ live ]);
 	} finally { global.window = saved; }
+});
+
+/* #132: by live traffic the rows changed places at every poll */
+test('client table: by name until a header is clicked, and the pick is kept for this browser', () => {
+	const savedWindow = global.window, savedL = global.L, box = {};
+	global.L = { env: {} };
+	global.window = {
+		sessionStorage: { getItem: () => null, setItem() {} },
+		localStorage: { getItem: k => k === 'vantage.sort.v1' ? box.v || null : null, setItem(k, v) { if (k === 'vantage.sort.v1') box.v = v; } }
+	};
+	const load = () => {
+		const self = Object.create(view);
+		self.initState({ board: {}, canWrite: false, canRdns: false, mdns: null });
+		self.paintClients = () => {};
+		return self;
+	};
+	const byName = { wifi: { key: 'name', dir: 1 }, wired: { key: 'name', dir: 1 } };
+	try {
+		let self = load();
+		assert.deepEqual(self.ui.sorts, byName);
+		self.setSort('live');
+		assert.deepEqual(self.ui.sorts.wifi, { key: 'live', dir: -1 }, 'the busiest first');
+		self.setSort('live');
+		assert.deepEqual(self.ui.sorts.wifi, { key: 'live', dir: 1 }, 'a second click turns it round');
+		self.ui.kind = 'wired';
+		self.setSort('seen');
+		assert.deepEqual(load().ui.sorts, { wifi: { key: 'live', dir: 1 }, wired: { key: 'seen', dir: 1 } }, 'kept, each list its own');
+		/* another tab, opened before those picks, changes one list: the other's pick stays */
+		const other = load();
+		box.v = JSON.stringify({ wifi: { key: 'signal', dir: -1 }, wired: { key: 'seen', dir: 1 } });
+		other.ui.kind = 'wired';
+		other.setSort('link');
+		assert.deepEqual(load().ui.sorts, { wifi: { key: 'signal', dir: -1 }, wired: { key: 'link', dir: -1 } });
+		/* the header's click goes through setSort, the table is in the pick's order, and the
+		   backdrop and a pick made while the page is open follow Motion when not in focus (#131) */
+		const src = fs.readFileSync(path.join(RES, 'view/vantage/overview.js'), 'utf8');
+		assert.ok(src.includes("'click': function() { self.setSort(c[0]); }"));
+		assert.ok(src.includes("var so = ui.sorts[ui.kind];") && src.includes("var va = self.sortValue(a, so.key), vb = self.sortValue(b, so.key);"));
+		assert.ok(src.includes("{ external: true, unfocused: movesUnfocused }"));
+		assert.ok(src.includes("window.addEventListener('vantage:unfocused', function() { self.paintLive(); });"));
+		/* a stored pick the list has no column for, or no direction: by name */
+		box.v = JSON.stringify({ wifi: { key: 'seen', dir: 1 }, wired: { key: 'link', dir: 2 } });
+		assert.deepEqual(load().ui.sorts, byName);
+		box.v = '[';
+		assert.deepEqual(load().ui.sorts, byName, 'not JSON');
+	} finally {
+		global.window = savedWindow;
+		global.L = savedL;
+	}
 });
