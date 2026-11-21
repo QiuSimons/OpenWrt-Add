@@ -73,7 +73,7 @@ async function open(url, { width = 1280, height = 900, appearance = 'light', sto
 
 /* every async source has rendered: leases, Wi‑Fi stations, sensors, languages */
 const dashboardReady = (page) => page.waitForFunction(() =>
-	document.querySelectorAll('.cb-card.span-8 .cb-list li').length >= 8 && document.querySelector('.cb-tag-wifi') &&
+	document.querySelectorAll('.cb-clients .cb-list li').length >= 8 && document.querySelector('.cb-tag-wifi') &&
 	document.querySelectorAll('.cb-kv li').length >= 3 && document.querySelector('.cb-lang .cb-lb'));
 
 test('side-router discovery works without DHCP and distinguishes neighbours, gateways and lease records', async () => {
@@ -129,6 +129,8 @@ test('side-router discovery works without DHCP and distinguishes neighbours, gat
 			assert.equal(await page.textContent('.cb-tile-val'), count);
 			assert.equal(await page.textContent('.cb-tile-sub'), zh ? '本机已知设备' : 'Known to this router');
 			assert.equal(await page.getAttribute('.cb-tile-head span[title]', 'title'), zh ? '可能包含离线设备。' : 'May include offline devices.');
+			assert.equal(await page.evaluate(() => document.querySelector('.cb-wireless').classList.contains('hidden')), true, 'no wireless radio hides the wireless card');
+			assert.equal(await page.evaluate(() => document.querySelector('.cb-interfaces').classList.contains('span-12')), true, 'interfaces fills the row when wireless is absent');
 			assert.deepEqual(errors, []);
 		} finally { await context.close(); }
 	}
@@ -313,6 +315,207 @@ test('dashboard shows merged devices, Wi-Fi details, IPv6, sensors and a traffic
 	await page.evaluate(() => window.scrollBy(0, 120));
 	await page.waitForFunction(() => !document.querySelector('.cb-lb-list'));
 	await context.close();
+});
+
+test('dashboard customization supports presets, multiple traffic panels, Wi-Fi/temp tiles, cancel rollback, persistence and mobile layout', async () => {
+	/* 1. Desktop: default spans, live preview, cancel rollback, presets, save & reload */
+	const { page, context, errors } = await open('/src/preview/index.html?lang=zh-Hans', { width: 1440, height: 1000 });
+	try {
+		await dashboardReady(page);
+		const defaultSpans = await page.evaluate(() => [...document.querySelectorAll('.cb-dash > .cb-card:not(.hidden)')].map((el) => {
+			const span = (el.className.match(/span-\d+/) || [])[0];
+			const role = (el.className.match(/cb-(hero|traffic|resources|tile-\w+|clients|wireless|interfaces)/) || [])[0];
+			return role + ':' + span;
+		}));
+		assert.deepEqual(defaultSpans, [
+			'cb-hero:span-12', 'cb-traffic:span-8', 'cb-resources:span-4',
+			'cb-tile-devices:span-3', 'cb-tile-connections:span-3', 'cb-tile-load:span-3', 'cb-tile-uptime:span-3',
+			'cb-clients:span-12', 'cb-wireless:span-6', 'cb-interfaces:span-6'
+		]);
+
+		/* Scroll down to the customize bar, open drawer, and verify edits keep the page scroll position */
+		await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+		const scrollBefore = await page.evaluate(() => window.scrollY);
+		assert.ok(scrollBefore > 200, 'page scrolled down before opening customizer: ' + scrollBefore);
+
+		/* Open customizer drawer and switch to Multi-WAN preset */
+		await page.click('.cb-customize-btn');
+		await page.waitForSelector('.cb-sheet.show');
+		await page.waitForTimeout(300);
+		assert.equal(await page.$eval('.cb-app', (e) => e.hasAttribute('inert')), true, 'background shell is inert while customizer is open');
+		assert.equal(await page.evaluate(() => window.scrollY), scrollBefore, 'opening customizer preserves page scroll');
+		await page.click('.cb-sheet-presets .cb-seg-btn:has-text("多口监控")');
+		await page.waitForFunction(() => document.querySelectorAll('.cb-traffic').length === 2);
+		await page.waitForTimeout(150);
+		const scrollAfterPreset = await page.evaluate(() => window.scrollY);
+		assert.ok(scrollAfterPreset > 200, 'switching preset does not jump page to top: ' + scrollAfterPreset);
+		/* Toggling a tile switch preserves scroll position and runs enter/exit animations cleanly */
+		const tileToggle = '.cb-sheet-group:has-text("指标磁贴") .cb-sheet-row:has-text("已发现设备") .cbi-checkbox input';
+		await page.click(tileToggle);
+		const enterAnims = await page.evaluate(() => document.querySelector('.cb-tile-devices')?.getAnimations().length || 0);
+		assert.ok(enterAnims > 0, 'adding a module triggers an entrance animation');
+		await page.waitForFunction(() => (document.querySelector('.cb-tile-devices')?.getAnimations().length || 0) === 0, null, { timeout: 2000 });
+		assert.equal(await page.evaluate(() => window.scrollY), scrollAfterPreset, 'toggling a tile keeps exact scroll position');
+		await page.click(tileToggle);
+		const exitGhost = await page.evaluate(() => document.querySelectorAll('.cb-dash-ghosts .cb-card-leaving').length);
+		assert.equal(exitGhost, 1, 'closing a module renders an inert exit ghost animation');
+		await page.waitForFunction(() => document.querySelectorAll('.cb-dash-ghosts').length === 0, null, { timeout: 2000 });
+		assert.equal(await page.evaluate(() => document.querySelectorAll('.cb-dash-ghosts').length), 0, 'exit ghost layer cleans up after animation');
+		assert.equal(await page.evaluate(() => window.scrollY), scrollAfterPreset, 'untoggling a tile keeps exact scroll position');
+		/* Reset scroll to top before taking the hero/monitor/sheet reference screenshot */
+		await page.evaluate(() => {
+			window.scrollTo(0, 0);
+			const sb = document.querySelector('.cb-sheet-body');
+			if (sb) sb.scrollTop = 0;
+		});
+		const multiSpans = await page.evaluate(() => [...document.querySelectorAll('.cb-dash > .cb-card:not(.hidden)')].map((el) => {
+			const span = (el.className.match(/span-\d+/) || [])[0];
+			const role = (el.className.match(/cb-(hero|traffic|resources|tile-\w+|clients|wireless|interfaces)/) || [])[0];
+			return role + ':' + span;
+		}));
+		assert.deepEqual(multiSpans, [
+			'cb-hero:span-12', 'cb-traffic:span-6', 'cb-traffic:span-6', 'cb-resources:span-12',
+			'cb-tile-connections:span-3', 'cb-tile-load:span-3', 'cb-tile-temp:span-3', 'cb-tile-uptime:span-3',
+			'cb-interfaces:span-12', 'cb-clients:span-12'
+		]);
+		assert.match(await page.textContent('.cb-tile-temp .cb-tile-val'), /\d+\.\d°C/);
+		const presetVis = await page.evaluate(() => {
+			const b = document.querySelector('.cb-sheet-body').getBoundingClientRect();
+			const lbl = document.querySelector('.cb-sheet-label').getBoundingClientRect();
+			return lbl.height > 10 && lbl.top >= b.top - 1;
+		});
+		assert.equal(presetVis, true, 'preset heading is not squished or clipped');
+		/* Drawer listbox remains interactive while .cb-app is inert */
+		await page.click('.cb-sheet-select >> nth=1');
+		await page.waitForSelector('.cb-lb-list.show');
+		await page.keyboard.press('Escape');
+		assert.equal(await page.$('.cb-lb-list'), null);
+		await page.screenshot({ path: path.join(SHOTS, 'custom-drawer-desktop.png') });
+
+		/* Collapse handle straddles the top-left border of the sheet on desktop (mirrors sidebar .cb-collapse) */
+		const deskSheet = await page.locator('.cb-sheet').boundingBox();
+		const deskHandle = await page.locator('.cb-sheet-collapse').boundingBox();
+		assert.ok(deskHandle.x < deskSheet.x && deskHandle.x + deskHandle.width > deskSheet.x, 'desktop collapse handle straddles left border');
+		assert.ok(deskHandle.y >= deskSheet.y && deskHandle.y <= deskSheet.y + 40, 'desktop collapse handle sits at top-left');
+
+		/* Collapse panel to preview unobstructed dashboard, then expand again with draft intact */
+		await page.click('.cb-sheet-collapse');
+		await page.waitForSelector('.cb-sheet-dock.show');
+		await page.waitForTimeout(320);
+		assert.equal(await page.$eval('.cb-sheet', (e) => e.classList.contains('collapsed') && e.hasAttribute('inert')), true, 'collapsed sheet is inert and hidden');
+		assert.equal(await page.$eval('.cb-app', (e) => e.hasAttribute('inert')), false, 'dashboard is interactive while collapsed');
+		assert.equal(await page.locator('.cb-traffic').count(), 2, 'live draft stays applied while collapsed');
+		const dockBox = await page.locator('.cb-sheet-dock').boundingBox();
+		assert.ok(dockBox.x >= 0 && dockBox.x + dockBox.width <= 1440 && dockBox.y + dockBox.height <= 1000, 'collapsed dock fits inside desktop viewport');
+		await page.screenshot({ path: path.join(SHOTS, 'custom-collapsed-desktop.png') });
+
+		await page.click('.cb-sheet-expand');
+		await page.waitForSelector('.cb-sheet.show');
+		await page.waitForTimeout(300);
+		assert.equal(await page.$eval('.cb-app', (e) => e.hasAttribute('inert')), true, 'expanding re-enables inert on background shell');
+		assert.equal(await page.$eval('.cb-sheet-dock', (e) => !e.classList.contains('show') && e.hasAttribute('inert')), true, 'dock hides when expanded');
+		assert.equal(await page.locator('.cb-traffic').count(), 2, 'draft preserved after expand');
+
+		/* Clicking the scrim collapses non-destructively, and Cancel from the dock rolls back */
+		await page.mouse.click(300, 300);
+		await page.waitForSelector('.cb-sheet-dock.show');
+		assert.equal(await page.locator('.cb-traffic').count(), 2, 'scrim click collapses instead of discarding');
+		await page.click('.cb-sheet-dock button:has-text("取消")');
+		await page.waitForFunction(() => !document.querySelector('.cb-sheet'));
+		assert.equal(await page.$eval('.cb-app', (e) => e.hasAttribute('inert')), false, 'closing customizer clears inert');
+		assert.equal(await page.locator('.cb-traffic').count(), 1);
+		assert.equal(await page.locator('.cb-wireless:not(.hidden)').count(), 1);
+
+		/* Re-open, apply Home Wi-Fi preset, add a second traffic chart, collapse & save from dock, then reload */
+		await page.click('.cb-customize-btn');
+		await page.waitForSelector('.cb-sheet.show');
+		await page.click('.cb-sheet-presets .cb-seg-btn:has-text("家用无线")');
+		await page.waitForSelector('.cb-tile-wifi');
+		assert.match(await page.textContent('.cb-tile-wifi .cb-tile-val'), /^\d+$/);
+		assert.match(await page.textContent('.cb-tile-wifi .cb-tile-sub'), /GHz/);
+		await page.click('.cb-sheet-add');
+		assert.equal(await page.locator('.cb-traffic').count(), 2);
+		await page.click('.cb-sheet-collapse');
+		await page.waitForSelector('.cb-sheet-dock.show');
+		await page.click('.cb-sheet-dock .cbi-button-save');
+		await page.waitForFunction(() => !document.querySelector('.cb-sheet'));
+		await page.screenshot({ path: path.join(SHOTS, 'custom-multi-desktop.png'), fullPage: true });
+
+		await page.reload();
+		await page.waitForSelector('.cb-tile-wifi');
+		assert.equal(await page.locator('.cb-traffic').count(), 2, 'custom layout persists across reload');
+		assert.equal(await page.locator('.cb-tile-temp').count(), 1);
+		assert.equal(await page.locator('.cb-tile-devices').count(), 0);
+		assert.deepEqual(errors, []);
+	} finally { await context.close(); }
+
+	/* 2. Phone 390px: odd tile count fills full row cleanly + bottom sheet fits viewport without overflow */
+	const phone = await open('/src/preview/index.html?lang=zh-Hans', {
+		width: 390, height: 844,
+		storage: { 'carbon.dashboard': 'hero=1;sections=monitor tiles details;monitor=traffic:auto traffic:br-lan resources;tiles=wifi temp uptime;details=clients wireless interfaces' }
+	});
+	try {
+		await dashboardReady(phone.page);
+		await phone.page.waitForFunction(() => /\d+\.\d°C/.test(document.querySelector('.cb-tile-temp .cb-tile-val')?.textContent || ''));
+		const geom = await phone.page.evaluate(() => {
+			const tiles = [...document.querySelectorAll('.cb-tile')].map((el) => ({
+				cls: el.className,
+				w: Math.round(el.getBoundingClientRect().width)
+			}));
+			const traffics = [...document.querySelectorAll('.cb-traffic')].map((el) => Math.round(el.getBoundingClientRect().width));
+			return {
+				overflow: document.documentElement.scrollWidth > innerWidth,
+				tiles,
+				traffics
+			};
+		});
+		assert.equal(geom.overflow, false, 'no horizontal overflow on phone');
+		assert.equal(geom.tiles.length, 3);
+		assert.ok(geom.tiles[2].cls.includes('cb-tile-wide'), 'odd last tile is marked wide');
+		assert.ok(geom.tiles[2].w > geom.tiles[0].w * 1.7, 'odd last tile spans full width on phone: ' + JSON.stringify(geom.tiles));
+		assert.ok(geom.traffics[0] > 300 && geom.traffics[1] > 300, 'stacked traffic charts use full phone width: ' + JSON.stringify(geom.traffics));
+		await phone.page.screenshot({ path: path.join(SHOTS, 'custom-odd-tiles-phone.png'), fullPage: true });
+
+		await phone.page.click('.cb-customize-btn');
+		await phone.page.waitForSelector('.cb-sheet.show');
+		await phone.page.waitForTimeout(320);
+		const sheetBox = await phone.page.locator('.cb-sheet').boundingBox();
+		const phoneHandle = await phone.page.locator('.cb-sheet-collapse').boundingBox();
+		const saveBox = await phone.page.locator('.cb-sheet-foot .cbi-button-save').boundingBox();
+		assert.ok(sheetBox.x >= 0 && sheetBox.x + sheetBox.width <= 391, 'bottom sheet stays within phone viewport');
+		assert.ok(sheetBox.height <= 844 * 0.9, 'bottom sheet leaves top margin');
+		assert.ok(phoneHandle.y < sheetBox.y && phoneHandle.y + phoneHandle.height > sheetBox.y, 'phone collapse handle straddles top border');
+		assert.ok(saveBox.bottom ? saveBox.bottom <= 844 : saveBox.y + saveBox.height <= 844.5, 'sticky save button stays visible inside phone viewport');
+		await phone.page.screenshot({ path: path.join(SHOTS, 'custom-drawer-phone.png') });
+		await phone.page.click('.cb-sheet-collapse');
+		await phone.page.waitForSelector('.cb-sheet-dock.show');
+		await phone.page.waitForTimeout(320);
+		const phoneDock = await phone.page.locator('.cb-sheet-dock').boundingBox();
+		assert.ok(phoneDock.x >= 0 && phoneDock.x + phoneDock.width <= 391 && phoneDock.y + phoneDock.height <= 844.5, 'collapsed dock fits phone viewport');
+		assert.ok(phoneDock.height <= 64, 'collapsed dock buttons stay on a single row on phone: height=' + phoneDock.height);
+		assert.equal(await phone.page.$eval('.cb-app', (e) => e.hasAttribute('inert')), false, 'phone dashboard interactive when collapsed');
+		await phone.page.screenshot({ path: path.join(SHOTS, 'custom-collapsed-phone.png') });
+		await phone.page.click('.cb-sheet-expand');
+		await phone.page.waitForSelector('.cb-sheet.show');
+		await phone.page.keyboard.press('Escape');
+		await phone.page.waitForFunction(() => !document.querySelector('.cb-sheet'));
+		assert.deepEqual(phone.errors, []);
+	} finally { await phone.context.close(); }
+
+	/* 3. Standalone Wi-Fi tile (no clients card or devices tile) + dark-mode customizer drawer */
+	const dark = await open('/src/preview/index.html?lang=zh-Hans', {
+		width: 1440, height: 1000, appearance: 'dark',
+		storage: { 'carbon.dashboard': 'hero=1;sections=tiles monitor details;monitor=none;tiles=wifi temp;details=none' }
+	});
+	try {
+		await dark.page.waitForFunction(() => /^\d+$/.test(document.querySelector('.cb-tile-wifi .cb-tile-val')?.textContent || ''));
+		assert.match(await dark.page.textContent('.cb-tile-wifi .cb-tile-sub'), /GHz/);
+		await dark.page.click('.cb-customize-btn');
+		await dark.page.waitForSelector('.cb-sheet.show');
+		await dark.page.waitForTimeout(300);
+		await dark.page.screenshot({ path: path.join(SHOTS, 'custom-drawer-dark.png') });
+		assert.deepEqual(dark.errors, []);
+	} finally { await dark.context.close(); }
 });
 
 /* every bundled catalogue loads, translates the shell and fits the sidebar */
@@ -511,6 +714,356 @@ test('table dropdown options escape the last row and remain clickable', async ()
 	}
 });
 
+/* Upstream luci-app-package-manager / luci-app-opkg inline stylesheet subset */
+const PACKAGE_MANAGER_CSS = `
+	.controls { display: flex; margin: .5em 0 1em 0; flex-wrap: wrap; justify-content: space-around; }
+	.controls > * { padding: .25em; white-space: nowrap; flex: 1 1 33%; box-sizing: border-box; display: flex; flex-wrap: wrap; }
+	.controls > *:first-child, .controls > * > label { flex-basis: 100%; min-width: 250px; }
+	.controls > *:nth-child(2), .controls > *:nth-child(3) { flex-basis: 20%; }
+	.controls > * > .btn { flex-basis: 20px; text-align: center; }
+	.controls > * > * { flex-grow: 1; align-self: center; }
+	.controls > div > input { width: auto; }
+	.td.version, .td.size { white-space: nowrap; }
+	#packages .td.cbi-section-actions { width: auto; }
+`;
+
+test('package manager controls align inputs and buttons on desktop and phone', async () => {
+	const cases = [
+		['src', 1440, 'light'], ['src', 1024, 'light'], ['src', 390, 'light'],
+		['min', 1440, 'dark'], ['min', 390, 'dark']
+	];
+	for (const [mount, width, appearance] of cases) {
+		const label = `${mount}/${width}/${appearance}`;
+		const { page, context, errors } = await open('/src/preview/form.html', { width, height: 900, appearance });
+		try {
+			await page.setContent(`<!doctype html><html data-darkmode="${appearance === 'dark'}"><head><meta charset="utf-8">
+				<link rel="stylesheet" href="/${mount}/htdocs/luci-static/carbon/carbon.css">
+				<style>${PACKAGE_MANAGER_CSS}</style>
+				</head><body data-page="admin-system-package-manager"><main id="maincontent" style="padding:24px"><div id="view">
+				<div class="cbi-section"><div class="controls">
+					<div><label>磁盘空间:</label><div class="cbi-progressbar" title="19% 已使用"><div style="width:19%">&nbsp;</div></div></div>
+					<div id="filter-block"><label>筛选:</label><span class="control-group"><input type="text" name="filter" value="adg"><button class="btn cbi-button">清除</button></span></div>
+					<div id="install-block"><label>下载并安装软件包:</label><span class="control-group"><input type="text" name="install" placeholder="软件包名称或 URL..."><button class="btn cbi-button cbi-button-action">确认</button></span></div>
+					<div id="actions-block"><label>操作:</label> <span class="control-group"><button class="btn cbi-button-positive">更新列表...</button> <button class="btn cbi-button-action">上传软件包...</button> <button class="btn cbi-button-neutral">配置 opkg</button></span></div>
+					<div id="check-block"><label>选项:</label><span class="control-group"><input type="checkbox" checked><button class="cbi-button">应用</button></span></div>
+				</div></div>
+				<div id="diag-group" style="margin-top:16px"><span class="control-group"><input type="text" value="openwrt.org"><button class="btn cbi-button cbi-button-action">IPv4 Ping</button></span></div>
+				<div class="cbi-section-node" style="margin-top:16px">
+					<div class="cbi-value"><label class="cbi-value-title">密码</label><div class="cbi-value-field"><div id="pw-group" class="control-group"><input type="password" value="secret"><button class="cbi-button cbi-button-neutral">*</button></div></div></div>
+					<div class="cbi-value"><label class="cbi-value-title">本地时间</label><div class="cbi-value-field"><input type="text" readonly value="12:00"><div id="time-group" class="control-group"><button class="cbi-button">同步</button></div></div></div>
+					<div class="cbi-value"><label class="cbi-value-title">列表</label><div class="cbi-value-field"><div class="cbi-dynlist"><div id="dyn-add" class="add-item"><input type="text" value="1.1.1.1"><button class="btn">+</button></div></div></div></div>
+				</div>
+				<div id="inline-pair" style="margin-top:16px"><input type="text" value="abc"> <button class="btn cbi-button">确定</button></div>
+				<div id="btn-variants" style="margin-top:16px"><button id="btn-neutral" class="cbi-button cbi-button-neutral">N</button><button id="btn-up" class="cbi-button cbi-button-up">↑</button></div>
+				</div></main></body></html>`, { waitUntil: 'load' });
+			const geom = await page.evaluate(() => {
+				const pair = (sel) => {
+					const input = document.querySelector(sel + ' input').getBoundingClientRect();
+					const btn = document.querySelector(sel + ' button').getBoundingClientRect();
+					return {
+						topDiff: Math.abs(input.top - btn.top),
+						bottomDiff: Math.abs(input.bottom - btn.bottom),
+						heightDiff: Math.abs(input.height - btn.height),
+						gap: btn.left - input.right,
+						btnWidth: btn.width
+					};
+				};
+				const actionBtns = [...document.querySelectorAll('#actions-block button')].map((b) => b.getBoundingClientRect());
+				return {
+					overflow: document.documentElement.scrollWidth > window.innerWidth,
+					filter: pair('#filter-block'),
+					install: pair('#install-block'),
+					diag: pair('#diag-group'),
+					pw: pair('#pw-group'),
+					pwMarginTop: parseFloat(getComputedStyle(document.getElementById('pw-group')).marginTop),
+					timeMarginTop: parseFloat(getComputedStyle(document.getElementById('time-group')).marginTop),
+					checkboxWidth: document.querySelector('#check-block input[type="checkbox"]').getBoundingClientRect().width,
+					dyn: pair('#dyn-add'),
+					inline: pair('#inline-pair'),
+					neutralBg: getComputedStyle(document.getElementById('btn-neutral')).backgroundColor,
+					upBg: getComputedStyle(document.getElementById('btn-up')).backgroundColor,
+					actionBtns
+				};
+			});
+			assert.equal(geom.overflow, false, `${label}: no horizontal overflow`);
+			for (const name of ['filter', 'install', 'diag', 'pw', 'dyn']) {
+				const p = geom[name];
+				assert.ok(p.topDiff <= 0.5, `${label} ${name}: top aligned (${p.topDiff}px)`);
+				assert.ok(p.bottomDiff <= 0.5, `${label} ${name}: bottom aligned (${p.bottomDiff}px)`);
+				assert.ok(p.heightDiff <= 0.5, `${label} ${name}: equal height (${p.heightDiff}px)`);
+				assert.ok(p.gap >= 4, `${label} ${name}: visible gap between input and button (${p.gap}px)`);
+			}
+			assert.equal(geom.pwMarginTop, 0, `${label}: first-child password control-group has no extra top margin`);
+			assert.ok(geom.timeMarginTop >= 6, `${label}: follow-up control-group keeps top margin (${geom.timeMarginTop}px)`);
+			assert.ok(geom.checkboxWidth <= 20, `${label}: checkbox in .controls .control-group is not stretched (${geom.checkboxWidth}px)`);
+			assert.ok(geom.dyn.btnWidth < 60, `${label}: dynlist .btn add button is not stretched (${geom.dyn.btnWidth}px)`);
+			assert.equal(geom.upBg, geom.neutralBg, `${label}: cbi-button-up matches cbi-button-neutral fill in ${appearance} mode`);
+			for (let i = 1; i < geom.actionBtns.length; i++) {
+				const prev = geom.actionBtns[i - 1], cur = geom.actionBtns[i];
+				if (Math.abs(prev.top - cur.top) <= 1) {
+					assert.ok(Math.abs(prev.bottom - cur.bottom) <= 0.5, `${label}: action buttons aligned`);
+					assert.ok(cur.left - prev.right >= 4, `${label}: action buttons separated (${cur.left - prev.right}px)`);
+				}
+			}
+			if (width > 760) {
+				assert.ok(geom.inline.topDiff <= 0.5 && geom.inline.bottomDiff <= 0.5,
+					`${label}: plain inline input + button aligned (top=${geom.inline.topDiff}, bottom=${geom.inline.bottomDiff})`);
+			}
+			assert.deepEqual(errors, []);
+		} finally { await context.close(); }
+	}
+});
+
+test('table action cells keep direct buttons compact and centred while preserving wrapped action groups', async () => {
+	for (const mount of ['src', 'min']) {
+		for (const width of [1440, 390]) {
+			const label = `${mount}/${width}`;
+			const { page, context, errors } = await open('/src/preview/form.html', { width, height: 900 });
+			try {
+				await page.setContent(`<!doctype html><html><head><meta charset="utf-8">
+					<link rel="stylesheet" href="/${mount}/htdocs/luci-static/carbon/carbon.css">
+					<style>${PACKAGE_MANAGER_CSS}</style>
+					</head><body data-page="admin-system-package-manager"><main id="maincontent" style="padding:24px"><div id="view">
+					<div class="cbi-section">
+						<table id="packages" class="table">
+							<tr class="tr cbi-section-table-titles">
+								<th class="th col-2 left">软件包名称</th>
+								<th class="th col-2 left version">版本</th>
+								<th class="th col-1 center size">大小 (.ipk)</th>
+								<th class="th col-10 left">描述</th>
+								<th class="th right cbi-section-actions">&nbsp;</th>
+							</tr>
+							<tr class="tr">
+								<td class="td col-2 left" data-title="软件包名称">luci-app-adguardhome</td>
+								<td class="td col-2 left version" data-title="版本">27.320.76646~57f5dec</td>
+								<td class="td col-1 center size" data-title="大小 (.ipk)">40.18 KiB</td>
+								<td class="td col-10 left" data-title="描述">LuCI support for AdGuard Home</td>
+								<td class="td right cbi-section-actions"><div id="pkg-install" class="btn cbi-button-action">安装...</div></td>
+							</tr>
+						</table>
+					</div>
+					<div class="cbi-section">
+						<table id="actions-cases" class="table">
+							<tr class="tr table-titles">
+								<th class="th">名称</th>
+								<th class="th cbi-section-actions">静态租约 / 操作</th>
+							</tr>
+							<tr class="tr">
+								<td class="td" data-title="名称">direct-button</td>
+								<td class="td cbi-section-actions"><button id="direct-btn" class="cbi-button cbi-button-apply">设为静态</button></td>
+							</tr>
+							<tr class="tr">
+								<td class="td" data-title="名称">multi-direct</td>
+								<td class="td cbi-section-actions"><button id="direct-a" class="cbi-button cbi-button-edit">编辑</button><button id="direct-b" class="cbi-button cbi-button-remove">删除</button></td>
+							</tr>
+							<tr class="tr">
+								<td class="td" data-title="名称">combo-direct</td>
+								<td class="td cbi-section-actions"><div id="direct-combo" class="cbi-dropdown btn cbi-button-action"><ul><li display="0">启动</li></ul><span class="open">▾</span></div></td>
+							</tr>
+							<tr class="tr">
+								<td class="td" data-title="名称">wrapped-cbi</td>
+								<td class="td cbi-section-actions" style="min-width:220px"><div id="wrapped-group"><button id="wrap-a" class="cbi-button cbi-button-edit">编辑</button><button id="wrap-b" class="cbi-button cbi-button-remove">删除</button></div></td>
+							</tr>
+						</table>
+					</div>
+					</div></main></body></html>`, { waitUntil: 'load' });
+
+				const res = await page.evaluate(() => {
+					const measureBtn = (id) => {
+						const el = document.getElementById(id);
+						const cs = getComputedStyle(el);
+						const r = el.getBoundingClientRect();
+						const td = el.closest('.td').getBoundingClientRect();
+						const range = document.createRange();
+						range.selectNodeContents(el);
+						const tr = range.getBoundingClientRect();
+						return {
+							display: cs.display,
+							justify: cs.justifyContent,
+							width: r.width,
+							height: r.height,
+							tdWidth: td.width,
+							leftInset: r.left - td.left,
+							rightInset: td.right - r.right,
+							centerDelta: Math.abs((tr.left - r.left) - (r.right - tr.right))
+						};
+					};
+					const multiA = document.getElementById('direct-a').getBoundingClientRect();
+					const multiB = document.getElementById('direct-b').getBoundingClientRect();
+					const comboCs = getComputedStyle(document.getElementById('direct-combo'));
+					const wrap = document.getElementById('wrapped-group');
+					const wrapCs = getComputedStyle(wrap);
+					const wrapR = wrap.getBoundingClientRect();
+					const wrapA = document.getElementById('wrap-a').getBoundingClientRect();
+					const wrapB = document.getElementById('wrap-b').getBoundingClientRect();
+					return {
+						pkg: measureBtn('pkg-install'),
+						direct: measureBtn('direct-btn'),
+						multiTopDiff: Math.abs(multiA.top - multiB.top),
+						multiGap: multiB.left - multiA.right,
+						combo: { display: comboCs.display, justify: comboCs.justifyContent },
+						wrapped: {
+							display: wrapCs.display,
+							leftGap: wrapA.left - wrapR.left,
+							rightGap: wrapR.right - wrapB.right,
+							topDiff: Math.abs(wrapA.top - wrapB.top),
+							gap: wrapB.left - wrapA.right
+						}
+					};
+				});
+
+				for (const [name, b] of [['pkg-install', res.pkg], ['direct-btn', res.direct]]) {
+					assert.equal(b.display, 'inline-flex', `${label} ${name}: stays inline-flex`);
+					assert.equal(b.justify, 'center', `${label} ${name}: centres label`);
+					assert.ok(b.centerDelta <= 2, `${label} ${name}: text centred inside button (delta=${b.centerDelta})`);
+					assert.ok(b.width < 120, `${label} ${name}: compact auto width (${b.width}px)`);
+					assert.ok(b.height <= 30, `${label} ${name}: compact table action height (${b.height}px)`);
+				}
+				if (width > 760) {
+					assert.ok(res.pkg.rightInset <= 20, `${label} pkg-install: aligned to right edge of action cell (${res.pkg.rightInset}px)`);
+				} else {
+					assert.ok(res.pkg.leftInset <= 16, `${label} pkg-install: aligned to left edge of mobile card (${res.pkg.leftInset}px)`);
+				}
+				assert.ok(res.multiTopDiff <= 1 && res.multiGap >= 3.5, `${label}: adjacent direct buttons keep gap without whitespace (${res.multiGap}px)`);
+				assert.equal(res.combo.display, 'inline-flex', `${label}: direct combo button keeps inline-flex`);
+				assert.equal(res.combo.justify, 'center', `${label}: direct combo button keeps button alignment`);
+				assert.equal(res.wrapped.display, 'flex', `${label}: CBI wrapper div keeps flex`);
+				if (width > 760) {
+					assert.ok(res.wrapped.rightGap <= 1 && res.wrapped.leftGap >= 40,
+						`${label}: CBI wrapper stays right-aligned on desktop (left=${res.wrapped.leftGap}, right=${res.wrapped.rightGap})`);
+				} else {
+					assert.ok(res.wrapped.leftGap <= 1 && res.wrapped.rightGap >= 40,
+						`${label}: CBI wrapper stays left-aligned on phone (left=${res.wrapped.leftGap}, right=${res.wrapped.rightGap})`);
+				}
+				assert.ok(res.wrapped.topDiff <= 1 && res.wrapped.gap >= 3.5, `${label}: wrapped buttons keep row gap`);
+				assert.deepEqual(errors, []);
+			} finally { await context.close(); }
+		}
+	}
+});
+
+test('lease table avatars stay in the hostname column when hostnames are IP addresses', async () => {
+	for (const mount of ['src', 'min']) {
+		const { page, context, errors } = await open('/src/preview/form.html', { width: 1280, height: 900 });
+		try {
+			await page.setContent(`<!doctype html><html><head><meta charset="utf-8">
+				<link rel="stylesheet" href="/${mount}/htdocs/luci-static/carbon/carbon.css">
+				<script src="/${mount}/htdocs/luci-static/carbon/carbon.js?v=test"></script>
+				</head><body><div id="view">
+				<table id="status_leases" class="table">
+					<tr class="tr table-titles"><th class="th">状态</th><th class="th">主机名</th><th class="th">IPv4 地址</th><th class="th">MAC 地址</th><th class="th">剩余租期</th></tr>
+					<tr class="tr" data-case="normal"><td class="td"><span class="dot"></span></td><td class="td">lwip0</td><td class="td">10.0.0.10</td><td class="td">02:11:22:33:44:01</td><td class="td">11h 59m</td></tr>
+					<tr class="tr" data-case="ip-unknown"><td class="td"><span class="dot"></span></td><td class="td">10.0.0.194</td><td class="td">10.0.0.194</td><td class="td">02:11:22:33:44:55</td><td class="td">11h 57m</td></tr>
+					<tr class="tr" data-case="ip-apple"><td class="td"><span class="dot"></span></td><td class="td">10.0.0.195</td><td class="td">10.0.0.195</td><td class="td">f0:ee:7a:66:0b:3e</td><td class="td">11h 56m</td></tr>
+					<tr class="tr" data-case="dash-apple"><td class="td"><span class="dot"></span></td><td class="td">-</td><td class="td">10.0.0.196</td><td class="td">f0:ee:7a:66:0b:3f</td><td class="td">11h 55m</td></tr>
+				</table>
+				<table id="lease_status_table" class="table">
+					<tr class="tr table-titles"><th class="th">接口</th><th class="th">主机名</th><th class="th">IPv4 地址</th><th class="th">MAC 地址</th><th class="th">剩余租期</th></tr>
+					<tr class="tr" data-case="single-iface-ip"><td class="td">lan</td><td class="td">10.0.0.194</td><td class="td">10.0.0.194</td><td class="td">02:11:22:33:44:55</td><td class="td">11h 59m</td></tr>
+				</table>
+				<table id="status_leases6" class="table">
+					<tr class="tr table-titles"><th class="th">状态</th><th class="th">主机</th><th class="th">IPv6 地址</th><th class="th">DUID</th><th class="th">剩余租期</th></tr>
+					<tr class="tr" data-case="v6-dot-ip-hint"><td class="td"><span class="dot"></span></td><td class="td">10.0.0.194</td><td class="td">2001:db8::1/128<br>fd00::1/128</td><td class="td">000100012a3b4c5df0ee7a660b3e</td><td class="td">11h 59m</td></tr>
+				</table>
+				<table id="lease6_status_table" class="table">
+					<tr class="tr table-titles"><th class="th">主机</th><th class="th">IPv6 地址</th><th class="th">DUID</th><th class="th">剩余租期</th></tr>
+					<tr class="tr" data-case="v6-single-nolead"><td class="td">10.0.0.194</td><td class="td">fe80::1/128</td><td class="td">00030001021122334455</td><td class="td">11h 59m</td></tr>
+				</table>
+				</div></body></html>`, { waitUntil: 'load' });
+
+			await page.evaluate(() => { window.Carbon.initLeaseAvatars(document.getElementById('view')); });
+			await page.waitForFunction(() => document.querySelector('[data-case="normal"] .cb-host') && document.querySelector('[data-case="v6-dot-ip-hint"] .cb-host'));
+
+			const inspect = (sel) => page.evaluate((s) => {
+				const cells = [...document.querySelector(s).children].filter((c) => c.classList.contains('td'));
+				return cells.map((c) => {
+					const av = c.querySelector('.cb-avatar');
+					const nm = c.querySelector('.cb-host-name');
+					return {
+						hosts: c.querySelectorAll('.cb-host').length,
+						hasDotDirect: !!c.querySelector(':scope > .dot'),
+						brand: av ? av.classList.contains('cb-avatar-brand') : false,
+						brandTitle: av ? av.getAttribute('title') : null,
+						avatarText: av ? av.textContent : null,
+						hasSvg: av ? !!av.querySelector('svg') : false,
+						hostName: nm ? nm.textContent : null
+					};
+				});
+			}, sel);
+
+			/* 1. Multi-row #status_leases with leading status-dot column */
+			for (const name of ['normal', 'ip-unknown', 'ip-apple', 'dash-apple']) {
+				const cols = await inspect(`[data-case="${name}"]`);
+				assert.equal(cols[0].hosts, 0, `${mount} ${name}: status-dot cell stays undecorated`);
+				assert.equal(cols[0].hasDotDirect, true, `${mount} ${name}: dot remains direct child of col 0`);
+				assert.equal(cols[1].hosts, 1, `${mount} ${name}: hostname cell gets avatar`);
+			}
+			const ipUnknown = await inspect('[data-case="ip-unknown"]');
+			assert.equal(ipUnknown[1].hostName, '10.0.0.194', `${mount}: IP hostname text preserved`);
+			assert.equal(ipUnknown[1].hasSvg, true, `${mount}: IP hostname with unknown MAC uses laptop icon, not digit "1"`);
+			assert.equal(ipUnknown[1].avatarText, '', `${mount}: no numeric monogram for IP hostname`);
+
+			const ipApple = await inspect('[data-case="ip-apple"]');
+			assert.equal(ipApple[1].brand, true, `${mount}: IP hostname with known OUI gets brand avatar`);
+			assert.equal(ipApple[1].brandTitle, 'Apple');
+
+			/* 2. Single-row table with leading Interface column and IP hostname */
+			const singleIface = await inspect('[data-case="single-iface-ip"]');
+			assert.equal(singleIface[0].hosts, 0, `${mount}: Interface column stays undecorated`);
+			assert.equal(singleIface[1].hosts, 1, `${mount}: single IP-hostname row still decorated in col 1`);
+			assert.equal(singleIface[1].hasSvg, true, `${mount}: single IP-hostname row uses laptop icon`);
+
+			/* 3. DHCPv6 table with leading dot, IPv4 fallback hostname, <br>-joined IPv6 and DUID-LLT */
+			const v6Dot = await inspect('[data-case="v6-dot-ip-hint"]');
+			assert.equal(v6Dot[0].hosts, 0, `${mount} v6: status-dot cell stays undecorated`);
+			assert.equal(v6Dot[1].hosts, 1, `${mount} v6: hostname cell decorated`);
+			assert.equal(v6Dot[1].brandTitle, 'Apple', `${mount} v6: DUID-LLT MAC identifies Apple`);
+
+			/* 4. Single-row DHCPv6 table without leading column and IPv4 fallback hostname */
+			const v6NoLead = await inspect('[data-case="v6-single-nolead"]');
+			assert.equal(v6NoLead[0].hosts, 1, `${mount} v6 no-lead: col 0 IP-hostname gets avatar`);
+			assert.equal(v6NoLead[0].hasSvg, true, `${mount} v6 no-lead: uses laptop icon`);
+
+			/* 5. Dynamic MutationObserver updates: append IP row, missing-IP row with MAC/time, single no-lead IPv4 row */
+			await page.evaluate(() => {
+				const t = document.getElementById('status_leases');
+				const tr = document.createElement('tr');
+				tr.className = 'tr';
+				tr.setAttribute('data-case', 'appended-ip');
+				tr.innerHTML = '<td class="td"><span class="dot"></span></td><td class="td">10.0.0.199</td><td class="td">10.0.0.199</td><td class="td">02:11:22:33:44:99</td><td class="td">11h 50m</td>';
+				t.appendChild(tr);
+
+				const t2 = document.getElementById('lease_status_table');
+				t2.innerHTML = '<tr class="tr table-titles"><th class="th">主机名</th><th class="th">IPv4 地址</th><th class="th">MAC 地址</th><th class="th">剩余租期</th></tr>' +
+					'<tr class="tr" data-case="missing-ip"><td class="td">host-no-ip</td><td class="td">-</td><td class="td">f0:ee:7a:66:0b:3e</td><td class="td">11:59:00</td></tr>';
+			});
+			await page.waitForFunction(() => document.querySelector('[data-case="appended-ip"] .cb-host'));
+			const appended = await inspect('[data-case="appended-ip"]');
+			assert.equal(appended[0].hosts, 0, `${mount} appended: col 0 untouched`);
+			assert.equal(appended[1].hosts, 1, `${mount} appended: col 1 decorated`);
+			assert.equal(appended[1].hasSvg, true, `${mount} appended: laptop icon`);
+			const normalAfter = await inspect('[data-case="normal"]');
+			assert.equal(normalAfter[1].hosts, 1, `${mount}: existing rows not double-wrapped`);
+
+			const missingIp = await inspect('[data-case="missing-ip"]');
+			assert.equal(missingIp[1].hosts, 0, `${mount}: MAC address is never mistaken for an IPv6 cell`);
+			assert.equal(missingIp[2].hosts, 0, `${mount}: HH:MM:SS time is never mistaken for an IPv6 cell`);
+
+			await page.evaluate(() => {
+				const t2 = document.getElementById('lease_status_table');
+				t2.innerHTML = '<tr class="tr table-titles"><th class="th">主机名</th><th class="th">IPv4 地址</th><th class="th">MAC 地址</th><th class="th">剩余租期</th></tr>' +
+					'<tr class="tr" data-case="v4-single-nolead"><td class="td">10.0.0.194</td><td class="td">10.0.0.194</td><td class="td">02:11:22:33:44:55</td><td class="td">11h 59m</td></tr>';
+			});
+			await page.waitForFunction(() => document.querySelector('[data-case="v4-single-nolead"] .cb-host'));
+			const v4NoLead = await inspect('[data-case="v4-single-nolead"]');
+			assert.equal(v4NoLead[0].hosts, 1, `${mount} v4 no-lead: col 0 IP-hostname gets avatar`);
+			assert.equal(v4NoLead[0].hasSvg, true, `${mount} v4 no-lead: uses laptop icon`);
+
+			assert.deepEqual(errors, []);
+		} finally { await context.close(); }
+	}
+});
+
 test('settings page: buttons, links, fields and status text share one centre line', async () => {
 	for (const width of [1200, 390]) {
 		const { page, context, errors } = await open('/src/tests/fixtures/settings.html', { width });
@@ -528,7 +1081,7 @@ test('settings page: buttons, links, fields and status text share one centre lin
 			});
 			return { row: row.className, spread: Math.max(...Object.values(lines).map((m) => Math.max(...m) - Math.min(...m))) };
 		}));
-		assert.equal(rows.length, 4, JSON.stringify(rows));
+		assert.equal(rows.length, 5, JSON.stringify(rows));
 		const stray = await page.evaluate(() => [...document.querySelectorAll('#view *')].flatMap((el) => [...el.childNodes])
 			.filter((n) => n.nodeType === 3 && /^(null|undefined)$/.test(n.textContent.trim())).length);
 		assert.equal(stray, 0, 'no "null" / "undefined" text from absent children');
