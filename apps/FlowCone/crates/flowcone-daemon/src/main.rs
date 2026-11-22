@@ -75,6 +75,10 @@ impl ShutdownNotifier {
         *guard = false;
         self.condvar.notify_all();
     }
+
+    fn notify_active(&self) {
+        self.condvar.notify_all();
+    }
 }
 
 /// Installs async-signal-safe signal handlers.
@@ -700,7 +704,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if has_more {
                 interval = Duration::from_millis(5);
             } else if is_idle {
-                interval = (interval * 2).min(Duration::from_secs(10));
+                interval = Duration::from_secs(300);
             } else {
                 rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
                 let jitter_ms = ((rng_state >> 33) % 501) as i64 - 250;
@@ -716,6 +720,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ev4_raw, ev6_raw) = lock_or_exit(&session_mgr, "session").event_fds();
     let event_session = Arc::clone(&session_mgr);
     let event_timeout = config.timeout_sec as u32;
+    let event_notifier = Arc::clone(&notifier);
     let event_thread = thread::spawn(move || {
         use rustix::event::{PollFd, PollFlags, poll};
         use std::os::fd::BorrowedFd;
@@ -736,8 +741,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         break;
                     }
                     let now = (get_monotonic_coarse_ns() / 1_000_000_000) as u32;
-                    let mut mgr = lock_or_exit(&event_session, "session");
-                    mgr.drain_events(now, event_timeout);
+                    let became_active = {
+                        let mut mgr = lock_or_exit(&event_session, "session");
+                        let was_idle = mgr.is_idle();
+                        mgr.drain_events(now, event_timeout);
+                        was_idle && !mgr.is_idle()
+                    };
+                    if became_active {
+                        event_notifier.notify_active();
+                    }
                 }
                 Ok(_) => {}
                 Err(rustix::io::Errno::INTR) => continue,

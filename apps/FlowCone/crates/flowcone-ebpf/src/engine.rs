@@ -18,12 +18,12 @@ use crate::{
     RESERVED_V4, RESERVED_V6, SESSION_EVENTS_V4, SESSION_EVENTS_V6, UDP_CSUM_OFFSET,
 };
 
-pub const EGRESS_ALLOC_PRIMARY: usize = 32;
-pub const EGRESS_ALLOC_FALLBACK: usize = 32;
-pub const FRAG_ALLOC_PRIMARY: usize = 32;
-pub const FRAG_ALLOC_FALLBACK: usize = 32;
-pub const FRAG6_ALLOC_PRIMARY: usize = 32;
-pub const FRAG6_ALLOC_FALLBACK: usize = 32;
+pub const EGRESS_ALLOC_PRIMARY: usize = 4;
+pub const EGRESS_ALLOC_FALLBACK: usize = 4;
+pub const FRAG_ALLOC_PRIMARY: usize = 4;
+pub const FRAG_ALLOC_FALLBACK: usize = 4;
+pub const FRAG6_ALLOC_PRIMARY: usize = 4;
+pub const FRAG6_ALLOC_FALLBACK: usize = 4;
 
 #[inline(always)]
 pub fn now_sec() -> u32 {
@@ -272,18 +272,7 @@ pub fn pop_and_claim_v4(q: &Queue<u16>, in_val: &BindingValue4) -> Result<Option
         port_state_bound(&PORT_FREE_V4, port);
         return Ok(Some(port));
     }
-    if !port_is_reserved(&RESERVED_V4, port)
-        && PORT_FREE_V4
-            .get(port as u32)
-            .map(|s| *s & PORT_FREE_BIT != 0)
-            .unwrap_or(false)
-    {
-        if (port & 1) == 0 {
-            queue_push(&FREE_EVEN_V4, &PORT_FREE_V4, port);
-        } else {
-            queue_push(&FREE_ODD_V4, &PORT_FREE_V4, port);
-        }
-    }
+    port_state_bound(&PORT_FREE_V4, port);
     Ok(None)
 }
 
@@ -298,18 +287,7 @@ pub fn pop_and_claim_v6(q: &Queue<u16>, in_val: &BindingValue6) -> Result<Option
         port_state_bound(&PORT_FREE_V6, port);
         return Ok(Some(port));
     }
-    if !port_is_reserved(&RESERVED_V6, port)
-        && PORT_FREE_V6
-            .get(port as u32)
-            .map(|s| *s & PORT_FREE_BIT != 0)
-            .unwrap_or(false)
-    {
-        if (port & 1) == 0 {
-            queue_push(&FREE_EVEN_V6, &PORT_FREE_V6, port);
-        } else {
-            queue_push(&FREE_ODD_V6, &PORT_FREE_V6, port);
-        }
-    }
+    port_state_bound(&PORT_FREE_V6, port);
     Ok(None)
 }
 

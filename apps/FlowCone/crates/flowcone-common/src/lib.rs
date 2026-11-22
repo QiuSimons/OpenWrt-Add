@@ -271,7 +271,7 @@ pub fn is_routable_internal_ipv6(addr: &[u8; 16], allow_all_internal: bool) -> b
 }
 
 pub const MAX_BINDINGS: u32 = 65536;
-pub const FRAG_MAP_ENTRIES: u32 = 1024;
+pub const FRAG_MAP_ENTRIES: u32 = 4096;
 pub const SESSION_EVENT_RINGBUF_BYTES: u32 = 4194304;
 pub const PORT_STATE_ENTRIES: u32 = 65536;
 pub const PORT_QUEUE_ENTRIES: u32 = 65536;

@@ -43,8 +43,9 @@ pub const UDP_CSUM_OFFSET: usize = 6;
 pub const BPF_ANY: u64 = 0;
 pub const BPF_NOEXIST: u64 = 1;
 pub const BPF_F_NO_PREALLOC: u32 = 1;
+pub const BPF_F_NO_COMMON_LRU: u32 = 2;
 
-pub const FRAG_TIMEOUT_SEC: u32 = 30;
+pub const FRAG_TIMEOUT_SEC: u32 = 10;
 pub const LAST_SEEN_INTERVAL_SEC: u32 = 1;
 
 pub const FRAG6_TARGET_INGRESS: u32 = 0;
@@ -89,33 +90,33 @@ pub static ICMP6_TARGET: ProgramArray = ProgramArray::with_max_entries(1, 0);
 
 #[map]
 pub static FRAG_IN_V4: LruHashMap<FragKey4, FragValue4> =
-    LruHashMap::with_max_entries(FRAG_MAP_ENTRIES, 0);
+    LruHashMap::with_max_entries(FRAG_MAP_ENTRIES, BPF_F_NO_COMMON_LRU);
 #[map]
 pub static FRAG_OUT_V4: LruHashMap<FragKey4, FragValue4> =
-    LruHashMap::with_max_entries(FRAG_MAP_ENTRIES, 0);
+    LruHashMap::with_max_entries(FRAG_MAP_ENTRIES, BPF_F_NO_COMMON_LRU);
 
 #[map]
 pub static FRAG_IN_V6: LruHashMap<FragKey6, FragValue6> =
-    LruHashMap::with_max_entries(FRAG_MAP_ENTRIES, 0);
+    LruHashMap::with_max_entries(FRAG_MAP_ENTRIES, BPF_F_NO_COMMON_LRU);
 #[map]
 pub static FRAG_OUT_V6: LruHashMap<FragKey6, FragValue6> =
-    LruHashMap::with_max_entries(FRAG_MAP_ENTRIES, 0);
+    LruHashMap::with_max_entries(FRAG_MAP_ENTRIES, BPF_F_NO_COMMON_LRU);
 
 #[map]
 pub static OUTBOUND_BINDINGS_V4: HashMap<EndpointKey4, BindingValue4> =
-    HashMap::with_max_entries(MAX_BINDINGS, BPF_F_NO_PREALLOC);
+    HashMap::with_max_entries(MAX_BINDINGS, 0);
 
 #[map]
 pub static INBOUND_BINDINGS_V4: HashMap<u16, BindingValue4> =
-    HashMap::with_max_entries(MAX_BINDINGS, BPF_F_NO_PREALLOC);
+    HashMap::with_max_entries(MAX_BINDINGS, 0);
 
 #[map]
 pub static OUTBOUND_BINDINGS_V6: HashMap<EndpointKey6, BindingValue6> =
-    HashMap::with_max_entries(MAX_BINDINGS, BPF_F_NO_PREALLOC);
+    HashMap::with_max_entries(MAX_BINDINGS, 0);
 
 #[map]
 pub static INBOUND_BINDINGS_V6: HashMap<u16, BindingValue6> =
-    HashMap::with_max_entries(MAX_BINDINGS, BPF_F_NO_PREALLOC);
+    HashMap::with_max_entries(MAX_BINDINGS, 0);
 
 /// Session creation ring buffers consumed by daemon.
 #[map]
