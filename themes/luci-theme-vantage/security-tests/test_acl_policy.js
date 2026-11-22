@@ -360,11 +360,11 @@ function checkPluginSource(src) {
 	   processes or reaches builtins by name, not even by reference
 	   (`let s = system`, `global[...]`, `call(...)`) */
 	assert.deepEqual([ ...src.matchAll(/^.*\bimport\b.*$/gm) ].map(m => m[0]), [
+		'import * as rtnl from \'rtnl\';',
+		'import * as nl80211 from \'nl80211\';',
 		'import { cursor } from \'uci\';',
 		'import { connect } from \'ubus\';',
-		'import { access, lsdir, readfile } from \'fs\';',
-		'import * as rtnl from \'rtnl\';',
-		'import * as nl80211 from \'nl80211\';'
+		'import { access, lsdir, readfile } from \'fs\';'
 	]);
 	const word = /\b(system|popen|exec|require|loadfile|loadstring|include|render|writefile|unlink|global)\b/.exec(src);
 	assert.equal(word, null, word && `"${word[1]}" is banned in the plugin, as a word${REWORD}`);

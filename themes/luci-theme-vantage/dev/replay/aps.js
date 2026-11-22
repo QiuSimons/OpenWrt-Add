@@ -58,7 +58,8 @@ const APS = [
 		   hint name, last octet ]; the first is the host this device hears
 		   too (shared()) */
 		wired: [
-			[ null, 'lan2', 1000, null, null ],
+			/* alone on lan2 there: the rate this device shows for it */
+			[ null, 'lan2', 1000, 40e3, 900e3 ],
 			[ '02:00:5e:30:00:01', 'lan3', 1000, 85e3, 1.2e6, 'office-printer', 211 ],
 			[ '02:00:5e:30:00:02', 'lan4', 100, 3e3, 12e3, null, 212 ],
 			/* ap-den */

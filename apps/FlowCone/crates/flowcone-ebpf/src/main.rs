@@ -28,7 +28,7 @@ pub use parsing::{
 };
 pub use engine::{
     fixup_csum_v4, fixup_csum_v6, fixup_l3_v4, get_or_create_mapping_v4,
-    get_or_create_mapping_v6, is_short_lived_port, now_sec,
+    get_or_create_mapping_v6, is_short_lived_port, now_sec, port_is_reserved,
     EGRESS_ALLOC_FALLBACK, EGRESS_ALLOC_PRIMARY, FRAG6_ALLOC_FALLBACK, FRAG6_ALLOC_PRIMARY,
     FRAG_ALLOC_FALLBACK, FRAG_ALLOC_PRIMARY,
 };
@@ -224,6 +224,9 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
         if ext_port < cfg.min_port4 || ext_port > cfg.max_port4 {
             return TC_ACT_UNSPEC;
         }
+        if port_is_reserved(&RESERVED_V4, ext_port) {
+            return TC_ACT_UNSPEC;
+        }
 
         if let Some(target) = INBOUND_BINDINGS_V4.get_ptr_mut(&ext_port) {
             let new_dst_ip = unsafe { (*target).ip };
@@ -307,6 +310,9 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
 
         let ext_port = u16::from_be(udph.dst_port);
         if ext_port < cfg.min_port6 || ext_port > cfg.max_port6 {
+            return TC_ACT_UNSPEC;
+        }
+        if port_is_reserved(&RESERVED_V6, ext_port) {
             return TC_ACT_UNSPEC;
         }
 
@@ -604,6 +610,9 @@ pub fn flowcone_frag_v6_ingress(ctx: TcContext) -> i32 {
         return TC_ACT_UNSPEC;
     }
     let ext_port = u16::from_be(udph.dst_port);
+    if port_is_reserved(&RESERVED_V6, ext_port) {
+        return TC_ACT_UNSPEC;
+    }
     let Some(target) = INBOUND_BINDINGS_V6.get_ptr_mut(&ext_port) else {
         return TC_ACT_UNSPEC;
     };
@@ -834,6 +843,9 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
             return TC_ACT_UNSPEC;
         };
         let ext_port = u16::from_be(udph.dst_port);
+        if port_is_reserved(&RESERVED_V4, ext_port) {
+            return TC_ACT_UNSPEC;
+        }
         let Some(target) = INBOUND_BINDINGS_V4.get_ptr_mut(&ext_port) else {
             return TC_ACT_UNSPEC;
         };
@@ -1060,6 +1072,9 @@ pub fn flowcone_icmp_target(ctx: TcContext) -> i32 {
         return TC_ACT_UNSPEC;
     };
     let ext_port = u16::from_be(udph.src_port);
+    if port_is_reserved(&RESERVED_V4, ext_port) {
+        return TC_ACT_UNSPEC;
+    }
     let Some(target) = INBOUND_BINDINGS_V4.get_ptr_mut(&ext_port) else {
         return TC_ACT_UNSPEC;
     };
@@ -1271,6 +1286,9 @@ pub fn flowcone_icmp6_target(ctx: TcContext) -> i32 {
         return TC_ACT_UNSPEC;
     };
     let ext_port = u16::from_be(udph.src_port);
+    if port_is_reserved(&RESERVED_V6, ext_port) {
+        return TC_ACT_UNSPEC;
+    }
     let Some(target) = INBOUND_BINDINGS_V6.get_ptr_mut(&ext_port) else {
         return TC_ACT_UNSPEC;
     };

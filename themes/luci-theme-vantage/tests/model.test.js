@@ -1303,7 +1303,7 @@ test('collector: the report is checked again here: ids, the pairing name, states
 	assert.deepEqual(a.nodes.map(n => [ n.id, n.ssid, n.bssid, n.band, n.clients ]), [
 		[ 'phy1-ap0', 'Home', null, '5g', 0 ], [ 'phy2-ap0', 'Guest�', null, '6g', 0 ]
 	], 'one node per interface (a netdev name: no colon, 15 characters), the band from the frequency when unknown');
-	assert.deepEqual(a.sta, [ { mac: '00:00:5e:00:53:21', node: 'phy1-ap0', signal: null, rxRate: null, txRate: null, rx: null, tx: null, connected: null } ]);
+	assert.deepEqual(a.sta, [ { mac: '00:00:5e:00:53:21', node: 'phy1-ap0', signal: null, rxRate: null, txRate: null, rxPhy: null, txPhy: null, rx: null, tx: null, connected: null } ]);
 	assert.deepEqual(a.hosts, [ { mac: '00:00:5e:00:53:41', port: 'lan3', speed: null, rx: null, tx: null } ]);
 	assert.deepEqual([ a.clients, a.wired, a.rate ], [ 0, 0, null ], 'counted by build(), from what it gives it');
 	for (const x of aps.slice(1, 7)) assert.deepEqual([ x.nodes, x.sta, x.hosts, x.clients, x.wired ], [ [], [], [], 0, 0 ], x.id + ': not reporting, nothing of its report');
@@ -1470,6 +1470,16 @@ test('build: a host heard on the port an access point\'s own MAC is heard on, th
 	/* on a router, a host on another port than the access point's: no note */
 	const r = model.build(router({ aps: [ ap(AP1, 'ap-hall', report({ wired: [ { mac: '00:00:5e:00:53:32', port: 'lan2' } ] })) ] }));
 	assert.equal(r.wiredHosts.filter(h => h.mac === '00:00:5e:00:53:32')[0].behind, undefined);
+});
+
+test('build: apHosts names each access point by its MAC where this device hears it, its port with it; none for one heard nowhere or not alone', () => {
+	const m = model.build(apDevice({ aps: [ ap(AP1, 'ap-hall', report({ stations: [], wired: [ { mac: '00:00:5e:00:53:31', port: 'lan2' } ] })) ] }));
+	const port = m.wiredHosts.filter(h => h.mac === HALL_MAC)[0].port;
+	assert.deepEqual({ ...m.apHosts }, { [HALL_MAC]: { id: AP1, name: 'ap-hall', port } });
+	assert.equal(m.wiredHosts.filter(h => h.mac === HALL_MAC)[0].behind, undefined, 'its own entry gets no note');
+	assert.deepEqual({ ...model.build(apDevice(null)).apHosts }, {});
+	/* two paired under one MAC: neither is placed */
+	assert.deepEqual({ ...model.build(apDevice({ aps: [ ap(AP1, 'ap-hall', report({})), ap(AP2, 'ap-den', report({ mac: HALL_MAC })) ] })).apHosts }, {});
 });
 
 /* a router with wired access points: its bridge hears their stations on

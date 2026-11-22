@@ -1023,6 +1023,22 @@ Status → Channel Analysis is a stock LuCI page. Its scan takes each radio
 off its channel for a moment, so clients may notice a short hiccup while the
 page is open. The Vantage dashboard never scans.
 
+### No login works after installing the dashboard
+
+Seen on vendor firmware with an older ucode (the one OpenWrt 23.05 has),
+with netlink modules taken from another distribution's feed, on Vantage
+1.1.1 and older: the dashboard's rpcd plugin could not load them, and
+rpcd went down with it, so LuCI refused every login (#134). From 1.1.2
+on the plugin fails without touching LuCI. To get LuCI back over SSH,
+remove the dashboard and restart rpcd:
+
+```sh
+apk del luci-app-vantage        # 24.10 and older: opkg remove luci-app-vantage
+/etc/init.d/rpcd restart
+```
+
+OpenWrt 24.10 and 25.12 with their own packages are not affected.
+
 ### The login page moves from http:// to https://
 
 Opened over plain HTTP, the login page looks whether the router's HTTPS

@@ -342,7 +342,11 @@ test('vantage.aps normalize: a hostile report keeps only what fits', { skip: NO_
 		ssids: [ { ifname: 'phy0-ap0', bssid: MAC(16), ssid: 'Café', freq: 5180, channel: 36 }, { ifname: 'phy0-ap0', ssid: 'again' },
 			{ ifname: 'bad name' }, { ifname: 'phy1-ap0', ssid: 'x'.repeat(33), freq: 'many' }, 'junk' ],
 		stations: [ sta(32, 'phy0-ap0'), sta(32, 'phy0-ap0'), sta(33, 'nowhere'), sta(34, 'phy0-ap0', { signal: 5, rx_rate: 0, rx_bytes: -1, connected: 'x' }),
-			{ mac: 'ff:ff:ff:ff:ff:fg', ifname: 'phy0-ap0' }, { mac: '00:00:00:00:00:00', ifname: 'phy0-ap0' } ],
+			{ mac: 'ff:ff:ff:ff:ff:fg', ifname: 'phy0-ap0' }, { mac: '00:00:00:00:00:00', ifname: 'phy0-ap0' },
+			/* a station's link (#155): numbers in range, flags that are true, nothing else */
+			sta(35, 'phy0-ap0', { rx_phy: { mhz: 80, mcs: 9, nss: 2, vht: true, sgi: true, more: 'x' },
+				tx_phy: { mhz: 9999, mcs: -1, nss: 'two', ht: 'yes', he: 1, eht: true, sgi: 'on' } }),
+			sta(36, 'phy0-ap0', { rx_phy: 'fast', tx_phy: [ 80 ] }) ],
 		ports: { lan2: { speed: 1000, rx_bytes: 1, tx_bytes: 2, hosts: 1 }, lan3: { hosts: 0 }, 'x y': { hosts: 1 }, lan4: 'x' },
 		wired: [ { mac: MAC(48), port: 'lan2' }, { mac: MAC(48), port: 'lan2' }, { mac: MAC(32), port: 'lan2' }, { mac: MAC(1), port: 'lan2' },
 			{ mac: MAC(49), port: 'lan3' }, { mac: MAC(50), port: 'lan9' } ]
@@ -357,7 +361,12 @@ test('vantage.aps normalize: a hostile report keeps only what fits', { skip: NO_
 	assert.deepEqual(r, {
 		name: '', model: '', uptime: null, mac: MAC(1),
 		ssids: [ { ifname: 'phy0-ap0', bssid: MAC(16), ssid: 'Café', freq: 5180, channel: 36 }, { ifname: 'phy1-ap0', bssid: null, ssid: '', freq: null, channel: null } ],
-		stations: [ sta(32, 'phy0-ap0'), { mac: MAC(34), ifname: 'phy0-ap0', signal: null, rx_rate: null, tx_rate: 2000, rx_bytes: null, tx_bytes: 20, connected: null } ],
+		stations: [ sta(32, 'phy0-ap0', { rx_phy: null, tx_phy: null }),
+			{ mac: MAC(34), ifname: 'phy0-ap0', signal: null, rx_rate: null, tx_rate: 2000, rx_bytes: null, tx_bytes: 20, connected: null, rx_phy: null, tx_phy: null },
+			sta(35, 'phy0-ap0', { rx_phy: { mhz: 80, mcs: 9, nss: 2, ht: false, vht: true, he: false, eht: false, sgi: true },
+				tx_phy: { mhz: null, mcs: null, nss: null, ht: false, vht: false, he: false, eht: true, sgi: false } }),
+			/* neither a text nor a list is a link */
+			sta(36, 'phy0-ap0', { rx_phy: null, tx_phy: null }) ],
 		ports: { lan2: { speed: 1000, rx_bytes: 1, tx_bytes: 2, hosts: 1 } },
 		wired: [ { mac: MAC(48), port: 'lan2' } ]
 	});
@@ -374,13 +383,15 @@ test('vantage.aps normalize: names and SSIDs are well-formed UTF-8 without contr
 
 test('vantage.aps view: rates from two reports, none across a reset or on a shared port', { skip: NO_UCODE }, () => {
 	const cur = { name: 'ap', model: '', uptime: 1, mac: null, ssids: [ { ifname: 'w0', bssid: null, ssid: 's', freq: 5180, channel: 36 } ],
-		stations: [ { mac: MAC(32), ifname: 'w0', signal: -50, rx_rate: 1, tx_rate: 2, rx_bytes: 2000, tx_bytes: 1000, connected: 3 } ],
+		stations: [ { mac: MAC(32), ifname: 'w0', signal: -50, rx_rate: 1, tx_rate: 2, rx_bytes: 2000, tx_bytes: 1000, connected: 3,
+			rx_phy: { mhz: 80, mcs: 9, nss: 2, ht: false, vht: true, he: false, eht: false, sgi: true }, tx_phy: null } ],
 		ports: { lan2: { speed: 100, rx_bytes: 500, tx_bytes: 600, hosts: 1 }, lan3: { speed: null, rx_bytes: 900, tx_bytes: 900, hosts: 2 } },
 		wired: [ { mac: MAC(48), port: 'lan2' }, { mac: MAC(49), port: 'lan3' }, { mac: MAC(50), port: 'lan3' } ] };
 	const prev = { stations: [ { mac: MAC(32), rx_bytes: 1000, tx_bytes: 2000 } ], ports: { lan2: { rx_bytes: 0, tx_bytes: 100 }, lan3: { rx_bytes: 0, tx_bytes: 0 } } };
 	const [ v, first ] = runModule([ [ 'view', cur, prev, 10 ], [ 'view', cur, null, 0 ] ]);
 	assert.deepEqual(v.ssids, [ { ifname: 'w0', bssid: null, ssid: 's', freq: 5180, channel: 36, band: '5g' } ]);
-	assert.deepEqual(v.stations, [ { mac: MAC(32), ifname: 'w0', signal: -50, rxRate: 1, txRate: 2, rx: 800, tx: null, connected: 3 } ]);
+	assert.deepEqual(v.stations, [ { mac: MAC(32), ifname: 'w0', signal: -50, rxRate: 1, txRate: 2, rx: 800, tx: null, connected: 3,
+		rxPhy: { mhz: 80, mcs: 9, nss: 2, ht: false, vht: true, he: false, eht: false, sgi: true }, txPhy: null } ]);
 	assert.deepEqual(v.wired, [ { mac: MAC(48), port: 'lan2', speed: 100, rx: 400, tx: 400 },
 		{ mac: MAC(49), port: 'lan3', speed: null, rx: null, tx: null }, { mac: MAC(50), port: 'lan3', speed: null, rx: null, tx: null } ]);
 	assert.deepEqual(first.stations[0].rx, null);
@@ -816,7 +827,9 @@ const REPORT_UBUS = {
 	'iwinfo info phy0-sta0': { mode: 'Client', ssid: 'Upstream' },
 	'iwinfo info ra0': { mode: 'Master', ssid: 'Guest', bssid: MAC(17), frequency: 2437, channel: 6 },
 	'iwinfo assoclist phy0-ap0': { results: [
-		{ mac: MAC(32).toUpperCase(), signal: -55, connected_time: 60, authorized: true, rx: { rate: 866000, bytes: 1000 }, tx: { rate: 650000, bytes: 2000 } },
+		{ mac: MAC(32).toUpperCase(), signal: -55, connected_time: 60, authorized: true,
+			rx: { rate: 866000, bytes: 1000, mhz: 80, mcs: 9, nss: 2, vht: true, short_gi: true },
+			tx: { rate: 650000, bytes: 2000, mhz: 80, mcs: 7, nss: 2, he: true, he_gi: 1, he_dcm: 0 } },
 		{ mac: MAC(33), signal: -70, authorized: false, rx: {}, tx: {} },
 		{ mac: 'junk' } ] },
 	'iwinfo assoclist ra0': { results: [ { mac: MAC(34), signal: -60, rx: { rate: 72000, bytes: 5 }, tx: { rate: 72000, bytes: 6 } } ] },
@@ -838,8 +851,13 @@ test('report: SSIDs, stations, and the wired hosts past the uplink', { skip: NO_
 		v: 1, name: 'ap-hall', model: 'Example AP', uptime: 1234, mac: MAC(1),
 		ssids: [ { ifname: 'phy0-ap0', bssid: MAC(16), ssid: 'Home', freq: 5180, channel: 36 }, { ifname: 'ra0', bssid: MAC(17), ssid: 'Guest', freq: 2437, channel: 6 } ],
 		stations: [
-			{ mac: MAC(32), ifname: 'phy0-ap0', signal: -55, rx_rate: 866000, tx_rate: 650000, rx_bytes: 1000, tx_bytes: 2000, connected: 60 },
-			{ mac: MAC(34), ifname: 'ra0', signal: -60, rx_rate: 72000, tx_rate: 72000, rx_bytes: 5, tx_bytes: 6, connected: null } ],
+			{ mac: MAC(32), ifname: 'phy0-ap0', signal: -55, rx_rate: 866000, tx_rate: 650000, rx_bytes: 1000, tx_bytes: 2000, connected: 60,
+				rx_phy: { mhz: 80, mcs: 9, nss: 2, ht: false, vht: true, he: false, eht: false, sgi: true },
+				tx_phy: { mhz: 80, mcs: 7, nss: 2, ht: false, vht: false, he: true, eht: false, sgi: true } },
+			/* a driver that says nothing of the link: every number unknown */
+			{ mac: MAC(34), ifname: 'ra0', signal: -60, rx_rate: 72000, tx_rate: 72000, rx_bytes: 5, tx_bytes: 6, connected: null,
+				rx_phy: { mhz: null, mcs: null, nss: null, ht: false, vht: false, he: false, eht: false, sgi: false },
+				tx_phy: { mhz: null, mcs: null, nss: null, ht: false, vht: false, he: false, eht: false, sgi: false } } ],
 		ports: { lan2: { speed: 100, rx_bytes: 300, tx_bytes: 400, hosts: 1 }, lan3: { speed: null, rx_bytes: 500, tx_bytes: 600, hosts: 2 } },
 		wired: [ { mac: MAC(66), port: 'lan2' }, { mac: MAC(67), port: 'lan3' }, { mac: MAC(68), port: 'lan3' } ]
 	});
@@ -1000,7 +1018,7 @@ test('collector: the report is checked, carries the pairing MAC, and rates come 
 	assert.equal(first.mac, AP_MAC, 'the MAC of the pairing, not the one it reports');
 	assert.equal(first.name, 'calls-itself-1');
 	assert.deepEqual(first.ssids, [ { ifname: 'phy0-ap0', bssid: MAC(16), ssid: 'Home', freq: 5180, channel: 36, band: '5g' } ]);
-	assert.deepEqual(first.stations, [ { mac: MAC(32), ifname: 'phy0-ap0', signal: -50, rxRate: 866000, txRate: 650000, rx: null, tx: null, connected: 60 } ]);
+	assert.deepEqual(first.stations, [ { mac: MAC(32), ifname: 'phy0-ap0', signal: -50, rxRate: 866000, txRate: 650000, rx: null, tx: null, connected: 60, rxPhy: null, txPhy: null } ]);
 	assert.deepEqual(first.wired, [ { mac: MAC(48), port: 'lan2', speed: 1000, rx: null, tx: null } ]);
 	/* 125000 bytes more in 10 s: 100 kbit/s from the station, twice that to it */
 	assert.deepEqual([ second.stations[0].rx, second.stations[0].tx, second.wired[0].rx ], [ 100000, 200000, 100000 ]);

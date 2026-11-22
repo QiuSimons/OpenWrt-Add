@@ -913,6 +913,64 @@ test('ucode plugin: compiles as rpcd loads it', { skip: NO_UCODE }, () => {
 	assert.equal(r.status, 0, r.stderr);
 });
 
+/* rpcd runs each ucode script in a VM of its own and frees the VM of one
+   that fails to load. ucode before late 2024 (OpenWrt 23.05, vendor
+   firmware built on it) keeps the uci, ubus and fs modules' types in
+   variables that the last script to load them sets: a plugin that loaded
+   them and then failed on rtnl or nl80211 (from another feed, unable to
+   load) would leave LuCI's own script, which uses all three, on freed
+   memory, which can crash rpcd and every login with it (#134). The plugin
+   loads the modules LuCI's script does not before those three, so such a
+   failure stops it first. */
+const LUCI_SHARED = [ 'uci', 'ubus', 'fs' ];
+
+/* [ { module, names } ] in source order; names null for `import * as` */
+function pluginImports() {
+	const re = /^import\s+(?:\{([^}]*)\}|\*\s+as\s+\w+)\s+from\s+'([^']+)';/gm;
+	return [ ...fs.readFileSync(PLUGIN, 'utf8').matchAll(re) ].map(m =>
+		({ module: m[2], names: m[1] == null ? null : m[1].split(',').map(n => n.trim().split(/\s+/)[0]).filter(Boolean) }));
+}
+
+test('ucode plugin: imports uci, ubus and fs after every other module (#134)', () => {
+	const mods = pluginImports().map(i => i.module);
+	assert.ok(mods.includes('rtnl') && mods.includes('nl80211'), mods.join(', '));
+	const first = mods.findIndex(m => LUCI_SHARED.includes(m));
+	assert.deepEqual(mods.slice(first).filter(m => !LUCI_SHARED.includes(m)), [], 'imported after uci, ubus or fs: ' + mods.join(', '));
+});
+
+/* the real plugin loaded under stand-ins that note each module's load in
+   order; `fail` names one whose load fails, as a failed dlopen() would:
+   { loaded, err, methods } */
+function loadPlugin(fail) {
+	const dir = mkTmp('vantage-imports-');
+	const harness = path.join(dir, 'load.uc');
+	for (const { module, names } of pluginImports())
+		fs.writeFileSync(path.join(dir, module + '.uc'), "'use strict';\n" +
+			`push(global.LOADED, ${JSON.stringify(module)});\n` +
+			(module === fail ? `die(${JSON.stringify(module + ' stand-in: cannot load')});\n` : '') +
+			'function f() {}\nconst C = {};\n' +
+			`export { ${(names || [ 'request' ]).map(n => 'f as ' + n).concat(names ? [] : [ "C as 'const'" ]).join(', ')} };\n`);
+	fs.writeFileSync(harness, "'use strict';\nglobal.LOADED = [];\nlet err = null, obj = null;\n" +
+		"try { obj = loadfile(PLUGIN, { raw_mode: true })()?.['luci.vantage']; } catch (e) { err = e.message; }\n" +
+		"print(sprintf('%J\\n', { loaded: global.LOADED, err, methods: obj ? sort(keys(obj)) : null }));\n");
+	const r = spawnSync(UCODE, [ '-L', dir, '-D', 'PLUGIN=' + PLUGIN, harness ], { encoding: 'utf8' });
+	assert.equal(r.status, 0, r.stderr);
+	return JSON.parse(r.stdout);
+}
+
+test('ucode plugin: a module that cannot load stops it before uci, ubus and fs are loaded (#134)', { skip: NO_UCODE }, () => {
+	const mods = pluginImports().map(i => i.module);
+	const ok = loadPlugin(null);
+	assert.deepEqual(ok.loaded, mods, ok.err);
+	assert.ok(ok.methods && ok.methods.includes('wireless'), JSON.stringify(ok));
+	for (const m of mods.filter(x => !LUCI_SHARED.includes(x))) {
+		const r = loadPlugin(m);
+		assert.match(String(r.err), new RegExp(m + ' stand-in: cannot load'), m);
+		assert.equal(r.methods, null, m);
+		assert.deepEqual(r.loaded.filter(x => LUCI_SHARED.includes(x)), [], `${m} failed after ${r.loaded.join(', ')}`);
+	}
+});
+
 /* ucode compiles a regular expression literal each time the code reaches it,
    and musl takes milliseconds over a counted repeat on a router (8.5 ms
    against 0.07 ms on an ARM access point): the plugin's patterns are module

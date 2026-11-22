@@ -566,6 +566,17 @@ function int_in(v, lo, hi) {
 	return (type(v) == 'int' && v >= lo && v <= hi) ? v : null;
 }
 
+// a station's link (the report's phy()), checked field by field
+function phy(r) {
+	if (type(r) != 'object')
+		return null;
+
+	return {
+		mhz: int_in(r.mhz, 1, 640), mcs: int_in(r.mcs, 0, 31), nss: int_in(r.nss, 1, 16),
+		ht: r.ht === true, vht: r.vht === true, he: r.he === true, eht: r.eht === true, sgi: r.sgi === true
+	};
+}
+
 // well-formed UTF-8 without control characters, at most max bytes; else ''
 function text(v, max) {
 	if (type(v) != 'string' || length(v) > max)
@@ -654,7 +665,8 @@ function normalize(r) {
 			signal: int_in(s.signal, -120, -1),
 			rx_rate: int_in(s.rx_rate, 1, 100000000), tx_rate: int_in(s.tx_rate, 1, 100000000),
 			rx_bytes: int_in(s.rx_bytes, 0, MAX_BYTES), tx_bytes: int_in(s.tx_bytes, 0, MAX_BYTES),
-			connected: int_in(s.connected, 0, 0x7fffffff)
+			connected: int_in(s.connected, 0, 0x7fffffff),
+			rx_phy: phy(s.rx_phy), tx_phy: phy(s.tx_phy)
 		});
 	}
 
@@ -713,7 +725,7 @@ function view(r, prev, dt) {
 		stations: map(r.stations, (x) => ({
 			mac: x.mac, ifname: x.ifname, signal: x.signal, rxRate: x.rx_rate, txRate: x.tx_rate,
 			rx: rate(x.rx_bytes, pst[x.mac]?.rx_bytes, dt), tx: rate(x.tx_bytes, pst[x.mac]?.tx_bytes, dt),
-			connected: x.connected
+			connected: x.connected, rxPhy: x.rx_phy, txPhy: x.tx_phy
 		})),
 		// a port's traffic is its host's only when the host has it alone
 		wired: map(r.wired, (x) => {

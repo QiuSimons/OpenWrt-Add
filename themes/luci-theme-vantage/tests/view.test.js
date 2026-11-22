@@ -262,6 +262,30 @@ test('wired branch: each port node shows its traffic, all its hosts\' together',
 	assert.equal(b.sub.textContent, '↓ 12.3 Mbit/s');
 });
 
+test('wired branch: hosts behind a paired access point count in its branch, not here; the access point itself goes by its pairing name', () => {
+	const self = Object.create(view);
+	const el = () => ({ textContent: '', attrs: {}, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }, setAttribute(k, v) { this.attrs[k] = v; } });
+	const node = port => ({ port, el: el(), name: el(), count: el(), rate: el() });
+	const host = (mac, port, extra) => Object.assign({ mac, port, name: 'h' + mac.slice(-2), speed: { mbps: 1000 } }, extra);
+	const behind = { id: '0123456789abcdef', name: 'ap-hall' };
+	self.m = { wiredHosts: [
+		host('00:00:5e:00:53:a1', 'lan1'),
+		host('00:00:5e:00:53:31', 'lan1', { behind }),
+		host('00:00:5e:00:53:32', 'lan1', { behind }),
+		host('00:00:5e:00:53:a2', 'lan2'),
+		host('00:00:5e:00:53:33', 'lan3')
+	], apHosts: {
+		'00:00:5e:00:53:a1': { id: '0123456789abcdef', name: 'ap-hall', port: 'lan1' },
+		/* heard on another port than the one it was placed on: not named */
+		'00:00:5e:00:53:a2': { id: 'fedcba9876543210', name: 'ap-den', port: 'lan4' }
+	} };
+	self.st = { devRates: {} };
+	const b = { ssids: [ node('lan1'), node('lan2'), node('lan3') ], title: el(), sub: el() };
+	self.updateWiredBranch(b);
+	assert.deepEqual(b.ssids.map(n => n.name.textContent), [ 'lan1 · ap-hall', 'lan2 · ha2', 'lan3 · h33' ]);
+	assert.equal(b.title.textContent, '3 devices', 'the two behind ap-hall are in its branch');
+});
+
 test('names beyond a poll: reverse DNS and the vendor table for wired hosts too', async () => {
 	const self = Object.create(view);
 	const asked = [];
@@ -2162,6 +2186,64 @@ test('paired access points: the list and the drawers show the address as text an
 	/* one link leaves the router, and it is a constant: the changelog ("What's new", below) */
 	assert.deepEqual(src.match(/'href': [^,}]+, 'target': '_blank'/g), [ "'href': NEWS_URL, 'target': '_blank'" ]);
 	assert.equal(src.split('_blank').length - 1, 1, 'no other link opens a new tab');
+}));
+
+/* #110: a host this device hears on a shared port, behind a paired access
+   point that has it alone on a port of its own there: the rate the
+   access point reports for that port is the host's in the list (Live,
+   its sort, the bars' scale) and in its details, and Top talkers still
+   does not rank it. One that shares its port there, and every host on a
+   device without the add-on, are shown as before */
+test('paired access points: a host behind one, alone on its port there, has the rate the access point reports; Top talkers does not rank it', t => withFakeDom(() => {
+	const savedL = global.L;
+	global.L = { url: (...p) => '/cgi-bin/luci/' + p.join('/') };
+	t.after(() => { global.L = savedL; });
+	const fmt = load('vantage.fmt');
+	const tree = list => { const n = new FNode('x'); append(n, list); return n; };
+	/* lan1: ap-hall and the printer; lan2: one host of this device's alone */
+	const page = m => Object.assign(Object.create(dview), { m, st: { staRates: {}, devRates: { lan1: { rx: 7e6, tx: 7e6 }, lan2: { rx: 1000, tx: 3000 } }, clientHist: {}, gone: [] },
+		ui: {}, el: {}, quiet: {}, canWrite: false });
+	const printer = m => m.wiredHosts.filter(h => h.mac === '00:00:5e:00:53:31')[0];
+	const asBefore = (self, h, why) => {
+		const live = tree(self.wiredCells(h, 0)).find('vt-td-live')[0];
+		assert.deepEqual([ live.textContent, live.children[0].getAttribute('title') ], [ fmt.DASH, 'Not counted per device on a shared port' ], why);
+		assert.equal(self.sortValue(h, 'live'), -1, why);
+		assert.ok(tree(self.drawerWired(h).body).textContent.includes('TrafficNot counted per device on a shared portthe port in total: '), why);
+	};
+
+	/* sharing its port there (no rate in the report), or no add-on: as before */
+	const shared = apModel({ aps: [ hall() ] });
+	assert.equal(printer(shared).behind.rate, null);
+	asBefore(page(shared), printer(shared), 'it shares its port at ap-hall too');
+	const none = apModel(null);
+	assert.equal(printer(none).behind, undefined);
+	asBefore(page(none), printer(none), 'no access point paired');
+
+	/* ap-hall has the printer alone on its lan2: 50 kbit/s to it, 2 from it */
+	const m = apModel({ aps: [ hall({}, { wired: [ { mac: '00:00:5e:00:53:31', port: 'lan2', speed: 1000, rx: 2000, tx: 50000 },
+		{ mac: '00:00:5e:00:53:41', port: 'lan3', speed: 100, rx: 4000, tx: 9000 } ] }) ] });
+	const self = page(m), host = printer(m);
+	assert.deepEqual([ host.port, host.shared, host.peers, host.behind.port, host.behind.rate ], [ 'lan1', true, 2, 'lan2', { rx: 2000, tx: 50000 } ], 'heard here on a port it shares');
+	const cells = tree(self.wiredCells(host, 52000));
+	assert.notEqual(cells.find('vt-td-live')[0].textContent, fmt.DASH, 'a rate, not a shared port\'s dash');
+	const total = cells.find('vt-live-total')[0], split = cells.find('vt-live-split')[0];
+	assert.equal(total.textContent, fmt.bits(52000));
+	assert.equal(total.getAttribute('title'), 'Counted by ap-hall on its port lan2');
+	assert.equal(split.getAttribute('title'), 'To device ' + fmt.bits(50000) + ', from device ' + fmt.bits(2000));
+	assert.equal(cells.find('vt-mini-fill')[0].style.width, '100.00%');
+	assert.equal(cells.find('vt-td-link')[0].textContent, 'Shared portlan1 · 2 devices', 'its link stays this device\'s shared port');
+	assert.equal(self.sortValue(host, 'live'), 52000);
+	const own = m.wiredHosts.filter(h => h.mac === '00:00:5e:00:53:32')[0];
+	assert.ok(!('title' in tree(self.wiredCells(own, 0)).find('vt-live-total')[0].attrs), 'no title on a row of this device\'s own');
+	const details = tree(self.drawerWired(host).body).textContent;
+	assert.ok(details.includes('Traffic↓ ' + fmt.bits(50000) + ' · ↑ ' + fmt.bits(2000) + 'Counted by ap-hall on its port lan2the port in total: ↓ ' + fmt.bits(7e6)), details);
+	assert.ok(details.includes('Access pointap-hallits port lan2'), 'the note stays');
+	const src = fs.readFileSync(path.join(RES, 'view/vantage/overview.js'), 'utf8');
+	assert.match(src, /all\.forEach\(function\(c\) \{ var r = wired \? self\.listRate\(c\) : st\.staRates\[c\.mac\];/, 'the bars are scaled by what the list shows');
+
+	/* Top talkers ranks by portRate, which a paired access point's host has none of */
+	assert.equal(self.portRate(host), null);
+	assert.deepEqual(self.talkers(m).map(x => x.mac), [ '00:00:5e:00:53:32' ], 'the host alone on lan2 here, not the one behind ap-hall');
 }));
 
 /* the model keeps the other access points that list an entry on it (ap.also,
@@ -4128,3 +4210,20 @@ test('details: a poll rebuilds them, but not under a selected text, and the focu
 		assert.equal(made.length, 5);
 	} finally { global.window = saved.window; if (saved.document === undefined) delete global.document; else global.document = saved.document; }
 });
+
+test('leaf rows: five, then "+n more" opens the rest and "Show fewer" closes them again', () => withFakeDom(() => {
+	const v = loadView({ content: (el, kids) => { el.kids = kids; } });
+	const self = Object.create(v);
+	const el = { vtSig: null, kids: [] };
+	const list = [ 1, 2, 3, 4, 5, 6, 7 ].map(n => ({ mac: '00:00:5e:00:53:0' + n, name: 'h' + n, ips: [ '192.0.2.' + n ], signal: -50, rate: { rx: 1, tx: 1 } }));
+	const rows = () => el.kids.filter(k => k.classList.contains('vt-leaf-row')).length;
+	const last = () => el.kids[el.kids.length - 1];
+	self.paintLeaf(el, list, false);
+	assert.equal(rows(), 5);
+	assert.equal(last().textContent, '+2 more');
+	last().on.click({ preventDefault() {}, stopPropagation() {} });
+	assert.equal(rows(), 7);
+	assert.equal(last().textContent, 'Show fewer');
+	last().on.click({ preventDefault() {}, stopPropagation() {} });
+	assert.equal(rows(), 5);
+}));
