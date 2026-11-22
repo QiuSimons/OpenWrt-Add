@@ -178,3 +178,13 @@ function flowFrames(pts) {
 	pts.forEach(function(p) { frames.push({ transform: 'translate(' + p[0].toFixed(1) + 'px, ' + p[1].toFixed(1) + 'px)' }); });
 	return frames;
 }
+
+/* a data object's host or port field is not a URL; a link's parts may be literals */
+function hostFields(item, s, h, x) {
+	item.host = s.dest_ip != null ? String(s.dest_ip) : null;
+	h.port = x.port;
+	h.hostname = x.name;
+	var link = E('a', { 'href': L.url('admin') }, [ 'x' ]);
+	link.hash = '#top';
+	return [ item, h, link ];
+}

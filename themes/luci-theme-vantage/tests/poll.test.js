@@ -80,7 +80,7 @@ function dashboard(b) {
 	self.wireRo = {};
 	/* a poll's painting, minus everything but what decides on layout */
 	[ 'paintHead', 'paintHealth', 'paintHero', 'paintSystem', 'paintChart', 'paintRadios', 'paintClients',
-		'paintTalkers', 'paintSsids', 'paintDrawer', 'paintLive' ].forEach(k => { self[k] = () => {}; });
+		'paintTalkers', 'paintSsids', 'paintWireguard', 'paintPorts', 'paintDrawer', 'paintLive' ].forEach(k => { self[k] = () => {}; });
 	self.scheduleWires = () => { throw new Error('a poll must not schedule a wire redraw'); };
 	self.drawWires = () => { throw new Error('a poll must not measure the wires'); };
 	return self;
@@ -149,6 +149,80 @@ test('a hold that ends while content grows back: the clock is cleared, no stale 
 	b.frame();
 	assert.equal(b.timers.length, 0);
 	assert.equal(sys.style.minHeight, '');
+}));
+
+/* the WireGuard tile is in the grid from the start, as every tile is, and switched off until a tunnel shows */
+test('the WireGuard tile: off without a tunnel and nothing moves for it; laid out once when the first tunnel shows', () => withBrowser(b => {
+	const self = dashboard(b), wg = self.tiles.wg, off = [];
+	wg.classList.toggle = (c, on) => { if (c === 'vt-cell-off') off.push(on); };
+	const places = () => layout.TILES.filter(id => id !== 'wg').map(id => [ id, self.tiles[id].style['--c'], self.tiles[id].style['--w'], self.tiles[id].style['--y'] ]);
+	self.paint();
+	assert.equal(b.frames.length, 1);
+	b.frame();
+	assert.deepEqual([ off, self.lay.wg, self.lay.list.map(e => e.id).includes('wg'), wg.style['--y'] ], [ [ true ], false, false, undefined ]);
+	const before = places(), height = self.el.grid.style.height;
+	for (let k = 0; k < 3; k++) { b.advance(5000); self.paint(); }
+	assert.equal(b.frames.length, 0, 'polls without a tunnel lay nothing out');
+
+	/* a poll brings the first tunnel (noteTunnels sets m.wg): one layout, the tile on, under Clients */
+	self.m = { wired: false, wg: true };
+	self.paint();
+	assert.equal(b.frames.length, 1, 'the tile set changed');
+	b.frame();
+	assert.deepEqual([ off.slice(-1), self.lay.wg, wg.style['--c'], wg.style['--w'] ], [ [ false ], true, '0', '2' ]);
+	assert.equal(parseFloat(wg.style['--y']), parseFloat(self.tiles.clients.style['--y']) + 200 + 14);
+	assert.deepEqual(places(), before, 'no other tile moved');
+	assert.equal(self.el.grid.style.height, height, 'beside the right-hand column: the page is no longer');
+	for (let k = 0; k < 3; k++) { b.advance(5000); self.paint(); }
+	assert.equal(b.frames.length, 0, 'and the polls after it lay nothing out');
+}));
+
+/* and so is the Ports tile: off until the device shows two Ethernet ports */
+test('the Ports tile: off with one port and nothing moves for it; laid out once when two ports show', () => withBrowser(b => {
+	const self = dashboard(b), ports = self.tiles.ports, off = [];
+	ports.classList.toggle = (c, on) => { if (c === 'vt-cell-off') off.push(on); };
+	const places = () => layout.TILES.filter(id => id !== 'ports').map(id => [ id, self.tiles[id].style['--c'], self.tiles[id].style['--w'], self.tiles[id].style['--y'] ]);
+	self.paint();
+	assert.equal(b.frames.length, 1);
+	b.frame();
+	assert.deepEqual([ off, self.lay.ports, self.lay.list.map(e => e.id).includes('ports'), ports.style['--y'] ], [ [ true ], false, false, undefined ]);
+	const before = places(), height = self.el.grid.style.height;
+	for (let k = 0; k < 3; k++) { b.advance(5000); self.paint(); }
+	assert.equal(b.frames.length, 0, 'polls with one port lay nothing out');
+
+	/* a poll shows two ports (notePorts sets m.portsTile): one layout, the tile on, under Clients and as wide */
+	self.m = { wired: false, portsTile: true };
+	self.paint();
+	assert.equal(b.frames.length, 1, 'the tile set changed');
+	b.frame();
+	assert.deepEqual([ off.slice(-1), self.lay.ports, ports.style['--c'], ports.style['--w'] ], [ [ false ], true, '0', '3' ]);
+	assert.equal(parseFloat(ports.style['--y']), parseFloat(self.tiles.clients.style['--y']) + 200 + 14);
+	assert.deepEqual(places(), before, 'no other tile moved');
+	assert.equal(self.el.grid.style.height, height, 'beside the right-hand column: the page is no longer');
+	for (let k = 0; k < 3; k++) { b.advance(5000); self.paint(); }
+	assert.equal(b.frames.length, 0, 'and the polls after it lay nothing out');
+
+	/* a tunnel shows too: the WireGuard tile under Clients, the Ports tile under it; a ninth tile, laid out as any */
+	self.m = { wired: false, portsTile: true, wg: true };
+	self.paint();
+	b.frame();
+	assert.deepEqual(self.lay.list.map(e => e.id), [ 'hero', 'chart', 'radios', 'clients', 'sys', 'talk', 'ssids', 'wg', 'ports' ]);
+	assert.equal(parseFloat(ports.style['--y']), parseFloat(self.tiles.wg.style['--y']) + 200 + 14);
+	/* a wired device: the full width, after its other tiles */
+	self.m = { wired: true, portsTile: true };
+	self.paint();
+	b.frame();
+	const wired = self.lay.list.map(e => e.id);
+	assert.deepEqual([ wired.slice(-1), wired.includes('radios'), ports.style['--c'], ports.style['--w'] ], [ [ 'ports' ], false, '0', '4' ]);
+	/* an edit stores every tile shown, the Ports tile among them, and the stored layout reads back with it */
+	self.viewChanged = () => {};
+	const saved = global.window.localStorage;
+	global.window.localStorage = { setItem() {}, removeItem() {}, getItem: () => null };
+	try { self.setLayout(layout.move(self.lay.list, 'ports', -1)); }
+	finally { global.window.localStorage = saved; }
+	const moved = wired.slice(0, -2).concat('ports', wired.slice(-2, -1));
+	assert.deepEqual(self.layouts['wide-wired'].map(e => e.id), moved);
+	assert.deepEqual(self.lay.list.map(e => e.id), moved);
 }));
 
 test('the network path: a poll with the same radios and SSIDs updates the nodes in place', () => {

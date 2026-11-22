@@ -402,6 +402,13 @@ test('VM sweep: phone cards: one inset, empty cells go, wide columns and zone fo
 			if (/\.td\.cbi-section-actions > div$/.test(s)) assert.fail('actions box rule reaches div.btn: ' + s);
 });
 
+test('#143: a titled actions column starts its title where its buttons start', () => {
+	assert.match(bodyOf((s) => s === '.td.cbi-section-actions'), /text-align:\s*right/);
+	assert.doesNotMatch(bodyOf((s) => s === '.th.cbi-section-actions'), /text-align/);
+	/* with Table Filters on, that cell of the filter row holds Reset */
+	assert.match(bodyOf((s) => s === '.cbi-section-table-filter > .th.cbi-section-actions'), /text-align:\s*right/);
+});
+
 test('VM sweep: unzoned grey, short header rows, placeholders, view toggles and ComboButton labels', () => {
 	/* LuCI writes the colour with and without a space after the colon */
 	const grey = bodyOf((s) => /--zone-color-rgb: 238, 238, 238/.test(s) && /--zone-color-rgb:238, 238, 238/.test(s));

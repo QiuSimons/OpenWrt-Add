@@ -402,6 +402,28 @@ test('A5: all-address and negated sources are not restrictions; genuine allowlis
 	assert.equal(fw.analyse(cfg(named), [ iface('lan', '192.0.2.1') ]).ignored[0].bad, 'src_ip', 'an unknown network: fw4 skips the rule');
 });
 
+test('#144: a prefix length is read as fw4 reads it, a negative one too', () => {
+	const into = dest_ip => wanRule({ name: 'Suffix', dest: 'lan', proto: 'tcp', dest_port: '10443', dest_ip });
+	/* ::1234/-64 compares the last 64 bits; fw4 writes that rule, as it
+	   does with the mask spelled out */
+	const spelled = into('::1234/::ffff:ffff:ffff:ffff');
+	assert.deepEqual(spelled.forwards.map(i => [ i.name, i.family ]), [ [ 'Suffix', 6 ] ]);
+	for (const dest_ip of [ '::1234/-64', '2001:db8::1234/-64', '::1234/-128', '::1234/+64', '::1234/0x40', '::1234/', '192.0.2.5/-8' ]) {
+		const r = into(dest_ip);
+		assert.deepEqual(r.ignored, [], dest_ip);
+		assert.deepEqual(r.forwards.map(i => i.name), [ 'Suffix' ], dest_ip);
+	}
+	/* as a source it is a restriction, unless no bit is left to compare */
+	const from = src_ip => wanRule({ proto: 'tcp', dest_port: '22', src_ip });
+	assert.deepEqual(from('::5/-64').open[0].from, { anywhere: false, only: [ '::5/-64' ], except: [] });
+	assert.deepEqual(from('::5/-64').warnings, []);
+	for (const src_ip of [ '0.0.0.0/-32', '::/-128', '203.0.113.5/-0', '203.0.113.5/0b' ]) assert.deepEqual(codes(from(src_ip)), [ 'admin-open:R' ], src_ip);
+	/* a port forward's target takes no such mask */
+	assert.deepEqual(wanRedirect({ src_dport: '2222', dest_ip: '192.0.2.10/-8' }).ignored.map(i => i.bad), [ 'dest_ip' ]);
+	/* and what fw4 refuses stays refused */
+	for (const dest_ip of [ '::1234/--64', '::1234/6.4', '::1234/64abc', '::1234/1e1' ]) assert.equal(into(dest_ip).ignored[0].bad, 'dest_ip', dest_ip);
+});
+
 test('A5: port lists with exclusions and ranges are read as fw4 matches them', () => {
 	assert.deepEqual(codes(wanRule({ proto: 'tcp', dest_port: '!22' })), [ 'admin-open:R' ], 'everything but 22 still has 80 and 443');
 	/* the warning names the admin ports it opens, Telnet's too */
@@ -1218,6 +1240,17 @@ test('fw4 itself: the 1.0.7 final check\'s cases (CX S4, S5, S6, N1)', { skip: N
 		else assert.deepEqual(r.warnings, [], name + ': model ' + codes(r));
 		if (code !== 'complex') assert.deepEqual(r.complex, [], name);
 	}
+});
+
+test('fw4 itself: it writes a rule for the prefix lengths the model accepts, and for no other (#144)', { skip: NO_FW4 }, () => {
+	for (const address of [ '::1234/64', '::1234/-64', '::1234/+64', '::1234/064', '::1234/0x40', '::1234/0X40', '::1234/-0x40', '::1234/0b1000000',
+		'::1234/0o100', '::1234/0b', '::1234/-0o', '::1234/', '::1234/-', '::1234/-128', '192.0.2.5/-8', '::1234/--64', '::1234/6.4', '::1234/64abc', '::1234/1e1', '::1234/0x', '::1234/x40' ]) {
+		const values = cfg(BASE.concat([ [ 'rule', { name: 'T', src: 'wan', dest: 'lan', proto: 'tcp', dest_port: '10443', target: 'ACCEPT', dest_ip: address } ] ]));
+		const rs = fw4Ruleset(values, DUMP);
+		assert.equal(fw.analyse(values, DUMP).ignored.length === 0, /!fw4: T"/.test(rs), address + ':\n' + rs.slice(-600));
+	}
+	const suffix = cfg(BASE.concat([ [ 'rule', { name: 'T', src: 'wan', dest: 'lan', proto: 'tcp', dest_port: '10443', target: 'ACCEPT', dest_ip: '::1234/-64' } ] ]));
+	assert.match(chain(fw4Ruleset(suffix, DUMP), 'forward_wan'), /ip6 daddr & ::ffff:ffff:ffff:ffff == ::1234 tcp dport 10443 counter jump accept_to_lan comment "!fw4: T"/);
 });
 
 test('overview: the 1.0.7 final check\'s cases read as fw4 has them (CX S4, S5, S6, N1)', async () => {

@@ -26,6 +26,19 @@ test('chart styles: linear scales never go below 10 kbit/s and round up', () => 
 	assert.equal(series.chartGeom('overlay', null, undefined).dn.scale, 1e4);
 });
 
+test('chart styles: where the labels read in bytes the scales are round in bytes', () => {
+	assert.equal(series.chartGeom('overlay', 1.2e6, 0).dn.scale, 1.5e6, '1.5 Mbit/s');
+	assert.equal(series.chartGeom('overlay', 1.2e6, 0, 8).dn.scale, 1.6e6, '200 kB/s, where 1.5 Mbit/s would read 188 kB/s');
+	for (const style of [ 'overlay', 'mirror', 'mirror-split', 'lanes' ])
+		assert.equal(series.chartGeom(style, 413, 0, 8).dn.scale, 12e3, style + ': an idle link keeps 1.5 kB/s (the floor is 1.25)');
+	/* log: a line per x10 from 1 kB/s to at least 1 MB/s */
+	assert.deepEqual(series.chartGeom('log', 44e6, .9e6, 8).labels.map(l => l.v), [ 80e6, 8e3 ]);
+	assert.deepEqual(series.chartGeom('log', 2.8e3, 0, 8).labels.map(l => l.v), [ 8e6, 8e3 ]);
+	assert.equal(series.chartGeom('log', 2.8e3, 0, 8).grid.length, 3, '10 and 100 kB/s between them');
+	/* any other unit is bits */
+	assert.equal(series.chartGeom('overlay', 1.2e6, 0, 3).dn.scale, 1.5e6);
+});
+
 test('chart styles: shared scales show both directions honestly', () => {
 	for (const style of [ 'overlay', 'mirror' ]) {
 		const g = series.chartGeom(style, 27.6e3, 62.9e3);

@@ -8,7 +8,7 @@ const insight = load('vantage.insight');
 
 function baseModel() {
 	return {
-		device: { load: [ 65536 ], memory: { usedPct: 40, available: 600, total: 1000 }, storage: [ { usedPct: 2, free: 1000 } ] },
+		device: { load: [ 65536 ], memory: { usedPct: 40, available: 600, total: 1000 }, storage: [ { key: 'root', usedPct: 2, free: 1000 } ] },
 		uplink: { dev: 'eth0', carrier: true, speed: { mbps: 2500, duplex: 'full' }, gateway: '192.0.2.1' },
 		radios: [ { id: 'radio0', bandLabel: '2.4 GHz', up: true, disabled: false }, { id: 'radio1', bandLabel: '6 GHz', up: true, disabled: false } ],
 		ssids: [ { up: true, clients: 0 }, { up: true, clients: 2 } ],
@@ -81,6 +81,50 @@ test('health: weak client, slow uplink, disabled radio, high memory', () => {
 	assert.equal(s.count, 4);
 });
 
+test('health: the uplink card reads its traffic in the unit picked, its link speed in bits', () => {
+	const fmt = load('vantage.fmt');
+	const card = () => { const m = baseModel(); m.uplink.speed = { mbps: 2500, duplex: 'full' }; return byId(insight.health(m, { cpu: { pct: 7, cores: [ 1 ] }, uplinkRate: { rx: 16e6, tx: 8e5 } }), 'uplink'); };
+	try {
+		fmt.setSpeedUnits('bytes');
+		const c = card();
+		assert.equal(c.value, '↓ 2 MB/s');
+		assert.match(c.reason, /↑\u00a0100\u00a0kB\/s/);
+		assert.match(c.reason, /2\.5\u00a0?[ \u00a0]?Gbit\/s/, 'the link is a negotiated speed');
+	} finally {
+		fmt.setSpeedUnits('bits');
+	}
+	assert.equal(card().value, '↓ 16.0 Mbit/s');
+});
+
+test('health: a link under 1 Gbit/s warns only when the port and its partner offer more, or that is not known', () => {
+	const up = (mbps, linkMax, duplex) => {
+		const m = baseModel();
+		m.uplink.speed = { mbps, duplex: duplex || 'full' };
+		if (linkMax !== undefined) m.uplink.linkMax = linkMax;
+		return byId(insight.health(m, { cpu: { pct: 7, cores: [ 1 ] }, uplinkRate: { rx: 2e6, tx: 1e6 } }), 'uplink');
+	};
+	/* as before where the lists say nothing: every wording and the level */
+	for (const unknown of [ undefined, null, NaN, '100' ]) {
+		const c = up(100, unknown);
+		assert.deepEqual([ c.level, c.value, c.reason, c.detail ], [ 'warn', '100 Mbit/s', 'eth0 · slow link', 'eth0 negotiated only 100 Mbit/s; a cable pair or port may be faulty' ], String(unknown));
+	}
+	/* both ends offer more: the same warning */
+	assert.deepEqual([ up(100, 1000).level, up(100, 2500).reason, up(10, 100).value ], [ 'warn', 'eth0 · slow link', '10 Mbit/s' ]);
+	/* the best there is: an ordinary uplink, counted nowhere */
+	const best = up(100, 100);
+	assert.deepEqual([ best.level, best.value ], [ 'ok', '↓ 2 Mbit/s' ]);
+	assert.equal(best.reason.replace(/\u00a0/g, ' '), '↑ 1 Mbit/s · 100 Mbit/s link');
+	assert.equal(best.detail, 'eth0 up at 100 Mbit/s, gateway 192.0.2.1; now 2 Mbit/s down, 1 Mbit/s up');
+	assert.equal(up(10, 10).level, 'ok');
+	const m = baseModel();
+	m.uplink.speed = { mbps: 100, duplex: 'full' };
+	m.uplink.linkMax = 100;
+	assert.deepEqual(insight.summary(insight.health(m, { cpu: { pct: 7, cores: [ 1 ] } })), { level: 'ok', count: 0, headline: 'Everything looks healthy' });
+	/* half duplex is still its own warning, and 1 Gbit/s and up never warned */
+	assert.equal(up(100, 100, 'half').value, 'Half duplex');
+	assert.equal(up(1000, 2500).level, 'ok');
+});
+
 test('health: a radio switched off is no warning; one enabled but down is an error', () => {
 	const m = baseModel();
 	m.radios[1].disabled = true;
@@ -142,6 +186,22 @@ test('health: missing data degrades to info, never throws', () => {
 	assert.equal(insight.summary([]).level, 'ok');
 });
 
+test('health: Storage is about the root filesystem, picked by its key; without one there is no check', () => {
+	const live = { cpu: { pct: 7, cores: [ 1 ] } };
+	const store = list => byId(insight.health(Object.assign(baseModel(), { device: Object.assign(baseModel().device, { storage: list }) }), live), 'storage');
+	const root = { key: 'root', label: 'Root (overlay)', usedPct: 90, free: 5 * 1024 * 1024 }, tmp = { key: 'tmp', label: 'Temporary (RAM)', usedPct: 1, free: 400 * 1024 * 1024 };
+	const c = store([ root, tmp ]);
+	assert.deepEqual([ c.level, c.value, c.reason, c.detail ], [ 'warn', '90% used', '5.00 MiB free', '5.00 MiB free on the root filesystem (90% used)' ]);
+	assert.doesNotMatch(c.detail, /overlay/, 'an ext4 root is no overlay');
+	/* wherever it is in the list */
+	assert.deepEqual(store([ tmp, root ]), c);
+	/* system info without a root: /tmp is not taken for it, and nothing is said */
+	for (const list of [ [ tmp ], [], undefined, [ { usedPct: 99, free: 1 } ], [ null, 'root' ] ]) assert.equal(store(list), undefined, JSON.stringify(list));
+	assert.deepEqual(insight.health(Object.assign(baseModel(), { device: Object.assign(baseModel().device, { storage: [ tmp ] }) }), live).map(x => x.id), [ 'uplink', 'cpu', 'memory', 'radios', 'signal' ]);
+	assert.equal(store([ Object.assign({}, root, { usedPct: 96 }) ]).level, 'err');
+	assert.equal(store([ Object.assign({}, root, { usedPct: 50 }) ]).level, 'ok');
+});
+
 test('health: a wired-only device has no Wi-Fi or Signal check', () => {
 	const m = Object.assign(baseModel(), { wired: true, radios: [], ssids: [], clients: [] });
 	const ids = insight.health(m, { cpu: { pct: 7, cores: [ 1 ] } }).map(c => c.id);
@@ -185,6 +245,32 @@ test('topTalkers: ranked by live total, share of the sum, zero traffic left out'
 	assert.equal(t[0].share, 0.75);
 	assert.equal(insight.topTalkers(clients, rates, 1).length, 1);
 	assert.deepEqual(insight.topTalkers([], {}), []);
+});
+
+/* #129: a wired host with a port to itself has the port's rate. A port's
+   counters and a station's run the same way, as this device counts them:
+   tx is what it sent to the device */
+test('topTalkers: wired hosts with a rate of their own rank with the stations, in the same direction', () => {
+	const clients = [ { mac: 'a', name: 'Phone' }, { mac: 'b', name: 'Laptop' } ];
+	const hosts = [ { mac: 'w1', name: 'NAS' }, { mac: 'w2', name: 'Printer' }, { mac: 'w3', name: 'Idle' }, { mac: 'w4', name: 'Shared' } ];
+	const same = { rx: 1e6, tx: 9e6 };
+	const t = insight.topTalkers(clients, { a: same, b: { rx: 0, tx: 2e6 } }, 5, hosts, { w1: same, w2: { rx: 3e6, tx: 15e6 }, w3: { rx: 0, tx: 0 } });
+	assert.deepEqual(t.map(x => [ x.mac, x.total, !!x.wired ]), [ [ 'w2', 18e6, true ], [ 'a', 10e6, false ], [ 'w1', 10e6, true ], [ 'b', 2e6, false ] ],
+		'one ranking by live total; no traffic and no rate of its own stay out');
+	const row = mac => t.filter(x => x.mac === mac)[0];
+	assert.deepEqual([ row('a').down, row('a').up ], [ 9e6, 1e6 ], 'a station: the radio\'s transmit is its download');
+	assert.deepEqual([ row('w1').down, row('w1').up ], [ 9e6, 1e6 ], 'a wired host: the port\'s transmit is its download, the same way round');
+	assert.equal(t.reduce((n, x) => n + x.share, 0), 1, 'shares of one sum, stations and hosts together');
+	assert.equal(row('w2').share, 0.45);
+	assert.ok(!('wired' in row('a')), 'a station\'s row is as before');
+	/* the top n of both kinds */
+	assert.deepEqual(insight.topTalkers(clients, { a: same }, 2, hosts, { w1: same, w2: { rx: 3e6, tx: 15e6 } }).map(x => x.mac), [ 'w2', 'a' ]);
+	/* each list has its own rates: a host is never ranked by a station's, nor a station by a port's */
+	assert.deepEqual(insight.topTalkers(clients, { w1: same }, 5, hosts, { a: same }), []);
+	/* without hosts, as before */
+	assert.deepEqual(insight.topTalkers(clients, { a: same }, 5).map(x => [ x.mac, x.share ]), [ [ 'a', 1 ] ]);
+	assert.deepEqual(insight.topTalkers(clients, { a: same }, 5, null, null).length, 1);
+	assert.deepEqual(insight.topTalkers(null, null, 5, hosts, { w1: same }).map(x => [ x.mac, x.name, x.down, x.share ]), [ [ 'w1', 'NAS', 9e6, 1 ] ], 'a device without stations');
 });
 
 test('presence: baseline, new arrivals, gone kept for a while', () => {
@@ -256,4 +342,85 @@ test('health: a quiet station\'s weak signal is left out of the warning and of t
 	const all = byId(insight.health({ ...m, clients: [ m.clients[m.clients.length - 3] ] }, { quiet: { far: true } }), 'signal');
 	assert.deepEqual([ all.level, all.value ], [ 'ok', '—' ]);
 	assert.match(all.reason, /No warnings asked for/);
+});
+
+/* a paired access point's station (c.ap) is not this device's to help */
+test('health: a weak station of a paired access point is no signal warning here, nor the weakest', () => {
+	const m = Object.assign(baseModel(), { clients: [ { mac: '00:00:5e:00:53:01', name: 'Phone', signal: -50 },
+		{ mac: '00:00:5e:00:53:02', name: 'Far laptop', signal: -88, ap: { id: '0123456789abcdef', name: 'ap-hall' } } ] });
+	const sig = byId(insight.health(m, {}), 'signal');
+	assert.equal(sig.level, 'ok');
+	assert.doesNotMatch(String(sig.value) + sig.reason + sig.detail, /88|Far laptop/);
+	assert.equal(sig.reason, 'The only measured client');
+	/* only theirs: as no clients here */
+	const theirs = byId(insight.health(Object.assign(baseModel(), { clients: [ m.clients[1] ] }), {}), 'signal');
+	assert.deepEqual([ theirs.level, theirs.value ], [ 'info', 'No clients' ]);
+});
+
+test('top talkers: a paired access point\'s stations push none of this device\'s out', () => {
+	const clients = [ { mac: 'a', name: 'Here' }, { mac: 'b', name: 'There', ap: { id: '0123456789abcdef' } } ];
+	const t = insight.topTalkers(clients, { a: { rx: 1000, tx: 1000 }, b: { rx: 9e9, tx: 9e9 } }, 5);
+	assert.deepEqual(t.map(x => [ x.mac, x.share ]), [ [ 'a', 1 ] ]);
+	/* nor with wired hosts beside them */
+	const w = insight.topTalkers(clients, { a: { rx: 1000, tx: 1000 }, b: { rx: 9e9, tx: 9e9 } }, 5, [ { mac: 'c', name: 'Wired' } ], { c: { rx: 500, tx: 500 } });
+	assert.deepEqual(w.map(x => x.mac), [ 'a', 'c' ]);
+});
+
+/* review F4: the collector answers its first call before it has fetched
+   anything; the stations of an access point's first report were there
+   before the page opened */
+test('presence: the stations of an access point\'s first report are not new; one that joins it later is', () => {
+	const AP = '0123456789abcdef', DEN = 'fedcba9876543210';
+	const here = { mac: 'a', name: 'Here' };
+	const sta = (mac, id) => ({ mac, name: mac, ap: { id: id || AP } });
+	/* the page opens: the access point still waiting */
+	let p = insight.presence(null, [ here ], 0, 60000, []);
+	assert.deepEqual(p.state.aps, []);
+	p = insight.presence(p.state, [ here, sta('b'), sta('c') ], 5000, 60000, [ AP ]);
+	assert.deepEqual(Object.keys(p.isNew), [], 'its first report: they were there');
+	assert.deepEqual([ p.state.baseline, p.state.aps ], [ [ 'a', 'b', 'c' ], [ AP ] ]);
+	p = insight.presence(p.state, [ here, sta('b'), sta('c'), sta('d') ], 10000, 60000, [ AP ]);
+	assert.deepEqual(Object.keys(p.isNew), [ 'd' ], 'joined after');
+	/* it stops reporting for a poll and comes back: nobody is new again, d still is */
+	p = insight.presence(p.state, [ here ], 15000, 60000, []);
+	p = insight.presence(p.state, [ here, sta('b'), sta('c'), sta('d') ], 20000, 60000, [ AP ]);
+	assert.deepEqual(Object.keys(p.isNew), [ 'd' ]);
+	/* another one's first report, later; a local arrival is new as ever */
+	p = insight.presence(p.state, [ here, sta('b'), sta('e', DEN), { mac: 'f', name: 'Late' } ], 25000, 60000, [ AP, DEN ]);
+	assert.deepEqual(Object.keys(p.isNew).sort(), [ 'f' ]);
+	assert.deepEqual(p.state.aps, [ AP, DEN ]);
+	/* reporting from the start without stations: its first one is new */
+	let q = insight.presence(null, [ here ], 0, 60000, [ AP ]);
+	q = insight.presence(q.state, [ here, sta('b') ], 5000, 60000, [ AP ]);
+	assert.deepEqual(Object.keys(q.isNew), [ 'b' ]);
+	/* without the fifth argument, as before */
+	let r = insight.presence(null, [ here ], 0, 60000);
+	r = insight.presence(r.state, [ here, { mac: 'z' } ], 5000, 60000);
+	assert.deepEqual([ Object.keys(r.isNew), r.state.baseline ], [ [ 'z' ], [ 'a' ] ]);
+});
+
+/* review F3, F4, F8: what the access points list is theirs to say; none of
+   it is kept after it is gone */
+test('presence: an access point\'s station that is no longer listed is no "left" row, however many they are', () => {
+	const AP = '0123456789abcdef';
+	const sta = n => ({ mac: 'r' + n, name: 'r' + n, ap: { id: AP } });
+	let p = insight.presence(null, [ { mac: 'a' }, { mac: 'b' }, sta(0), sta(1) ], 0, 300000, [ AP ]);
+	/* the access point stops reporting; a station of this device leaves */
+	p = insight.presence(p.state, [ { mac: 'a' } ], 5000, 300000, []);
+	assert.deepEqual(p.gone.map(g => g.client.mac), [ 'b' ], 'this device\'s own station only');
+	assert.deepEqual(Object.keys(p.state.firstSeen).sort(), [ 'a', 'b' ]);
+	/* 1024 other stations on every report for five minutes */
+	let n = 2, state = p.state;
+	for (let i = 0; i < 30; i++) {
+		const now = Array.from({ length: 1024 }, () => sta(n++));
+		p = insight.presence(state, [ { mac: 'a' } ].concat(now), 10000 + i * 10000, 300000, [ AP ]);
+		state = p.state;
+	}
+	assert.deepEqual(p.gone.map(g => g.client.mac), [ 'b' ]);
+	assert.equal(Object.keys(state.present).length, 1025);
+	assert.equal(Object.keys(state.firstSeen).length, 1026, 'nothing piles up');
+	/* a station that roams from this device to the access point is still there */
+	p = insight.presence(null, [ { mac: 'a' } ], 0, 300000, [ AP ]);
+	p = insight.presence(p.state, [ Object.assign({ mac: 'a' }, { ap: { id: AP } }) ], 5000, 300000, [ AP ]);
+	assert.deepEqual([ p.gone, Object.keys(p.isNew) ], [ [], [] ]);
 });

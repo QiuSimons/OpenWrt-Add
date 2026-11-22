@@ -44,6 +44,8 @@ const SRC = {
 	'ucode/template/themes/vantage/header.ut': [ '<link rel="stylesheet" href="{{ media }}/a.css">\n<b>{# PKG_VERSION #}</b>\n', 0o644 ],
 	'root/etc/uci-defaults/30_luci-theme-vantage': [ '#!/bin/sh\nexit 0\n', 0o755 ],
 	'root/etc/config/vantage': [ 'config names names\n', 0o644 ],
+	'root/etc/init.d/vantage-x': [ '#!/bin/sh /etc/rc.common\n', 0o755 ],
+	'root/usr/libexec/vantage/x': [ '#!/usr/bin/ucode -S\n', 0o755 ],
 };
 
 function tmp() { return mkTmp('vantage-pkgtest-'); }
@@ -109,10 +111,18 @@ test('verify_built_apk: Makefile parsing and generated scripts', () => {
 	assert.ok(s['post-upgrade'].startsWith('#!/bin/sh\nexport PKG_UPGRADE=1\n[ "${IPKG_NO_SCRIPT}"'));
 	assert.throws(() => V.parseMakefile(MAKEFILE.replace('exit 0\nendef', 'exit $(X)\nendef'), 'M'), /make expansion/);
 	assert.throws(() => V.parseMakefile(MAKEFILE.replace('+rpcd', '+PACKAGE_x:rpcd'), 'M'), /not a plain \+package/);
-	for (const name of [ 'luci-theme-vantage', 'luci-app-vantage' ]) {
+	/* a version floor: one of its own dependencies, at its own version, nothing else */
+	const floor = v => MAKEFILE.replace('LUCI_MINIFY_CSS:=0', 'LUCI_EXTRA_DEPENDS:=' + v + '\nLUCI_MINIFY_CSS:=0');
+	assert.equal(mk.minDepends, null);
+	assert.deepEqual(V.expectedDepends(mk, true), [ 'libc', 'luci-base', 'rpcd' ]);
+	assert.equal(V.parseMakefile(floor('rpcd (>=$(PKG_VERSION))'), 'M').minDepends, 'rpcd');
+	for (const bad of [ 'wget (>=$(PKG_VERSION))', 'rpcd (>=1.0)', 'rpcd (=$(PKG_VERSION))', 'rpcd', 'rpcd (>=$(PKG_VERSION)), luci-base (>=$(PKG_VERSION))', '' ])
+		assert.throws(() => V.parseMakefile(floor(bad), 'M'), /LUCI_EXTRA_DEPENDS is not/, bad);
+	for (const name of [ 'luci-theme-vantage', 'luci-app-vantage', 'luci-app-vantage-aps' ]) {
 		const real = V.parseMakefile(fs.readFileSync(path.join(ROOT, name, 'Makefile'), 'utf8'), name);
 		assert.equal(real.name, name);
-		assert.ok(real.depends.includes('luci-base'));
+		/* the add-on comes with the dashboard, which brings luci-base */
+		assert.ok(real.depends.includes(name === 'luci-app-vantage-aps' ? 'luci-app-vantage' : 'luci-base'));
 	}
 	assert.equal(V.substituteVersion('<script src="{{ resource }}/cbi.js"></script> "{{ media }}/x.svg"', 'a.ut', '1.2'),
 		'<script src="{{ resource }}/cbi.js?v=1.2"></script> "{{ media }}/x.svg"');
@@ -128,6 +138,10 @@ test('verify_built_apk: rejects stray files, bad modes, metadata and script drif
 		[ f => { f.pkg.entries.push({ path: 'www/extra.js', dir: false, mode: 0o644, user: 'root', group: 'root', extra: [] });
 			fs.writeFileSync(path.join(f.pkgRoot, 'www/extra.js'), '1'); }, /extra\.js: in the package but not in the source/ ],
 		[ f => { f.pkg.entries.find(e => e.path.endsWith('a.css')).mode = 0o666; }, /world-writable/ ],
+		/* a script the device runs that lost its bit, in the package or already in git */
+		[ f => { f.pkg.entries.find(e => e.path === 'etc/init.d/vantage-x').mode = 0o644; }, /etc\/init\.d\/vantage-x: mode 644, expected 755/ ],
+		[ f => { f.pkg.entries.find(e => e.path === 'usr/libexec/vantage/x').mode = 0o644; }, /usr\/libexec\/vantage\/x: mode 644, expected 755/ ],
+		[ f => { fs.chmodSync(path.join(f.src, 'luci-theme-vantage/root/etc/init.d/vantage-x'), 0o644); f.pkg.entries.find(e => e.path === 'etc/init.d/vantage-x').mode = 0o644; }, /etc\/init\.d\/vantage-x: mode 644, expected 755/ ],
 		[ f => { f.pkg.entries.find(e => e.path.endsWith('a.css')).mode = 0o4755; }, /setuid/ ],
 		[ f => { f.pkg.entries.find(e => e.path.includes('uci-defaults/')).mode = 0o644; }, /30_luci-theme-vantage: mode 644, expected 755/ ],
 		[ f => { f.pkg.entries.find(e => e.path.endsWith('a.css')).user = 'nobody'; }, /owner nobody/ ],
@@ -302,3 +316,142 @@ for (const rel of builds) {
 		assert.match(r.stdout, /all packages verified/);
 	});
 }
+
+/* ------------------------------------------- luci-app-vantage-aps */
+
+const APS = path.join(ROOT, 'luci-app-vantage-aps');
+function tree(dir, base, out = []) {
+	for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+		const p = path.join(dir, e.name);
+		if (e.isDirectory()) tree(p, base, out); else out.push(path.relative(base, p));
+	}
+	return out.sort();
+}
+
+test('add-on: it ships exactly these files, the ones the device runs executable', () => {
+	assert.deepEqual(tree(path.join(APS, 'root'), path.join(APS, 'root')), [
+		'etc/init.d/vantage-collector',
+		'lib/upgrade/keep.d/luci-app-vantage-aps',
+		'usr/libexec/vantage/collector',
+		'usr/libexec/vantage/report',
+		'usr/share/luci/menu.d/luci-app-vantage-aps.json',
+		'usr/share/rpcd/acl.d/luci-app-vantage-aps.json',
+		'usr/share/rpcd/ucode/luci.vantage-pair',
+		'usr/share/ucode/vantage/aps.uc'
+	]);
+	assert.deepEqual(tree(path.join(APS, 'htdocs'), path.join(APS, 'htdocs')), [
+		'luci-static/resources/vantage/aps.css',
+		'luci-static/resources/view/vantage/aps.js'
+	]);
+	for (const f of tree(path.join(APS, 'root'), path.join(APS, 'root'))) {
+		const x = (fs.statSync(path.join(APS, 'root', f)).mode & 0o111) !== 0, must = /^(etc\/init\.d|usr\/libexec)\//.test(f);
+		assert.equal(x, must, f + (must ? ' must be executable' : ' must not be executable'));
+	}
+	/* kept on sysupgrade: the router's key and its paired list, nothing else */
+	assert.equal(fs.readFileSync(path.join(APS, 'root/lib/upgrade/keep.d/luci-app-vantage-aps'), 'utf8'), '/etc/vantage/\n');
+	const mk = V.parseMakefile(fs.readFileSync(path.join(APS, 'Makefile'), 'utf8'), 'luci-app-vantage-aps/Makefile');
+	assert.deepEqual(mk.depends, [ 'luci-app-vantage', 'rpcd-mod-ucode', 'ucode-mod-fs', 'ucode-mod-ubus', 'ucode-mod-uci', 'ucode-mod-uloop' ]);
+	/* the dashboard of its own release or newer: apk folds the floor into the entry, opkg lists it beside the plain one */
+	assert.equal(mk.minDepends, 'luci-app-vantage');
+	assert.deepEqual(V.expectedDepends(mk, false), [ 'libc', 'luci-app-vantage>=' + mk.version, 'rpcd-mod-ucode', 'ucode-mod-fs', 'ucode-mod-ubus', 'ucode-mod-uci', 'ucode-mod-uloop' ]);
+	assert.deepEqual(V.expectedDepends(mk, true), [ 'luci-app-vantage (>=' + mk.version + ')', 'libc', 'luci-app-vantage', 'rpcd-mod-ucode', 'ucode-mod-fs', 'ucode-mod-ubus', 'ucode-mod-uci', 'ucode-mod-uloop' ]);
+	assert.deepEqual(Object.keys(mk.script).filter(k => mk.script[k] != null), [], 'no install or removal scripts of its own');
+});
+
+test('dashboard: it ships exactly these root files, none of them a program', () => {
+	/* The dashboard package reads; it has no service, no init script and nothing the device runs. (An earlier
+	   form of the access points feature had put a root service here: such a file must not come in unseen.) */
+	const APP = path.join(ROOT, 'luci-app-vantage');
+	const files = tree(path.join(APP, 'root'), path.join(APP, 'root'));
+	assert.deepEqual(files, [
+		'etc/config/vantage',
+		'usr/share/luci/menu.d/zz-luci-app-vantage.json',
+		'usr/share/rpcd/acl.d/luci-app-vantage.json',
+		'usr/share/rpcd/ucode/luci.vantage'
+	]);
+	for (const f of files) {
+		const st = fs.lstatSync(path.join(APP, 'root', f));
+		assert.ok(st.isFile(), f + ' is a plain file');
+		assert.equal(st.mode & 0o111, 0, f + ' must not be executable');
+	}
+	const mk = V.parseMakefile(fs.readFileSync(path.join(APP, 'Makefile'), 'utf8'), 'luci-app-vantage/Makefile');
+	assert.ok(!mk.depends.some(d => /uloop|dropbear|dbclient/.test(d)), 'no daemon\'s or SSH\'s modules among its dependencies: ' + mk.depends);
+	assert.deepEqual(Object.keys(mk.script).filter(k => mk.script[k] != null), [], 'no install or removal scripts');
+});
+
+/* luci.mk installs more than root/ and htdocs/: ucode/ goes to /usr/share/ucode/luci, luasrc/ to the Lua tree, and src/
+   is built. Neither package has any of them, so that the two lists above are all that reaches a device */
+test('dashboard and add-on: nothing is installed from a directory the file lists do not cover', () => {
+	for (const pkg of [ 'luci-app-vantage', 'luci-app-vantage-aps' ])
+		assert.deepEqual(fs.readdirSync(path.join(ROOT, pkg)).sort(), [ 'Makefile', 'htdocs', 'po', 'root' ], pkg);
+});
+
+test('add-on: the collector starts only with an access point paired and dbclient there', () => {
+	const dir = tmp();
+	try {
+		const init = fs.readFileSync(path.join(APS, 'root/etc/init.d/vantage-collector'), 'utf8');
+		assert.ok(init.startsWith('#!/bin/sh /etc/rc.common\n'));
+		assert.match(init, /^START=99$/m);
+		assert.match(init, /^USE_PROCD=1$/m);
+		assert.ok(init.includes('APS=/etc/vantage/aps.json\n') && init.includes('[ -x /usr/bin/dbclient ] || return 0'), 'the paths this test replaces');
+		const aps = path.join(dir, 'aps.json'), db = path.join(dir, 'dbclient');
+		const script = path.join(dir, 'run.sh');
+		fs.writeFileSync(script, [ 'procd_open_instance() { echo open; }', 'procd_close_instance() { echo close; }', 'procd_set_param() { echo "param $*"; }',
+			init.replace('APS=/etc/vantage/aps.json', 'APS=' + aps).replace('/usr/bin/dbclient', db), 'start_service', '' ].join('\n'));
+		const start = () => spawnSync('/bin/sh', [ script ], { encoding: 'utf8' }).stdout;
+		/* stopped: its run directory goes, that one path written out (the collector's own RUN) and nothing from a variable */
+		assert.ok(init.includes('\nservice_stopped() {\n\trm -rf /var/run/vantage-collector\n}\n'), 'service_stopped removes the run directory');
+		assert.equal((init.match(/\brm\b/g) || []).length, 1, 'the one removal');
+		assert.match(fs.readFileSync(path.join(APS, 'root/usr/libexec/vantage/collector'), 'utf8'), /^const RUN = '\/var\/run\/vantage-collector';$/m);
+		const run = path.join(dir, 'run'), beside = path.join(dir, 'beside');
+		fs.mkdirSync(path.join(run, '00000000000000a1/.ssh'), { recursive: true });
+		fs.writeFileSync(path.join(run, '00000000000000a1/.ssh/known_hosts'), 'x\n');
+		fs.writeFileSync(beside, 'kept\n');
+		const stopped = path.join(dir, 'stopped.sh');
+		fs.writeFileSync(stopped, [ init.replace('rm -rf /var/run/vantage-collector', 'rm -rf ' + run), 'service_stopped', '' ].join('\n'));
+		assert.equal(spawnSync('/bin/sh', [ stopped ], { encoding: 'utf8' }).status, 0);
+		assert.deepEqual([ fs.existsSync(run), fs.readFileSync(beside, 'utf8') ], [ false, 'kept\n' ]);
+		assert.equal(start(), '', 'no list');
+		fs.writeFileSync(aps, '[ ]');
+		assert.equal(start(), '', 'an empty list');
+		fs.writeFileSync(aps, '[ { "id": "00000000000000a1" } ]');
+		assert.equal(start(), '', 'no dbclient');
+		fs.writeFileSync(db, '#!/bin/sh\n', { mode: 0o755 });
+		/* `file`: an upgrade only runs "start", and procd restarts a running instance on it only when one of these has changed.
+		   So every program file of the daemon is in the list, and each is a file of the package */
+		const programs = [ '/usr/libexec/vantage/collector', '/usr/share/ucode/vantage/aps.uc' ];
+		assert.equal(start(), 'open\nparam command /usr/libexec/vantage/collector\nparam file ' + programs.join(' ') + '\nparam respawn 3600 5 5\nparam stderr 1\nclose\n');
+		for (const f of programs) assert.ok(fs.statSync(path.join(APS, 'root', f)).isFile(), f);
+		const collector = fs.readFileSync(path.join(APS, 'root/usr/libexec/vantage/collector'), 'utf8');
+		assert.deepEqual([ ...collector.matchAll(/^import .* from '([^']+)';$/gm) ].map(m => m[1]).filter(m => !/^(uloop|ubus|fs)$/.test(m)), [ 'vantage.aps' ], 'the one module of its own it loads');
+		/* the whole script, comments aside: a command anywhere else in it (at the top, in a stop_service, hidden in
+		   start_service) runs as root at boot, at stop or on every upgrade */
+		assert.deepEqual(init.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#')), [
+			'START=99',
+			'USE_PROCD=1',
+			'APS=/etc/vantage/aps.json',
+			'start_service() {',
+			'grep -qs \'"id"\' "$APS" || return 0',
+			'[ -x /usr/bin/dbclient ] || return 0',
+			'procd_open_instance',
+			'procd_set_param command /usr/libexec/vantage/collector',
+			'procd_set_param file /usr/libexec/vantage/collector /usr/share/ucode/vantage/aps.uc',
+			'procd_set_param respawn 3600 5 5',
+			'procd_set_param stderr 1',
+			'procd_close_instance',
+			'}',
+			'service_stopped() {',
+			'rm -rf /var/run/vantage-collector',
+			'}'
+		]);
+	} finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('verify_built_apk: a tree from before the add-on existed still verifies', () => {
+	const f = fixture();
+	try {
+		/* only luci-theme-vantage in this source tree, as at an old tag */
+		const pkgs = V.sourcePackages(f.src, LANGS);
+		assert.deepEqual([ ...pkgs.keys() ], [ 'luci-theme-vantage' ]);
+	} finally { f.cleanup(); }
+});

@@ -6,7 +6,8 @@ things at more length.
 
 ## The project
 
-Two OpenWrt 25.12 LuCI packages plus offline tooling. No npm, no
+Three OpenWrt 25.12 LuCI packages (a theme, a dashboard and an optional
+add-on to it) plus offline tooling. No npm, no
 `package.json`, no build step for the UI: the files under `htdocs/` and
 `ucode/` ship as they are.
 
@@ -14,6 +15,7 @@ Two OpenWrt 25.12 LuCI packages plus offline tooling. No npm, no
 |---|---|
 | `luci-theme-vantage/` | Theme: ucode templates (`ucode/template/themes/vantage/*.ut`), CSS and icons (`htdocs/luci-static/vantage/`), shell script (`htdocs/luci-static/resources/menu-vantage.js`, `vantage-theme/host.js`), `root/etc/uci-defaults/30_luci-theme-vantage`, `postrm` in the `Makefile` |
 | `luci-app-vantage/` | Dashboard at `admin/dashboard`: views (`htdocs/.../view/vantage/overview.js`; `firewall.js`, the Network → Firewall → Overview tab), modules (`htdocs/.../vantage/*.js`), `app.css`, menu entry, rpcd ACL (`root/usr/share/rpcd/acl.d/`), rpcd ucode plugin `luci.vantage` (`root/usr/share/rpcd/ucode/luci.vantage`), default `/etc/config/vantage` |
+| `luci-app-vantage-aps/` | Optional add-on: the access points a router's dashboard shows, read over SSH. Pairing page (`htdocs/.../view/vantage/aps.js`, Network → Access points), rpcd ucode plugin `luci.vantage.pair` (`root/usr/share/rpcd/ucode/luci.vantage-pair`), shared checks (`root/usr/share/ucode/vantage/aps.uc`), the collector daemon and the report command (`root/usr/libexec/vantage/`), init script, its own ACL groups and catalogue |
 | `dev/replay/` | Offline LuCI server that replays a recording; see its README |
 | `dev/build/` | `sdk-build.sh`: reproducible build in the OpenWrt SDK image (podman) |
 | `dev/icons/build.js` | Generates the status icon set; edit the generator, not the SVGs |
@@ -47,7 +49,9 @@ Two OpenWrt 25.12 LuCI packages plus offline tooling. No npm, no
    `entityencode(v, true)`, and `striptags()` for titles. Never output
    `fuser`. On pages for visitors who are not logged in (login, 404,
    CSRF) the theme adds nothing about the device, only the login page's
-   hostname heading (encoded), colour mode, background, whether
+   hostname heading (encoded), the HTTPS ports its script may move to
+   (none where `luci.main.vantage_https` is `stay`), colour mode,
+   background, whether
    Low-power router is on (which stills that background) and Motion when
    not in focus (which lets it move without the focus) (LuCI's core header
    still prints its `L.env` script; that is upstream, see
@@ -56,7 +60,11 @@ Two OpenWrt 25.12 LuCI packages plus offline tooling. No npm, no
    enforces this.
 6. **The ACL stays minimal and matches the code.** Every `rpc.declare` in
    the app must be granted in `luci-app-vantage.json`, and every grant must
-   be used. The read group is read-only and never reads Wi-Fi keys
+   be used (two calls are granted elsewhere instead: `vantage.collector
+   report` by the add-on, see the end of this rule, and LuCI's own
+   `luci.wireguard getWgInstances` by `luci-proto-wireguard`, so that
+   only a login holding LuCI's group for it sees the WireGuard tile;
+   `test_acl_policy.js` pins both). The read group is read-only and never reads Wi-Fi keys
    (wireless data comes from the plugin's `wireless` method; LuCI's own
    groups, such as `luci-base-network-status`, can); reverse DNS
    sits in its own optional group (`luci-app-vantage-rdns`); the names
@@ -69,6 +77,14 @@ Two OpenWrt 25.12 LuCI packages plus offline tooling. No npm, no
    Adding a call means changing the view, the ACL JSON and the allowlist in
    `security-tests/test_acl_policy.js` together, and saying why in the
    commit message. Point out any ACL change to the human.
+   The add-on (`luci-app-vantage-aps`) is the one place that runs programs
+   and writes files outside uci, each listed line by line in
+   `test_acl_policy.js` (the pairing plugin, the report, the collector):
+   changing one of those lines means changing the test with it, and saying
+   why. Its group (`luci-app-vantage-aps`) is for administrators; seeing
+   the access points (`vantage.collector report`) is its second group,
+   `luci-app-vantage-aps-view`. The dashboard's groups grant nothing of
+   the add-on.
 7. **Theme and app stay independent.** The app is styled only through the
    theme's `--v-*` custom properties, each with a fallback, and its classes
    are `vt-*` scoped under `.vt-app`. The theme doesn't style app
@@ -153,7 +169,8 @@ the result.
   `String.format`). After adding, changing or removing strings, run
   `dev/i18n/update.sh` and commit `po/templates/*.pot` and the updated
   catalogues; CI fails on `dev/i18n/update.sh --check` otherwise.
-  Catalogues are `luci-app-vantage/po/<lang>/vantage.po` and
+  Catalogues are `luci-app-vantage/po/<lang>/vantage.po`,
+  `luci-app-vantage-aps/po/<lang>/vantage-aps.po` and
   `luci-theme-vantage/po/<lang>/vantage-theme.po`; nothing else goes in
   `po/`.
 - Comments are short and say why, not what.

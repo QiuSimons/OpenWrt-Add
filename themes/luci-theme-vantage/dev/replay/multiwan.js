@@ -9,8 +9,11 @@
                               default route of metric 20, and 'wanb6'
                               (dhcpv6) on the same device: one line
      network.device status    SYNTHETIC eth9 with counters growing with
-                              the clock (about 30 Mbit/s down, 4 up)
+                              the clock (about 30 Mbit/s down, 4 up) and
+                              a port's link modes (see wired.js)
    Added addresses are documentation ranges only. */
+
+const { modes } = require('./wired');
 
 const LINE = {
 	iface: 'wanb', iface6: 'wanb6', dev: 'eth9', speed: '1000F', metric: 20,
@@ -57,7 +60,7 @@ function ifaces() {
 function device(t) {
 	const rx = bytes(LINE.down, 41, t), tx = bytes(LINE.up, 42, t);
 	return {
-		up: true, carrier: true, devtype: 'ethernet', type: 'Network device', speed: LINE.speed, macaddr: '00:00:5e:00:53:e1',
+		up: true, carrier: true, devtype: 'ethernet', type: 'Network device', speed: LINE.speed, 'link-supported': modes(LINE.speed), macaddr: '00:00:5e:00:53:e1',
 		statistics: { rx_bytes: rx, tx_bytes: tx, rx_packets: Math.round(rx / 900), tx_packets: Math.round(tx / 900), rx_errors: 0, tx_errors: 0, rx_dropped: 0, tx_dropped: 0 }
 	};
 }

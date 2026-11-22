@@ -4,12 +4,12 @@
 
 | Version | OpenWrt | Supported |
 |---|---|---|
-| 1.0.x | 25.12 | Yes |
-| 1.0.x | 24.10 | Yes, since 1.0.8 |
-| 1.0.x | 23.05 and older | No (untested) |
+| 1.1.x | 25.12 | Yes |
+| 1.1.x | 24.10 | Yes |
+| 1.1.x | 23.05 and older | No (untested) |
+| 1.0.x | any | No: update to 1.1 |
 
-Fixes go into the latest release. Only the newest 1.0.x release is
-supported.
+Fixes go into the latest release. Only the newest release is supported.
 
 ## Reporting a vulnerability
 
@@ -24,8 +24,9 @@ without any details of the problem.
 
 Please include:
 
-- the affected package (`luci-theme-vantage`, `luci-app-vantage` or the
-  dev tooling) and version, and your OpenWrt version
+- the affected package (`luci-theme-vantage`, `luci-app-vantage`,
+  `luci-app-vantage-aps` or the dev tooling) and version, and your
+  OpenWrt version
 - what an attacker can do, and what they need first (logged in or not,
   on the LAN, a Wi-Fi client, a limited LuCI user, ...)
 - steps to reproduce, ideally a proof of concept
@@ -42,6 +43,12 @@ In scope:
 - the rpcd ACLs: permissions broader than documented, or writes outside
   `/etc/config/vantage` (the dashboard) and `/etc/config/vantage_theme`
   (the theme)
+- the optional access point add-on (`luci-app-vantage-aps`): a router's
+  key doing more on an access point than fetching its report, a router
+  accepting another device's report as a paired access point's, pairing
+  without the add-on's permission, or its writes going beyond
+  `/etc/vantage`, its own lines of `/etc/dropbear/authorized_keys`, its
+  service's boot links and `/var/run/vantage-collector`
 - packaging: the install and removal scripts, file permissions
 - the dev tooling that handles recorded device data (`dev/replay/`),
   for example real identifiers leaking into demo output or the

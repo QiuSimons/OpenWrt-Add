@@ -8,7 +8,7 @@ Nothing is forwarded anywhere; there is no upstream.
         [--theme-dir <pkg>/htdocs/luci-static/<name>] [--theme <name>] \
         [--templates <pkg>/ucode/template] [--rootfs <device rootfs dump>] \
         [--app-dir <luci-app package dir>]... [--keep-uniwrt] [--no-synthetic] \
-        [--demo] [--wired | --big] [--multiwan] [--fullvpn] [--lang <lang>] [--fixtures <dir>]...
+        [--demo] [--wired | --big] [--multiwan] [--fullvpn] [--aps] [--wg] [--lang <lang>] [--fixtures <dir>]...
 
 Open <http://127.0.0.1:8025/>. Any username/password logs in; the session
 lasts until the replay restarts (log in again after a restart).
@@ -209,7 +209,10 @@ Serves the recorded access point as a router without Wi-Fi, to work on
 the dashboard's wired-only layout (`wired.js`): the wireless status lists
 no radios, the recorded uplink is renamed `wan` (proto `dhcp`), and
 synthetic `lan`, `vpn` (WireGuard) and `guest` (down) interfaces with
-documentation addresses and growing counters are added. Combine it with
+documentation addresses and growing counters are added. The switch ports
+`lan1` and `lan2` list the link modes they support, as netifd does for a
+port, so with the recorded `eth0` the dashboard's Ports tile has three
+(the recording alone has one port, and no tile). Combine it with
 `--demo` as usual.
 
 ## A bigger access point (`--big`)
@@ -223,7 +226,10 @@ behind `lan5`, and `eth1.1`, VLAN 1 of a swconfig switch `switch0` with
 three of its four ports linked, as `luci getSwconfigPortState` answers)
 plus the gateway on `eth0`. Counters grow with the clock
 and add up (a network's are its stations', `eth0` carries most of the
-total). Addresses take the recorded LAN's first three octets, so use it
+total). The ports list their link modes like `--wired`'s, and `lan4`,
+at 100 Mbit/s, counts receive errors, for the Ports tile: ten cells,
+`switch0`'s four among them.
+Addresses take the recorded LAN's first three octets, so use it
 with `--demo`; MACs are documentation values. Only the dashboard's calls
 are rewritten: LuCI's own wireless pages still show the recording. It
 cannot be combined with `--wired`.
@@ -235,7 +241,9 @@ lines (`multiwan.js`): `wanb` (DHCP, on a synthetic `eth9` at 1 Gbit/s, a
 device none of the other modes uses) with an IPv4 default route of metric
 20, above the recorded uplink's, and `wanb6` (DHCPv6) on the same device,
 which stays part of that line. Its counters grow with the clock, about
-30 Mbit/s down and 4 Mbit/s up. Combine it with `--wired` (a router
+30 Mbit/s down and 4 Mbit/s up; `eth9` is a port like `--wired`'s, so
+the recorded access point has two with it, and the Ports tile.
+Combine it with `--wired` (a router
 without Wi-Fi) or `--big`; addresses are documentation values.
 
 ## A full-tunnel VPN (`--fullvpn`)
@@ -248,6 +256,46 @@ about 40 Mbit/s down and 3 Mbit/s up. The stand-in for `luci.vantage
 routes` answers its lookups as the kernel would from netifd's routes: the
 lowest metric, and of a tunnel's and its line's the tunnel's. Combine it with
 `--wired`, `--big` and `--multiwan`; addresses are documentation values.
+
+## Paired access points (`--aps`)
+
+Answers `vantage.collector report` as the collector service does with
+access points paired, to work on the dashboard's branches for them
+(`aps.js`): `ap-hall` (two SSIDs, seven stations, three wired hosts) and
+`ap-den` (one SSID, three stations, one wired host) reporting, and
+`ap-loft` offline (not reachable for six minutes, so without a report).
+Their stations' traffic moves a little on every call; most get a name and
+an address in the host hints, as a router's leases would give them, and
+so do the two reporting access points. `ap-hall`'s own MAC is added beside the
+first two wired hosts the stand-in for `luci.vantage wired` lists, on
+their port, and `ap-hall` lists both: the first as its wired host, which
+gets the note "behind ap-hall", the second as its station, which moves
+from the wired list to the Wi-Fi list as on a router with wired access
+points. The pairing stand-in (`pair-plugin.js`) starts with the same
+three paired: their names, addresses and MACs are `aps.js`'s, the first
+two with the network they are on (`lan`), `ap-loft` at an address of
+none of the stand-in's networks and so without one.
+Without `--aps` the object is absent (uhttpd's "Object not found"), as on
+a device with none paired. Addresses and MACs are documentation values,
+names and SSIDs invented. Combine it with the other modes.
+
+## WireGuard tunnels (`--wg`)
+
+Answers `luci.wireguard getWgInstances` as luci-proto-wireguard's rpcd
+plugin does on a router with two tunnels, to work on the dashboard's
+WireGuard tile (`wg.js`): `wg0` with seven road-warrior peers (two with a
+session and traffic, one with a session and none, two whose last
+handshake is hours and days old, two that never made one, one of them
+without a description) and `wg1` with one site-to-site peer. The reply
+has the plugin's own form (`wg show all dump` split by tabs: numbers as
+text, `(none)` and `off` for nothing). Counters grow with the clock, and
+a peer with a session makes a handshake every two minutes. Without
+`--wg` the object is absent (uhttpd's "Object not found") and LuCI's
+group for it is not held, as on a device without luci-proto-wireguard,
+so the dashboard asks for nothing; a recording or a `--fixtures` plugin
+that has the object answers as before (`addons.sh`). Keys are hashes of
+a label, addresses documentation values, names invented. Combine it with
+the other modes.
 
 ## Translation preview (`--lang`)
 

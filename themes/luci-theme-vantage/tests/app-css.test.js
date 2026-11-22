@@ -126,3 +126,21 @@ test('health cards: a reason part goes whole to the next line, without its dot (
 	assert.match(dot.body, /content:\s*"·"/);
 	assert.match(dot.body, /width:\s*\.9em/, 'as wide as the shift');
 });
+
+/* #127: what paired access points add to the path is styled only under
+   .vt-path-mesh (the path has it with at least one): without one the
+   dashboard is as before */
+test('paired access points: their rows, branches and wider nodes only under .vt-path-mesh', () => {
+	const ours = /vt-leaf-|vt-node-peer|vt-branches-label|vt-path-sib/;
+	const scoped = rules.filter(r => ours.test(r.sel));
+	assert.ok(scoped.length >= 10, 'found the rules');
+	for (const r of scoped)
+		for (const part of r.sel.split(','))
+			assert.match(part, /\.vt-path-(mesh|sib)\b/, `${part.trim()} applies without a paired access point`);
+	/* the SSID nodes keep their 260px unless an access point is paired */
+	const bare = rules.filter(r => r.sel === '.vt-app .vt-branch-ssids .vt-node');
+	assert.deepEqual(bare.map(r => r.body.trim()), [ 'max-width: 260px;', 'max-width: none; align-self: stretch;' ]);
+	assert.ok(!rules.some(r => /340px/.test(r.body) && !/\.vt-path-mesh/.test(r.sel)), 'no 340px node outside');
+	/* a narrow node (a phone): the address column goes, the name keeps its room */
+	assert.match(css, /@container vtleaf \(max-width: 27em\)\s*\{[^@}]*\}\s*\.vt-app \.vt-path-mesh \.vt-leaf-ip \{ display: none; \}/);
+});

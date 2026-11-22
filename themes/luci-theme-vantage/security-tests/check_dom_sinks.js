@@ -184,8 +184,9 @@
  * traced.
  *
  * Usage
- *   node check_dom_sinks.js [paths...]     default: luci-theme-vantage/htdocs
- *                                          and luci-app-vantage/htdocs
+ *   node check_dom_sinks.js [paths...]     default: the htdocs of
+ *                                          luci-theme-vantage, luci-app-vantage
+ *                                          and luci-app-vantage-aps
  *   node check_dom_sinks.js --self-test    runs security-tests/fixtures
  */
 'use strict';
@@ -359,6 +360,16 @@ const ANIM_TAGS = new Set(['animate', 'set', 'animatetransform', 'animatemotion'
 const ANIM_VALUE_ATTRS = new Set(['to', 'from', 'values', 'by']);
 function tagName(v) { return String(v).trim().toLowerCase().replace(/^[^:]*:/, ''); }
 const URL_PROPS = new Set(['href', 'src', 'action', 'formAction', 'location', 'poster', 'codeBase', 'cite', 'background']);
+/* the parts of a URL a link, a URL object or a location takes on their
+   own: `a.hostname = x` sends LuCI's own link to another host (a peer
+   that names any address phishes the root password). Checked on
+   receivers that are such an object: location (bare or window./
+   document./top./parent./self.) and names this file binds to E('a'...),
+   E('area'...), dom.create('a'...), document.createElement('a'...) or
+   new URL(...); data objects with a `host` or `port` field are not.
+   Name-based like the rest: a link reached under another name, through
+   Object.assign or a computed key held in a variable is not followed */
+const URL_PARTS = new Set(['host', 'hostname', 'port', 'protocol', 'pathname', 'search', 'hash', 'username', 'password', 'origin']);
 const NUM_PROPS = new Set(['length', 'offsetTop', 'offsetLeft', 'offsetWidth', 'offsetHeight',
 	'clientWidth', 'clientHeight', 'clientTop', 'clientLeft', 'scrollTop', 'scrollLeft',
 	'scrollWidth', 'scrollHeight', 'innerWidth', 'innerHeight', 'pageXOffset', 'pageYOffset',
@@ -1536,12 +1547,31 @@ function scanUnit(prog, u, report) {
 	const isAliasRhs = (s, end) => isP(T[s - 1], '=') && isId(T[s - 2]) && !isP(T[s - 3], '.') && !isP(T[s - 3], '?.') &&
 		exprEnd(u, s, T.length) === end;
 
+	/* names bound here (`x = ...`, not a member) to a new link or URL */
+	const urlNames = new Set();
+	const ids = (k, ...vs) => vs.every((v, n) => v === '.' ? isP(T[k + n], '.') : isId(T[k + n], v));
+	for (let k = 1; k + 3 < T.length; k++) {
+		if (!isId(T[k]) || !isP(T[k + 1], '=') || isP(T[k - 1], '.') || isP(T[k - 1], '?.')) continue;
+		const c = k + 2;
+		const maker = ids(c, 'E') ? c + 1 : ids(c, 'dom', '.', 'create') ? c + 3 : ids(c, 'L', '.', 'dom', '.', 'create') ? c + 5 :
+			ids(c, 'document', '.', 'createElement') ? c + 3 : -1;
+		const tag = T[maker + 1];
+		if (maker > 0 && isP(T[maker], '(') && tag && (tag.t === 'str' || (tag.t === 'tmpl' && !tag.subs.length)) && /^(a|area)$/i.test(tag.v)) urlNames.add(T[k].v);
+		if (ids(c, 'new', 'URL') && isP(T[c + 2], '(')) urlNames.add(T[k].v);
+		for (const g of [ 'window', 'globalThis', 'self' ]) if (ids(c, 'new', g, '.', 'URL') && isP(T[c + 4], '(')) urlNames.add(T[k].v);
+	}
+	const urlReceiver = (r) => isId(T[r]) && (urlNames.has(T[r].v) && !isP(T[r - 1], '.') && !isP(T[r - 1], '?.') ||
+		T[r].v === 'location' && (!isP(T[r - 1], '.') || [ 'window', 'document', 'top', 'parent', 'self', 'globalThis' ].includes((T[r - 2] || {}).v)));
 	const propWrite = (i, prop, opIdx) => {
 		const op = T[opIdx];
 		if (!op || op.t !== 'punc' || !ASSIGN_OPS.has(op.v)) return;
 		const e = exprEnd(u, opIdx + 1, T.length);
 		const val = [opIdx + 1, e];
-		if (URL_PROPS.has(prop)) {
+		if (URL_PARTS.has(prop) && urlReceiver(isP(T[i], '[') ? i - 1 : i - 2)) {
+			const lit = e === opIdx + 2 && T[opIdx + 1] && (T[opIdx + 1].t === 'str' || (T[opIdx + 1].t === 'tmpl' && !T[opIdx + 1].subs.length));
+			if (op.v !== '=' || !lit)
+				flag(i, 'url-prop', `.${prop} ${op.v} \`${text(val[0], val[1])}\` on a link or location: only a literal may set a part of a URL${why()}`, [val[0]]);
+		} else if (URL_PROPS.has(prop)) {
 			if (op.v !== '=' || !check(val[0], val[1], 'url'))
 				flag(i, 'url-prop', `.${prop} ${op.v} \`${text(val[0], val[1])}\` is not traceable to a safe URL${why()}`, [val[0]]);
 		} else if (/^on[a-z]+$/.test(prop)) {
@@ -1925,7 +1955,7 @@ function selfTest() {
 
 function main(argv) {
 	if (argv[0] === '--self-test') return selfTest() ? 0 : 1;
-	const roots = argv.length ? argv : [ 'luci-theme-vantage', 'luci-app-vantage' ]
+	const roots = argv.length ? argv : [ 'luci-theme-vantage', 'luci-app-vantage', 'luci-app-vantage-aps' ]
 		.map((pkg) => path.join(__dirname, '..', pkg, 'htdocs')).filter((p) => fs.existsSync(p));
 	const files = [];
 	for (const r of roots) collect(r, files);

@@ -43,7 +43,7 @@ test('theme postrm: an opkg upgrade keeps the theme LuCI uses', () => {
 });
 
 test('theme postrm: removal falls back to Bootstrap and drops the theme entry', () => {
-	const want = [ 'set luci.main.mediaurlbase=/luci-static/bootstrap', 'delete luci.themes.Vantage', 'commit luci' ];
+	const want = [ 'set luci.main.mediaurlbase=/luci-static/bootstrap', 'delete luci.themes.Vantage', 'delete luci.main.vantage_https', 'commit luci' ];
 	/* opkg passes "remove"; apk's post-deinstall gets the old version */
 	assert.deepEqual(run([ 'remove' ], { PKG_UPGRADE: '0' }), want);
 	assert.deepEqual(run([ '1.0.8-r1' ]), want);

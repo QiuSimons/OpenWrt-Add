@@ -10,7 +10,10 @@
                               'guest' (down) are added
      network.device status    SYNTHETIC counters for the added devices,
                               growing with the clock; switch ports lan1
-                              and lan2 are members of br-lan0
+                              and lan2 are members of br-lan0, each with
+                              the link modes it supports, as netifd lists
+                              them for a port (the dashboard's Ports tile
+                              tells a port from a virtual device by them)
      luci.vantage wired       SYNTHETIC hosts: one alone on lan1, three
                               sharing lan2 (a switch behind it)
      luci-rpc getHostHints    their names and addresses added
@@ -75,8 +78,13 @@ function device(n, i, t) {
 	return d;
 }
 
+/* the link modes of a port that can do `speed`, in ethtool's names */
+function modes(speed) {
+	return [ '10baseT-H', '10baseT-F', '100baseT-H', '100baseT-F', '1000baseT-F' ].concat(speed === '2500F' ? [ '2500baseT-F' ] : []);
+}
+
 function port(p, i, t) {
-	return { up: true, carrier: true, devtype: 'ethernet', type: 'Network device', speed: p.speed, statistics: counters(p.rate, 10 + i, t) };
+	return { up: true, carrier: true, devtype: 'ethernet', type: 'Network device', speed: p.speed, 'link-supported': modes(p.speed), statistics: counters(p.rate, 10 + i, t) };
 }
 
 /* the hosts as luci.vantage wired returns them, heard a few seconds to a
@@ -117,4 +125,4 @@ function transform(object, method, args, reply) {
 	return reply;
 }
 
-module.exports = { transform, NETS, PORTS, HOSTS };
+module.exports = { transform, modes, NETS, PORTS, HOSTS };

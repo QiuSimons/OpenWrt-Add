@@ -262,6 +262,8 @@ test('replay server: cgi-download serves fixture files only, with the session', 
 	const st = start([ '--mirror', m, '--rootfs', r, '--port', String(port), '--fixtures', a, '--no-synthetic' ]);
 	try {
 		await st.ready;
+		/* the address is the last line of the start: the others are in */
+		assert.match(st.log.trimEnd().split('\n').pop(), /^\[replay\] http:\/\//);
 		assert.match(st.log, /\[replay\] fixtures: .*\(0 plugin files, 1 uci configs, 2 exec outputs\)/);
 		const req = (...x) => request(port, ...x);
 		const login = await req('POST', '/cgi-bin/luci/admin/status', { headers: FORM, body: 'luci_username=root&luci_password=x' });

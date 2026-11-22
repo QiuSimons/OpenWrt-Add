@@ -4,7 +4,7 @@
    left pending does not close it, passing over the rail leaves it open,
    and the keyboard can open it, walk into it and leave it. Also what the
    shell lists: crumbs (a repeated one merged, a 404), flyouts and the
-   palette's rows. */
+   palette's rows, a provider's among them. */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -78,6 +78,7 @@ class El {
 	querySelectorAll(sel) { return this.walk([]).filter(n => sel.split(',').some(s => matchOne(n, s))); }
 	querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
 	focus() { this.ownerDocument.activeElement = this; }
+	scrollIntoView() {}
 	click() { this.dispatch('click', { detail: 1 }); }
 	get tabIndex() { return ('tabindex' in this.attrs) ? +this.attrs.tabindex : (/^(A|BUTTON|INPUT|SELECT|TEXTAREA)$/.test(this.tagName) ? 0 : -1); }
 	getBoundingClientRect() { return { left: 200, top: 8, right: 320, bottom: 44, width: 120, height: 36 }; }
@@ -87,12 +88,16 @@ class El {
 function setup(dispatchpath, nodespec) {
 	const timers = [];
 	let now = 0, seq = 0;
+	/* window events: the palette asks whoever listens (vantage:palette) */
+	const heard = {};
 	const window = {
 		innerWidth: 1440,
 		setTimeout: (fn, ms) => { timers.push({ id: ++seq, at: now + (ms || 0), fn }); return seq; },
 		clearTimeout: id => { const i = timers.findIndex(t => t.id === id); if (i >= 0) timers.splice(i, 1); },
 		requestAnimationFrame: () => 0,
-		matchMedia: () => ({ matches: false, addEventListener() {} })
+		matchMedia: () => ({ matches: false, addEventListener() {} }),
+		addEventListener: (t, fn) => { (heard[t] = heard[t] || []).push(fn); },
+		dispatchEvent: ev => { (heard[ev.type] || []).forEach(fn => fn(ev)); return true; }
 	};
 	const advance = ms => {
 		now += ms;
@@ -119,6 +124,8 @@ function setup(dispatchpath, nodespec) {
 			if (typeof v === 'function') el.addEventListener(k, v);
 			else if (v != null) el.setAttribute(k, v);
 		}
+		/* as LuCI's E(): a plain string is markup */
+		if (typeof kids === 'string' && kids !== '') { el.innerHTML = kids; return el; }
 		for (const c of (Array.isArray(kids) ? kids : (kids == null || kids === '' ? [] : [ kids ])))
 			if (c !== '' && c != null) el.appendChild(typeof c === 'object' ? c : document.createTextNode(c));
 		return el;
@@ -163,7 +170,7 @@ function setup(dispatchpath, nodespec) {
 	const btn = document.querySelector('button.vt-crumb-switch');
 	const rail = document.querySelector('li.vt-rail-item');
 	const key = (el, k, more) => el.dispatch('keydown', Object.assign({ key: k }, more));
-	return { shell, document, fly, btn, rail, advance, key, search: document.getElementById('vt-search-btn') };
+	return { shell, document, window, fly, btn, rail, advance, key, search: document.getElementById('vt-search-btn') };
 }
 
 const isOpen = (fly, btn) => !fly.hidden && fly.classList.contains('is-switch') && btn.getAttribute('aria-expanded') === 'true';
@@ -365,4 +372,113 @@ test('palette: grouped rows say their category once; icons only on actions; hint
 	pal.input.value = 'zzz';
 	s.shell.filterPalette();
 	assert.equal(pal.count.textContent, '0 results');
+});
+
+test('palette: a provider\'s entries under their headers, after the pages; keys and Enter as for pages', () => {
+	const s = setup([ 'admin', 'status', 'overview' ]);
+	const asked = [], ran = [];
+	const all = [
+		{ kind: 'client', title: 'den-phone', detail: '192.0.2.22 · Harbor-5G · via ap-den', words: '02:00:5e:20:00:12', run: () => ran.push('den-phone') },
+		{ kind: 'client', title: 'log-server', detail: '192.0.2.40 · lan', words: '00:00:5e:00:53:40', run: () => ran.push('log-server') },
+		{ kind: 'radio', title: '5 GHz · Wi-Fi 6', detail: 'Ch 36 · 80 MHz', words: 'radio1 HE80 Channel 36', run: () => ran.push('radio1') },
+		{ kind: 'page', title: 'Not a kind', run: () => ran.push('page') },
+		{ kind: 'ssid', title: 'Harbor-5G', detail: '<b>5 GHz</b>', run: 'location = "https://example.net/"' }
+	];
+	s.window.addEventListener('vantage:palette', ev => { asked.push(ev.detail.query); ev.detail.add(all); });
+	s.shell.openPalette();
+	const pal = s.shell.pal;
+	const rows = () => pal.list.children.map(li => li.classList.contains('vt-pal-group') ? '# ' + li.textContent
+		: li.classList.contains('vt-pal-empty') ? '! ' + li.textContent
+		: [ li.getAttribute('aria-selected') === 'true' ? '>' : '', li.querySelector('.vt-pal-title').textContent, (li.querySelector('.vt-pal-path') || { textContent: '' }).textContent ].join('|'));
+	/* asked on opening, with no query: the pages where they always are, then the kinds */
+	assert.deepEqual(asked, [ '' ]);
+	assert.deepEqual(rows().slice(0, 2), [ '# Status', '>|Overview|' ]);
+	assert.deepEqual(rows().slice(-6), [ '|Log out|Session',
+		'# Clients', '|den-phone|192.0.2.22 · Harbor-5G · via ap-den', '|log-server|192.0.2.40 · lan',
+		'# Radios', '|5 GHz · Wi-Fi 6|Ch 36 · 80 MHz' ]);
+	assert.equal(pal.count.textContent, '');
+
+	/* asked again as the query changes; found by a word that is not shown */
+	pal.input.value = ' 53:40 ';
+	s.shell.filterPalette();
+	assert.deepEqual(asked, [ '', '53:40' ]);
+	assert.deepEqual(rows(), [ '# Clients', '>|log-server|192.0.2.40 · lan' ]);
+	assert.equal(pal.count.textContent, '1 result');
+	/* its row: an option like a page's, its texts as text nodes, no link */
+	const li = pal.items[0].li;
+	assert.equal(li.getAttribute('role'), 'option');
+	assert.equal(pal.input.getAttribute('aria-activedescendant'), li.id);
+	assert.equal(li.querySelector('a'), null);
+	assert.ok(li.querySelector('.vt-pal-path').children.every(c => c.nodeType === 3));
+
+	/* pages and a provider's rows in one list: the arrows walk both, Enter runs the one marked */
+	pal.input.value = 'log';
+	s.shell.filterPalette();
+	assert.deepEqual(rows(), [ '>|Log out|Session', '|Login background: None|Appearance', '|Login background: Starfield|Appearance',
+		'|System Log|Status', '|Kernel Log|Status › System Log',
+		'# Clients', '|log-server|192.0.2.40 · lan' ]);
+	assert.equal(pal.count.textContent, '6 results');
+	s.key(pal.input, 'ArrowUp');                               /* from the first row round to the last */
+	assert.equal(rows()[6], '>|log-server|192.0.2.40 · lan');
+	s.key(pal.input, 'ArrowDown');
+	assert.equal(rows()[0], '>|Log out|Session');
+	s.key(pal.input, 'ArrowUp');
+	s.key(pal.input, 'Enter');
+	assert.deepEqual(ran, [ 'log-server' ]);
+	assert.equal(s.shell.pal, null, 'closed before the entry runs');
+
+	/* Escape closes it and runs nothing */
+	s.shell.openPalette();
+	s.shell.pal.input.value = 'den';
+	s.shell.filterPalette();
+	const esc = s.key(s.shell.pal.input, 'Escape', { stopPropagation() {} });
+	assert.equal(s.shell.pal, null);
+	assert.ok(esc.defaultPrevented);
+	assert.deepEqual(ran, [ 'log-server' ]);
+
+	/* a click, as on a page's row */
+	s.shell.openPalette();
+	s.shell.pal.input.value = 'ch 36';
+	s.shell.filterPalette();
+	s.shell.pal.items[0].li.click();
+	assert.deepEqual(ran, [ 'log-server', 'radio1' ]);
+
+	/* nothing fits: it says so in words that are not about pages only */
+	s.shell.openPalette();
+	s.shell.pal.input.value = 'zzz';
+	s.shell.filterPalette();
+	assert.deepEqual(s.shell.pal.list.children.map(c => c.textContent), [ 'Nothing found' ]);
+	s.shell.closePalette();
+});
+
+test('palette: what is handed over after the event, or by no list, is not listed', () => {
+	const s = setup([ 'admin', 'status', 'overview' ]);
+	let late = null;
+	s.window.addEventListener('vantage:palette', ev => { late = ev.detail.add; ev.detail.add('clients'); ev.detail.add({ length: 1, 0: {} }); });
+	s.shell.openPalette();
+	const before = s.shell.pal.list.children.length;
+	late([ { kind: 'client', title: 'den-phone', run() {} } ]);
+	s.shell.pal.input.value = 'den-phone';
+	s.shell.filterPalette();
+	/* no list came: as on a page without a provider */
+	assert.deepEqual(s.shell.pal.list.children.map(c => c.textContent), [ 'No matching pages' ]);
+	s.shell.pal.input.value = '';
+	s.shell.filterPalette();
+	assert.equal(s.shell.pal.list.children.length, before);
+});
+
+/* --------------------------- from the review of the 1.1 batch: the wiring */
+test('palette: no text of a provider entry is handed to E() as markup', () => {
+	const s = setup([ 'admin', 'status', 'overview' ]);
+	s.window.addEventListener('vantage:palette', ev => ev.detail.add([ { kind: 'ssid', title: 'Harbor-5G', detail: '<b>5 GHz</b>', words: 'x', run() {} } ]));
+	s.shell.openPalette();
+	for (const q of [ '', 'harbor' ]) {
+		s.shell.pal.input.value = q;
+		s.shell.filterPalette();
+		const nodes = s.shell.pal.list.querySelectorAll('li, span, a, mark, b');
+		assert.ok(nodes.length > 2, q);
+		assert.ok(nodes.every(n => n.innerHTML === undefined), 'a text node, never markup: ' + JSON.stringify(q));
+		assert.ok(s.shell.pal.list.textContent.includes('<b>5 GHz</b>'), q);
+	}
+	s.shell.closePalette();
 });

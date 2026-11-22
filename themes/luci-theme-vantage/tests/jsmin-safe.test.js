@@ -23,7 +23,7 @@ function scripts(dir) {
 }
 
 test('shipped scripts: no escaped slash followed by * or another slash (jsmin reads a comment)', () => {
-	const files = [ 'luci-app-vantage/htdocs', 'luci-theme-vantage/htdocs' ].flatMap(d => scripts(path.join(ROOT, d)));
+	const files = [ 'luci-app-vantage/htdocs', 'luci-app-vantage-aps/htdocs', 'luci-theme-vantage/htdocs' ].flatMap(d => scripts(path.join(ROOT, d)));
 	assert.ok(files.length > 10, 'found the shipped scripts');
 	const bad = [];
 	for (const f of files)
@@ -58,7 +58,7 @@ function closingSlashPrev(line, from) {
 const JSMIN_DIVISION = /(?:=>|\b(?:return|typeof|case|do|else|in|instanceof|new|void|delete|throw))\s*\/(?![/*])/g;
 
 test('shipped scripts: no regular expression after return or => that ends in a character jsmin starts one after', () => {
-	const files = [ 'luci-app-vantage/htdocs', 'luci-theme-vantage/htdocs' ].flatMap(d => scripts(path.join(ROOT, d)));
+	const files = [ 'luci-app-vantage/htdocs', 'luci-app-vantage-aps/htdocs', 'luci-theme-vantage/htdocs' ].flatMap(d => scripts(path.join(ROOT, d)));
 	const bad = [];
 	for (const f of files)
 		fs.readFileSync(f, 'utf8').split('\n').forEach((line, i) => {
@@ -82,7 +82,7 @@ function spacedAfterDivision(line) {
 }
 
 test('shipped scripts: no regular expression with a space after return or =>', () => {
-	const files = [ 'luci-app-vantage/htdocs', 'luci-theme-vantage/htdocs' ].flatMap(d => scripts(path.join(ROOT, d)));
+	const files = [ 'luci-app-vantage/htdocs', 'luci-app-vantage-aps/htdocs', 'luci-theme-vantage/htdocs' ].flatMap(d => scripts(path.join(ROOT, d)));
 	const bad = [];
 	for (const f of files)
 		fs.readFileSync(f, 'utf8').split('\n').forEach((line, i) => {

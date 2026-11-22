@@ -10,7 +10,7 @@
    usage: node server.js --mirror <dir> [--port 8025] [--theme-dir <htdocs/luci-static/name>]
                          [--theme <name>] [--templates <ucode/template dir>] [--rootfs <dir>]
                          [--app-dir <package dir>]... [--keep-uniwrt] [--[no-]synthetic] [--demo]
-                         [--wired | --big] [--multiwan] [--fullvpn]
+                         [--wired | --big] [--multiwan] [--fullvpn] [--aps] [--wg]
                          [--lang <LuCI language, e.g. de or zh_Hans>] [--fixtures <dir>]...
 
    Pages are rendered like the device does: the dispatcher logic below
@@ -33,6 +33,15 @@
    --fullvpn gives the 'vpn' WireGuard interface a default route at the
    uplink's metric, a full-tunnel VPN the kernel prefers (fullvpn.js);
    with --wired, --big and --multiwan too.
+
+   --aps answers vantage.collector report with paired access points
+   (aps.js): two reporting, one offline. Without it that object is absent,
+   as on a device with none paired.
+
+   --wg answers luci.wireguard getWgInstances with two WireGuard tunnels
+   and their peers (wg.js). Without it that object is absent and LuCI's
+   group for it not held, as on a device without luci-proto-wireguard
+   (unless the recording or a --fixtures plugin has the object).
 
    --fixtures <dir> (repeatable) adds hand-written data for pages the
    recording lacks (fixtures.js): rpcd plugin stand-ins, uci configs, a small
@@ -71,6 +80,8 @@ const wired = require('./wired');
 const big = require('./big');
 const multiwan = require('./multiwan');
 const fullvpn = require('./fullvpn');
+const aps = require('./aps');
+const wg = require('./wg');
 
 /* ------------------------------------------------------------ arguments */
 
@@ -78,7 +89,7 @@ function parseArgs(argv) {
 	const o = { port: 8025, synthetic: true };
 	for (let i = 0; i < argv.length; i++) {
 		const m = /^--(mirror|port|theme-dir|theme|templates|rootfs|app-dir|lang|fixtures)(?:=(.*))?$/.exec(argv[i]);
-		if (!m) { if (argv[i] === '--keep-uniwrt') o.keepUniwrt = true; else if (argv[i] === '--synthetic') o.synthetic = true; else if (argv[i] === '--no-synthetic') o.synthetic = false; else if (argv[i] === '--demo') o.demo = true; else if (argv[i] === '--wired') o.wired = true; else if (argv[i] === '--big') o.big = true; else if (argv[i] === '--multiwan') o.multiwan = true; else if (argv[i] === '--fullvpn') o.fullvpn = true; else if (argv[i] === '-h' || argv[i] === '--help') o.help = true; else o.bad = argv[i]; continue; }
+		if (!m) { if (argv[i] === '--keep-uniwrt') o.keepUniwrt = true; else if (argv[i] === '--synthetic') o.synthetic = true; else if (argv[i] === '--no-synthetic') o.synthetic = false; else if (argv[i] === '--demo') o.demo = true; else if (argv[i] === '--wired') o.wired = true; else if (argv[i] === '--big') o.big = true; else if (argv[i] === '--multiwan') o.multiwan = true; else if (argv[i] === '--fullvpn') o.fullvpn = true; else if (argv[i] === '--aps') o.aps = true; else if (argv[i] === '--wg') o.wg = true; else if (argv[i] === '-h' || argv[i] === '--help') o.help = true; else o.bad = argv[i]; continue; }
 		const v = (m[2] !== undefined) ? m[2] : argv[++i];
 		if (m[1] === 'app-dir') (o.appDirs = o.appDirs || []).push(v);
 		else if (m[1] === 'fixtures') (o.fixtures = o.fixtures || []).push(v);
@@ -87,7 +98,7 @@ function parseArgs(argv) {
 	return o;
 }
 
-const USAGE = 'usage: server.js --mirror <dir> [--port 8025] [--theme-dir <htdocs/luci-static/name>] [--theme <name>] [--templates <dir>] [--rootfs <dir>] [--app-dir <pkg>]... [--keep-uniwrt] [--no-synthetic] [--demo] [--wired | --big] [--multiwan] [--fullvpn] [--lang <lang>] [--fixtures <dir>]...';
+const USAGE = 'usage: server.js --mirror <dir> [--port 8025] [--theme-dir <htdocs/luci-static/name>] [--theme <name>] [--templates <dir>] [--rootfs <dir>] [--app-dir <pkg>]... [--keep-uniwrt] [--no-synthetic] [--demo] [--wired | --big] [--multiwan] [--fullvpn] [--aps] [--wg] [--lang <lang>] [--fixtures <dir>]...';
 const opts = parseArgs(process.argv.slice(2));
 if (opts.help || opts.bad || !opts.mirror) {
 	console.error(opts.bad ? `unknown argument ${opts.bad}\n${USAGE}` : USAGE);
@@ -620,10 +631,27 @@ function ubusReply(msg) {
 		const devs = Array.isArray(all) && all[0] === 0 && all[1] && typeof all[1] === 'object' ? all[1] : null;
 		return Object.assign(reply, { result: devs && Object.prototype.hasOwnProperty.call(devs, args.name) ? [ 0, devs[args.name] ] : [ 4 ] });
 	}
+	/* luci-proto-wireguard, its rpcd object and its ACL group: there with
+	   --wg (wg.js answers the status call), or where the recording or a
+	   fixture's plugin has the object; else the group is not held and the
+	   object is absent, as on a device without the package */
+	if (!opts.wg && !store.plugins.has('luci.wireguard') && !store.objects.has('luci.wireguard')) {
+		if (object === 'session' && method === 'access' && args && args.scope === 'access-group' && args.object === 'luci-proto-wireguard')
+			return Object.assign(reply, { result: [ 0, { access: false } ] });
+		if (object === 'luci.wireguard')
+			return Object.assign(reply, { error: { code: -32000, message: 'Object not found' } });
+	}
+	if (opts.wg && object === 'luci.wireguard' && method === 'getWgInstances')
+		return Object.assign(reply, wg.transform(object, method, args, null));
+	/* the collector service runs only with an access point paired:
+	   without --aps the object is absent, as uhttpd answers one */
+	if (object === 'vantage.collector')
+		return Object.assign(reply, opts.aps ? aps.transform(object, method, args, null) : { error: { code: -32000, message: 'Object not found' } });
 	const r = store.call(object, method, args || {});
 	const dev = opts.wired ? wired.transform(object, method, args, r) : opts.big ? big.transform(object, method, args, r) : r;
 	const lines = opts.multiwan ? multiwan.transform(object, method, args, dev) : dev;
-	return Object.assign(reply, opts.fullvpn ? fullvpn.transform(object, method, args, lines) : lines);
+	const vpn = opts.fullvpn ? fullvpn.transform(object, method, args, lines) : lines;
+	return Object.assign(reply, opts.aps ? aps.transform(object, method, args, vpn) : vpn);
 }
 
 async function handleUbus(req, res) {
@@ -829,7 +857,6 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(port, '127.0.0.1', () => {
-	console.error(`[replay] http://127.0.0.1:${port}/  theme=${theme}${shellTheme ? ' (built-in shell templates)' : ''}`);
 	console.error(`[replay] templates: ${engine.roots.join(', ')}`);
 	console.error(`[replay] static: ${[ themeDir, ...appDirs.map(d => path.join(d, 'htdocs')), ...store.staticDirs, path.join(rootfs, 'www') ].filter(Boolean).join(', ')}`);
 	if (appDirs.length) console.error(`[replay] apps: ${appDirs.join(', ')} (menu: ${Object.keys(appMenu).join(', ') || 'none'})`);
@@ -839,4 +866,7 @@ server.listen(port, '127.0.0.1', () => {
 	if (store.plugins.size) console.error(`[replay] plugins: ${[ ...store.plugins.keys() ].join(', ')}`);
 	if (fixtures.dirs.length) console.error(`[replay] fixtures: ${fixtures.dirs.join(', ')} (${fixtures.pluginFiles().length} plugin files, ${fixtures.configs().length} uci configs, ${fixtures.exec.size} exec outputs)`);
 	if (preview) console.error(`[replay] language ${preview.code} (${preview.lc}): catalogues from ${preview.dirs.join(', ')} over the recorded one`);
+	/* the address comes last: whoever waits for it (the tests do) has every
+	   line above it */
+	console.error(`[replay] http://127.0.0.1:${port}/  theme=${theme}${shellTheme ? ' (built-in shell templates)' : ''}`);
 });

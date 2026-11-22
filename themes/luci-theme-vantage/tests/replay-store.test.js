@@ -216,3 +216,86 @@ test('--big: four radios, ten networks, 74 stations and six ports, one a switch 
 	assert.ok(macs.every(m => /^(00:00:5e:00:53|02:00:5e:[0-9a-f]{2}:[0-9a-f]{2}):[0-9a-f]{2}$/i.test(m)), 'documentation MACs');
 	assert.ok(Object.values(hints).every(h => h.ipaddrs.every(a => /^192\.0\.2\.\d+$/.test(a))), 'the recorded LAN\'s prefix');
 });
+
+/* the dashboard's Ports tile takes a device for a port when netifd calls it ethernet (or dsa) and its driver names
+   the link modes it supports, as every real port's does: the synthetic ports of the modes carry them */
+test('--wired, --multiwan, --big: the synthetic ports are ports to the dashboard (link modes), a VLAN and a bridge are not', () => {
+	const wired = require('../dev/replay/wired'), multiwan = require('../dev/replay/multiwan'), big = require('../dev/replay/big');
+	const model = require('./luci-stub').load('vantage.model');
+	const ok = data => ({ result: [ 0, data ] });
+	/* the recorded access point: a bridge of one Ethernet port and its Wi-Fi interfaces */
+	const modes = [ '10baseT-H', '10baseT-F', '100baseT-H', '100baseT-F', '1000baseT-F', '2500baseT-F' ];
+	const recorded = () => ok({ 'br-lan': { devtype: 'bridge', type: 'bridge', up: true, carrier: true, 'link-supported': [], 'bridge-members': [ 'eth0', 'phy0-ap0' ] },
+		eth0: { devtype: 'ethernet', up: true, carrier: true, speed: '2500F', 'link-supported': modes }, 'phy0-ap0': { up: true, carrier: true }, lo: { up: true, carrier: true } });
+	const ids = devs => model.ports(devs, {}, {}, [], [], []).map(p => p.id);
+	assert.deepEqual(ids(recorded().result[1]), [ 'eth0' ], 'as recorded: one port, no tile');
+	assert.deepEqual(wired.modes('1000F'), modes.slice(0, 5));
+	assert.deepEqual(wired.modes('2500F'), modes);
+	const w = wired.transform('network.device', 'status', {}, recorded()).result[1];
+	assert.deepEqual(ids(w), [ 'eth0', 'lan1', 'lan2' ]);
+	assert.deepEqual(ids(multiwan.transform('network.device', 'status', {}, recorded()).result[1]), [ 'eth0', 'eth9' ], 'a second line is a second port');
+	assert.deepEqual(ids(multiwan.transform('network.device', 'status', {}, ok(w)).result[1]), [ 'eth0', 'eth9', 'lan1', 'lan2' ]);
+	/* --big: five ports beside the uplink's, and switch0's four behind the VLAN eth1.1, which is no port itself */
+	const b = big.transform('network.device', 'status', {}, recorded()).result[1];
+	const reply = big.transform('luci.vantage', 'wired', {}, ok({ hosts: [] })).result[1];
+	const state = { switch0: big.transform('luci', 'getSwconfigPortState', { switch: 'switch0' }, { result: [ 4 ] }).result[1].result };
+	const ports = model.ports(b, reply.switches, state, big.NETS.map(n => n[0]), reply.hosts, []);
+	assert.deepEqual(ports.map(p => p.name), [ 'eth0', 'lan1', 'lan2', 'lan3', 'lan4', 'lan5', 'LAN 1', 'LAN 2', 'LAN 3', 'LAN 4' ]);
+	assert.deepEqual(ports.map(p => p.hosts), [ 1, 1, 1, 7, 1, 3, null, null, null, null ], 'three of the switch\'s ports have a link: whose the VLAN\'s hosts are is not known');
+	assert.deepEqual(ports.slice(6).map(p => p.link), [ false, true, true, true ]);
+	/* lan4, the port at 100 Mbit/s, counts receive errors that only grow; no other port counts any */
+	const errors = d => ports.map(p => p.sw ? 0 : d[p.id].statistics.rx_errors);
+	const first = errors(b), later = errors(big.transform('network.device', 'status', {}, recorded()).result[1]);
+	assert.ok(first[4] > 0 && later[4] >= first[4] && Number.isInteger(first[4]));
+	assert.deepEqual(first.filter((n, i) => i !== 4), [ 0, 0, 0, 0, 0, 0, 0, 0, 0 ]);
+	assert.equal(ports[4].counters.rxErrors, first[4]);
+});
+
+test('--wg: two WireGuard tunnels in the form LuCI\'s plugin gives; sessions and counters that move; documentation values only', () => {
+	const wg = require('../dev/replay/wg');
+	const model = require('./luci-stub').load('vantage.model');
+	const now = Math.floor(Date.now() / 1000);
+	const r = wg.transform('luci.wireguard', 'getWgInstances', {}, null);
+	assert.equal(r.result[0], 0);
+	const data = r.result[1];
+	assert.deepEqual(Object.keys(data), [ 'wg0', 'wg1' ]);
+	/* as `wg show all dump` split by tabs: every field text, "(none)" and "off" for nothing, no key but the public ones */
+	for (const [ name, t ] of Object.entries(data)) {
+		assert.deepEqual(Object.keys(t), [ 'name', 'public_key', 'listen_port', 'fwmark', 'peers' ]);
+		assert.deepEqual([ t.name, typeof t.listen_port, t.fwmark ], [ name, 'string', 'off' ]);
+		for (const p of t.peers) {
+			assert.deepEqual(Object.keys(p), [ 'name', 'public_key', 'endpoint', 'allowed_ips', 'latest_handshake', 'transfer_rx', 'transfer_tx', 'persistent_keepalive' ]);
+			for (const k of [ 'public_key', 'endpoint', 'latest_handshake', 'transfer_rx', 'transfer_tx', 'persistent_keepalive' ]) assert.equal(typeof p[k], 'string', k);
+			assert.match(p.public_key, /^[A-Za-z0-9+/]{43}=$/);
+			/* the plugin lists allowed IPs only beside an endpoint */
+			assert.equal(p.endpoint === '(none)', p.allowed_ips.length === 0);
+		}
+	}
+	assert.doesNotMatch(JSON.stringify(data), /private|preshared|psk/i);
+	/* what the dashboard makes of it: both tunnels, every state, a peer that goes by its key */
+	const t = model.wireguard(data, now);
+	assert.deepEqual(t.map(x => [ x.name, x.port, x.peers.length ]), [ [ 'wg0', 51820, 7 ], [ 'wg1', 51821, 1 ] ]);
+	assert.deepEqual(t[0].peers.map(p => p.state), [ 'recent', 'recent', 'recent', 'stale', 'stale', 'never', 'never' ]);
+	assert.deepEqual(t[0].peers.map(p => p.name), [ 'kitchen tablet', 'Mira phone', 'workshop laptop', 'Jonas phone', 'backup NAS at the cabin', 'guest laptop', '' ]);
+	assert.ok(t[0].peers.length > 5, 'more than a tunnel lists before "+n more"');
+	assert.equal(t[0].peers[6].label, t[0].peers[6].key);
+	assert.deepEqual([ t[1].peers[0].state, t[1].peers[0].keepalive, t[1].peers[0].endpoint ], [ 'recent', 25, '[2001:db8:51::1]:51820' ]);
+	/* a session makes a handshake every two minutes: never older than that, at any time */
+	for (const dt of [ 0, 59, 119, 120, 3601, 86400 ])
+		for (const x of model.wireguard(wg.instances(now + dt), now + dt)) for (const p of x.peers) if (p.state === 'recent') assert.ok(p.age < 120, p.label + ' +' + dt);
+	/* counters only grow, and where traffic flows they do */
+	const a = wg.instances(now), b = wg.instances(now + 10);
+	const num = (d, i, k) => +d.wg0.peers[i][k];
+	for (let i = 0; i < 7; i++) for (const k of [ 'transfer_rx', 'transfer_tx' ]) assert.ok(num(b, i, k) >= num(a, i, k) && Number.isSafeInteger(num(b, i, k)), i + ' ' + k);
+	assert.ok(num(b, 0, 'transfer_tx') > num(a, 0, 'transfer_tx') && num(b, 1, 'transfer_rx') > num(a, 1, 'transfer_rx'));
+	assert.deepEqual([ num(b, 2, 'transfer_rx') - num(a, 2, 'transfer_rx'), num(a, 5, 'transfer_rx'), num(a, 6, 'transfer_tx') ], [ 0, 0, 0 ], 'an idle session; peers that never came');
+	/* documentation addresses, keys that are a hash of a label */
+	const addrs = Object.values(data).flatMap(x => x.peers.flatMap(p => [ p.endpoint ].concat(p.allowed_ips))).filter(x => x !== '(none)');
+	assert.ok(addrs.length > 10 && addrs.every(x => /^\[?(192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|2001:db8:)/.test(x)), addrs.join(' '));
+	assert.equal(data.wg0.peers[0].public_key, wg.key('wg0 peer 0'));
+	/* the plugin's other methods and every other object are left as they are */
+	const ok = { result: [ 0, { x: 1 } ] }, nf = { result: [ 4 ] };
+	assert.equal(wg.transform('luci.wireguard', 'generateKeyPair', {}, nf), nf);
+	assert.equal(wg.transform('network.interface', 'dump', {}, ok), ok);
+	assert.equal(wg.transform('luci.vantage', 'getWgInstances', {}, ok), ok);
+});

@@ -43,6 +43,36 @@ test('fmt: bits, bytes, PHY rates, durations, placeholders for junk', () => {
 	assert.equal(fmt.macTail('nonsense'), '');
 });
 
+
+test('fmt: traffic reads in bytes when picked; link rates stay bitrates', () => {
+	try {
+		fmt.setSpeedUnits('bytes');
+		assert.equal(fmt.speedUnits(), 'bytes');
+		assert.equal(fmt.bits(8e6), '1 MB/s');
+		assert.equal(fmt.bits(372.3e6), '46.5 MB/s');
+		assert.equal(fmt.bits(12.34e3), '1.54 kB/s');
+		assert.equal(fmt.bits(800), '100 B/s');
+		assert.equal(fmt.bits(0), '0 B/s');
+		assert.equal(fmt.bits(-1), '—');
+		assert.equal(fmt.bits('x'), '—');
+		assert.equal(fmt.rates(12.3e6, 800), '↓ 1.54 MB/s  ↑ 100 B/s');
+		assert.equal(fmt.rates(0, 0), 'idle');
+		assert.deepEqual(fmt.rateParts(400e6, 1.6e9), { dn: '50.0', up: '200', unit: 'MB/s' }, 'one unit for both, as in bits');
+		assert.equal(fmt.phyRate(576400), '576 Mbit/s', 'a negotiated speed, not traffic');
+		fmt.setSpeedUnits('nibbles');
+		assert.equal(fmt.speedUnits(), 'bytes', 'an unknown unit changes nothing');
+	} finally {
+		fmt.setSpeedUnits('bits');
+	}
+	assert.equal(fmt.bits(8e6), '8 Mbit/s');
+});
+
+test('fmt.daysAgo: days for two months, months for two years, then full years', () => {
+	assert.deepEqual([ 0, 0.9, 1, 1.5, 2, 59, 60, 91, 365, 700, 730, 731, 1095, 1096, 4000 ].map(d => fmt.daysAgo(d)),
+		[ 'today', 'today', '1 day ago', '1 day ago', '2 days ago', '59 days ago', '2 months ago', '3 months ago', '12 months ago', '23 months ago', '24 months ago', '2 years ago', '2 years ago', '3 years ago', '10 years ago' ]);
+	for (const junk of [ -1, null, undefined, 'x', NaN ]) assert.equal(fmt.daysAgo(junk), '—', String(junk));
+});
+
 test('fmt.safeText: neutralises reordering characters, cuts by code point', () => {
 	assert.equal(fmt.safeText('abc\u202egnp', 64), 'abc�gnp');
 	assert.equal(fmt.safeText('\u200b', 64), '�');

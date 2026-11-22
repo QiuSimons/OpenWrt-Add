@@ -16,3 +16,8 @@ test('version: what the dashboard and the theme show is their Makefile\'s', () =
 	assert.equal(/^const VERSION = '([^']+)';/m.exec(read('luci-theme-vantage/htdocs/luci-static/resources/menu-vantage.js'))[1],
 		pkgVersion('luci-theme-vantage'), 'menu-vantage.js');
 });
+
+test('version: the three packages of a release carry one version', () => {
+	for (const pkg of [ 'luci-theme-vantage', 'luci-app-vantage-aps' ])
+		assert.equal(pkgVersion(pkg), pkgVersion('luci-app-vantage'), pkg);
+});

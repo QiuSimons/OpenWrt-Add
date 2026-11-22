@@ -15,7 +15,11 @@
      network.device status    the networks' and ports' counters (sums of
                               their stations' and hosts'); eth0 carries
                               most of it to the gateway; lan1..lan5 and
-                              eth1.1 are bridge members of br-lan
+                              eth1.1 are bridge members of br-lan. A port
+                              lists the link modes it supports (see
+                              wired.js), and lan4, at 100 Mbit/s, counts
+                              receive errors as a worn cable gives them
+                              (for the dashboard's Ports tile)
      luci.vantage wired       SYNTHETIC hosts on lan1..lan5 and eth1.1,
                               the gateway on eth0, and switch0's ports
                               behind eth1.1 (switches)
@@ -24,6 +28,8 @@
    The recorded LAN (the interface with the default route) gives the
    addresses their first three octets and the gateway's; documentation
    values otherwise. Added MACs and addresses are documentation ranges. */
+
+const { modes } = require('./wired');
 
 const RADIOS = [
 	{ id: 'radio0', band: '2g', channel: 1, htmode: 'HE20', freq: 2412, centre: 1, txpower: 20, noise: -92, phy: 'phy0', util: 150 },
@@ -101,7 +107,7 @@ const STATIONS = {
 /* wired ports of br-lan, after eth0 (the uplink) */
 const PORTS = [
 	{ dev: 'lan1', speed: '1000F' }, { dev: 'lan2', speed: '2500F' }, { dev: 'lan3', speed: '1000F' },
-	{ dev: 'lan4', speed: '100F' }, { dev: 'lan5', speed: '2500F' },
+	{ dev: 'lan4', speed: '100F', errors: true }, { dev: 'lan5', speed: '2500F' },
 	/* a VLAN on a swconfig switch: its speed is the CPU port's */
 	{ dev: 'eth1.1', speed: '10000F', devtype: 'vlan' }
 ];
@@ -275,6 +281,9 @@ function devices(recorded, t) {
 	PORTS.forEach(p => {
 		const s = sumBytes(HOSTS.filter(h => h.port === p.dev), t);
 		out[p.dev] = { external: false, present: true, type: 'Network device', devtype: p.devtype || 'ethernet', up: true, carrier: true, speed: p.speed, statistics: counters(s[0], s[1]) };
+		if (!p.devtype) out[p.dev]['link-supported'] = modes(p.speed);
+		/* one every two minutes, and a dozen from before the replay */
+		if (p.errors) out[p.dev].statistics.rx_errors = 12 + Math.floor(t / 120);
 	});
 	/* the uplink carries most of the stations' and hosts' traffic: from
 	   the gateway what goes to them, to it what they send */

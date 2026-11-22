@@ -272,4 +272,15 @@ function badCss(el, x, sheet, doc) {
 	RegExp('^' + x + '$'); // expect-violation
 	history.pushState(null, '', x); // expect-violation
 	history.replaceState(null, '', 'javascript:' + x); // expect-violation
+	var link = E('a', { 'href': L.url('admin') }, [ 'x' ]);
+	link.hostname = x.ip; // expect-violation
+	link['host'] = x; // expect-violation
+	var u2 = new URL(L.url('admin'), location.href);
+	u2.protocol = x; // expect-violation
+	window.location.hostname = x; // expect-violation
+	var link2 = E(`a`, { 'href': L.url('admin') }, [ 'x' ]);
+	link2.hostname = x; // expect-violation
+	var u3 = new window.URL(L.url('admin'), location.href);
+	u3.host = x; // expect-violation
+	location.pathname += x; // expect-violation
 }

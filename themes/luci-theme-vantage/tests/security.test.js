@@ -15,10 +15,10 @@ function run(script, args) {
 	return { status: r.status, out: (r.stdout || '') + (r.stderr || '') };
 }
 
-test('check_dom_sinks: self-test, and 0 violations and 0 suppressions in the app and the theme', () => {
+test('check_dom_sinks: self-test, and 0 violations and 0 suppressions in the app, the add-on and the theme', () => {
 	let r = run('check_dom_sinks.js', [ '--self-test' ]);
 	assert.equal(r.status, 0, r.out);
-	for (const dir of [ 'luci-app-vantage/htdocs', 'luci-theme-vantage/htdocs' ]) {
+	for (const dir of [ 'luci-app-vantage/htdocs', 'luci-app-vantage-aps/htdocs', 'luci-theme-vantage/htdocs' ]) {
 		r = run('check_dom_sinks.js', [ dir ]);
 		assert.equal(r.status, 0, r.out);
 		assert.match(r.out, / 0 violation\(s\), 0 dom-safe suppression\(s\), 0 error\(s\)/, dir);
@@ -28,7 +28,7 @@ test('check_dom_sinks: self-test, and 0 violations and 0 suppressions in the app
 test('check_private_addresses: self-test and a clean package, tests, docs, dev', () => {
 	let r = run('check_private_addresses.js', [ '--self-test' ]);
 	assert.equal(r.status, 0, r.out);
-	r = run('check_private_addresses.js', [ 'luci-app-vantage', 'tests', 'docs', 'dev', 'security-tests' ]);
+	r = run('check_private_addresses.js', [ 'luci-app-vantage', 'luci-app-vantage-aps', 'tests', 'docs', 'dev', 'security-tests' ]);
 	assert.equal(r.status, 0, r.out);
 	assert.match(r.out, / 0 finding\(s\)/);
 });

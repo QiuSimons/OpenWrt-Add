@@ -14,7 +14,7 @@ const { findings } = require('../security-tests/check_private_addresses.js');
 const { parseLuciLanguages } = require('../security-tests/verify_built_apk.js');
 
 /* package directory -> catalogue name (dev/i18n/update.sh CATALOGS) */
-const CATALOGS = { 'luci-app-vantage': 'vantage', 'luci-theme-vantage': 'vantage-theme' };
+const CATALOGS = { 'luci-app-vantage': 'vantage', 'luci-app-vantage-aps': 'vantage-aps', 'luci-theme-vantage': 'vantage-theme' };
 const LANGS = parseLuciLanguages(fs.readFileSync(path.join(ROOT, 'dev/i18n/luci-languages.mk'), 'utf8'), 'luci-languages.mk');
 
 /* every .pot and .po: [ repository-relative path, package, language or null ] */

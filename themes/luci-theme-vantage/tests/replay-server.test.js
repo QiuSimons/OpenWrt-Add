@@ -5,7 +5,7 @@
 
    Needs the private mirror ($VANTAGE_MIRROR or ../vantage-mirror) and a
    rootfs dump ($VANTAGE_ROOTFS or the server's default); skipped without
-   them. Listens on a free port in 8220-8239 on 127.0.0.1. */
+   them. Listens on a free port in 8230-8239 on 127.0.0.1. */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('child_process');
@@ -20,14 +20,19 @@ const ROOTFS = process.env.VANTAGE_ROOTFS || path.join(ROOT, '../vantage-rootfs'
 const ready = fs.existsSync(MIRROR) && fs.existsSync(path.join(ROOTFS, 'usr/share/ucode/luci/template/view.ut'));
 const skip = !ready && 'no mirror or rootfs dump';
 
+/* from a place of this process's own in the range: two runs side by side
+   would both find the first free port free, and one would talk to the
+   other's server. A range of its own too: replay-fixtures.test.js runs
+   beside this file and takes its port from 8221-8229 */
 async function freePort() {
-	for (let p = 8220; p <= 8239; p++) {
+	for (let i = 0; i < 10; i++) {
+		const p = 8230 + (process.pid + i) % 10;
 		const ok = await new Promise(res => {
 			const s = net.createServer().once('error', () => res(false)).listen(p, '127.0.0.1', () => s.close(() => res(true)));
 		});
 		if (ok) return p;
 	}
-	throw new Error('no free port in 8220-8239');
+	throw new Error('no free port in 8230-8239');
 }
 
 /* raw request, so Host / Origin can be anything */
@@ -114,6 +119,12 @@ test('replay server: host, origin, session, headers, escaping, logs', { skip, ti
 		assert.equal(dash[1].result[0], 0);
 		assert.equal(dash[2].result[0], 0);
 
+		/* without --wg there is no luci-proto-wireguard: its group is not held, its object absent (as uhttpd says it);
+		   the other groups are held as before */
+		const access = (group, id) => rpc(sid, 'session', 'access', { scope: 'access-group', object: group, function: 'read' }, id);
+		const nowg = JSON.parse((await req('POST', '/ubus/', { headers: JSONH, body: `[${access('luci-proto-wireguard', 1)},${access('luci-app-vantage', 2)},${rpc(sid, 'luci.wireguard', 'getWgInstances', {}, 3)},${rpc(sid, 'luci.wireguard', 'generateKeyPair', {}, 4)}]` })).body);
+		assert.deepEqual(nowg.map(r => r.result || r.error), [ [ 0, { access: false } ], [ 0, { access: true } ], { code: -32000, message: 'Object not found' }, { code: -32000, message: 'Object not found' } ]);
+
 		/* app plugin stand-ins (dev/replay/*-plugin.js) are loaded and answer */
 		for (const f of fs.readdirSync(path.join(ROOT, 'dev/replay')).filter(f => /-plugin\.js$/.test(f))) {
 			const mod = require(path.join(ROOT, 'dev/replay', f));
@@ -155,6 +166,37 @@ test('replay server: host, origin, session, headers, escaping, logs', { skip, ti
 		await new Promise(r => setTimeout(r, 200));
 		assert.doesNotMatch(log, /[\x00-\x08\x0b-\x1f\x7f-\x9f]/, 'no control characters in the log');
 		assert.match(log, /\\x1b\]0;T\\x07/);
+	}
+	finally {
+		srv.kill('SIGTERM');
+	}
+});
+
+/* --wg: LuCI's WireGuard status is there, for the session only, and its group held */
+test('replay server: --wg answers luci.wireguard getWgInstances with two tunnels', { skip, timeout: 60000 }, async () => {
+	const port = await freePort();
+	const srv = spawn(process.execPath, [ path.join(ROOT, 'dev/replay/server.js'), '--mirror', MIRROR, '--rootfs', ROOTFS, '--port', String(port),
+		'--app-dir', path.join(ROOT, 'luci-app-vantage'), '--demo', '--wg' ], { stdio: [ 'ignore', 'ignore', 'pipe' ] });
+	let log = '';
+	srv.stderr.on('data', d => { log += d; });
+	try {
+		for (let i = 0; i < 200 && !log.includes('[replay] http://'); i++) await new Promise(r => setTimeout(r, 50));
+		assert.match(log, /\[replay\] http:\/\//, log);
+		const login = await request(port, 'POST', '/cgi-bin/luci/', { headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: `http://127.0.0.1:${port}` }, body: 'luci_username=root&luci_password=x' });
+		const sid = login.headers['set-cookie'][0].split(';')[0].split('=')[1];
+		const call = async (s, object, method, args) => JSON.parse((await request(port, 'POST', '/ubus/', { headers: JSONH, body: rpc(s, object, method, args) })).body);
+		assert.deepEqual((await call(sid, 'session', 'access', { scope: 'access-group', object: 'luci-proto-wireguard', function: 'read' })).result, [ 0, { access: true } ]);
+		const r = await call(sid, 'luci.wireguard', 'getWgInstances');
+		assert.equal(r.result[0], 0);
+		assert.deepEqual(Object.keys(r.result[1]), [ 'wg0', 'wg1' ]);
+		assert.deepEqual(Object.values(r.result[1]).map(t => t.peers.length), [ 7, 1 ]);
+		/* a later call: the counters moved on */
+		await new Promise(res => setTimeout(res, 1100));
+		const later = await call(sid, 'luci.wireguard', 'getWgInstances');
+		assert.ok(+later.result[1].wg1.peers[0].transfer_rx > +r.result[1].wg1.peers[0].transfer_rx);
+		/* not without the login */
+		assert.equal((await call(ZERO, 'luci.wireguard', 'getWgInstances')).error.code, -32002);
+		assert.doesNotMatch(log, /unknown call[^\n]*luci\.wireguard\.getWgInstances/);
 	}
 	finally {
 		srv.kill('SIGTERM');

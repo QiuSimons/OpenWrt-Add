@@ -3,7 +3,7 @@
     "description": "Grant LuCI access to localClash rpcd helper methods",
     "read": {
       "ubus": {
-        "localclash": [ "status", "dashboard_config", "subscription_get", "subscription_schedule_get", "pool_capability_get", "pool_schedule_get", "custom_sites_get", "service_status", "bootstrap_logs", "task_status", "bootstrap_task_status", "boot_restore_status", "takeover_status", "takeover_logs", "core_update_check", "luci_update_check", "mcp_help", "one_click_update_preferences" ]
+        "localclash": [ "status", "dashboard_config", "subscription_get", "subscription_schedule_get", "pool_capability_get", "pool_schedule_get", "custom_sites_get", "service_status", "bootstrap_logs", "task_status", "bootstrap_task_status", "boot_restore_status", "takeover_status", "takeover_logs", "update_checks_start", "update_checks_status", "core_update_check", "luci_update_check", "mcp_help", "one_click_update_preferences" ]
       }
     },
     "write": {
@@ -16,6 +16,7 @@
           "subscription_schedule_set",
           "pool_capability_set_async",
           "pool_schedule_set",
+          "pool_schedule_set_async",
           "subscription_schedule_run_now",
           "custom_sites_transact",
           "custom_sites_transact_async",

@@ -192,6 +192,167 @@ test('palette layout without a query: headers only over categories of several ro
 	]);
 });
 
+/* the palette's functions for what a provider hands over (PALETTE_EVENT),
+   with the constants they read */
+function provided(name, ...deps) {
+	const consts = [ 'PROVIDED_KINDS', 'PROVIDED_MAX', 'PROVIDED_SCAN', 'PROVIDED_TEXT' ].map(c => {
+		const m = new RegExp('^const ' + c + ' = .*$', 'm').exec(src);
+		assert.ok(m, 'found ' + c);
+		return m[0];
+	}).join('\n');
+	const body = [ name ].concat(deps).map(n => {
+		const start = src.indexOf('function ' + n + '(');
+		assert.ok(start >= 0, 'found ' + n);
+		return src.slice(start, src.indexOf('\n}\n', start) + 3);
+	}).join('\n');
+	return new Function('window', consts + '\n' + body + '\nreturn ' + name + ';')({});
+}
+
+test('palette provider: only entries of the form are taken, eight a kind, and their text as it came', () => {
+	require('./luci-stub');
+	const check = provided('providedEntries', 'kindTitle');
+	let ran = 0;
+	const run = () => { ran++; };
+	const e = more => Object.assign({ kind: 'client', title: 'den-phone', detail: '192.0.2.22 · Harbor', words: '00:00:5e:00:53:22', run }, more);
+	const got = check([ e(), e({ kind: 'radio', title: '5 GHz · Wi-Fi 6', detail: 'Ch 36 · 80 MHz', words: undefined }),
+		e({ kind: 'ssid', title: 'Harbor', detail: undefined }), e({ kind: 'interface', title: 'lan' }) ]);
+	assert.deepEqual(got.map(x => [ x.kind, x.group, x.title, x.path, x.find ]), [
+		[ 'client', 'Clients', 'den-phone', '192.0.2.22 · Harbor', '192.0.2.22 · Harbor 00:00:5e:00:53:22' ],
+		[ 'radio', 'Radios', '5 GHz · Wi-Fi 6', 'Ch 36 · 80 MHz', 'Ch 36 · 80 MHz ' ],
+		[ 'ssid', 'Wireless networks', 'Harbor', '', ' 00:00:5e:00:53:22' ],
+		[ 'interface', 'Interfaces', 'lan', '192.0.2.22 · Harbor', '192.0.2.22 · Harbor 00:00:5e:00:53:22' ]
+	]);
+	/* nothing but these fields comes along: no page, no icon, no markup flag */
+	assert.deepEqual(Object.keys(check([ e({ segs: [ 'admin', 'x' ], icon: 'logout', href: 'https://example.net/', html: true }) ])[0]).sort(),
+		[ 'find', 'group', 'kind', 'path', 'run', 'title' ]);
+	got[0].run();
+	assert.equal(ran, 1);
+	/* markup is text to it: kept as it came, for a text node */
+	assert.equal(check([ e({ title: '<img src=x onerror=alert(1)>' }) ])[0].title, '<img src=x onerror=alert(1)>');
+
+	/* not of the form: dropped, one by one */
+	for (const bad of [ null, 'den-phone', 7, [ 'client' ], e({ kind: 'page' }), e({ kind: 'constructor' }), e({ kind: [ 'client' ] }), e({ kind: undefined }),
+		e({ title: '' }), e({ title: '   ' }), e({ title: 7 }), e({ title: null }), e({ title: [ 'den' ] }), e({ title: 'x'.repeat(129) }),
+		e({ detail: 7 }), e({ detail: {} }), e({ detail: 'x'.repeat(129) }), e({ words: [ 'a' ] }), e({ words: 'x'.repeat(513) }),
+		e({ run: 'alert(1)' }), e({ run: null }), e({ run: undefined }) ])
+		assert.deepEqual(check([ bad ]), [], JSON.stringify(bad));
+	assert.equal(check([ e({ title: 'x'.repeat(128), detail: 'y'.repeat(128), words: 'z'.repeat(512) }) ]).length, 1, 'at the bounds');
+	for (const bad of [ null, undefined, 'clients', { length: 3 }, e() ]) assert.deepEqual(check(bad), [], 'not a list');
+
+	/* eight of a kind, of the first 64 looked at */
+	const many = [];
+	for (let i = 0; i < 20; i++) many.push(e({ title: 'c' + i }), e({ kind: 'radio', title: 'r' + i }));
+	const cut = check(many);
+	assert.deepEqual(cut.filter(x => x.kind === 'client').map(x => x.title), [ 'c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7' ]);
+	assert.equal(cut.filter(x => x.kind === 'radio').length, 8);
+	assert.equal(check(new Array(64).fill({}).concat(e())).length, 0, 'past the first 64: not looked at');
+	assert.equal(check(new Array(63).fill({}).concat(e())).length, 1);
+
+	/* what an entry's function throws stays with it */
+	const noisy = check([ e({ run: () => { throw new Error('gone'); } }) ])[0];
+	assert.doesNotThrow(() => noisy.run());
+});
+
+test('palette provider: entries rank as pages do, by their name first, else by their second text and words', () => {
+	require('./luci-stub');
+	const rank = provided('rankPalette', 'fuzzy', 'pathScore');
+	const check = provided('providedEntries', 'kindTitle');
+	const run = () => {};
+	const pool = check([
+		{ kind: 'client', title: 'den-phone', detail: '192.0.2.22 · Harbor-5G · via ap-den', words: '02:00:5e:20:00:12 2001:db8::22', run },
+		{ kind: 'client', title: 'living-tv', detail: '192.0.2.31 · Harbor-5G', words: '00:00:5e:00:53:31', run },
+		{ kind: 'client', title: 'Private device 53:0F', detail: '00:00:5E:00:53:0F · Harbor', words: '00:00:5e:00:53:0f', run }
+	]);
+	const titles = q => rank(q, pool).map(x => x.e.title);
+	/* the fuzzy match of titles: "tv" as a word before its letters scattered */
+	assert.deepEqual(titles('tv'), [ 'living-tv', 'Private device 53:0F' ]);
+	assert.deepEqual(titles('living'), [ 'living-tv' ]);
+	assert.ok(rank('tv', pool)[0].idx.length, 'a name match carries its highlight');
+	assert.deepEqual(titles('53:31'), [ 'living-tv' ], 'a MAC fragment, from the words');
+	assert.deepEqual(rank('53:31', pool)[0].idx, [], 'nothing of the name to highlight');
+	assert.deepEqual(titles('192.0.2.22'), [ 'den-phone' ], 'an address, from the second text');
+	assert.deepEqual(titles('2001:db8::22'), [ 'den-phone' ]);
+	assert.deepEqual(titles('ap-den'), [ 'den-phone' ], 'its access point');
+	assert.deepEqual(titles('53:0f'), [ 'Private device 53:0F' ], 'the name first, whatever case');
+	assert.deepEqual(titles('harbor-5g'), [ 'den-phone', 'living-tv' ]);
+	assert.deepEqual(titles('zzz'), []);
+	/* several words: the query as typed, or each starting a word; "6" does not start 36 */
+	const radios = check([
+		{ kind: 'radio', title: '2.4 GHz · Wi-Fi 6', detail: 'Ch 6 · 20 MHz', words: 'radio0 HE20 Channel 6', run },
+		{ kind: 'radio', title: '5 GHz · Wi-Fi 6', detail: 'Ch 36 · 80 MHz', words: 'radio1 HE80 Channel 36', run }
+	]);
+	assert.deepEqual(rank('ch 6', radios).map(x => x.e.path), [ 'Ch 6 · 20 MHz' ]);
+	assert.deepEqual(rank('channel 36', radios).map(x => x.e.path), [ 'Ch 36 · 80 MHz' ]);
+	assert.deepEqual(rank('5 GHz', radios).map(x => x.e.path), [ 'Ch 36 · 80 MHz' ]);
+	assert.deepEqual(rank('radio0', radios).map(x => x.e.path), [ 'Ch 6 · 20 MHz' ]);
+	assert.equal(rank('6', radios).length, 2, 'both are Wi-Fi 6 by name: the names decide, as for pages');
+	/* a page beside them is ranked as ever: its path, not a `find` */
+	assert.deepEqual(rank('net', pool.concat({ title: 'Wireless', path: 'Network', segs: [ 'admin', 'network', 'wireless' ] })).map(x => x.e.title), [ 'Wireless' ]);
+});
+
+test('palette with a query: each kind under its header, the part with the best match first, the pages on a tie', () => {
+	require('./luci-stub');
+	const sections = provided('paletteSections', 'rankPalette', 'fuzzy', 'pathScore');
+	const rank = provided('rankPalette', 'fuzzy', 'pathScore');
+	const check = provided('providedEntries', 'kindTitle');
+	const run = () => {};
+	const pages = [
+		{ title: 'Wireless', path: 'Network', segs: [ 'admin', 'network', 'wireless' ] },
+		{ title: 'Channel Analysis', path: 'Status', segs: [ 'admin', 'status', 'channel_analysis' ] },
+		{ title: 'Interfaces', path: 'Network', segs: [ 'admin', 'network', 'network' ] }
+	];
+	const got = check([
+		{ kind: 'client', title: 'ap-den', detail: '192.0.2.11 · lan', run },
+		{ kind: 'client', title: 'living-tv', detail: '192.0.2.31 · Wireless-Guest', run },
+		{ kind: 'ssid', title: 'Wireless-Guest', detail: '5 GHz · 1 client', run },
+		{ kind: 'ssid', title: 'Wireless', detail: '5 GHz · 3 clients', run },
+		{ kind: 'interface', title: 'lan', detail: '192.0.2.1 · static', run }
+	]);
+	const rows = q => sections(q, rank(q, pages), got, 'Pages and actions').map(x => (x.head ? '# ' + x.head + ' | ' : '') + x.r.e.title + ' | ' + x.path);
+	/* the interface named so, before the page it only scatters over; the
+	   pages then say what they are; clients on that network last */
+	assert.deepEqual(rows('lan'), [
+		'# Interfaces | lan | 192.0.2.1 · static',
+		'# Pages and actions | Channel Analysis | Status',
+		'# Clients | ap-den | 192.0.2.11 · lan'
+	]);
+	/* a page and a network of one name: the page leads, without a header, as it does alone */
+	assert.deepEqual(rows('wireless'), [
+		'Wireless | Network',
+		'# Wireless networks | Wireless | 5 GHz · 3 clients',
+		'Wireless-Guest | 5 GHz · 1 client',
+		'# Clients | living-tv | 192.0.2.31 · Wireless-Guest'
+	]);
+	/* nothing from a provider: as before */
+	assert.deepEqual(sections('wire', rank('wire', pages), [], 'Pages and actions').map(x => [ x.head, x.r.e.title, x.path ]), [ [ null, 'Wireless', 'Network' ] ]);
+	/* no page: the kinds alone */
+	assert.deepEqual(rows('192.0.2.31'), [ '# Clients | living-tv | 192.0.2.31 · Wireless-Guest' ]);
+	assert.deepEqual(rows('zzz'), []);
+});
+
+test('palette layout without a query: a provider\'s kind always has its header, and its second text stays whole', () => {
+	require('./luci-stub');
+	const layout = fn('paletteLayout');
+	const check = provided('providedEntries', 'kindTitle');
+	const run = () => {};
+	const r = e => ({ e, idx: [] });
+	const rows = layout([
+		r({ title: 'Dashboard', path: '', group: 'Dashboard' }),
+		r({ title: 'Log out', path: 'Session', group: 'Actions' })
+	].concat(check([
+		{ kind: 'client', title: 'den-phone', detail: 'Clients › 192.0.2.22', run },
+		{ kind: 'client', title: 'living-tv', detail: 'Clients', run },
+		{ kind: 'radio', title: '5 GHz · Wi-Fi 6', detail: 'Ch 36 · 80 MHz', run }
+	]).map(r)));
+	assert.deepEqual(rows.map(x => [ x.head, x.r.e.title, x.path ]), [
+		[ null, 'Dashboard', '' ],
+		[ null, 'Log out', 'Session' ],
+		[ 'Clients', 'den-phone', 'Clients › 192.0.2.22' ],
+		[ null, 'living-tv', 'Clients' ],
+		[ 'Radios', '5 GHz · Wi-Fi 6', 'Ch 36 · 80 MHz' ]       /* one row, and still headed */
+	]);
+});
+
 test('channel analysis: a row or hump is ours by BSSID only', () => {
 	assert.doesNotMatch(src, /Local Interface'/, 'no SSID-text match (a neighbour can broadcast that SSID)');
 	assert.match(src, /const mine = own\.has\(bssid\);/);
@@ -352,8 +513,9 @@ test('Appearance: the templates and the login page read the same keys, in the sa
 	const table = /\nconst LOOK = (\{[\s\S]*?\n\});\n/.exec(src);
 	assert.ok(table, 'found LOOK');
 	const LOOK = new Function('THEME_KEY', 'LOGIN_KEY', 'BACKDROP_KEY', 'return ' + table[1])('vantage.theme', 'vantage.login', 'vantage.backdrop.v1');
-	assert.deepEqual(Object.keys(LOOK), [ 'theme', 'login', 'backdrop', 'power', 'unfocused', 'brand' ]);
+	assert.deepEqual(Object.keys(LOOK), [ 'theme', 'login', 'backdrop', 'power', 'unfocused', 'brand', 'units' ]);
 	assert.ok(header.includes("look('brand', [ 'none', 'hostname', 'model' ])"), 'the template keeps the same brand values');
+	assert.ok(header.includes("look('units', [ 'bits', 'bytes' ])"), 'the template keeps the same units values');
 	assert.ok(header.includes("look('theme', 'vantage.theme.own', 'vantage.theme', [ 'auto', 'light', 'dark' ])"));
 	assert.ok(header.includes("look('backdrop', 'vantage.backdrop.own', 'vantage.backdrop.v1', [ 'grid', 'stars', 'none' ])"));
 	assert.ok(header.includes("look('power', 'vantage.power.own', 'vantage.power', [ 'normal', 'low' ])"));
@@ -375,6 +537,17 @@ test('Appearance: the templates and the login page read the same keys, in the sa
 	assert.equal(src.split('this.applyUnfocused();').length, 3, 'applied when the page opens and when another tab picks');
 	assert.ok(src.includes("else if (name === 'unfocused') root.setAttribute('data-vt-look-unfocused', value);"), 'a saved pick becomes the page\'s');
 	assert.equal(src.split("'vt-unfocused': 'unfocused'").length, 2, 'a failed save can be tried again');
+	assert.equal(src.split("'vt-units': 'units'").length, 2, 'Speed units too');
+	/* Speed units: handed over like the others, and the dashboard hears a pick */
+	assert.ok(header.includes("look('units', 'vantage.units.own', 'vantage.units', [ 'bits', 'bytes' ])"), 'this browser\'s pick, before the first paint');
+	assert.ok(!/units/.test(login) && !/units/.test(loginJs), 'the login page has no use for it');
+	assert.equal(src.split('this.applyUnits();').length, 3, 'applied when the page opens and when another tab picks');
+	assert.ok(src.includes("else if (name === 'units') root.setAttribute('data-vt-look-units', value);"), 'a saved pick becomes the page\'s');
+	assert.ok(src.includes("'vt-units': this.unitsPref()"), 'the panel shows the pick in force');
+	assert.ok(src.includes("this.root.setAttribute('data-vt-units', v);\n\t\t\twindow.dispatchEvent(new CustomEvent(UNITS_EVENT));"), 'and tells the dashboard');
+	assert.ok(src.includes("const UNITS_EVENT = 'vantage:units';"));
+	assert.ok(src.indexOf('this.backdropGroup(),') < src.indexOf("this.appearGroup('vt-units'") && src.indexOf("this.appearGroup('vt-units'") < src.indexOf("this.appearGroup('vt-power'"),
+		'Speed units sits between the network path\'s background and Low-power router');
 	assert.ok(src.includes("'vt-unfocused': this.unfocusedPref()"), 'the panel shows the pick in force');
 	for (const [ name, k ] of Object.entries(LOOK)) {
 		assert.match(k.own, /^vantage\.[a-z]+\.own$/, name);
@@ -386,6 +559,7 @@ test('Appearance: the templates and the login page read the same keys, in the sa
 	assert.deepEqual(LOOK.power.ok, [ 'normal', 'low' ], 'Low-power router is off unless picked');
 	assert.deepEqual(LOOK.unfocused.ok, [ 'still', 'moving' ], 'nothing moves without the focus unless picked');
 	assert.deepEqual(LOOK.brand.ok, [ 'none', 'hostname', 'model' ], 'nothing next to the logo unless picked');
+	assert.deepEqual(LOOK.units.ok, [ 'bits', 'bytes' ], 'traffic reads in bits unless picked');
 	assert.ok(!login.includes('vt-look-brand'), 'the login page shows no device name');
 	/* saved in config vantage_theme, section appearance, and nowhere else */
 	assert.deepEqual([ ...src.matchAll(/callLook(?:Set|Commit|Revert)\(([^)]*?)[,)]/g) ].map(m => m[1]), [ "'vantage_theme'", "'vantage_theme'", "'vantage_theme'", "'vantage_theme'" ]);
@@ -407,10 +581,11 @@ test('Customize: the theme, the template and the dashboard keep the same chart s
 	const form = /const VIEW_LAYOUT = (\/.*\/);/.exec(src)[1];
 	assert.ok(header.includes(`const form = ${form};`) && header.includes('match(v, form)'), 'the template reads what the theme writes');
 	const re = new Function('return ' + form)();
-	/* every tile of every default layout, shown and hidden, fits the form and comes back */
+	/* every tile of every default layout, shown and hidden, fits the form and comes back:
+	   without and with the WireGuard tile, without and with the Ports tile */
 	for (const tier of [ 'wide', 'mid', 'narrow' ]) for (const wired of [ false, true ]) {
-		for (const hide of [ false, true ]) {
-			const list = layout.compact(layout.defaults(tier, wired).map(e => Object.assign({}, e, { hide })));
+		for (const hide of [ false, true ]) for (const wg of [ false, true ]) for (const ports of [ false, true ]) {
+			const list = layout.compact(layout.defaults(tier, wired, wg, ports).map(e => Object.assign({}, e, { hide })));
 			const text = layout.encode(list);
 			assert.match(text, re, text);
 			const k = layout.key(tier, wired), opt = layout.option(k);
@@ -421,6 +596,15 @@ test('Customize: the theme, the template and the dashboard keep the same chart s
 	}
 	/* the longest tile name still fits */
 	for (const id of layout.TILES) assert.match(`${id}:0:1`, re, id);
+	/* a layout holds twelve entries: the nine tiles there are, and room for three more before the form must grow again */
+	const all = layout.defaults('wide', false, true, true);
+	assert.equal(all.length, layout.TILES.length);
+	assert.ok(layout.TILES.length <= 12, 'a tile more than the form takes: widen VIEW_LAYOUT and the template\'s form together');
+	const entries = n => Array.from({ length: n }, (x, i) => i < all.length ? layout.encode([ all[i] ]) : 'hero:0:1:h').join(' ');
+	for (let n = 1; n <= 12; n++) assert.match(entries(n), re, n + ' entries');
+	assert.doesNotMatch(entries(13), re, 'a thirteenth entry is no layout');
+	assert.doesNotMatch(entries(12) + ' ', re);
+	assert.ok(form.endsWith('){0,11})$/'), 'one entry and up to eleven more');
 	/* a failed save can be done again: only one under way stops a repeat */
 	assert.match(src, /pending\[name\] === value && !failed\[name\]/);
 	assert.match(src, /'click', \(\) => \{ if \(input\.checked && \(this\.lookFailed \|\| \{\}\)\[look\]\) set\(o\[0\]\)/);
@@ -463,7 +647,8 @@ test('update check: reads the theme\'s version from the package list, compares, 
 	assert.ok(!newer('1.0.16', '1.0.16'));
 	assert.ok(!newer('1.0.16', '1.0.16.2'), 'a test build ahead of the release');
 	assert.ok(newer('1.0.16.1', '1.0.16'));
-	/* one request, to the constant URL, from the click handler only; nothing else leaves for the internet */
+	/* one request, to the constant URL, from the click handler or, where it is on, the daily check
+	   (below); nothing else leaves for the internet */
 	assert.equal(src.split('fetch(UPDATE_INDEX,').length - 1, 1);
 	assert.match(src, /const UPDATE_INDEX = 'https:\/\/anothadev\.github\.io\/luci-theme-vantage\/24\.10\/Packages';/);
 	assert.match(src, /fetch\(UPDATE_INDEX, \{ cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer'/);
@@ -472,6 +657,447 @@ test('update check: reads the theme\'s version from the package list, compares, 
 	assert.deepEqual([ ...src.matchAll(/fetch\(([^,)]+)/g) ].map(m => m[1]).filter(a => !/^L\.resource\(/.test(a)), [ 'UPDATE_INDEX' ]);
 	/* the link is a constant: nothing from the list reaches an attribute */
 	assert.match(src, /'href': 'https:\/\/github\.com\/anothaDev\/luci-theme-vantage\/releases\/latest',/);
+});
+
+/* The daily check (#133): menu-vantage.js whole, as LuCI evaluates it, on a
+   browser just big enough for it. `store` is this browser's localStorage and
+   outlives a page; page() is one page load, up to its idle time. */
+function updateBrowser(store) {
+	require('./luci-stub');      /* String.prototype.format */
+	const DAY = 24 * 3600 * 1000;
+	const b = { store: store || {}, now: 1700000000000, asked: [], saved: [], list: null, size: null, read: 0, full: false, visible: true, auth: true, idle: true, DAY };
+	const text = t => ({ nodeType: 3, data: String(t) });
+	const E = (tag, attrs, kids) => {
+		const el = {
+			tagName: tag.toUpperCase(), attrs: {}, children: [], listeners: {}, hidden: false, checked: false,
+			setAttribute(k, v) { if (k === 'hidden') this.hidden = true; else this.attrs[k] = String(v); },
+			getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; },
+			hasAttribute(k) { return k in this.attrs; },
+			removeAttribute(k) { delete this.attrs[k]; },
+			toggleAttribute(k, on) { if (on) this.attrs[k] = ''; else delete this.attrs[k]; },
+			appendChild(c) { this.children.push(c); return c; },
+			addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); },
+			fire(t) { (this.listeners[t] || []).forEach(f => f({ type: t, target: this })); },
+			all() { return this.children.filter(c => c.tagName).reduce((a, c) => a.concat(c, c.all()), []); },
+			get textContent() { return this.children.map(c => c.nodeType === 3 ? c.data : c.textContent).join(''); },
+			set textContent(v) { this.children = v ? [ text(v) ] : []; }
+		};
+		for (const [ k, v ] of Object.entries(attrs || {})) el.setAttribute(k, v);
+		for (const c of [].concat(kids == null ? [] : kids)) if (c !== '') el.appendChild(typeof c === 'object' ? c : text(c));
+		return el;
+	};
+	const localStorage = {
+		getItem: k => (Object.prototype.hasOwnProperty.call(b.store, k) ? b.store[k] : null),
+		/* b.full: a browser whose storage takes no more */
+		setItem: (k, v) => { if (b.full) throw new Error('QuotaExceededError'); b.store[k] = String(v); },
+		removeItem: k => { delete b.store[k]; }
+	};
+	/* the list: a string answers 200 with it, a number is that HTTP status, null no answer at all;
+	   b.size: the length its host says it has (Content-Length), b.read: how often its text was taken */
+	const fetch = (url, opts) => {
+		b.asked.push({ url, opts });
+		if (b.list == null) return Promise.reject(new TypeError('Failed to fetch'));
+		const headers = { get: k => (String(k).toLowerCase() === 'content-length' && b.size != null ? String(b.size) : null) };
+		return Promise.resolve(typeof b.list === 'number' ? { ok: false, status: b.list, headers } : { ok: true, status: 200, headers, text: () => { b.read++; return Promise.resolve(b.list); } });
+	};
+	const rpc = { declare: spec => (...args) => { b.saved.push([ spec.object, spec.method ].concat(args)); return Promise.resolve({}); } };
+	b.settle = async () => { for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r)); };
+	b.page = async save => {
+		const idle = [], timers = [];
+		const gear = E('button', { 'id': 'vt-look', 'aria-label': 'Appearance', 'title': 'Appearance' });
+		const heard = {};
+		const document = {
+			visibilityState: b.visible ? 'visible' : 'hidden',
+			body: { classList: { contains: c => c === (b.auth ? 'vt-auth' : 'vt-login-page') } },
+			getElementById: id => (id === 'vt-look' ? gear : null),
+			createTextNode: text,
+			addEventListener: (t, f) => { (heard[t] = heard[t] || []).push(f); }
+		};
+		const window = b.idle ? { requestIdleCallback: f => { idle.push(f); } } : {};
+		const proto = new Function('baseclass', 'ui', 'rpc', 'host', 'E', 'L', '_', 'document', 'window', 'localStorage', 'fetch', 'Date', 'setTimeout', 'clearTimeout', src)(
+			{ extend: x => x }, {}, rpc, {}, E, {}, t => t, document, window, localStorage, fetch, { now: () => b.now }, (f, ms) => { timers.push({ f, ms }); return timers.length; }, () => {});
+		const root = E('html', { 'data-vt-look-save': save || 'no' });
+		const shell = Object.assign(Object.create(proto), { root });
+		/* what __init__ does for it (setupTheme's last line, then setupUpdate) */
+		shell.applyUpdate();
+		shell.setupUpdate();
+		const page = { shell, gear, timers, line: null, waiting: idle.length + timers.length };
+		/* the tab comes into view, or goes out of it */
+		page.show = async on => { document.visibilityState = on ? 'visible' : 'hidden'; (heard.visibilitychange || []).forEach(f => f()); await b.settle(); };
+		/* the browser reaches its idle time */
+		idle.splice(0).forEach(f => f());
+		await b.settle();
+		/* Appearance's last line and the daily check's group, as appearanceEl builds them */
+		page.open = () => { const ver = shell.versionEl(), set = shell.updateGroup(); page.line = ver.children[3]; page.check = ver.children[2]; page.set = set; return page; };
+		page.dot = () => gear.hasAttribute('data-vt-update');
+		page.pick = v => { const r = page.set.all().find(e => e.tagName === 'INPUT' && e.attrs.value === v); r.checked = true; r.fire('change'); };
+		return page;
+	};
+	b.packages = v => [ 'Package: luci-app-vantage', 'Version: 9.9.9-r1', '', 'Package: luci-theme-vantage', 'Version: ' + v, 'Depends: luci-base', '' ].join('\n');
+	b.last = () => (b.store['vantage.update.last'] ? JSON.parse(b.store['vantage.update.last']) : null);
+	return b;
+}
+/* versions around the one the theme has, whatever a release makes it */
+const RUNNING = /^const VERSION = '([^']+)';/m.exec(src)[1];
+const [ MAJOR, MINOR ] = RUNNING.split('.').map(Number);
+const NEWER = [ MAJOR, MINOR + 1, 0 ].join('.'), OLDER = [ MAJOR - 1, 9999, 9999 ].join('.');
+
+test('daily update check: off unless picked, and silent: nothing asked, nothing kept, no dot', async () => {
+	const b = updateBrowser();
+	b.list = b.packages(NEWER + '-r1');
+	const p = await b.page();
+	assert.equal(p.waiting, 0, 'nothing waits for the idle time');
+	assert.equal(b.asked.length, 0);
+	assert.deepEqual(b.store, {}, 'nothing written');
+	assert.ok(!p.dot());
+	assert.equal(p.gear.getAttribute('aria-label'), 'Appearance');
+	assert.equal(p.shell.updatePref(), 'off');
+	/* only the word 'on' switches it on */
+	for (const odd of [ 'On', '1', 'true', 'yes', ' on', '' ]) {
+		const o = updateBrowser({ 'vantage.update.auto': odd });
+		o.list = o.packages(NEWER);
+		await o.page();
+		assert.equal(o.asked.length, 0, JSON.stringify(odd));
+	}
+	/* a result left behind by an earlier pick tells nothing while it is off */
+	const left = updateBrowser({ 'vantage.update.last': JSON.stringify({ at: 1700000000000, latest: NEWER }) });
+	assert.ok(!(await left.page()).dot());
+	assert.equal(left.asked.length, 0);
+	/* the manual check still works as before, and keeps nothing */
+	p.open();
+	p.check.fire('click');
+	await b.settle();
+	assert.equal(b.asked.length, 1, 'asked on the click');
+	assert.equal(p.line.textContent, 'Version ' + NEWER + ' is available. What\'s new');
+	assert.deepEqual(b.store, {}, 'off: the answer is not kept');
+	assert.ok(!p.dot(), 'off: no dot');
+});
+
+test('daily update check: on, one request in 24 hours, whatever pages load', async () => {
+	const b = updateBrowser({ 'vantage.update.auto': 'on' });
+	b.list = b.packages(RUNNING + '-r1');
+	const t0 = b.now;
+	await b.page();
+	assert.equal(b.asked.length, 1, 'the first page asks');
+	/* the manual check's request, to the letter: no cookies, no referrer, one URL */
+	assert.equal(b.asked[0].url, 'https://anothadev.github.io/luci-theme-vantage/24.10/Packages');
+	assert.deepEqual(b.asked[0].opts, { cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer', signal: undefined });
+	assert.deepEqual(b.last(), { at: t0, latest: RUNNING }, 'the time and what the list had');
+	for (const later of [ 0, 1000, 3600 * 1000, b.DAY - 1 ]) {
+		b.now = t0 + later;
+		await b.page();
+		assert.equal(b.asked.length, 1, 'no second request after ' + later + ' ms');
+	}
+	b.now = t0 + b.DAY;
+	await b.page();
+	assert.equal(b.asked.length, 2, 'a day later: the next one');
+	assert.equal(b.last().at, t0 + b.DAY);
+	/* two pages at once: the try is written down before the answer comes */
+	const two = updateBrowser({ 'vantage.update.auto': 'on' });
+	two.list = two.packages(NEWER);
+	await Promise.all([ two.page(), two.page() ]);
+	assert.equal(two.asked.length, 1, 'the second page finds the first one\'s try');
+	/* a clock set back: a try dated ahead of it does not hold the check off for ever */
+	b.now = t0 - 5 * b.DAY;
+	await b.page();
+	assert.equal(b.asked.length, 3);
+	/* a browser without requestIdleCallback waits two seconds instead, and asks the same */
+	const old = updateBrowser({ 'vantage.update.auto': 'on' });
+	old.list = old.packages(NEWER);
+	old.idle = false;
+	const p = await old.page();
+	assert.equal(old.asked.length, 0, 'not while the page loads');
+	assert.deepEqual(p.timers.map(t => t.ms), [ 2000 ]);
+	p.timers[0].f();
+	await old.settle();
+	assert.equal(old.asked.length, 1);
+	/* the page-load call sites: applied with the theme, checked from __init__ only */
+	assert.match(src, /\t\tthis\.loadHost\(\);\n\t\tthis\.setupUpdate\(\);\n/);
+	assert.equal(src.split('this.setupUpdate()').length - 1, 1);
+	assert.equal(src.split('this.dailyCheck()').length - 1, 3, 'from the idle callback or its timer, and when the tab comes into view');
+	assert.equal(src.split('askLatest(').length - 1, 3, 'defined once; the manual check and the daily one ask through it');
+	assert.match(src, /const UPDATE_EVERY = 24 \* 3600 \* 1000;/);
+});
+
+test('daily update check: nothing asked from a hidden tab or the login page', async () => {
+	const hidden = updateBrowser({ 'vantage.update.auto': 'on' });
+	hidden.list = hidden.packages(NEWER);
+	hidden.visible = false;
+	await hidden.page();
+	assert.equal(hidden.asked.length, 0, 'hidden tab');
+	assert.equal(hidden.last(), null, 'and no try counted: the next page in view asks');
+	hidden.visible = true;
+	await hidden.page();
+	assert.equal(hidden.asked.length, 1);
+
+	const anon = updateBrowser({ 'vantage.update.auto': 'on' });
+	anon.list = anon.packages(NEWER);
+	anon.auth = false;
+	await anon.page();
+	assert.equal(anon.asked.length, 0, 'a page without a login');
+	/* the login page itself: its template and script load no menu script and read nothing of the check */
+	const T = path.join(__dirname, '..', 'luci-theme-vantage');
+	const login = fs.readFileSync(path.join(T, 'ucode/template/themes/vantage/sysauth.ut'), 'utf8');
+	const loginJs = fs.readFileSync(path.join(T, 'htdocs/luci-static/vantage/login.js'), 'utf8');
+	const footer = fs.readFileSync(path.join(T, 'ucode/template/themes/vantage/footer.ut'), 'utf8');
+	for (const [ name, body ] of [ [ 'sysauth.ut', login ], [ 'login.js', loginJs ] ])
+		assert.doesNotMatch(body, /vantage\.update|vt-update|L\.require|fetch\(|XMLHttpRequest/, name);
+	assert.ok(!login.includes('menu-vantage'), 'the login page loads no menu script');
+	assert.deepEqual([ ...(login + loginJs).matchAll(/localStorage\.getItem\('([^']+)'\)/g) ].map(m => m[1]).sort(),
+		[ 'vantage.login', 'vantage.login.own', 'vantage.power', 'vantage.power.own', 'vantage.theme', 'vantage.theme.own', 'vantage.unfocused', 'vantage.unfocused.own' ],
+		'what the login page reads from this browser');
+	assert.match(footer, /\{% if \(ctx\.authsession && !blank_page\): %\}\n<script>L\.require\('menu-vantage'\);<\/script>/, 'the menu script loads for a session only');
+});
+
+test('daily update check: a newer version is told, an equal, older or unreadable one is not', async () => {
+	const told = async (listed, running) => {
+		const b = updateBrowser({ 'vantage.update.auto': 'on' });
+		b.list = b.packages(listed);
+		await b.page();
+		assert.equal(b.asked.length, 1, listed);
+		/* the page after it: what was kept tells, not the request */
+		const p = await b.page();
+		assert.equal(b.asked.length, 1, listed);
+		return { dot: p.dot(), last: b.last() };
+	};
+	assert.deepEqual(await told(NEWER + '-r1'), { dot: true, last: { at: 1700000000000, latest: NEWER } }, 'newer; the package release is left out');
+	assert.equal((await told([ MAJOR, MINOR + 1 ].join('.'))).dot, true, 'two parts');
+	assert.equal((await told([ MAJOR + 1, 0, 0 ].join('.'))).dot, true);
+	assert.equal((await told(RUNNING)).dot, false, 'this version');
+	assert.equal((await told(RUNNING + '-r7')).dot, false, 'this version, another package release');
+	assert.equal((await told(OLDER)).dot, false, 'older');
+	for (const odd of [ NEWER + '-rc1', 'v' + NEWER, NEWER + '<img src=x>', '99999.0.0', '9', 'latest', '' ])
+		assert.deepEqual(await told(odd), { dot: false, last: { at: 1700000000000, latest: null } }, 'unreadable, kept as a try: ' + JSON.stringify(odd));
+
+	/* numbers, not text: 1.0.9 < 1.0.10 < 1.1 */
+	const { newerKnown, updateMemory } = new Function([ 'versionParts', 'newerVersion', 'updateMemory', 'newerKnown' ].map(n => {
+		const at = src.indexOf('function ' + n + '(');
+		return src.slice(at, src.indexOf('\n}\n', at) + 3);
+	}).join('\n') + '\nreturn { newerKnown, updateMemory };')();
+	/* as the browser keeps it and the theme reads it back */
+	const kept = latest => updateMemory(JSON.stringify({ at: 1, latest }));
+	const newer = (latest, running) => newerKnown(kept(latest), running) === latest;
+	assert.ok(newer('1.0.10', '1.0.9') && !newer('1.0.9', '1.0.10'));
+	assert.ok(newer('1.1', '1.0.10') && !newer('1.0.10', '1.1'));
+	assert.ok(newer('1.1.0', '1.0.21') && newer('1.10.0', '1.9.9') && newer('2.0', '1.99.99') && newer('1.0.21.1', '1.0.21'));
+	assert.ok(!newer('1.1', '1.1.0') && !newer('1.1.0', '1.1'), 'the same version, written shorter');
+	assert.ok(!newer('1.0.22', '1.0.22-r3') && newer('1.0.22-r1', '1.0.21-r9'), 'a package release does not count');
+	for (const odd of [ null, undefined, '', 'x', '1', '1.2.3.4.5', '1.0.22 ', '1.0.x', [ '9.9.9' ], 9.9, {} ])
+		assert.equal(newerKnown(kept(odd), '1.0.21'), null, 'unreadable: ' + JSON.stringify(odd));
+	for (const odd of [ null, undefined, '', 'x', '1', '1.2.3.4.5', '1.0.22 ', '1.0.x' ])
+		assert.equal(newerKnown(kept('9.9.9'), odd), null, 'this version unreadable: ' + JSON.stringify(odd));
+	assert.equal(newerKnown(null, '1.0.21'), null, 'nothing kept');
+
+	/* what the browser kept is read as carefully as the list: anything else is no notice */
+	for (const kept of [ 'x', '{', 'null', '[]', '"9.9.9"', '9', JSON.stringify({ latest: '9.9.9' }), JSON.stringify({ at: 'now', latest: '9.9.9' }), JSON.stringify({ at: 1700000000000, latest: '9.9.9<b>' }),
+		JSON.stringify({ at: 1700000000000, latest: [ '9.9.9' ] }), JSON.stringify({ at: 1700000000000, latest: { toString: 1 } }), JSON.stringify({ at: 1700000000000 }) ]) {
+		const b = updateBrowser({ 'vantage.update.auto': 'on', 'vantage.update.last': kept });
+		b.visible = false;       /* just what was kept: no request to replace it */
+		const p = await b.page();
+		assert.ok(!p.dot(), kept);
+		assert.equal(p.gear.getAttribute('aria-label'), 'Appearance', kept);
+	}
+});
+
+test('daily update check: a check that fails is that day\'s try, says nothing and keeps what was known', async () => {
+	for (const failure of [ null, 404, 500, '<html>not a list</html>', 'Package: luci-theme-vantage-extra\nVersion: 9.9.9\n' ]) {
+		const b = updateBrowser({ 'vantage.update.auto': 'on' });
+		const t0 = b.now;
+		b.list = failure;
+		const p = await b.page();
+		p.open();
+		assert.equal(b.asked.length, 1, String(failure));
+		assert.deepEqual(b.last(), { at: t0, latest: null }, 'kept as a try');
+		assert.ok(!p.dot() && p.line.hidden && p.line.textContent === '', 'nothing shown');
+		assert.equal(p.gear.getAttribute('aria-label'), 'Appearance');
+		/* no second try that day, however often a page loads */
+		b.now = t0 + b.DAY - 1;
+		for (let i = 0; i < 5; i++) await b.page();
+		assert.equal(b.asked.length, 1, 'no retry');
+		b.now = t0 + b.DAY;
+		await b.page();
+		assert.equal(b.asked.length, 2, 'the next day\'s');
+	}
+	/* a version known from an earlier day stays known through a failed one */
+	const b = updateBrowser({ 'vantage.update.auto': 'on' });
+	const t0 = b.now;
+	b.list = b.packages(NEWER);
+	await b.page();
+	b.list = null;
+	b.now = t0 + b.DAY;
+	const p = await b.page();
+	assert.equal(b.asked.length, 2);
+	assert.deepEqual(b.last(), { at: t0 + b.DAY, latest: NEWER });
+	assert.ok(p.dot());
+	/* silent: the daily check's own failure reaches no console and no page text */
+	assert.match(src, /this\.askLatest\(true\)\.catch\(\(\) => \{\}\);/);
+});
+
+test('daily update check: a list larger than a list is, is not read; where the try cannot be kept, nothing is asked', async () => {
+	const LIMIT = +/const UPDATE_MAX = (\d+);/.exec(src)[1];
+	assert.equal(LIMIT, 262144);
+	/* its host says it is larger: not read, and that day's try all the same */
+	const big = updateBrowser({ 'vantage.update.auto': 'on' });
+	big.list = big.packages(NEWER); big.size = LIMIT + 1;
+	let p = await big.page();
+	assert.deepEqual([ big.asked.length, big.read, p.dot() ], [ 1, 0, false ]);
+	assert.deepEqual(big.last(), { at: big.now, latest: null });
+	/* at the limit it is read */
+	const fits = updateBrowser({ 'vantage.update.auto': 'on' });
+	fits.list = fits.packages(NEWER); fits.size = LIMIT;
+	p = await fits.page();
+	assert.deepEqual([ fits.read, p.dot() ], [ 1, true ]);
+	/* no length given: read, and no more of it looked at than a list has */
+	const long = updateBrowser({ 'vantage.update.auto': 'on' });
+	long.list = 'x'.repeat(LIMIT) + '\n\n' + long.packages(NEWER);
+	p = await long.page();
+	assert.deepEqual([ long.read, p.dot() ], [ 1, false ], 'the entry lies past what is looked at');
+	/* storage that takes no more: every page would find no try kept and ask again, so the daily check asks nothing */
+	const full = updateBrowser({ 'vantage.update.auto': 'on' });
+	full.full = true; full.list = full.packages(NEWER);
+	for (let i = 0; i < 3; i++) p = await full.page();
+	assert.equal(full.asked.length, 0);
+	/* the manual check is asked for each time it runs: it still does */
+	p.open().check.fire('click');
+	await full.settle();
+	assert.equal(full.asked.length, 1);
+	assert.match(p.line.textContent, new RegExp('^Version ' + NEWER.replace(/\./g, '\\.') + ' is available\\.'));
+});
+
+test('daily update check: the dot on the gear, its label, and the manual check\'s line under Appearance', async () => {
+	const b = updateBrowser({ 'vantage.update.auto': 'on' });
+	b.list = b.packages(NEWER + '-r1');
+	const first = await b.page();
+	/* the page that asked shows it as soon as the answer is in */
+	assert.ok(first.dot(), 'a dot on the gear');
+	const label = 'Appearance: Version ' + NEWER + ' is available.';
+	assert.equal(first.gear.getAttribute('aria-label'), label, 'said in the gear\'s name');
+	assert.equal(first.gear.getAttribute('title'), label);
+	/* the next page knows it from the start, without asking */
+	const p = (await b.page()).open();
+	assert.equal(b.asked.length, 1);
+	assert.ok(p.dot());
+	assert.equal(p.line.hidden, false);
+	assert.equal(p.line.textContent, 'Version ' + NEWER + ' is available. What\'s new', 'the manual check\'s own line');
+	const link = p.line.children.find(c => c.tagName === 'A');
+	assert.deepEqual(link.attrs, { href: 'https://github.com/anothaDev/luci-theme-vantage/releases/latest', target: '_blank', rel: 'noopener noreferrer' }, 'the constant link');
+	assert.equal(p.line.getAttribute('role'), 'status');
+	/* the dot is drawn from the attribute, at the gear's corner: still, in the notice colour, and no mark of any kind */
+	const css = fs.readFileSync(path.join(__dirname, '..', 'luci-theme-vantage/htdocs/luci-static/vantage/vantage.css'), 'utf8');
+	const dot = /\n#vt-look\[data-vt-update\]::after \{([^}]*)\}/.exec(css);
+	assert.ok(dot, 'the dot\'s rule');
+	assert.match(dot[1], /content:\s*"";/);
+	assert.match(dot[1], /width:\s*7px;\s*height:\s*7px;\s*border-radius:\s*50%/, 'the indicators\' size');
+	assert.match(dot[1], /background:\s*var\(--info\)/);
+	assert.doesNotMatch(dot[1], /animation|transition/);
+	/* the gear's own drawing is the template's, untouched: the script changes attributes only */
+	const apply = src.slice(src.indexOf('\tapplyUpdate() {'), src.indexOf('\tsetupUpdate() {'));
+	assert.doesNotMatch(apply, /btn\.(textContent|appendChild|innerHTML|replaceChildren)/);
+	/* a manual check with the daily one on is that day's try, and its answer is kept */
+	const m = updateBrowser({ 'vantage.update.auto': 'on', 'vantage.update.last': JSON.stringify({ at: 1700000000000, latest: RUNNING }) });
+	m.list = m.packages(NEWER);
+	m.now += 3600 * 1000;
+	const mp = (await m.page()).open();
+	assert.equal(m.asked.length, 0, 'not due');
+	assert.ok(!mp.dot() && mp.line.hidden);
+	mp.check.fire('click');
+	assert.equal(mp.line.textContent, 'Checking…');
+	await m.settle();
+	assert.equal(m.asked.length, 1);
+	assert.deepEqual(m.last(), { at: 1700000000000 + 3600 * 1000, latest: NEWER });
+	assert.ok(mp.dot(), 'the dot comes with the answer');
+	assert.equal(mp.line.textContent, 'Version ' + NEWER + ' is available. What\'s new');
+	m.now += m.DAY - 1;
+	await m.page();
+	assert.equal(m.asked.length, 1, 'the daily check waits a day from it');
+	/* this version catches up: the notice is over, with nothing asked */
+	const up = updateBrowser({ 'vantage.update.auto': 'on', 'vantage.update.last': JSON.stringify({ at: 1700000000000, latest: RUNNING }) });
+	const done = (await up.page()).open();
+	assert.ok(!done.dot() && done.line.hidden);
+	assert.equal(done.gear.getAttribute('aria-label'), 'Appearance');
+	const past = updateBrowser({ 'vantage.update.auto': 'on', 'vantage.update.last': JSON.stringify({ at: 1700000000000, latest: OLDER }) });
+	assert.ok(!(await past.page()).dot(), 'a version behind this one');
+});
+
+test('daily update check: switched off, the notice and what was kept go; switched on, it asks with the next page', async () => {
+	const b = updateBrowser({ 'vantage.update.auto': 'on' });
+	b.list = b.packages(NEWER);
+	await b.page();
+	const p = (await b.page()).open();
+	assert.ok(p.dot() && !p.line.hidden);
+	p.pick('off');
+	assert.ok(!p.dot(), 'the dot goes');
+	assert.equal(p.gear.getAttribute('aria-label'), 'Appearance');
+	assert.equal(p.gear.getAttribute('title'), 'Appearance');
+	assert.ok(p.line.hidden && p.line.textContent === '', 'the line goes');
+	assert.deepEqual(b.store, {}, 'nothing of it is left in the browser');
+	b.now += 30 * b.DAY;
+	assert.ok(!(await b.page()).dot());
+	assert.equal(b.asked.length, 1, 'off: nothing more is asked');
+	/* on again: no request from the click; the next page asks */
+	const q = (await b.page()).open();
+	q.pick('on');
+	await b.settle();
+	assert.deepEqual(b.store, { 'vantage.update.auto': 'on' });
+	assert.equal(b.asked.length, 1, 'the pick itself asks nothing');
+	await b.page();
+	assert.equal(b.asked.length, 2);
+	/* another tab switches it off, or learns of a version: this page follows (the storage event) */
+	const tab = await b.page();
+	assert.ok(tab.dot());
+	delete b.store['vantage.update.auto'];
+	tab.shell.applyUpdate();
+	assert.ok(!tab.dot());
+	assert.match(src, /if \(ev\.key === UPDATE_AUTO_KEY \|\| ev\.key === UPDATE_LAST_KEY\) this\.applyUpdate\(\);/);
+	/* a manual result is not the daily check's to take away */
+	const manual = updateBrowser();
+	manual.list = manual.packages(NEWER);
+	const mp = (await manual.page()).open();
+	mp.check.fire('click');
+	await manual.settle();
+	mp.pick('on');
+	mp.pick('off');
+	assert.equal(mp.line.textContent, 'Version ' + NEWER + ' is available. What\'s new');
+	assert.equal(mp.line.hidden, false);
+});
+
+test('daily update check: this browser\'s alone: never saved for every browser, unknown to the templates and the login page', async () => {
+	/* a login that may save Appearance for every browser */
+	const b = updateBrowser();
+	const p = (await b.page('yes')).open();
+	p.pick('on');
+	p.pick('off');
+	p.pick('on');
+	await b.settle();
+	assert.deepEqual(b.saved, [], 'no uci call for it');
+	assert.deepEqual(b.store, { 'vantage.update.auto': 'on' }, 'kept in this browser');
+	/* the same page does save a real Appearance pick, so the harness would have seen one */
+	p.shell.setLook('power', 'low', () => {});
+	await b.settle();
+	assert.deepEqual(b.saved.map(c => c.slice(0, 3)), [ [ 'uci', 'revert', 'vantage_theme' ], [ 'uci', 'set', 'vantage_theme' ], [ 'uci', 'commit', 'vantage_theme' ] ]);
+	assert.deepEqual(b.saved[1][4], { power: 'low' }, 'and only that pick');
+	/* it is not one of the looks: setLook, the router's attributes and the other-tab sync never see it */
+	const table = /\nconst LOOK = (\{[\s\S]*?\n\});\n/.exec(src);
+	const LOOK = new Function('THEME_KEY', 'LOGIN_KEY', 'BACKDROP_KEY', 'return ' + table[1])('vantage.theme', 'vantage.login', 'vantage.backdrop.v1');
+	assert.deepEqual(Object.keys(LOOK), [ 'theme', 'login', 'backdrop', 'power', 'unfocused', 'brand', 'units' ]);
+	assert.doesNotMatch(JSON.stringify(LOOK), /update/);
+	const setPref = src.slice(src.indexOf('\tsetUpdatePref(pref) {'), src.indexOf('\tupdateGroup() {'));
+	assert.doesNotMatch(setPref, /setLook|lookWrite|callLook|LOOK_SYNC/);
+	assert.doesNotMatch(src, /setLook\('update'|data-vt-look-update|look_update/);
+	assert.deepEqual([ ...src.matchAll(/storage(?:Get|Set)\((UPDATE_\w+)/g) ].map(m => m[1]).filter((k, i, a) => a.indexOf(k) === i).sort(), [ 'UPDATE_AUTO_KEY', 'UPDATE_LAST_KEY' ]);
+	assert.match(src, /const UPDATE_AUTO_KEY = 'vantage\.update\.auto';\nconst UPDATE_LAST_KEY = 'vantage\.update\.last';/);
+	/* the panel shows the pick, and tells its cost where it is picked */
+	assert.ok(src.includes("'vt-update': this.updatePref()"), 'the panel shows the pick in force');
+	assert.equal(p.set.children[0].textContent, 'Daily update check');
+	const help = p.set.all().find(e => e.tagName === 'P');
+	assert.match(help.textContent, /^Once a day this browser reads the project's package list on GitHub Pages, which shows GitHub this computer's IP address and the address this page was opened at\. For this browser only\.$/);
+	assert.equal(p.set.getAttribute('aria-describedby'), help.getAttribute('id'), 'the help belongs to the group');
+	assert.deepEqual(p.set.all().filter(e => e.tagName === 'INPUT').map(e => [ e.attrs.type, e.attrs.name, e.attrs.value ]), [ [ 'radio', 'vt-update', 'off' ], [ 'radio', 'vt-update', 'on' ] ], 'off comes first');
+	/* neither template hands it over, the shipped config has no such option, and the login page reads none of it */
+	const T = path.join(__dirname, '..', 'luci-theme-vantage');
+	for (const f of [ 'ucode/template/themes/vantage/header.ut', 'ucode/template/themes/vantage/sysauth.ut', 'ucode/template/themes/vantage/footer.ut', 'htdocs/luci-static/vantage/login.js', 'root/etc/config/vantage_theme',
+		'root/usr/share/rpcd/acl.d/luci-theme-vantage.json', 'root/etc/uci-defaults/30_luci-theme-vantage' ])
+		assert.doesNotMatch(fs.readFileSync(path.join(T, f), 'utf8'), /update/i, f);
 });
 
 /* the theme's clock: a pulse CSS cancelled since the last step (the dot's
@@ -538,4 +1164,197 @@ test('translated column titles: the columns the English rule keeps on one line t
 	assert.match(scan, /if \(cell\._vtNowrap\) cell\.classList\.add\('vt-nowrap'\);/);
 	/* LuCI's own catalogue translates them: no literal _('...') of these titles in the theme */
 	for (const t of list) assert.ok(!src.includes("_('" + t + "')"), t + ' stays out of the theme catalogue');
+});
+
+/* The tab's title (1.1): while the dashboard says something needs
+   attention, how many things do, in front of "Page · hostname" */
+test('tab title: the count while the dashboard warns or errs, a plain mark without one, nothing otherwise', () => {
+	const alertMark = fn('alertMark');
+	assert.equal(alertMark('warn', '2'), '(2) ');
+	assert.equal(alertMark('err', '1'), '(1) ');
+	assert.equal(alertMark('warn', '12'), '(12) ');
+	assert.equal(alertMark('err', 3), '(3) ', 'a number too');
+	/* no count with the level (a dashboard from before 1.1), or not a count */
+	for (const none of [ null, undefined, '', '0', '-1', '1.5', '007', '1000', ' 2', '2 ', '2\n', 'two', '<b>2</b>', '2) Log in', {}, NaN ])
+		assert.equal(alertMark('warn', none), '(!) ', JSON.stringify(none));
+	/* no level, no mark, whatever the count says */
+	for (const level of [ null, undefined, '', 'ok', 'info', 'paused', 'WARN', 'warn ', 'error', true ])
+		assert.equal(alertMark(level, '2'), '', JSON.stringify(level));
+	/* signs and digits only, at any count: nothing of it is a word, an emoji or a check mark */
+	for (let n = 1; n < 1000; n++) assert.match(alertMark('warn', String(n)), /^\(\d{1,3}\) $/);
+});
+
+/* menu-vantage.js whole, on a page that has a title, <html> and
+   MutationObserver: set() is the dashboard writing an attribute */
+function titlePage(attrs) {
+	require('./luci-stub');      /* String.prototype.format */
+	const p = { watched: [], writes: [] };
+	let title = 'Dashboard · LuCI';      /* as header.ut wrote it */
+	p.document = { get title() { return title; }, set title(v) { title = String(v); p.writes.push(title); } };
+	p.root = { attrs: Object.assign({}, attrs), getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; } };
+	p.set = (k, v) => { p.root.attrs[k] = String(v); p.watched.filter(w => w.node === p.root && w.opts.attributes && w.opts.attributeFilter.includes(k)).forEach(w => w.f()); };
+	const window = { MutationObserver: function(f) { this.observe = (node, opts) => { p.watched.push({ node, opts, f }); }; } };
+	p.proto = new Function('baseclass', 'ui', 'rpc', 'host', 'E', 'L', '_', 'document', 'window', src)(
+		{ extend: x => x }, {}, { declare: () => () => Promise.resolve({}) }, {}, () => ({}), {}, t => t, p.document, window);
+	p.shell = Object.assign(Object.create(p.proto), { root: p.root });
+	p.window = window;
+	return p;
+}
+
+test('tab title: follows the dashboard, is written once a change, and is the title as before without one', () => {
+	/* the theme alone, or any page but the dashboard: "Page · hostname", as before */
+	let p = titlePage();
+	p.shell.watchAlert();
+	p.shell.updateTitle();
+	assert.equal(p.document.title, 'Dashboard · LuCI', 'nothing known yet: the template\'s title stands');
+	p.shell.pageTitle = 'Dashboard';
+	p.shell.updateTitle();
+	p.shell.hostname = 'attic-ap';
+	p.shell.updateTitle();
+	assert.deepEqual(p.writes, [ 'Dashboard', 'Dashboard · attic-ap' ]);
+	/* one observer, on <html>, for the dashboard's two attributes and nothing else of the page */
+	assert.equal(p.watched.length, 1);
+	assert.equal(p.watched[0].node, p.root);
+	assert.deepEqual(p.watched[0].opts, { attributes: true, attributeFilter: [ 'data-vt-alert', 'data-vt-alert-count' ] });
+
+	/* the dashboard reports: the level, then the count, as paintHead sets them */
+	p.writes.length = 0;
+	p.set('data-vt-alert', '');
+	p.set('data-vt-alert-count', '');
+	assert.deepEqual(p.writes, [], 'all fine: not written again');
+	p.set('data-vt-alert', 'warn');
+	p.set('data-vt-alert-count', '2');
+	assert.equal(p.document.title, '(2) Dashboard · attic-ap');
+	/* the same word at every poll writes nothing */
+	const n = p.writes.length;
+	for (let i = 0; i < 5; i++) { p.set('data-vt-alert', 'warn'); p.set('data-vt-alert-count', '2'); }
+	assert.equal(p.writes.length, n);
+	p.set('data-vt-alert', 'err');
+	p.set('data-vt-alert-count', '3');
+	assert.equal(p.document.title, '(3) Dashboard · attic-ap');
+	/* it clears: the title as before */
+	p.set('data-vt-alert', '');
+	p.set('data-vt-alert-count', '');
+	assert.equal(p.document.title, 'Dashboard · attic-ap');
+
+	/* a dashboard from before 1.1 sets the level only */
+	p = titlePage();
+	Object.assign(p.shell, { pageTitle: 'Dashboard', hostname: 'attic-ap' });
+	p.shell.watchAlert();
+	p.set('data-vt-alert', 'warn');
+	assert.equal(p.document.title, '(!) Dashboard · attic-ap');
+	p.set('data-vt-alert', '');
+	assert.equal(p.document.title, 'Dashboard · attic-ap');
+
+	/* the dashboard painted before the menu and the hostname came: whichever comes last finds its word */
+	p = titlePage({ 'data-vt-alert': 'err', 'data-vt-alert-count': '1' });
+	p.shell.watchAlert();
+	p.shell.updateTitle();
+	assert.equal(p.document.title, 'Dashboard · LuCI');
+	p.shell.pageTitle = 'Dashboard';
+	p.shell.updateTitle();
+	assert.equal(p.document.title, '(1) Dashboard');
+	p.shell.hostname = 'attic-ap';
+	p.shell.updateTitle();
+	assert.equal(p.document.title, '(1) Dashboard · attic-ap');
+	/* what is not a count never reaches the title */
+	p.set('data-vt-alert-count', '2) Log in again');
+	assert.equal(p.document.title, '(!) Dashboard · attic-ap');
+
+	/* a browser without MutationObserver: the title as before, and no error */
+	p = titlePage();
+	delete p.window.MutationObserver;
+	Object.assign(p.shell, { pageTitle: 'Dashboard', hostname: 'attic-ap' });
+	p.shell.watchAlert();
+	p.shell.updateTitle();
+	assert.equal(p.document.title, 'Dashboard · attic-ap');
+
+	/* one place writes the title, with text only; the watch starts with the shell */
+	assert.equal(src.split('document.title = ').length - 1, 1);
+	assert.match(src, /\n\t\tthis\.watchAlert\(\);\n\t\tthis\.loadHost\(\);\n/);
+	const part = src.slice(src.indexOf('function alertMark('), src.indexOf('/* Does help text carry a warning?')) + src.slice(src.indexOf('\tupdateTitle() {'), src.indexOf('\t/* -------------------------------------------------- indicators */'));
+	assert.doesNotMatch(part, /innerHTML|querySelector\('title'\)|textContent|_\(/);
+});
+
+/* --------------------------- from the review of the 1.1 batch: the wiring */
+
+test('daily update check: the theme itself applies what is kept at page load and puts the group in the panel', () => {
+	assert.match(src, /\t\tthis\.applyBrand\(\);\n\t\tthis\.applyUpdate\(\);\n\t\},/, 'setupTheme ends by applying it');
+	assert.match(src, /\n\t\t\tthis\.updateGroup\(\),\n\t\t\tthis\.versionEl\(\)\n/, 'the Appearance panel has the group');
+});
+
+test('daily update check: a manual check that finds this version current says so, after a notice', async () => {
+	const w = updateBrowser({ 'vantage.update.auto': 'on', 'vantage.update.last': JSON.stringify({ at: 1700000000000, latest: NEWER }) });
+	w.list = w.packages(RUNNING);
+	w.now += 3600 * 1000;
+	const wp = (await w.page()).open();
+	assert.ok(wp.dot() && !wp.line.hidden, 'the notice from what was kept');
+	wp.check.fire('click');
+	await w.settle();
+	assert.deepEqual([ wp.line.textContent, wp.line.hidden, wp.dot() ], [ 'Up to date', false, false ]);
+});
+
+test('daily update check: switched off before the page is idle, nothing is asked', async () => {
+	const late = updateBrowser({ 'vantage.update.auto': 'on' });
+	late.list = late.packages(NEWER);
+	late.idle = false;
+	const lp = await late.page();
+	delete late.store['vantage.update.auto'];
+	lp.timers[0].f();
+	await late.settle();
+	assert.equal(late.asked.length, 0);
+});
+
+test('daily update check: setupTheme applies what is kept, and another tab\'s storage event reaches it', () => {
+	require('./luci-stub');
+	const store = { 'vantage.update.auto': 'on', 'vantage.update.last': JSON.stringify({ at: 1, latest: NEWER }) };
+	const heard = {};
+	const gear = { attrs: { 'aria-label': 'Appearance' }, addEventListener() {}, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }, setAttribute(k, v) { this.attrs[k] = String(v); },
+		toggleAttribute(k, on) { if (on) this.attrs[k] = ''; else delete this.attrs[k]; }, hasAttribute(k) { return k in this.attrs; } };
+	const document = { getElementById: id => (id === 'vt-look' ? gear : null) };
+	const window = { addEventListener: (t, f) => { (heard[t] = heard[t] || []).push(f); } };
+	const localStorage = { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } };
+	const proto = new Function('baseclass', 'ui', 'rpc', 'host', 'E', 'L', '_', 'document', 'window', 'localStorage', src)(
+		{ extend: x => x }, {}, { declare: () => () => Promise.resolve({}) }, {}, () => ({}), {}, t => t, document, window, localStorage);
+	const shell = Object.assign(Object.create(proto), { root: { getAttribute: () => null, setAttribute() {} } });
+	for (const k of [ 'applyTheme', 'applyBackdrop', 'applyPower', 'applyUnfocused', 'applyUnits', 'applyBrand' ]) shell[k] = () => {};
+	shell.setupTheme();
+	assert.ok(gear.hasAttribute('data-vt-update'), 'applied with the theme, at page load');
+	delete store['vantage.update.auto'];
+	heard.storage.forEach(f => f({ key: 'vantage.update.auto', newValue: null }));
+	assert.ok(!gear.hasAttribute('data-vt-update'), 'another tab switched it off: the dot goes here');
+	store['vantage.update.auto'] = 'on';
+	heard.storage.forEach(f => f({ key: 'vantage.update.last', newValue: store['vantage.update.last'] }));
+	assert.ok(gear.hasAttribute('data-vt-update'), 'another tab learned of a version');
+});
+
+test('daily update check: a page left open, or loaded out of view, checks when its tab comes into view, once a day', async () => {
+	/* loaded in a background tab: nothing asked there, and the check is not lost */
+	const b = updateBrowser({ 'vantage.update.auto': 'on' });
+	b.list = b.packages(NEWER);
+	b.visible = false;
+	const p = await b.page();
+	assert.equal(b.asked.length, 0);
+	await p.show(true);
+	assert.deepEqual([ b.asked.length, p.dot() ], [ 1, true ]);
+	/* looked at again and again that day: no more questions */
+	for (let i = 0; i < 3; i++) { await p.show(false); await p.show(true); }
+	assert.equal(b.asked.length, 1);
+	/* the same page, still open the next day */
+	b.now += b.DAY;
+	await p.show(false);
+	assert.equal(b.asked.length, 1, 'going out of view asks nothing');
+	await p.show(true);
+	assert.equal(b.asked.length, 2);
+	/* switched off, or on the login page: coming into view asks nothing */
+	const off = updateBrowser({});
+	off.list = off.packages(NEWER);
+	const q = await off.page();
+	await q.show(false); await q.show(true);
+	assert.equal(off.asked.length, 0);
+	const login = updateBrowser({ 'vantage.update.auto': 'on' });
+	login.auth = false; login.list = login.packages(NEWER);
+	const l = await login.page();
+	await l.show(false); await l.show(true);
+	assert.equal(login.asked.length, 0);
 });
