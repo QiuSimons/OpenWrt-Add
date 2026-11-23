@@ -610,12 +610,12 @@ impl SessionManager {
             map.fetch_or(slot, mask, Ordering::Relaxed);
             if let Ok(in_val) = ib_map.get(port, 0) {
                 let ep_key = in_val.make_key();
-                let _ = ib_map.remove(port);
                 if let Ok(ob_val) = ob_map.get(&ep_key, 0) {
                     if u16::from_be(ob_val.port_be()) == *port {
                         let _ = ob_map.remove(&ep_key);
                     }
                 }
+                let _ = ib_map.remove(port);
             }
         }
         for port in &removed {
@@ -623,12 +623,12 @@ impl SessionManager {
             if *port >= pool.min_port && *port <= pool.max_port {
                 if let Ok(in_val) = ib_map.get(port, 0) {
                     let ep_key = in_val.make_key();
-                    let _ = ib_map.remove(port);
                     if let Ok(ob_val) = ob_map.get(&ep_key, 0) {
                         if u16::from_be(ob_val.port_be()) == *port {
                             let _ = ob_map.remove(&ep_key);
                         }
                     }
+                    let _ = ib_map.remove(port);
                 }
                 Self::release_family_port(*port, pool);
             }
@@ -1136,8 +1136,16 @@ impl SessionManager {
                             processed4 += 1;
                             continue;
                         }
-                        let ob_removed = self.ob_map4.remove(&key).is_ok();
-                        let ib_removed = if ib_matches {
+                        let ob_removed = if let Ok(cur_ob) = self.ob_map4.get(&key, 0)
+                            && u16::from_be(cur_ob.port) == port
+                        {
+                            self.ob_map4.remove(&key).is_ok()
+                        } else {
+                            false
+                        };
+                        let ib_removed = if let Ok(cur_ib) = self.ib_map4.get(&port, 0)
+                            && cur_ib.matches_key(&key)
+                        {
                             self.ib_map4.remove(&port).is_ok()
                         } else {
                             false
@@ -1259,8 +1267,16 @@ impl SessionManager {
                             processed6 += 1;
                             continue;
                         }
-                        let ob_removed = self.ob_map6.remove(&key).is_ok();
-                        let ib_removed = if ib_matches {
+                        let ob_removed = if let Ok(cur_ob) = self.ob_map6.get(&key, 0)
+                            && u16::from_be(cur_ob.port) == port
+                        {
+                            self.ob_map6.remove(&key).is_ok()
+                        } else {
+                            false
+                        };
+                        let ib_removed = if let Ok(cur_ib) = self.ib_map6.get(&port, 0)
+                            && cur_ib.matches_key(&key)
+                        {
                             self.ib_map6.remove(&port).is_ok()
                         } else {
                             false

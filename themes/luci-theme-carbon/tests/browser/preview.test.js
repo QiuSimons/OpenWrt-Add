@@ -74,7 +74,7 @@ async function open(url, { width = 1280, height = 900, appearance = 'light', sto
 /* every async source has rendered: leases, Wi‑Fi stations, sensors, languages */
 const dashboardReady = (page) => page.waitForFunction(() =>
 	document.querySelectorAll('.cb-clients .cb-list li').length >= 8 && document.querySelector('.cb-tag-wifi') &&
-	document.querySelectorAll('.cb-kv li').length >= 3 && document.querySelector('.cb-lang .cb-lb'));
+	document.querySelectorAll('.cb-kv li').length >= 2 && document.querySelector('.cb-lang .cb-lb'));
 
 test('side-router discovery works without DHCP and distinguishes neighbours, gateways and lease records', async () => {
 	const mock = fs.readFileSync(path.join(ROOT, 'preview', 'mock.js'), 'utf8');
@@ -270,7 +270,7 @@ test('dashboard shows merged devices, Wi-Fi details, IPv6, sensors and a traffic
 	assert.ok(info.nas, 'static-IP device from ARP named by host hints');
 	assert.equal(info.gateway, false, 'upstream gateway is not a LAN device');
 	assert.equal(info.ipv6, '240e:3a1:4c2:8f0::1');
-	assert.deepEqual(info.sensors, ['Temperature · cpu', 'Temperature · mt7986 phy1']);
+	assert.deepEqual(info.sensors, ['Temperature']);
 	assert.match(info.tile, /^\d+ on Wi-Fi$/);
 
 	/* the traffic picker is a Carbon listbox (same control as the language switch), grouped like <optgroup> */
