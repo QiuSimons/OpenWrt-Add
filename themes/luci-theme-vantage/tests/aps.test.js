@@ -843,7 +843,8 @@ const REPORT_UBUS = {
 		{ mac: MAC(69), port: 'phy0-ap0' }, { mac: MAC(70), port: 'ra0' },
 		{ mac: MAC(1), port: 'lan2' }, { mac: 'bad', port: 'lan2' }, { mac: MAC(71), port: 'bad port' }, { mac: MAC(66), port: 'lan3' } ] }
 };
-const REPORT_CALLS = [ 'system board', 'system info', 'iwinfo devices', 'iwinfo info', 'iwinfo assoclist', 'network.interface dump', 'luci.vantage wired' ];
+/* and the switch chip's counters (#156): the dashboard's plugin runs ethtool for them, the report only asks */
+const REPORT_CALLS = [ 'system board', 'system info', 'iwinfo devices', 'iwinfo info', 'iwinfo assoclist', 'network.interface dump', 'luci.vantage wired', 'luci.vantage.ports counters' ];
 
 test('report: SSIDs, stations, and the wired hosts past the uplink', { skip: NO_UCODE }, () => {
 	const { out, calls } = reportRun({ ubus: REPORT_UBUS, arp: [ [ '192.0.2.1', '0x1', '0x2', MAC(64), '*', 'br-lan' ], [ '192.0.2.99', '0x1', '0x0', MAC(65), '*', 'br-lan' ] ] });
@@ -853,7 +854,8 @@ test('report: SSIDs, stations, and the wired hosts past the uplink', { skip: NO_
 		stations: [
 			{ mac: MAC(32), ifname: 'phy0-ap0', signal: -55, rx_rate: 866000, tx_rate: 650000, rx_bytes: 1000, tx_bytes: 2000, connected: 60,
 				rx_phy: { mhz: 80, mcs: 9, nss: 2, ht: false, vht: true, he: false, eht: false, sgi: true },
-				tx_phy: { mhz: 80, mcs: 7, nss: 2, ht: false, vht: false, he: true, eht: false, sgi: true } },
+				/* he_gi 1 is 1.6 µs, the middle one of HE's three: not a short guard interval */
+				tx_phy: { mhz: 80, mcs: 7, nss: 2, ht: false, vht: false, he: true, eht: false, sgi: false } },
 			/* a driver that says nothing of the link: every number unknown */
 			{ mac: MAC(34), ifname: 'ra0', signal: -60, rx_rate: 72000, tx_rate: 72000, rx_bytes: 5, tx_bytes: 6, connected: null,
 				rx_phy: { mhz: null, mcs: null, nss: null, ht: false, vht: false, he: false, eht: false, sgi: false },
@@ -1241,7 +1243,7 @@ test('collector: a report is counted before it is parsed', { skip: NO_UCODE }, (
 	const head = '{"v":1,"name":"x","ssids":[', objects = n => head + Array(n).fill('{}').join(',') + ']}';
 	const hostile = objects(Math.floor((131072 - head.length - 2 + 1) / 3));
 	assert.ok(hostile.length <= 131072 && hostile.length > 131000 && JSON.parse(hostile).v === 1, 'within the size limit, and JSON');
-	for (const out of [ hostile, objects(1280), '{"v":1,"x":[' + Array(4098).fill('0').join(',') + ']}' ]) {
+	for (const out of [ hostile, objects(2048), '{"v":1,"x":[' + Array(8194).fill('0').join(',') + ']}' ]) {
 		const { results } = runCollector({ hosts: { '192.0.2.10': { out } } }, [ ASK, wait(2), ASK ]);
 		assert.deepEqual([ results[2].aps[0].state, results[2].aps[0].error, results[2].aps[0].report ], [ 'error', 'invalid', null ], out.length + ' bytes');
 	}
@@ -1259,8 +1261,8 @@ test('collector: a report is counted before it is parsed', { skip: NO_UCODE }, (
 	}
 	/* the two counts, to the byte */
 	const P = t => [ 'parseable', t ];
-	assert.deepEqual(runModule([ P('{}'), P('['.repeat(1280)), P('['.repeat(1281)), P('{'.repeat(1281)), P('{'.repeat(640) + 'x' + '['.repeat(641)), P(','.repeat(4096)), P(','.repeat(4097)),
-		P('{}\u0000' + '{'.repeat(2000)), P(null), P(7) ]), [ true, true, false, false, false, true, false, false, false, false ]);
+	assert.deepEqual(runModule([ P('{}'), P('['.repeat(2048)), P('['.repeat(2049)), P('{'.repeat(2049)), P('{'.repeat(1024) + 'x' + '['.repeat(1025)), P(','.repeat(8192)), P(','.repeat(8193)),
+		P('{}\u0000' + '{'.repeat(3000)), P(null), P(7) ]), [ true, true, false, false, false, true, false, false, false, false ]);
 });
 
 test('collector: the paired list is read again when it changes, even within a second; 1024 stations in a reply', { skip: NO_UCODE }, () => {
@@ -1274,4 +1276,114 @@ test('collector: the paired list is read again when it changes, even within a se
 	assert.deepEqual(results[4].aps.map(a => a.name), [ 'ap1', 'ap2', 'ap3', 'ap4' ], 'removed at once');
 	assert.deepEqual(results[6].aps.map(a => a.name), [ 'ap1', 'ap2', 'ap3', 'ap4', 'ap-den' ], 'and added, in the same second');
 	assert.equal(results[6].aps[4].state, 'waiting');
+});
+
+/* ------------------------------------------- switch counters (#156) */
+
+/* On a DSA switch the kernel counts what passes the CPU only; the switch chip's own counters come from the dashboard's
+   plugin luci.vantage.ports, which the report asks (it runs nothing itself), and travel beside the kernel's under names of
+   their own: a router of an earlier version reads the kernel's as before, and the collector never takes a rate across the two */
+const HW_ARP = [ [ '192.0.2.1', '0x1', '0x2', MAC(64), '*', 'br-lan' ] ];
+
+test('report: a port\'s switch counters beside the kernel\'s, where the plugin has them; only asked when there are ports', { skip: NO_UCODE }, () => {
+	const ubus = Object.assign({}, REPORT_UBUS, { 'luci.vantage.ports counters': { v: 1, state: 'ok', took: 9, more: false, ports: {
+		lan2: { rx_bytes: 74382564128, tx_bytes: 131657591122 }, lan3: { error: 'unknown' }, lan1: { rx_bytes: 1, tx_bytes: 2 } } } });
+	const { out, calls } = reportRun({ ubus, arp: HW_ARP });
+	assert.deepEqual(out.ports, {
+		lan2: { speed: 100, rx_bytes: 300, tx_bytes: 400, hosts: 1, hw_rx_bytes: 74382564128, hw_tx_bytes: 131657591122 },
+		lan3: { speed: null, rx_bytes: 500, tx_bytes: 600, hosts: 2 }
+	}, 'lan1 is the uplink: not in the report, whatever the plugin says of it');
+	assert.equal(calls.filter(c => c === 'luci.vantage.ports counters').length, 1, 'asked once');
+	/* half a pair, a negative, a text, a number past 64 bits, a list: neither field */
+	for (const bad of [ { rx_bytes: 5 }, { rx_bytes: -1, tx_bytes: 2 }, { rx_bytes: '5', tx_bytes: 6 }, { rx_bytes: 5, tx_bytes: 1e30 }, [ 5, 6 ], 'x', null ]) {
+		const u = Object.assign({}, REPORT_UBUS, { 'luci.vantage.ports counters': { v: 1, state: 'ok', ports: { lan2: bad } } });
+		assert.deepEqual(reportRun({ ubus: u, arp: HW_ARP }).out.ports.lan2, { speed: 100, rx_bytes: 300, tx_bytes: 400, hosts: 1 }, JSON.stringify(bad));
+	}
+	/* no such object (a dashboard before it), an answer of nothing to get, or another read running (busy): the report as before */
+	for (const reply of [ null, { v: 1, state: 'none', ports: {} }, { v: 1, state: 'no-ethtool', ports: {} }, { v: 1, state: 'busy', took: 0, more: false, ports: {} }, 'x' ]) {
+		const u = Object.assign({}, REPORT_UBUS, { 'luci.vantage.ports counters': reply });
+		assert.deepEqual(reportRun({ ubus: u, arp: HW_ARP }).out, reportRun({ ubus: REPORT_UBUS, arp: HW_ARP }).out, JSON.stringify(reply));
+	}
+	/* no uplink found, so no ports: nothing to ask about */
+	assert.ok(!reportRun({ ubus, arp: [] }).calls.includes('luci.vantage.ports counters'));
+});
+
+test('vantage.aps normalize: switch counters both or neither; a report from before them keeps its shape', { skip: NO_UCODE }, () => {
+	const port = extra => ({ v: 1, ports: { lan2: Object.assign({ speed: 1000, rx_bytes: 1, tx_bytes: 2, hosts: 1 }, extra) } });
+	const cases = [ {}, { hw_rx_bytes: 10, hw_tx_bytes: 20 }, { hw_rx_bytes: 10 }, { hw_rx_bytes: -1, hw_tx_bytes: 20 }, { hw_rx_bytes: 'x', hw_tx_bytes: 20 },
+		{ hw_rx_bytes: 10, hw_tx_bytes: 1.5 }, { hw_rx_bytes: 10, hw_tx_bytes: 9007199254740991 } ];
+	const r = runModule(cases.map(c => [ 'normalize', port(c) ]));
+	const base = { speed: 1000, rx_bytes: 1, tx_bytes: 2, hosts: 1 };
+	assert.deepEqual(r.map(x => x.ports.lan2), [ base, Object.assign({ hw_rx_bytes: 10, hw_tx_bytes: 20 }, base), base, base, base, base,
+		Object.assign({ hw_rx_bytes: 10, hw_tx_bytes: 9007199254740991 }, base) ]);
+	assert.deepEqual(Object.keys(r[0].ports.lan2), [ 'speed', 'rx_bytes', 'tx_bytes', 'hosts' ], 'an old-shape report: the old shape');
+});
+
+test('vantage.aps view: a port\'s rate from the switch\'s counters in both reports, the kernel\'s in neither, none across the two', { skip: NO_UCODE }, () => {
+	const rep = (lan2, lan3) => ({ name: 'ap', model: '', uptime: 1, mac: null, ssids: [], stations: [],
+		ports: { lan2: Object.assign({ speed: 1000, hosts: 1 }, lan2), lan3: Object.assign({ speed: 1000, hosts: 2 }, lan3) },
+		wired: [ { mac: MAC(48), port: 'lan2' }, { mac: MAC(49), port: 'lan3' }, { mac: MAC(50), port: 'lan3' } ] });
+	const k = (rx, tx) => ({ rx_bytes: rx, tx_bytes: tx }), h = (rx, tx, hrx, htx) => ({ rx_bytes: rx, tx_bytes: tx, hw_rx_bytes: hrx, hw_tx_bytes: htx });
+	const rates = v => v.wired.map(w => [ w.port, w.rx, w.tx ]);
+	const [ hw, kernel, lost, gained, first ] = runModule([
+		/* both reports carry the chip's: its rate, not the kernel's (10 s apart) */
+		[ 'view', rep(h(110, 120, 25000, 50000), h(0, 0, 0, 0)), rep(h(100, 100, 0, 0), h(0, 0, 0, 0)), 10 ],
+		/* neither does (an access point without them, or before them): the kernel's, as before */
+		[ 'view', rep(k(1100, 2100), k(0, 0)), rep(k(100, 100), k(0, 0)), 10 ],
+		/* the chip's in the earlier one only, or in the later one only: no rate for that step */
+		[ 'view', rep(k(110, 120), k(0, 0)), rep(h(100, 100, 0, 0), k(0, 0)), 10 ],
+		[ 'view', rep(h(110, 120, 25000, 50000), k(0, 0)), rep(k(100, 100), k(0, 0)), 10 ],
+		[ 'view', rep(h(110, 120, 25000, 50000), k(0, 0)), null, 0 ]
+	]);
+	assert.deepEqual(rates(hw), [ [ 'lan2', 20000, 40000 ], [ 'lan3', null, null ], [ 'lan3', null, null ] ], 'a shared port has no rate of its host\'s, as before');
+	assert.deepEqual(rates(kernel)[0], [ 'lan2', 800, 1600 ]);
+	assert.deepEqual(rates(lost)[0], [ 'lan2', null, null ]);
+	assert.deepEqual(rates(gained)[0], [ 'lan2', null, null ]);
+	assert.deepEqual(rates(first)[0], [ 'lan2', null, null ]);
+});
+
+test('collector: an access point that starts sending the switch\'s counters gives no rate for that step, then theirs', { skip: NO_UCODE }, () => {
+	/* the access point is upgraded between two fetches: an old-shape report, then two of the new one */
+	const hwReport = (bytes, hw) => apReport(1, bytes, { ports: { lan2: { speed: 1000, rx_bytes: bytes, tx_bytes: bytes, hosts: 1, hw_rx_bytes: hw, hw_tx_bytes: 2 * hw } } });
+	const { results } = runCollector({ hosts: { '192.0.2.10': { out: apReport(1, 1000) } } }, [ ASK, wait(2), ASK,
+		{ write: [ 'hosts/192.0.2.10/out', hwReport(2000, 5e9) ] }, wait(10), ASK,
+		{ write: [ 'hosts/192.0.2.10/out', hwReport(3000, 5e9 + 1250000) ] }, wait(10), ASK ]);
+	const at = i => results[i].aps[0].report.wired[0];
+	assert.deepEqual([ at(2).rx, at(5).rx, at(5).tx ], [ null, null, null ], 'the kernel\'s, then the chip\'s: no rate across them');
+	/* 1250000 bytes more in 10 s on the chip's counters: 1 Mbit/s, not the kernel's 800 bit/s */
+	assert.deepEqual([ at(8).rx, at(8).tx ], [ 1000000, 2000000 ]);
+});
+
+/* The collector reads a report up to 256 KiB: twice what the fullest takes now (#156 review), so that a field an access
+   point adds later is not refused; the shell's file limit lets dbclient write just over that, never far more */
+test('collector: a report over 128 KiB is read, a field an access point may add later in it; one over 256 KiB is refused', { skip: NO_UCODE }, () => {
+	for (const [ size, state, error ] of [ [ 200000, 'ok', null ], [ 261500, 'ok', null ], [ 300000, 'error', 'invalid' ] ]) {
+		const out = apReport(1, 1000, { later: 'x'.repeat(size) });
+		const { results, sb } = runCollector({ hosts: { '192.0.2.10': { out } } }, [ ASK, wait(2), ASK ]);
+		const a = results[2].aps[0];
+		assert.deepEqual([ a.state, a.error ], [ state, error ], out.length + ' bytes');
+		if (state === 'ok') assert.deepEqual([ a.report.name, a.report.wired.length ], [ 'calls-itself-1', 1 ], 'the rest of it, as ever');
+		/* what dbclient wrote is gone, and was never more than the file limit */
+		assert.ok(!fs.existsSync(sb.p('run/' + AP1.id + '/out')));
+	}
+});
+
+/* The fullest report since each station carries its link (#155) and each port the switch's counters (#156): 256 stations
+   with rx_phy and tx_phy, 32 ports with hw_rx_bytes and hw_tx_bytes, 16 SSIDs, 128 wired hosts, every number at its
+   longest, and the free text (name, model, SSIDs) full of braces or commas, which the counts take as they stand */
+test('collector: the fullest report an access point can make now passes the counts, whatever its free text holds', { skip: NO_UCODE }, () => {
+	const B = 9007199254740991, PHY = { mhz: 640, mcs: 31, nss: 16, ht: false, vht: false, he: false, eht: false, sgi: false };
+	const full = fill => JSON.stringify({ v: 1, name: fill.repeat(63), model: fill.repeat(64), uptime: 2147483647, mac: MAC(99),
+		ssids: Array.from({ length: 16 }, (_, i) => ({ ifname: 'w' + i, bssid: MAC(i), ssid: fill.repeat(32), freq: 5180, channel: 36 })),
+		stations: Array.from({ length: 256 }, (_, i) => ({ mac: '02:00:5e:00:' + (i >> 8).toString(16).padStart(2, '0') + ':' + (i & 255).toString(16).padStart(2, '0'), ifname: 'w' + (i % 16),
+			signal: -120, rx_rate: 100000000, tx_rate: 100000000, rx_bytes: B, tx_bytes: B, connected: 2147483647, rx_phy: PHY, tx_phy: PHY })),
+		ports: Object.fromEntries(Array.from({ length: 32 }, (_, i) => [ 'lan' + i, { speed: 1000000, rx_bytes: B, tx_bytes: B, hosts: 4, hw_rx_bytes: B, hw_tx_bytes: B } ])),
+		wired: Array.from({ length: 128 }, (_, i) => ({ mac: '02:00:5e:01:00:' + i.toString(16).padStart(2, '0'), port: 'lan' + (i % 32) })) }) + '\n';
+	for (const fill of [ 'x', '{', '[', ',' ]) {
+		const out = full(fill);
+		const { results } = runCollector({ hosts: { '192.0.2.10': { out } } }, [ ASK, wait(2), ASK ]);
+		const a = results[2].aps[0], r = a.report;
+		assert.deepEqual([ a.state, a.error ], [ 'ok', null ], 'full of ' + fill + ': ' + out.length + ' bytes, ' + out.replace(/[^[{]/g, '').length + ' opened, ' + out.replace(/[^,]/g, '').length + ' commas');
+		assert.deepEqual([ r.ssids.length, r.stations.length, r.wired.length, r.stations[255].rxPhy.mhz ], [ 16, 256, 128, 640 ]);
+	}
 });

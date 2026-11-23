@@ -424,6 +424,13 @@ test('Appearance saved for every browser: only values the theme knows reach the 
 		assert.equal(view(o, 'layout'), '', 'anonymous');
 	}
 	assert.ok(!/data-vt-look-(chart|layout)/.test(renderLogin({ path: ADMIN, look: lay }).html), 'the login page has no use for them');
+	/* the network path's form (#157): handed over like the chart style, and only a form the theme knows */
+	assert.equal(view(renderPage({ path: ADMIN, authed: true, look: { path: 'compact' } }).html, 'path'), 'compact');
+	assert.equal(view(renderPage({ path: ADMIN, authed: true, look: { path: 'full' } }).html, 'path'), 'full');
+	assert.equal(view(renderPage({ path: [ 'admin', 'x' ], authed: false, look: { path: 'compact' } }).html, 'path'), '', 'anonymous');
+	assert.ok(!/data-vt-look-path/.test(renderLogin({ path: ADMIN, look: { path: 'compact' } }).html), 'the login page has no use for it');
+	for (const odd of [ HOSTILE, 'Compact', ' compact', 'compact ', 'cards', 'compact"', [ 'compact' ], {}, 1, '' ])
+		assert.equal(view(renderPage({ path: ADMIN, authed: true, look: { path: odd } }).html, 'path'), '', `path ${JSON.stringify(odd)}`);
 	for (const odd of [ HOSTILE, 'hero:0:4;mid=x', 'hero:0:4"', 'Hero:0:4', 'hero:9:9', 'hero:0:4 ', ' hero:0:4', 'hero', 'default x',
 		Array(13).fill('hero:0:1').join(' '), 'x'.repeat(9) + ':0:1', [ 'hero:0:4' ], {}, 1, '' ]) {
 		const page = renderPage({ path: ADMIN, authed: true, look: { chart: odd, layout_wide: odd } }).html;
@@ -444,7 +451,7 @@ test('Appearance saved for every browser: only values the theme knows reach the 
 	assert.equal(attrOf(renderPage({ path: [ 'admin', 'x' ], authed: false, acl: held, logins: root }).html, 'html', 'data-vt-look-save'), 'no', 'anonymous');
 	/* the inline scripts stay data-free: they read the attributes */
 	assert.deepEqual(inlineScripts(renderLogin({ path: ADMIN, look }).html), inlineScripts(renderLogin({ path: ADMIN }).html));
-	assert.deepEqual(inlineScripts(renderPage({ path: ADMIN, authed: true, look: Object.assign({}, look, lay) }).html), inlineScripts(renderPage({ path: ADMIN, authed: true }).html));
+	assert.deepEqual(inlineScripts(renderPage({ path: ADMIN, authed: true, look: Object.assign({ path: 'compact' }, look, lay) }).html), inlineScripts(renderPage({ path: ADMIN, authed: true }).html));
 });
 
 test('login form: post back without action, contract field names and autocomplete', () => {

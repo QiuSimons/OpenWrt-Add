@@ -144,3 +144,11 @@ test('paired access points: their rows, branches and wider nodes only under .vt-
 	/* a narrow node (a phone): the address column goes, the name keeps its room */
 	assert.match(css, /@container vtleaf \(max-width: 27em\)\s*\{[^@}]*\}\s*\.vt-app \.vt-path-mesh \.vt-leaf-ip \{ display: none; \}/);
 });
+
+test('a provider tile: a note without a break wraps, and nothing of its body reaches past the tile sideways', () => {
+	const rule = sel => (rules.find(r => r.sel === sel) || {}).body || '';
+	assert.match(rule('.vt-app .vt-ext-note'), /overflow-wrap:\s*anywhere/);
+	assert.match(rule('.vt-app .vt-ext'), /overflow-x:\s*clip/);
+	/* never downwards: a trend line's stroke at the bottom stays whole */
+	assert.doesNotMatch(rule('.vt-app .vt-ext'), /(?:^|[;\s])overflow(?:-y)?:/);
+});

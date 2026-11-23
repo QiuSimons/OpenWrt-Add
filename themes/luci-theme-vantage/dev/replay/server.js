@@ -10,7 +10,7 @@
    usage: node server.js --mirror <dir> [--port 8025] [--theme-dir <htdocs/luci-static/name>]
                          [--theme <name>] [--templates <ucode/template dir>] [--rootfs <dir>]
                          [--app-dir <package dir>]... [--keep-uniwrt] [--[no-]synthetic] [--demo]
-                         [--wired | --big] [--multiwan] [--fullvpn] [--aps] [--wg]
+                         [--wired | --big] [--dsa] [--multiwan] [--fullvpn] [--aps] [--wg] [--tiles] [--traffic]
                          [--lang <LuCI language, e.g. de or zh_Hans>] [--fixtures <dir>]...
 
    Pages are rendered like the device does: the dispatcher logic below
@@ -23,6 +23,11 @@
 
    --wired serves the device as a router without Wi-Fi (wired.js): no
    radios, the uplink renamed wan, synthetic lan/vpn/guest interfaces.
+
+   --dsa (with --wired) makes lan1 and lan2 a DSA switch's ports, whose
+   kernel counters see a trickle, and answers luci.vantage.ports counters
+   with the chip's own (dsa.js). Without it that call answers as on a
+   device without a DSA port.
 
    --big serves the device as a larger access point (big.js): four radios,
    ten networks, 74 stations, five wired ports with hosts behind them.
@@ -42,6 +47,16 @@
    and their peers (wg.js). Without it that object is absent and LuCI's
    group for it not held, as on a device without luci-proto-wireguard
    (unless the recording or a --fixtures plugin has the object).
+
+   --tiles answers two providers of dashboard tiles (tiles.js): the example
+   provider in tiles/ (vantage.tile.dns) and a modem stand-in, each granted
+   by an ACL group of its own. Without it no session holds such a grant and
+   the objects are absent, as on a device without a provider package.
+
+   --traffic answers luci.vantage.traffic hosts, luci-app-vantage-traffic's
+   per-device counters, for the wired hosts luci.vantage wired lists
+   (traffic.js), and holds that package's group. Without it the object is
+   absent and the group not held, as on a router without the package.
 
    --fixtures <dir> (repeatable) adds hand-written data for pages the
    recording lacks (fixtures.js): rpcd plugin stand-ins, uci configs, a small
@@ -82,6 +97,9 @@ const multiwan = require('./multiwan');
 const fullvpn = require('./fullvpn');
 const aps = require('./aps');
 const wg = require('./wg');
+const tiles = require('./tiles');
+const traffic = require('./traffic');
+const dsa = require('./dsa');
 
 /* ------------------------------------------------------------ arguments */
 
@@ -89,7 +107,9 @@ function parseArgs(argv) {
 	const o = { port: 8025, synthetic: true };
 	for (let i = 0; i < argv.length; i++) {
 		const m = /^--(mirror|port|theme-dir|theme|templates|rootfs|app-dir|lang|fixtures)(?:=(.*))?$/.exec(argv[i]);
-		if (!m) { if (argv[i] === '--keep-uniwrt') o.keepUniwrt = true; else if (argv[i] === '--synthetic') o.synthetic = true; else if (argv[i] === '--no-synthetic') o.synthetic = false; else if (argv[i] === '--demo') o.demo = true; else if (argv[i] === '--wired') o.wired = true; else if (argv[i] === '--big') o.big = true; else if (argv[i] === '--multiwan') o.multiwan = true; else if (argv[i] === '--fullvpn') o.fullvpn = true; else if (argv[i] === '--aps') o.aps = true; else if (argv[i] === '--wg') o.wg = true; else if (argv[i] === '-h' || argv[i] === '--help') o.help = true; else o.bad = argv[i]; continue; }
+		if (argv[i] === '--traffic') { o.traffic = true; continue; }
+		if (argv[i] === '--dsa') { o.dsa = true; continue; }
+		if (!m) { if (argv[i] === '--keep-uniwrt') o.keepUniwrt = true; else if (argv[i] === '--synthetic') o.synthetic = true; else if (argv[i] === '--no-synthetic') o.synthetic = false; else if (argv[i] === '--demo') o.demo = true; else if (argv[i] === '--wired') o.wired = true; else if (argv[i] === '--big') o.big = true; else if (argv[i] === '--multiwan') o.multiwan = true; else if (argv[i] === '--fullvpn') o.fullvpn = true; else if (argv[i] === '--aps') o.aps = true; else if (argv[i] === '--wg') o.wg = true; else if (argv[i] === '--tiles') o.tiles = true; else if (argv[i] === '-h' || argv[i] === '--help') o.help = true; else o.bad = argv[i]; continue; }
 		const v = (m[2] !== undefined) ? m[2] : argv[++i];
 		if (m[1] === 'app-dir') (o.appDirs = o.appDirs || []).push(v);
 		else if (m[1] === 'fixtures') (o.fixtures = o.fixtures || []).push(v);
@@ -98,13 +118,14 @@ function parseArgs(argv) {
 	return o;
 }
 
-const USAGE = 'usage: server.js --mirror <dir> [--port 8025] [--theme-dir <htdocs/luci-static/name>] [--theme <name>] [--templates <dir>] [--rootfs <dir>] [--app-dir <pkg>]... [--keep-uniwrt] [--no-synthetic] [--demo] [--wired | --big] [--multiwan] [--fullvpn] [--aps] [--wg] [--lang <lang>] [--fixtures <dir>]...';
+const USAGE = 'usage: server.js --mirror <dir> [--port 8025] [--theme-dir <htdocs/luci-static/name>] [--theme <name>] [--templates <dir>] [--rootfs <dir>] [--app-dir <pkg>]... [--keep-uniwrt] [--no-synthetic] [--demo] [--wired | --big] [--dsa] [--multiwan] [--fullvpn] [--aps] [--wg] [--tiles] [--traffic] [--lang <lang>] [--fixtures <dir>]...';
 const opts = parseArgs(process.argv.slice(2));
 if (opts.help || opts.bad || !opts.mirror) {
 	console.error(opts.bad ? `unknown argument ${opts.bad}\n${USAGE}` : USAGE);
 	process.exit(2);
 }
 if (opts.wired && opts.big) { console.error(`--wired and --big are two different devices\n${USAGE}`); process.exit(2); }
+if (opts.dsa && !opts.wired) { console.error(`--dsa makes --wired's ports a switch's\n${USAGE}`); process.exit(2); }
 function readText(file) { try { return fs.readFileSync(file, 'utf8'); } catch (e) { return ''; } }
 
 const port = parseInt(opts.port, 10);
@@ -465,8 +486,23 @@ function buildUrl(...p) {
 
 /* the logged-in session's groups, as rpcd grants them to root (read and
    write '*'): every group of the packages' rpcd ACL files, for templates
-   that look at ctx.authacl (the theme's Appearance) */
-const ACL_GROUPS = {};
+   that look at ctx.authacl (the theme's Appearance); with --tiles the
+   providers' too (tiles.js). ACL_UBUS: the ubus objects and methods those
+   groups grant, what rpcd answers for the session's whole ACL (session
+   access without an object), which the dashboard reads for its provider
+   tiles */
+const ACL_GROUPS = {}, ACL_UBUS = {};
+function grantGroups(acl) {
+	for (const g of Object.keys(acl && typeof acl === 'object' ? acl : {})) {
+		if (!/^[A-Za-z0-9_.-]+$/.test(g)) continue;
+		ACL_GROUPS[g] = [ 'read', 'write' ];
+		for (const kind of [ 'read', 'write' ]) {
+			const u = acl[g] && acl[g][kind] && acl[g][kind].ubus;
+			for (const o of Object.keys(u && typeof u === 'object' ? u : {}))
+				if (Array.isArray(u[o])) ACL_UBUS[o] = [ ...new Set((ACL_UBUS[o] || []).concat(u[o].filter(x => typeof x === 'string'))) ];
+		}
+	}
+}
 for (const d of appDirs.concat(themeDir ? [ path.resolve(themeDir, '../../..') ] : [])) {
 	const adir = path.join(d, 'root/usr/share/rpcd/acl.d');
 	let files = [];
@@ -474,10 +510,11 @@ for (const d of appDirs.concat(themeDir ? [ path.resolve(themeDir, '../../..') ]
 	for (const f of files) {
 		let acl = null;
 		try { acl = JSON.parse(readText(path.join(adir, f))); } catch (e) {}
-		for (const g of Object.keys(acl && typeof acl === 'object' ? acl : {}))
-			if (/^[A-Za-z0-9_.-]+$/.test(g)) ACL_GROUPS[g] = [ 'read', 'write' ];
+		grantGroups(acl);
 	}
 }
+if (opts.tiles) grantGroups(tiles.acl());
+if (opts.traffic) grantGroups(traffic.acl());
 
 /* ucode environment the templates see */
 function templateEnv(req, resolved, loggedIn, form) {
@@ -631,6 +668,24 @@ function ubusReply(msg) {
 		const devs = Array.isArray(all) && all[0] === 0 && all[1] && typeof all[1] === 'object' ? all[1] : null;
 		return Object.assign(reply, { result: devs && Object.prototype.hasOwnProperty.call(devs, args.name) ? [ 0, devs[args.name] ] : [ 4 ] });
 	}
+	/* the session's whole ACL (rpcd answers it to session access without
+	   an object and a function): its groups and the ubus grants of the
+	   packages' ACL files, as root has them */
+	if (object === 'session' && method === 'access' && !(args && args.object != null && args.function != null))
+		return Object.assign(reply, { result: [ 0, { 'access-group': Object.assign({}, ACL_GROUPS), ubus: JSON.parse(JSON.stringify(ACL_UBUS)) } ] });
+	/* providers of dashboard tiles: a --fixtures plugin's, else with
+	   --tiles tiles.js's, else absent */
+	if (/^vantage\.tile\./.test(object) && !store.plugins.has(object))
+		return Object.assign(reply, opts.tiles ? tiles.transform(object, method, args) : { error: { code: -32000, message: 'Object not found' } });
+	/* luci-app-vantage-traffic, its rpcd object and its ACL group: there
+	   with --traffic (traffic.js answers for the wired hosts this replay
+	   lists, as the other modes made them); else the group is not held
+	   and the object is absent, as on a router without the package */
+	if (object === 'session' && method === 'access' && args && args.scope === 'access-group' && args.object === 'luci-app-vantage-traffic')
+		return Object.assign(reply, { result: [ 0, { access: !!opts.traffic } ] });
+	if (object === 'luci.vantage.traffic')
+		return Object.assign(reply, opts.traffic ? traffic.transform(object, method, args,
+			ubusReply({ jsonrpc: '2.0', id: reply.id, method: 'call', params: [ sid, 'luci.vantage', 'wired', {} ] })) : { error: { code: -32000, message: 'Object not found' } });
 	/* luci-proto-wireguard, its rpcd object and its ACL group: there with
 	   --wg (wg.js answers the status call), or where the recording or a
 	   fixture's plugin has the object; else the group is not held and the
@@ -643,12 +698,18 @@ function ubusReply(msg) {
 	}
 	if (opts.wg && object === 'luci.wireguard' && method === 'getWgInstances')
 		return Object.assign(reply, wg.transform(object, method, args, null));
+	/* the dashboard's switch counters plugin (luci.vantage.ports): with
+	   --dsa the chip's counters for --wired's ports (dsa.js), else the
+	   plugin's answer on a device without a DSA port */
+	if (object === 'luci.vantage.ports')
+		return Object.assign(reply, method === 'counters' ? { result: [ 0, opts.dsa ? dsa.counters(Date.now() / 1000) : dsa.NONE ] } : { error: { code: -32601, message: 'Method not found' } });
 	/* the collector service runs only with an access point paired:
 	   without --aps the object is absent, as uhttpd answers one */
 	if (object === 'vantage.collector')
 		return Object.assign(reply, opts.aps ? aps.transform(object, method, args, null) : { error: { code: -32000, message: 'Object not found' } });
 	const r = store.call(object, method, args || {});
-	const dev = opts.wired ? wired.transform(object, method, args, r) : opts.big ? big.transform(object, method, args, r) : r;
+	const dev0 = opts.wired ? wired.transform(object, method, args, r) : opts.big ? big.transform(object, method, args, r) : r;
+	const dev = opts.dsa ? dsa.transform(object, method, args, dev0) : dev0;
 	const lines = opts.multiwan ? multiwan.transform(object, method, args, dev) : dev;
 	const vpn = opts.fullvpn ? fullvpn.transform(object, method, args, lines) : lines;
 	return Object.assign(reply, opts.aps ? aps.transform(object, method, args, vpn) : vpn);

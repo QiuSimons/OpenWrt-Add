@@ -9,9 +9,10 @@
 # SDK image. The SDK entrypoint is openwrt/gh-action-sdk's, pinned by hash.
 # The SDK image is pinned by digest (table below). Every package is checked
 # by security-tests/verify_built_apk.js before anything reaches
-# dist/<release>/, which then holds exactly the three packages, one language
+# dist/<release>/, which then holds exactly the four packages, one language
 # package per po/<lang>/ directory of each (luci-i18n-vantage-<lc>,
-# luci-i18n-vantage-aps-<lc>, luci-i18n-vantage-theme-<lc>), SHA256SUMS and BUILDINFO (plus the signed
+# luci-i18n-vantage-aps-<lc>, luci-i18n-vantage-traffic-<lc>,
+# luci-i18n-vantage-theme-<lc>), SHA256SUMS and BUILDINFO (plus the signed
 # index when signing). Exits 0 only when all of them were built, verified
 # and hashed.
 #
@@ -31,7 +32,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
 release=${1:-25.12.4}
-packages="luci-theme-vantage luci-app-vantage luci-app-vantage-aps"
+packages="luci-theme-vantage luci-app-vantage luci-app-vantage-aps luci-app-vantage-traffic"
 
 die() { echo "sdk-build: $*" >&2; exit 2; }
 

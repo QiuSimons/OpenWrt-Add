@@ -8,7 +8,7 @@ Nothing is forwarded anywhere; there is no upstream.
         [--theme-dir <pkg>/htdocs/luci-static/<name>] [--theme <name>] \
         [--templates <pkg>/ucode/template] [--rootfs <device rootfs dump>] \
         [--app-dir <luci-app package dir>]... [--keep-uniwrt] [--no-synthetic] \
-        [--demo] [--wired | --big] [--multiwan] [--fullvpn] [--aps] [--wg] [--lang <lang>] [--fixtures <dir>]...
+        [--demo] [--wired | --big] [--dsa] [--multiwan] [--fullvpn] [--aps] [--wg] [--tiles] [--traffic] [--lang <lang>] [--fixtures <dir>]...
 
 Open <http://127.0.0.1:8025/>. Any username/password logs in; the session
 lasts until the replay restarts (log in again after a restart).
@@ -136,7 +136,10 @@ Routing follows the device dispatcher: the recorded menu
   local time keep counting across wrap-arounds); then browser rows (exact
   args); then the same object/method with other args (not for `file`/`uci`).
   Unknown calls answer `[4]` (UBUS_STATUS_NOT_FOUND).
-- `session access` is always granted.
+- `session access` is always granted. Without an object and a function
+  it answers the session's whole ACL, as rpcd does: the groups of the
+  packages' ACL files (`--app-dir`, the theme, `--tiles`) and the ubus
+  methods they grant, as root holds them.
 - `uci`: an in-memory overlay seeded from recorded `uci get`;
   set/add/delete/rename/order stage changes, `uci changes` lists them,
   apply/commit/confirm/revert (RPC and `/admin/uci/*`) succeed. Save & Apply
@@ -213,6 +216,19 @@ documentation addresses and growing counters are added. The switch ports
 `lan1` and `lan2` list the link modes they support, as netifd does for a
 port, so with the recorded `eth0` the dashboard's Ports tile has three
 (the recording alone has one port, and no tile). Combine it with
+`--demo` as usual.
+
+## A DSA switch (`--dsa`)
+
+With `--wired`, makes `lan1` and `lan2` the ports of a switch chip under
+DSA (`dsa.js`), to see the dashboard count such ports by the chip's own
+counters (#156): netifd types them `dsa`, their kernel counters see a
+fiftieth of their traffic (what passes the CPU), and `luci.vantage.ports
+counters` answers as the dashboard's plugin does on a router, with the
+chip's counters at the ports' full rates, each with the time it was read. The Ports tile and the Wired
+branch then show `lan1` at about 18 Mbit/s down, not a fiftieth of it.
+Without `--dsa` that call answers as on a device without a DSA port
+(`state: 'none'`), and the dashboard asks no more. Combine it with
 `--demo` as usual.
 
 ## A bigger access point (`--big`)
@@ -296,6 +312,38 @@ so the dashboard asks for nothing; a recording or a `--fixtures` plugin
 that has the object answers as before (`addons.sh`). Keys are hashes of
 a label, addresses documentation values, names invented. Combine it with
 the other modes.
+
+## Provider tiles (`--tiles`)
+
+Answers two providers of dashboard tiles another package would install
+(#129), to work on the dashboard's side of the hook (`tiles.js`):
+`vantage.tile.dns`, the example provider in `tiles/` (an rpcd ucode
+plugin that reads dnsmasq's ubus metrics, and its own ACL group), over
+synthetic dnsmasq counters, and `vantage.tile.modem`, a stand-in for a
+mobile backup line (signal with levels, band and operator as text, its
+traffic). The session holds a group for each, so the dashboard finds them
+in its ACL. Without `--tiles` no group grants them and the objects are
+absent, as on a router without a provider package; a `--fixtures` plugin
+that answers a `vantage.tile.*` object answers it in either case (its
+grant comes from an `--app-dir`'s ACL file). Numbers and names are
+invented. Combine it with the other modes. The contract, and how to try
+a provider of your own here: [`docs/TILES.md`](../../docs/TILES.md).
+
+## Per-device traffic (`--traffic`)
+
+Answers `luci.vantage.traffic hosts` as luci-app-vantage-traffic's rpcd
+plugin does on a router (#110, experimental), to work on the dashboard's
+rate through the router for hosts that share a port (`traffic.js`): one
+read every 5 s, shared by every call in between, with byte counters that
+only grow for each wired host the replay's own `luci.vantage wired` lists
+(as the other modes made it), a rate per host from a hash of its MAC and
+a fifth of them idle. The session holds the package's group. Without
+`--traffic` the object is absent (uhttpd's "Object not found") and the
+group is not held, as on a router without the package, so the dashboard
+asks for nothing. Use it with `--wired` (three hosts share `lan2`) or
+`--big`: on the recorded access point every host is on the line's own
+network, where the dashboard shows no such rate. No address of either end
+is in the answer. Combine it with the other modes.
 
 ## Translation preview (`--lang`)
 

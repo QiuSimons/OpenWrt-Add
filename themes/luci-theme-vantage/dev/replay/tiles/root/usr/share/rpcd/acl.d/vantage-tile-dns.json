@@ -1,0 +1,10 @@
+{
+	"vantage-tile-dns": {
+		"description": "Vantage dashboard: the DNS tile (vantage.tile.dns status: dnsmasq's query counters, read-only)",
+		"read": {
+			"ubus": {
+				"vantage.tile.dns": [ "status" ]
+			}
+		}
+	}
+}

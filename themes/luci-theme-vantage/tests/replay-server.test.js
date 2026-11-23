@@ -124,6 +124,9 @@ test('replay server: host, origin, session, headers, escaping, logs', { skip, ti
 		const access = (group, id) => rpc(sid, 'session', 'access', { scope: 'access-group', object: group, function: 'read' }, id);
 		const nowg = JSON.parse((await req('POST', '/ubus/', { headers: JSONH, body: `[${access('luci-proto-wireguard', 1)},${access('luci-app-vantage', 2)},${rpc(sid, 'luci.wireguard', 'getWgInstances', {}, 3)},${rpc(sid, 'luci.wireguard', 'generateKeyPair', {}, 4)}]` })).body);
 		assert.deepEqual(nowg.map(r => r.result || r.error), [ [ 0, { access: false } ], [ 0, { access: true } ], { code: -32000, message: 'Object not found' }, { code: -32000, message: 'Object not found' } ]);
+		/* nor, without --traffic, luci-app-vantage-traffic */
+		const notraffic = JSON.parse((await req('POST', '/ubus/', { headers: JSONH, body: `[${access('luci-app-vantage-traffic', 1)},${rpc(sid, 'luci.vantage.traffic', 'hosts', {}, 2)}]` })).body);
+		assert.deepEqual(notraffic.map(r => r.result || r.error), [ [ 0, { access: false } ], { code: -32000, message: 'Object not found' } ]);
 
 		/* app plugin stand-ins (dev/replay/*-plugin.js) are loaded and answer */
 		for (const f of fs.readdirSync(path.join(ROOT, 'dev/replay')).filter(f => /-plugin\.js$/.test(f))) {
@@ -203,6 +206,36 @@ test('replay server: --wg answers luci.wireguard getWgInstances with two tunnels
 	}
 });
 
+/* --traffic: luci-app-vantage-traffic's counters for the wired hosts the replay lists, its group held */
+test('replay server: --traffic answers luci.vantage.traffic hosts for the wired hosts, one read every 5 s', { skip, timeout: 60000 }, async () => {
+	const port = await freePort();
+	const srv = spawn(process.execPath, [ path.join(ROOT, 'dev/replay/server.js'), '--mirror', MIRROR, '--rootfs', ROOTFS, '--port', String(port),
+		'--app-dir', path.join(ROOT, 'luci-app-vantage'), '--demo', '--wired', '--traffic' ], { stdio: [ 'ignore', 'ignore', 'pipe' ] });
+	let log = '';
+	srv.stderr.on('data', d => { log += d; });
+	try {
+		for (let i = 0; i < 200 && !log.includes('[replay] http://'); i++) await new Promise(r => setTimeout(r, 50));
+		assert.match(log, /\[replay\] http:\/\//, log);
+		const login = await request(port, 'POST', '/cgi-bin/luci/', { headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: `http://127.0.0.1:${port}` }, body: 'luci_username=root&luci_password=x' });
+		const sid = login.headers['set-cookie'][0].split(';')[0].split('=')[1];
+		const call = async (s, object, method, args) => JSON.parse((await request(port, 'POST', '/ubus/', { headers: JSONH, body: rpc(s, object, method, args) })).body);
+		assert.deepEqual((await call(sid, 'session', 'access', { scope: 'access-group', object: 'luci-app-vantage-traffic', function: 'read' })).result, [ 0, { access: true } ]);
+		const wired = (await call(sid, 'luci.vantage', 'wired')).result[1].hosts.map(h => h.mac).sort();
+		const r = await call(sid, 'luci.vantage.traffic', 'hosts');
+		assert.equal(r.result[0], 0);
+		const a = r.result[1];
+		assert.deepEqual(a.hosts.map(h => h.mac), wired, 'the wired hosts the replay lists');
+		for (const h of a.hosts) assert.deepEqual(Object.keys(h), [ 'mac', 'rx', 'tx' ]);
+		assert.deepEqual([ a.acct, a.every, a.partial, a.at % 5000 ], [ true, 5000, false, 0 ]);
+		assert.ok(a.hosts.every(h => /^00:00:5e:00:53:[0-9a-f]{2}$|^02:00:5e:/.test(h.mac)), 'documentation MACs');
+		/* not without the login */
+		assert.equal((await call(ZERO, 'luci.vantage.traffic', 'hosts')).error.code, -32002);
+	}
+	finally {
+		srv.kill('SIGTERM');
+	}
+});
+
 /* --lang: the packages' po/<lang>/*.po over the recorded catalogue, in
    /admin/translations/<lc> (what cbi.js reads) and in the templates' _() */
 test('replay server: --lang previews the package catalogues', { skip, timeout: 60000 }, async () => {
@@ -255,4 +288,52 @@ test('replay server: --lang previews the package catalogues', { skip, timeout: 6
 	const code = await new Promise(r => bad.on('exit', r));
 	assert.equal(code, 2);
 	assert.match(err, /--lang xx: not a LuCI language/);
+});
+
+/* --dsa: --wired's ports as a DSA switch's, the dashboard's switch counters plugin answering with the chip's own (#156) */
+test('replay server: --dsa types --wired\'s ports dsa and answers luci.vantage.ports counters with the chip\'s counters', { skip, timeout: 60000 }, async () => {
+	const start = async extra => {
+		const port = await freePort();
+		const srv = spawn(process.execPath, [ path.join(ROOT, 'dev/replay/server.js'), '--mirror', MIRROR, '--rootfs', ROOTFS, '--port', String(port),
+			'--app-dir', path.join(ROOT, 'luci-app-vantage'), '--demo', '--wired' ].concat(extra), { stdio: [ 'ignore', 'ignore', 'pipe' ] });
+		let log = '';
+		srv.stderr.on('data', d => { log += d; });
+		for (let i = 0; i < 200 && !log.includes('[replay] http://'); i++) await new Promise(r => setTimeout(r, 50));
+		assert.match(log, /\[replay\] http:\/\//, log);
+		const login = await request(port, 'POST', '/cgi-bin/luci/', { headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: `http://127.0.0.1:${port}` }, body: 'luci_username=root&luci_password=x' });
+		const sid = login.headers['set-cookie'][0].split(';')[0].split('=')[1];
+		const call = async (s, object, method, args) => JSON.parse((await request(port, 'POST', '/ubus/', { headers: JSONH, body: rpc(s, object, method, args) })).body);
+		return { srv, sid, call };
+	};
+	const a = await start([ '--dsa' ]);
+	try {
+		const devs = (await a.call(a.sid, 'network.device', 'status')).result[1];
+		assert.deepEqual([ devs.lan1.devtype, devs.lan2.devtype ], [ 'dsa', 'dsa' ]);
+		const r = await a.call(a.sid, 'luci.vantage.ports', 'counters');
+		assert.equal(r.result[0], 0);
+		assert.deepEqual([ r.result[1].v, r.result[1].state, Object.keys(r.result[1].ports) ], [ 1, 'ok', [ 'lan1', 'lan2' ] ]);
+		/* each reading with its time on the device's clock, which a later one is ahead of */
+		assert.ok(Number.isInteger(r.result[1].ports.lan1.at) && r.result[1].ports.lan1.at >= 0);
+		await new Promise(res => setTimeout(res, 50));
+		assert.ok((await a.call(a.sid, 'luci.vantage.ports', 'counters')).result[1].ports.lan1.at > r.result[1].ports.lan1.at);
+		/* the chip counts what the kernel's counters miss */
+		assert.ok(r.result[1].ports.lan1.tx_bytes > devs.lan1.statistics.tx_bytes * 10);
+		assert.equal((await a.call(ZERO, 'luci.vantage.ports', 'counters')).error.code, -32002, 'not without the login');
+	}
+	finally {
+		const gone = new Promise(r => a.srv.once('exit', r));
+		a.srv.kill('SIGTERM');
+		await gone;
+	}
+	/* without it: a device without a DSA port */
+	const b = await start([]);
+	try {
+		assert.deepEqual((await b.call(b.sid, 'luci.vantage.ports', 'counters')).result, [ 0, { v: 1, state: 'none', took: 0, more: false, ports: {} } ]);
+		assert.equal((await b.call(b.sid, 'network.device', 'status')).result[1].lan1.devtype, 'ethernet');
+	}
+	finally {
+		const gone = new Promise(r => b.srv.once('exit', r));
+		b.srv.kill('SIGTERM');
+		await gone;
+	}
 });

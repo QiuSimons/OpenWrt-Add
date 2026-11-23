@@ -2330,3 +2330,58 @@ test('build: on a bridge the mark is the port the gateway was learned on, never 
 	assert.deepEqual(portsOf({ devs: old, switches: wide, switchState: {}, ifaces: [ wan ] }).marks, []);
 	assert.deepEqual(portsOf({ devs: old, switches: wide, switchState: { switch0: [ { port: 5, link: false }, { port: 6, link: true, speed: 1000, duplex: true } ] }, ifaces: [ wan ] }).marks, [ [ 'switch0 6', [ 'wan' ] ] ], 'the one with a link');
 });
+
+/* #155: a paired access point's station carries its link as the access point saw it (rx_phy, tx_phy; sgi: HT and VHT's
+   short guard interval only). The collector checked it; this device checks it again, field by field, and the link it
+   shows for the station is built from it */
+const sta21 = extra => Object.assign({ mac: '00:00:5e:00:53:21', ifname: 'phy1-ap0', signal: -61, rxRate: 72200, txRate: 144400, rx: 8000, tx: 64000, connected: 120 }, extra);
+const phyOf = p => {
+	const a = model.collectorAps({ aps: [ ap(AP1, 'ap-hall', report({ stations: [ sta21({ rxPhy: p, txPhy: p }) ] })) ] })[0];
+	assert.deepEqual(a.sta[0].txPhy, a.sta[0].rxPhy, 'the same check both ways');
+	return a.sta[0].rxPhy;
+};
+const NO_FLAGS = { ht: false, vht: false, he: false, eht: false, short_gi: false };
+
+test('collector: a station\'s link: width, MCS and streams in their ranges and whole, each else unknown', () => {
+	assert.deepEqual(phyOf({ mhz: 1, mcs: 0, nss: 1 }), Object.assign({ mhz: 1, mcs: 0, nss: 1 }, NO_FLAGS), 'the lowest');
+	assert.deepEqual(phyOf({ mhz: 640, mcs: 31, nss: 16 }), Object.assign({ mhz: 640, mcs: 31, nss: 16 }, NO_FLAGS), 'the highest');
+	for (const [ field, bad ] of [ [ 'mhz', 0 ], [ 'mhz', 641 ], [ 'mhz', 80.5 ], [ 'mhz', '80' ], [ 'mhz', -20 ], [ 'mhz', Infinity ],
+		[ 'mcs', -1 ], [ 'mcs', 32 ], [ 'mcs', 9.5 ], [ 'mcs', '9' ], [ 'mcs', null ],
+		[ 'nss', 0 ], [ 'nss', 17 ], [ 'nss', 1.5 ], [ 'nss', '2' ], [ 'nss', true ] ]) {
+		const p = Object.assign({ mhz: 80, mcs: 9, nss: 2 }, { [field]: bad });
+		assert.deepEqual(phyOf(p), Object.assign({ mhz: 80, mcs: 9, nss: 2 }, NO_FLAGS, { [field]: null }), field + ' ' + String(bad));
+	}
+	for (const junk of [ null, 'fast', [ 80 ], 7, true ]) assert.equal(phyOf(junk), null, JSON.stringify(junk));
+});
+
+test('collector: a station\'s link: each flag its own and only when true; short GI is sgi, the report\'s word', () => {
+	for (const f of [ 'ht', 'vht', 'he', 'eht' ])
+		assert.deepEqual(phyOf({ mhz: 80, [f]: true }), Object.assign({ mhz: 80, mcs: null, nss: null }, NO_FLAGS, { [f]: true }), f);
+	assert.deepEqual(phyOf({ mhz: 80, sgi: true }), Object.assign({ mhz: 80, mcs: null, nss: null }, NO_FLAGS, { short_gi: true }), 'sgi');
+	/* not true: false, whatever else it is; and a short_gi the report does not send is not read */
+	for (const v of [ 'yes', 1, 'true', {}, [ true ], null ])
+		assert.deepEqual(phyOf({ mhz: 80, ht: v, vht: v, he: v, eht: v, sgi: v }), Object.assign({ mhz: 80, mcs: null, nss: null }, NO_FLAGS), JSON.stringify(v));
+	assert.deepEqual(phyOf({ mhz: 80, short_gi: true }), Object.assign({ mhz: 80, mcs: null, nss: null }, NO_FLAGS));
+});
+
+test('build: a paired access point\'s station shows the link it reports, each way, where it reports one and a rate', () => {
+	const wifi = load('vantage.wifi');
+	const built = st => model.build(router({ aps: [ ap(AP1, 'ap-hall', report({ stations: [ sta21(st) ] })) ] })).clients.filter(x => x.ap)[0];
+	const rxPhy = { mhz: 80, mcs: 9, nss: 2, ht: false, vht: true, he: false, eht: false, sgi: true };
+	const txPhy = { mhz: 40, mcs: 7, nss: 1, ht: false, vht: false, he: true, eht: false, sgi: false };
+	const c = built({ rxPhy, txPhy });
+	assert.deepEqual(c.rx, wifi.phy({ rate: 72200, mhz: 80, mcs: 9, nss: 2, ht: false, vht: true, he: false, eht: false, short_gi: true }));
+	assert.deepEqual(c.tx, wifi.phy({ rate: 144400, mhz: 40, mcs: 7, nss: 1, ht: false, vht: false, he: true, eht: false, short_gi: false }));
+	assert.deepEqual([ c.rx.mhz, c.rx.mcs, c.rx.nss, c.rx.detail, c.tx.mhz, c.tx.mcs, c.tx.detail ], [ 80, 9, 2, 'MCS 9 · 2×2 · short GI', 40, 7, 'MCS 7 · 1×1' ]);
+	/* one way only: the other is the rate alone, as without a link */
+	const rxOnly = built({ rxPhy });
+	assert.deepEqual([ rxOnly.rx.mhz, rxOnly.tx.mhz, rxOnly.tx.detail, rxOnly.tx.rate ], [ 80, null, '', 144400 ]);
+	const txOnly = built({ txPhy });
+	assert.deepEqual([ txOnly.rx.mhz, txOnly.rx.detail, txOnly.tx.mhz ], [ null, '', 40 ]);
+	/* a link without a rate shows none: no width or MCS of a rate nobody reported */
+	const noRate = built({ rxPhy, txPhy, rxRate: null, txRate: 0 });
+	assert.deepEqual([ noRate.rx, noRate.tx ], [ null, null ]);
+	/* no link at all: the rates alone, as before #155 */
+	const none = built({});
+	assert.deepEqual([ none.rx.mhz, none.rx.detail, none.tx.mhz, none.rx.rate ], [ null, '', null, 72200 ]);
+});

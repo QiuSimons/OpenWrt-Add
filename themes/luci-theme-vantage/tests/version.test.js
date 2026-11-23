@@ -17,7 +17,7 @@ test('version: what the dashboard and the theme show is their Makefile\'s', () =
 		pkgVersion('luci-theme-vantage'), 'menu-vantage.js');
 });
 
-test('version: the three packages of a release carry one version', () => {
-	for (const pkg of [ 'luci-theme-vantage', 'luci-app-vantage-aps' ])
+test('version: the packages of a release carry one version', () => {
+	for (const pkg of [ 'luci-theme-vantage', 'luci-app-vantage-aps', 'luci-app-vantage-traffic' ])
 		assert.equal(pkgVersion(pkg), pkgVersion('luci-app-vantage'), pkg);
 });

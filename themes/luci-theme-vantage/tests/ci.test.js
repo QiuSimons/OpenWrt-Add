@@ -1,10 +1,10 @@
 'use strict';
 /* The release signing keys stay behind the release-signing environment
    (security review SEC-005): only the build job names them, and only a
-   tag push puts that job in the environment. The Pages job deploys its
-   own attempt's artifact, so a re-run needs no artifacts deleted, and tries
-   the deploy once more when the artifact list lags the upload (v1.0.21,
-   v1.1.0). */
+   tag push puts that job in the environment. The Pages job tries the
+   deploy once more when the artifact list lags the upload (v1.0.21,
+   v1.1.0); before a re-run, that run's github-pages artifact is deleted
+   by hand (CONTRIBUTING.md, release step 5). */
 
 const test = require('node:test');
 const assert = require('node:assert/strict');

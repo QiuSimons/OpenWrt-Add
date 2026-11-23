@@ -8,8 +8,8 @@
  *   node security-tests/verify_built_apk.js [options] <package or directory>...
  *
  *   --src <dir>         source tree the packages were built from (a checkout
- *                       holding luci-theme-vantage/, luci-app-vantage/ and
- *                       luci-app-vantage-aps/)
+ *                       holding luci-theme-vantage/, luci-app-vantage/,
+ *                       luci-app-vantage-aps/ and luci-app-vantage-traffic/)
  *   --rev <git-rev>     use `git archive <rev>` of this repository as source
  *                       (default: the rev in BUILDINFO next to the packages)
  *   --apk-tool <path>   apk-tools 3 binary (default: $VANTAGE_APK, then
@@ -88,7 +88,7 @@ const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const PACKAGES = [ 'luci-theme-vantage', 'luci-app-vantage', 'luci-app-vantage-aps' ];
+const PACKAGES = [ 'luci-theme-vantage', 'luci-app-vantage', 'luci-app-vantage-aps', 'luci-app-vantage-traffic' ];
 /* files the device runs: 0755 in the package whatever git has (luci.mk
    makes uci-defaults executable itself; an init script or a libexec
    program that lost its bit in git would ship dead, and fails here) */

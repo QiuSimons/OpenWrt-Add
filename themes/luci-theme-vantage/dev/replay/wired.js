@@ -125,4 +125,4 @@ function transform(object, method, args, reply) {
 	return reply;
 }
 
-module.exports = { transform, modes, NETS, PORTS, HOSTS };
+module.exports = { transform, modes, counters, NETS, PORTS, HOSTS };

@@ -185,8 +185,10 @@
  *
  * Usage
  *   node check_dom_sinks.js [paths...]     default: the htdocs of
- *                                          luci-theme-vantage, luci-app-vantage
- *                                          and luci-app-vantage-aps
+ *                                          luci-theme-vantage, luci-app-vantage,
+ *                                          luci-app-vantage-aps and
+ *                                          luci-app-vantage-traffic (where
+ *                                          there is one)
  *   node check_dom_sinks.js --self-test    runs security-tests/fixtures
  */
 'use strict';
@@ -1955,7 +1957,7 @@ function selfTest() {
 
 function main(argv) {
 	if (argv[0] === '--self-test') return selfTest() ? 0 : 1;
-	const roots = argv.length ? argv : [ 'luci-theme-vantage', 'luci-app-vantage', 'luci-app-vantage-aps' ]
+	const roots = argv.length ? argv : [ 'luci-theme-vantage', 'luci-app-vantage', 'luci-app-vantage-aps', 'luci-app-vantage-traffic' ]
 		.map((pkg) => path.join(__dirname, '..', pkg, 'htdocs')).filter((p) => fs.existsSync(p));
 	const files = [];
 	for (const r of roots) collect(r, files);

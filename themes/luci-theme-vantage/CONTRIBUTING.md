@@ -85,6 +85,8 @@ Each package has its own catalogue, generated with LuCI's own tools:
 |---|---|---|
 | dashboard | `luci-app-vantage/po/templates/vantage.pot` | `luci-app-vantage/po/<lang>/vantage.po` |
 | theme | `luci-theme-vantage/po/templates/vantage-theme.pot` | `luci-theme-vantage/po/<lang>/vantage-theme.po` |
+| access points add-on | `luci-app-vantage-aps/po/templates/vantage-aps.pot` | `luci-app-vantage-aps/po/<lang>/vantage-aps.po` |
+| traffic add-on | `luci-app-vantage-traffic/po/templates/vantage-traffic.pot` | `luci-app-vantage-traffic/po/<lang>/vantage-traffic.po` |
 
 `dev/i18n/update.sh` needs git, perl and GNU gettext (Debian/Ubuntu:
 `apt install gettext`; macOS: `brew install gettext`). On its first run it
@@ -99,7 +101,7 @@ fetches LuCI's i18n scripts at the commit the pinned SDK builds with
 dev/i18n/update.sh --add de
 ```
 
-This creates both catalogues from the templates. Translate them with any
+This creates the four catalogues from the templates. Translate them with any
 PO editor (Poedit, Lokalize, or a text editor): fill in each `msgstr`. An
 empty `msgstr` keeps the English text, so you can translate in several
 steps.
@@ -154,8 +156,9 @@ keeping the display format in a format string (`_('%s Gbit/s').format(v)`,
 helper, run `dev/i18n/update.sh` and commit the templates with it.
 
 CI builds one language package per package and language
-(`luci-i18n-vantage-<lang>` and `luci-i18n-vantage-theme-<lang>`, with
-`<lang>` as LuCI's package suffix, e.g. `zh-cn`) and checks each against
+(`luci-i18n-vantage-<lang>`, `luci-i18n-vantage-theme-<lang>`,
+`luci-i18n-vantage-aps-<lang>` and `luci-i18n-vantage-traffic-<lang>`,
+with `<lang>` as LuCI's package suffix, e.g. `zh-cn`) and checks each against
 your catalogues; there is nothing else to set up.
 
 ## Rules
@@ -220,7 +223,7 @@ SDK.
 ## Releases
 
 1. Add the release to `CHANGELOG.md` (user-visible changes, newest
-   first), bump `PKG_VERSION` in the three Makefiles and the `VERSION`
+   first), bump `PKG_VERSION` in the four Makefiles and the `VERSION`
    lines of `overview.js` and `menu-vantage.js`
    (`tests/version.test.js` checks them), with the version in
    `overview.js`'s `NEWS_URL` (the "what's new" link;

@@ -81,6 +81,35 @@ test('fmt.safeText: neutralises reordering characters, cuts by code point', () =
 	assert.equal(fmt.safeText(null), '');
 });
 
+test('fmt.safeText: reads no more than its length can show, with the same result as reading all of it', () => {
+	/* the result as it was made before: all of the text replaced, then cut */
+	const src = require('fs').readFileSync(require('path').join(__dirname, '../luci-app-vantage/htdocs/luci-static/resources/vantage/fmt.js'), 'utf8');
+	const UNSAFE = new Function('return ' + /^var UNSAFE_TEXT = (\/.+\/g);$/m.exec(src)[1])();
+	const whole = (s, max) => {
+		if (s == null) return '';
+		const chars = Array.from(String(s).replace(UNSAFE, '\ufffd'));
+		max = max > 1 ? max : 64;
+		return chars.length > max ? chars.slice(0, max - 1).join('') + '…' : chars.join('');
+	};
+	/* pairs, lone halves of a pair, tag characters (a pair each), what is replaced and what is not */
+	const parts = [ 'a', 'é', '\u{1F600}', '\u200b', '\u202e', '\u0000', '\uDB40\uDC41', '\uDB40', '\uDC41', '\ufe0f', '\u3164', '\u{E0100}', ' ' ];
+	let seed = 7;
+	const rnd = n => (seed = (seed * 1103515245 + 12345) % 2147483648) % n;
+	for (let i = 0; i < 20000; i++) {
+		let s = '';
+		for (let k = rnd(160); k > 0; k--) s += parts[rnd(parts.length)];
+		const max = [ undefined, 0, 1, 2, 3, 5, 8, 16, 32, 48, 64 ][rnd(11)];
+		assert.equal(fmt.safeText(s, max), whole(s, max), JSON.stringify([ s, max ]));
+	}
+	/* a reply of a megabyte: what is replaced and spread is the part that can show */
+	const seen = [], replace = String.prototype.replace, from = Array.from;
+	String.prototype.replace = function(re, to) { if (re instanceof RegExp) seen.push(this.length); return replace.call(this, re, to); };
+	Array.from = function(x) { seen.push(typeof x === 'string' ? x.length : -1); return from.apply(Array, arguments); };
+	try { assert.equal(fmt.safeText('\u202e'.repeat(1 << 20), 32), '\ufffd'.repeat(31) + '…'); }
+	finally { String.prototype.replace = replace; Array.from = from; }
+	assert.ok(seen.length && seen.every(n => n >= 0 && n <= 66), seen.join(' '));
+});
+
 test('wifi: bands, widths, generations (6E on 6 GHz)', () => {
 	assert.equal(wifi.bandKey('6g'), '6g');
 	assert.equal(wifi.bandKey('constructor', 2437), '2g');
@@ -99,6 +128,10 @@ test('wifi.phy: friendly PHY label and details', () => {
 	const p = wifi.phy({ rate: 576400, mhz: 160, eht: true, mcs: 3, nss: 2, eht_gi: 0 });
 	assert.equal(p.label, '576 Mbit/s · 160 MHz · EHT');
 	assert.equal(p.detail, 'MCS 3 · 2×2');
+	/* "short GI" is HT and VHT's; HE and EHT's guard intervals count up from the shortest */
+	assert.equal(wifi.phy({ rate: 866000, mhz: 80, vht: true, mcs: 9, nss: 2, short_gi: true }).detail, 'MCS 9 · 2×2 · short GI');
+	assert.equal(wifi.phy({ rate: 650000, mhz: 80, he: true, mcs: 7, nss: 2, he_gi: 1 }).detail, 'MCS 7 · 2×2');
+	assert.equal(wifi.phy({ rate: 650000, mhz: 80, eht: true, mcs: 7, nss: 2, eht_gi: 2 }).detail, 'MCS 7 · 2×2');
 	assert.equal(wifi.phy({ rate: 1000, mhz: 20 }).label, '1 Mbit/s · 20 MHz · legacy');
 	assert.equal(wifi.phy(null), null);
 });

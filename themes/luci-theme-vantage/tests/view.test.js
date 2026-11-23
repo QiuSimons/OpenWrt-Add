@@ -2386,7 +2386,8 @@ test('paired access points: the collector\'s call is a request of its own, and a
 	const src = fs.readFileSync(path.join(RES, 'view/vantage/overview.js'), 'utf8');
 	/* LuCI sends the calls of one moment as one request and answers them together, unless one says nobatch */
 	const alone = [ ...src.matchAll(/rpc\.declare\(\{ object: '([^']+)', method: '([^']+)'[^\n]*\bnobatch: true[^\n]*\}\)/g) ].map(m => m[1] + ' ' + m[2]);
-	assert.deepEqual(alone, [ 'vantage.collector report' ]);
+	/* and the switch chip's counters (#156), which start ethtool on the router */
+	assert.deepEqual(alone, [ 'vantage.collector report', 'luci.vantage.traffic hosts', 'luci.vantage.ports counters' ]);
 
 	/* it does not answer: the device's own calls are made and answered as always */
 	const first = c.poll();
@@ -2894,6 +2895,25 @@ test('WireGuard: an object that went away under an open page is asked for again 
 	assert.equal(c.asked, asked + 1);
 }));
 
+test('WireGuard: after a slow answer the wait is four minutes at most; a call that was out while the computer slept makes none', () => wgPolls(async c => {
+	const reply = wgReply([ wgPeer('A', 'phone') ]);
+	c.answer = () => Promise.resolve(reply);
+	await c.poll(0);
+	/* 28 s: ten times as long would be 280 s */
+	c.took = 28e3;
+	const slow = await c.poll(5e3);
+	for (let i = 0; i < 47; i++) assert.equal(await c.poll(5e3), slow, 'poll ' + i);
+	assert.equal(c.asked, 2);
+	await c.poll(5e3);
+	assert.equal(c.asked, 3, 'four minutes on');
+	/* an answer an hour after the question: the machine slept, the router did not take an hour */
+	c.took = 3600e3;
+	await c.poll(5e3);
+	assert.equal(c.asked, 4);
+	assert.deepEqual(await c.poll(5e3), { reply, at: c.t });
+	assert.equal(c.asked, 5, 'asked again at the next poll');
+}));
+
 /* what a poll's answer becomes: this.st.wg, the rates, and whether the tile exists (m.wg) */
 function wgState(self, reply, at, now) {
 	const m = {};
@@ -3105,8 +3125,8 @@ test('WireGuard tile: built once like any tile, named for Customize, its link Lu
 	assert.match(src, /this\.paintSsids\(\);\n\t\tthis\.paintWireguard\(\);\n/);
 	/* the layout is told whether a tunnel was seen, and stores under the same keys as before
 	   (the Ports tile's condition follows the tunnel's in both calls: its own test) */
-	assert.match(src, /wired = !!this\.m\.wired, wg = !!this\.m\.wg, ports = !!this\.m\.portsTile;\n\t\tvar list = this\.drag \? this\.drag\.list : this\.layoutFor\(tier, wired, wg, ports\);/);
-	assert.match(src, /layout\.same\(list, layout\.defaults\(l\.tier, l\.wired, l\.wg, l\.ports\)\)/);
+	assert.match(src, /wired = !!this\.m\.wired, wg = !!this\.m\.wg, ports = !!this\.m\.portsTile, extra = this\.m\.extra;\n\t\tvar list = this\.drag \? this\.drag\.list : this\.layoutFor\(tier, wired, wg, ports, extra\);/);
+	assert.match(src, /layout\.same\(list, layout\.defaults\(l\.tier, l\.wired, l\.wg, l\.ports, l\.extra\)\)/);
 }));
 
 /* ------------------------------------------------------------ Ports tile */
@@ -3359,9 +3379,9 @@ test('Ports tile: built once like any tile, named for Customize, laid out by the
 	/* painted with the other tiles, after the WireGuard tile */
 	assert.match(src, /this\.paintWireguard\(\);\n\t\tthis\.paintPorts\(\);\n/);
 	/* the layout is told whether two ports were seen, and stores under the same keys as before */
-	assert.match(src, /wg = !!this\.m\.wg, ports = !!this\.m\.portsTile;\n\t\tvar list = this\.drag \? this\.drag\.list : this\.layoutFor\(tier, wired, wg, ports\);/);
-	assert.match(src, /return layout\.normalize\(this\.layouts\[k\] \|\| null, tier, wired, wg, ports\);/);
-	assert.match(src, /layout\.same\(list, layout\.defaults\(l\.tier, l\.wired, l\.wg, l\.ports\)\)/);
+	assert.match(src, /wg = !!this\.m\.wg, ports = !!this\.m\.portsTile, extra = this\.m\.extra;\n\t\tvar list = this\.drag \? this\.drag\.list : this\.layoutFor\(tier, wired, wg, ports, extra\);/);
+	assert.match(src, /return layout\.normalize\(this\.layouts\[k\] \|\| null, tier, wired, wg, ports, extra\);/);
+	assert.match(src, /layout\.same\(list, layout\.defaults\(l\.tier, l\.wired, l\.wg, l\.ports, l\.extra\)\)/);
 	assert.match(src, /this\.laidPorts !== !!this\.m\.portsTile/);
 }));
 

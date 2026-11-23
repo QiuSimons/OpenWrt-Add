@@ -5,5 +5,7 @@
 /dev/build/                                @anothaDev
 /.release-manifests/                       @anothaDev
 /luci-app-vantage/root/usr/share/rpcd/     @anothaDev
+/luci-app-vantage/root/usr/libexec/        @anothaDev
 /luci-app-vantage-aps/root/                @anothaDev
+/luci-app-vantage-traffic/root/            @anothaDev
 /luci-theme-vantage/ucode/                 @anothaDev

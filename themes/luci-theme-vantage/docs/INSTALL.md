@@ -137,12 +137,39 @@ from your configured package feeds.
 | `rpcd-mod-iwinfo` | app | lists radios and connected stations | yes (with `luci-mod-status`) |
 | `rpcd-mod-rrdns` | app, optional | client names from reverse DNS | yes (with `luci-light`) |
 | `umdns` | app, optional | client names from mDNS (`.local` announcements) | no |
+| `ethtool` | app, optional | a DSA switch's own byte counters for its ports | no |
 
 When an optional package is missing, the dashboard leaves that name source
 out and keeps working.
 
-Space: the download is about 200 KB in total, and the two packages take
-about 730 KB once installed (less on a compressed overlay).
+`ethtool` matters on a router or access point whose Ethernet ports are a
+switch chip's under DSA (most with several LAN ports since OpenWrt 21.02;
+`ls /sys/class/net/*/dsa` lists the chip's link to the CPU there). The
+kernel counts on such a port only what passes the device's CPU: what the
+chip forwards from one of its ports to another (a computer on `lan1`
+fetching from a NAS on `lan2`, an access point on `lan3` and the devices
+behind it) never shows there, and the Ports tile and the Wired branch
+read near zero for it (#156). With `ethtool` installed the dashboard
+reads the chip's own counters instead, one `ethtool -S <port>` a port at
+each poll, and a paired access point's report carries its own. Without
+it nothing changes and nothing is started for it. Install it, then
+reload the dashboard:
+
+```sh
+apk add ethtool        # OpenWrt 25.12
+opkg install ethtool   # OpenWrt 24.10
+```
+
+(`ethtool-full` works as well.) The chip's counters are read for the
+switch drivers whose names the dashboard knows: `mt7530` (MT7530, MT7531,
+MT7988; from Linux 6.16 it puts them in the kernel's counters itself),
+`qca8k`, `mv88e6xxx`, `b53` and `bcm_sf2`, `lantiq_gswip` and
+`rtl8366rb`. For any other driver the kernel's counters stay; some
+(`rtl8365mb`, `ksz`, `felix`, `ar9331`, `xrs700x`) count the chip's
+traffic there already.
+
+Space: the download is about 250 KB in total, and the two packages take
+about 900 KB once installed (less on a compressed overlay).
 
 ### Browser
 
@@ -171,7 +198,9 @@ Releases are published at
 
 Each release carries the theme's and the dashboard's `.apk` files, the
 optional access point add-on (`luci-app-vantage-aps`, see
-[Other access points](#other-access-points-optional)), the language packages of every
+[Other access points](#other-access-points-optional)), the optional,
+experimental per-device traffic (`luci-app-vantage-traffic`, see
+[Per-device traffic](#per-device-traffic-optional-experimental)), the language packages of every
 translation it has (`luci-i18n-vantage-*.apk`, see [Languages](#languages))
 and a `SHA256SUMS` file listing their SHA-256 hashes. Download the packages
 you want and `SHA256SUMS` from the release page, then check them on your
@@ -247,7 +276,7 @@ in place stays trusted.
 
 ### Build from source
 
-`dev/build/sdk-build.sh` builds the three packages, and a language package for
+`dev/build/sdk-build.sh` builds the four packages, and a language package for
 each translation in the tree, inside the official OpenWrt SDK container
 image.
 
@@ -305,7 +334,7 @@ package with `security-tests/verify_built_apk.js`, using the SDK's own
 dependencies, install and remove scripts, and that every packaged file is
 the commit's source after LuCI's build transforms (JavaScript minification,
 `?v=<version>` in templates, catalogues compiled by `po2lmo`). The set of
-packages must be exactly the three plus one language package per
+packages must be exactly the four plus one language package per
 `po/<lang>/` directory of each, named the way the SDK's `luci.mk` names
 them. Then it replaces the previous contents of `dist/<release>/` (only its
 own file names) with:
@@ -314,7 +343,8 @@ own file names) with:
 |---|---|
 | `luci-theme-vantage-<version>.apk`, `luci-app-vantage-<version>.apk` | the packages |
 | `luci-app-vantage-aps-<version>.apk` | the optional access point add-on |
-| `luci-i18n-vantage-<lang>-<version>.apk`, `luci-i18n-vantage-aps-<lang>-<version>.apk`, `luci-i18n-vantage-theme-<lang>-<version>.apk` | language packages, one of each per translation (none without translations) |
+| `luci-app-vantage-traffic-<version>.apk` | the optional, experimental per-device traffic |
+| `luci-i18n-vantage-<lang>-<version>.apk`, `luci-i18n-vantage-aps-<lang>-<version>.apk`, `luci-i18n-vantage-traffic-<lang>-<version>.apk`, `luci-i18n-vantage-theme-<lang>-<version>.apk` | language packages, one of each per translation (none without translations) |
 | `SHA256SUMS` | their SHA-256 hashes |
 | `BUILDINFO` | commit, SDK release, image digest, SDK tarball hash, entrypoint hash, feed commits |
 | `packages.adb` | only with signing, see [Signed packages](#signed-packages) |
@@ -439,7 +469,8 @@ scp -O SHA256SUMS $(awk '/ luci-(theme|app)-vantage-[0-9].*\.apk$/ {print $2}' S
 ```
 
 This copies the theme and the dashboard as `SHA256SUMS` lists them by name
-(the `[0-9]` after the name keeps the optional `luci-app-vantage-aps` out),
+(the `[0-9]` after the name keeps the optional `luci-app-vantage-aps` and
+`luci-app-vantage-traffic` out),
 so an older download in the same folder stays behind.
 
 Files go in their own folder because `/tmp` is open to every process on the
@@ -557,7 +588,7 @@ a new one, then log in). Two reasons:
 
 | | `luci-theme-vantage` | `luci-app-vantage` |
 |---|---|---|
-| Files | `/www/luci-static/vantage/` (CSS, icons, logo), `/www/luci-static/resources/menu-vantage.js`, `/www/luci-static/resources/vantage-theme/`, `/usr/share/ucode/luci/template/themes/vantage/` | `/www/luci-static/resources/view/vantage/`, `/www/luci-static/resources/vantage/`, `/usr/share/luci/menu.d/zz-luci-app-vantage.json`, `/usr/share/rpcd/acl.d/luci-app-vantage.json`, `/etc/config/vantage` |
+| Files | `/www/luci-static/vantage/` (CSS, icons, logo), `/www/luci-static/resources/menu-vantage.js`, `/www/luci-static/resources/vantage-theme/`, `/usr/share/ucode/luci/template/themes/vantage/` | `/www/luci-static/resources/view/vantage/`, `/www/luci-static/resources/vantage/`, `/usr/share/luci/menu.d/zz-luci-app-vantage.json`, `/usr/share/rpcd/acl.d/luci-app-vantage.json`, `/usr/libexec/rpcd/luci.vantage.ports`, `/etc/config/vantage` |
 | Configuration | Registers the theme as `luci.themes.Vantage`. Makes it the active theme (`luci.main.mediaurlbase=/luci-static/vantage`) **only on a first install**, never on an upgrade or reinstall. Adds `/etc/config/vantage_theme` (Appearance, and the dashboard's layout and chart style) and the rpcd group `luci-theme-vantage`. | None besides its own `/etc/config/vantage` (client names). |
 | Menu | – | Adds **Dashboard** (`admin/dashboard`) as the first menu entry, so it is the page LuCI opens after login. Status → Overview is unchanged. With `luci-mod-dashboard` also installed, which uses the same entry, Dashboard opens Vantage's and LuCI's moves to Status → Dashboard. With the Vantage theme installed but not selected, Dashboard opens LuCI's own page instead (see [Switch themes](#switch-themes)). |
 | After install | Clears LuCI's caches (`/tmp/luci-indexcache.*`, `/tmp/luci-modulecache/`) and reloads rpcd. | Same. |
@@ -675,6 +706,112 @@ Before removing the add-on:
   folder, and every access point keeps accepting the key until it is
   revoked there.
 
+### Per-device traffic (optional, experimental)
+
+On a router, a device that shares a port with others (behind a switch,
+or behind an access point that is not paired or not OpenWrt) has no
+traffic of its own on the dashboard: the port counts them together. This
+add-on counts it per device from the router's connection tracking and
+shows it in the Clients list and the device's details, marked "Through
+this router". It is experimental: reports of how it behaves on your
+router are welcome in
+[#110](https://github.com/anothaDev/luci-theme-vantage/issues/110).
+
+Install it on the router, the device that routes the traffic (on an
+access point that only bridges, there is nothing to count):
+
+```sh
+apk add luci-app-vantage-traffic        # OpenWrt 25.12
+opkg install luci-app-vantage-traffic   # OpenWrt 24.10
+```
+
+From release files, copy `luci-app-vantage-traffic-<version>.apk` with
+the others and install it the same way. Then reload the dashboard.
+
+What it counts and what it doesn't:
+
+- **Traffic through the router**: to and from the internet, to the router
+  itself, and between the router's networks. Not what devices of one
+  network send each other: the switch or the bridge passes that without
+  the router counting it. A device's own port, where it has one, and a
+  paired access point that has the device alone on a port count all of
+  it, so the dashboard shows their numbers first.
+- **Devices the router knows by address**, from its neighbour table: not
+  devices behind another router, and not an IPv6 address the neighbour
+  table has dropped.
+- Rates are averages between two reads, 5 s apart (30 s with Low-power
+  router).
+
+What it changes: nothing but its files
+(`/usr/libexec/rpcd/luci.vantage.traffic` and
+`/usr/share/rpcd/acl.d/luci-app-vantage-traffic.json`) and its counters'
+state in `/var/run/vantage-traffic`: RAM, readable by root alone, gone at
+a reboot (the counting then starts over). No firewall rule, no sysctl
+setting, no service, no config file, and nothing runs while no dashboard
+is open.
+
+What it costs: rpcd runs the plugin as a process of its own when a
+dashboard asks, and goes on answering LuCI meanwhile, so a read never
+holds LuCI up. A read takes the router's CPU for a moment: on a quad-core
+ARM access point about 0.4 s at 2,000 entries and 1.5 s at 8,000 (beyond
+about 12,500 entries the 2 s limit ends the read); on an x86 VM 22 ms at
+2,000 entries and 0.2 s at 16,384. It is shared by everyone
+looking, one at a time, every 5 s at most; a slow one makes the next wait
+ten times as long as it took, so the reads take about a tenth of one core at
+most, and the table is read for 2 s at most. Where connections come and
+go quickly a read costs a little more: the add-on keeps the connections
+that ended since the read before, and those of 64 KiB or more that ended
+in the last 150 s (16,384 at most), so that one a read missed does not
+count twice; on a desktop, 2,000 entries of which 80 end each second, a
+tenth of them large, take 30 ms a read instead of 22 ms. A smaller
+connection missed by two reads running can count twice, by less than
+64 KiB, for one step of the rate. `cat /proc/net/nf_conntrack
+| wc -l` tells how many entries your router has now;
+`dev/traffic/bench.uc` in the source measures what a read costs it
+(`bench.uc <dir> churn` with connections coming and going).
+
+Things that make the numbers low, which the device's details point out:
+
+- **Connection accounting switched off.** OpenWrt has it on
+  (`net.netfilter.nf_conntrack_acct=1` in
+  `/etc/sysctl.d/11-nf-conntrack.conf`); if someone switched it off,
+  nothing is counted and the details say so. The add-on never switches
+  it on.
+- **nlbwmon.** Where it runs (luci-app-nlbwmon, Bandwidth Monitor), it
+  resets these counters every time it reads them (every 30 s by
+  default), and what passed since the add-on's last read is lost. Use one
+  of the two; a longer `refresh_interval` in `/etc/config/nlbwmon` makes
+  the loss smaller.
+- **Hardware flow offloading** (Network → Firewall → Routing/NAT
+  Offloading). Many drivers don't count offloaded connections, so their
+  traffic may be missing; software flow offloading counts as usual.
+
+Its permission is its own: `luci-app-vantage-traffic`. An administrator
+has it; a login you restricted to the dashboard (`luci-app-vantage`) sees
+the dashboard as before. To show per-device traffic to that login, add
+`luci-app-vantage-traffic` to its `read` list in `/etc/config/rpcd`;
+whoever holds it sees how much each device sends and receives. Its
+translation is a package of its own, `luci-i18n-vantage-traffic-<lang>`
+(it translates the permission's description).
+
+To remove it:
+
+```sh
+apk del luci-app-vantage-traffic        # OpenWrt 25.12
+opkg remove luci-app-vantage-traffic    # OpenWrt 24.10
+```
+
+Where its translation is installed, name that package in the same
+command (`luci-i18n-vantage-traffic-<lang>`): neither package manager
+removes a package that another one still needs.
+
+Nothing stays behind on the router: the removal deletes
+`/var/run/vantage-traffic` and has rpcd let go of the plugin (a reload,
+as installing a LuCI package does); a read running at that moment can
+make the folder again, in RAM until the next reboot. A dashboard left
+open asks once a minute whether it is back, and no more once its page
+is reloaded.
+
 ## Switch themes
 
 In LuCI: **System → System → Language and Style → Design**, pick a theme,
@@ -703,12 +840,14 @@ dashboard shows under any theme.
 ## Languages
 
 Vantage's texts go through LuCI's translation system. A translation ships
-as up to two small packages per language, one for each Vantage package:
+as small packages per language, one for each Vantage package you have:
 
 | Package | Translates |
 |---|---|
 | `luci-i18n-vantage-<lang>` | the dashboard (`luci-app-vantage`) |
 | `luci-i18n-vantage-theme-<lang>` | the theme (`luci-theme-vantage`) |
+| `luci-i18n-vantage-aps-<lang>` | the access points add-on (`luci-app-vantage-aps`) |
+| `luci-i18n-vantage-traffic-<lang>` | the traffic add-on (`luci-app-vantage-traffic`) |
 
 `<lang>` is LuCI's language suffix, the same as in OpenWrt's own
 `luci-i18n-base-<lang>`: for example `de`, `fr`, `pt-br`, or `zh-cn` for
@@ -739,8 +878,8 @@ Then choose the language in LuCI: **System → System → Language and Style
 language. Installing a language package adds its language to that list.
 
 A language package contains only the compiled catalogue
-(`/usr/lib/lua/luci/i18n/vantage.<lang>.lmo` or
-`vantage-theme.<lang>.lmo`) and a first-boot script that registers the
+(`/usr/lib/lua/luci/i18n/vantage.<lang>.lmo`, or `vantage-theme`,
+`vantage-aps` or `vantage-traffic` in that name) and a first-boot script that registers the
 language (`luci.languages.<lang>`). Texts that are not translated yet stay
 in English. `apk upgrade` upgrades installed language packages with the
 rest; if you upgrade by package name, name them too; with files, install the new language packages together with the new
@@ -758,7 +897,8 @@ apk update && apk upgrade luci-theme-vantage luci-app-vantage
 ```
 
 With the access points add-on, name `luci-app-vantage-aps` as well, here
-and in the commands below, on the router and on every access point.
+and in the commands below, on the router and on every access point; with
+per-device traffic, `luci-app-vantage-traffic` on the router.
 
 (If you first installed from files, run
 `apk add luci-theme-vantage luci-app-vantage` once instead; see
@@ -772,13 +912,13 @@ apk add --no-network --allow-untrusted /tmp/vantage/luci-theme-vantage-[0-9]*.ap
 ```
 
 apk replaces the installed version. Your theme choice is kept (the
-upgrade never selects a theme), and so are your device names: when
-`/etc/config/vantage` has been changed, apk keeps your file and saves the
-packaged one next to it as `/etc/config/vantage.apk-new`, which you can
-delete. The same goes for your Appearance in `/etc/config/vantage_theme`
-(`vantage_theme.apk-new`). On 24.10, opkg keeps your file too, saves the
-packaged one as `vantage_theme-opkg`, and prints a harmless error line about
-it. Log out and in once after upgrading.
+upgrade never selects a theme), and so are your device names in
+`/etc/config/vantage` and your Appearance in `/etc/config/vantage_theme`.
+The packaged copy that apk saves next to a changed file
+(`vantage.apk-new`, `vantage_theme.apk-new`; on 24.10 opkg's
+`vantage-opkg`, `vantage_theme-opkg`) holds no setting, and since 1.2.0
+the install removes it. opkg may print a harmless error line about it.
+Log out and in once after upgrading.
 
 ### Downgrade
 
@@ -798,7 +938,8 @@ opkg remove luci-app-vantage luci-theme-vantage    # OpenWrt 24.10
 Or name just one of them, and add any installed language packages
 (`apk list --installed | grep vantage` shows them, e.g.
 `luci-i18n-vantage-zh-cn`) and the optional `luci-app-vantage-aps`
-(revoke its routers first, see [Other access points](#other-access-points-optional)). What happens:
+(revoke its routers first, see [Other access points](#other-access-points-optional))
+and `luci-app-vantage-traffic`. What happens:
 
 - **Theme:** if Vantage is the active theme, LuCI switches to Bootstrap (or,
   when Bootstrap isn't installed, to another installed theme), and the
@@ -810,8 +951,7 @@ Or name just one of them, and add any installed language packages
   modified `/etc/config/vantage` in place; delete it with
   `rm /etc/config/vantage` if you don't want to keep it.
 - **Appearance:** a saved `/etc/config/vantage_theme` stays behind the same
-  way; `rm /etc/config/vantage_theme` removes it (and
-  `vantage_theme.apk-new` or `vantage_theme-opkg`, if an upgrade left one).
+  way; `rm /etc/config/vantage_theme` removes it.
   The login page's switch, `luci.main.vantage_https`, is removed with the
   theme.
 - **Signing key and repository:** these stay, so your router keeps trusting
@@ -971,7 +1111,9 @@ uci commit luci
   button. Names from reverse DNS need `luci-app-vantage-rdns` in the `read`
   list as well (see [Security notes](#security-notes) before you add it).
   The paired access points need `luci-app-vantage-aps-view` there (see
-  [Other access points](#other-access-points-optional)). The WireGuard
+  [Other access points](#other-access-points-optional)), and per-device
+  traffic `luci-app-vantage-traffic` (see
+  [Per-device traffic](#per-device-traffic-optional-experimental)). The WireGuard
   tile needs LuCI's own `luci-proto-wireguard` there, the group that
   opens Status → WireGuard: Vantage grants nothing for it.
 - The dashboard's radios and SSIDs come from the app's rpcd plugin
@@ -1028,7 +1170,7 @@ page is open. The Vantage dashboard never scans.
 Seen on vendor firmware with an older ucode (the one OpenWrt 23.05 has),
 with netlink modules taken from another distribution's feed, on Vantage
 1.1.1 and older: the dashboard's rpcd plugin could not load them, and
-rpcd went down with it, so LuCI refused every login (#134). From 1.1.2
+rpcd went down with it, so LuCI refused every login (#134). From 1.2.0
 on the plugin fails without touching LuCI. To get LuCI back over SSH,
 remove the dashboard and restart rpcd:
 
@@ -1078,7 +1220,11 @@ Then reload the page. To remove Vantage entirely, see
   `/proc/stat`, the kernel's route to the internet and the link state of a
   swconfig switch's ports. It cannot
   run commands; for that link state LuCI's own method runs `swconfig dev
-  <switch> show`, read-only. Its only write permission, in a
+  <switch> show`, read-only. One program it starts itself, for a DSA
+  switch's own port counters: `/usr/sbin/ethtool -S <port>`, where
+  `ethtool` is installed, for each of the device's own DSA ports by its
+  kernel name, in a process of rpcd's own (the plugin
+  `luci.vantage.ports`, which takes nothing from the caller). Its only write permission, in a
   separate group (`luci-app-vantage-names`), is the plugin methods
   `luci.vantage set_alias` and `set_quiet`, which check each name and
   station on the device and write nothing but `/etc/config/vantage` (at
@@ -1095,6 +1241,16 @@ Then reload the page. To remove Vantage entirely, see
   collector log in to those access points, so the dashboard's own
   permission does not include it. See
   [Other access points](#other-access-points-optional).
+- **Per-device traffic.** `luci-app-vantage-traffic` (optional,
+  experimental) reads the router's connection table and neighbour tables,
+  in a process rpcd runs for it, and writes nothing but its counters'
+  state in `/var/run/vantage-traffic`, readable by root alone. Its answer
+  holds a MAC address and byte counts per device, never the addresses
+  they talk to; the state also keeps each connection's addresses and
+  ports, as the kernel's own table does. It is a permission of
+  its own (`luci-app-vantage-traffic`), since it shows how much each
+  device sends and receives. See
+  [Per-device traffic](#per-device-traffic-optional-experimental).
 - **The theme's Appearance.** The theme's own permission group,
   `luci-theme-vantage`, may write `/etc/config/vantage_theme` and nothing
   else. It exists to save the colour mode, the backgrounds, what shows next

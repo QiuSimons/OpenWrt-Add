@@ -578,6 +578,21 @@ test('Customize: the theme, the template and the dashboard keep the same chart s
 	const charts = new Function('return ' + /const VIEW_CHARTS = (\[[^\]]*\]);/.exec(src)[1])();
 	assert.deepEqual(charts, series.CHART_STYLES);
 	assert.ok(header.includes(`look('chart', ${JSON.stringify(charts).replace(/"/g, "'").replace(/,/g, ', ').replace('[', '[ ').replace(']', ' ]')})`));
+	/* the network path's form (#157): the same forms in the theme, the template and the dashboard, full first (the default) */
+	const app = fs.readFileSync(path.join(__dirname, '..', 'luci-app-vantage/htdocs/luci-static/resources/view/vantage/overview.js'), 'utf8');
+	const paths = new Function('return ' + /const VIEW_PATHS = (\[[^\]]*\]);/.exec(src)[1])();
+	assert.deepEqual(paths, new Function('return ' + /^var PATH_FORMS = (\[[^\]]*\]);/m.exec(app)[1])());
+	assert.deepEqual(paths, [ 'full', 'compact' ]);
+	assert.ok(header.includes("const look_path = look('path', [ 'full', 'compact' ]);"));
+	assert.ok(header.includes('data-vt-look-path="{{ look_path }}"'), 'handed to the page as the chart style is');
+	assert.match(app, /lookAttr\('data-vt-look-path'\)/, 'and read there');
+	/* the theme writes a form it knows and nothing else under that name */
+	const pick = name => { const at = src.indexOf('function ' + name + '('); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
+	const viewValue = new Function([ /^const VIEW_CHARTS = .*$/m, /^const VIEW_PATHS = .*$/m, /^const VIEW_LAYOUT = .*$/m ].map(re => re.exec(src)[0]).join('\n') +
+		'\n' + pick('viewValue') + '\nreturn viewValue;')();
+	for (const v of paths) assert.ok(viewValue('path', v), v);
+	for (const v of [ 'Compact', ' compact', 'cards', 'overlay', '', null, [ 'compact' ] ]) assert.ok(!viewValue('path', v), JSON.stringify(v));
+	assert.ok(!viewValue('chart', 'compact') && viewValue('chart', 'log'), 'each option its own values');
 	const form = /const VIEW_LAYOUT = (\/.*\/);/.exec(src)[1];
 	assert.ok(header.includes(`const form = ${form};`) && header.includes('match(v, form)'), 'the template reads what the theme writes');
 	const re = new Function('return ' + form)();
@@ -625,6 +640,12 @@ test('Appearance: the theme\'s rpcd group writes config vantage_theme only, whic
 	assert.deepEqual(Object.keys(g).sort(), [ 'description', 'write' ]);
 	const conf = fs.readFileSync(path.join(T, 'root/etc/config/vantage_theme'), 'utf8');
 	assert.deepEqual(conf.split('\n').filter(l => l.trim() && !/^\s*#/.test(l)), [ "config appearance 'appearance'" ], 'one section, nothing set');
+	assert.match(conf, /# network path \(option path: full, or compact with one line per node\)/, 'the comment names what Customize saves');
+	/* the packaged copy that opkg and apk put beside a saved file at every
+	   upgrade goes at install: two literal paths, and nothing else is removed */
+	const defaults = fs.readFileSync(path.join(T, 'root/etc/uci-defaults/30_luci-theme-vantage'), 'utf8');
+	assert.deepEqual(defaults.split('\n').filter(l => /\brm\b/.test(l) && !/^\s*#/.test(l)),
+		[ 'rm -f /etc/config/vantage_theme-opkg /etc/config/vantage_theme.apk-new' ]);
 	const mk = fs.readFileSync(path.join(T, 'Makefile'), 'utf8');
 	assert.match(mk, /define Package\/luci-theme-vantage\/conffiles\n\/etc\/config\/vantage_theme\nendef/);
 });

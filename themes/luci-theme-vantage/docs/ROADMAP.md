@@ -18,6 +18,19 @@ points without Dropbear; per-port traffic that a switch chip forwards
 without the kernel counting it; the collector under a user of its own
 instead of root; finding a moved access point over IPv6.
 
+### Per-device traffic (experimental)
+
+Since 1.2.0 the optional `luci-app-vantage-traffic` counts the traffic
+through a router of each device that shares a port, from connection
+tracking, without firewall rules
+([#110](https://github.com/anothaDev/luci-theme-vantage/issues/110) by
+@MohdMusab; see the spec, "Per-device traffic"). It reads in a process
+of its own, so rpcd and LuCI are never held up by a read. Still open:
+what a read costs small routers with large connection tables (a tenth
+of one core at most, by design); flows offloaded to hardware; whether
+Top talkers should rank these devices; living beside nlbwmon, which
+resets the same counters.
+
 ### WireGuard tile
 
 Since 1.1, from LuCI's own `luci.wireguard getWgInstances`
@@ -31,6 +44,19 @@ LuCI's plugin looks up on every call.
 Since 1.1 the dashboard answers the command palette (Ctrl+K) with its
 clients, radios, Wi-Fi networks and interfaces (see the spec, "Entity
 search"). Other pages can answer the same way; none does yet.
+
+### Provider tiles (experimental)
+
+Since 1.2.0 another package can put a read-only tile on the dashboard
+([#129](https://github.com/anothaDev/luci-theme-vantage/issues/129);
+for authors [`docs/TILES.md`](TILES.md), see also the spec, "Provider
+tiles"). Experimental: the contract may change in any release. Still
+open: a provider of the project's own, before the contract is called
+stable; what reading the session's ACL costs a router with many LuCI
+apps (once a page); more than three such tiles or longer ids, which
+need the theme's stored-layout form widened in its script and its
+template together; letting that one ACL read answer the dashboard's
+four group probes too; OpenWrt 24.10, not tried.
 
 ## Later
 
