@@ -363,20 +363,19 @@ fn send_liveness_batch(batch_bytes: &[u8]) -> Result<(), &'static str> {
             continue;
         };
 
-        if n >= 20 {
-            let nlmsg_type = u16::from_ne_bytes([reply_buf[4], reply_buf[5]]);
-            if nlmsg_type == 2 {
-                let errno = i32::from_ne_bytes([
-                    reply_buf[16],
-                    reply_buf[17],
-                    reply_buf[18],
-                    reply_buf[19],
-                ]);
-                if errno == 0 {
-                    return Ok(());
-                }
-                return Err("netlink batch rejected by kernel");
+        if n < 20 {
+            *sock_guard = None;
+            continue;
+        }
+
+        let nlmsg_type = u16::from_ne_bytes([reply_buf[4], reply_buf[5]]);
+        if nlmsg_type == 2 {
+            let errno =
+                i32::from_ne_bytes([reply_buf[16], reply_buf[17], reply_buf[18], reply_buf[19]]);
+            if errno == 0 {
+                return Ok(());
             }
+            return Err("netlink batch rejected by kernel");
         }
         return Ok(());
     }

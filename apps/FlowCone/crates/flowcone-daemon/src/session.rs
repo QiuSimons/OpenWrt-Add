@@ -391,6 +391,8 @@ fn expiry_step(now: u32, timeout: u32, seen: Option<u32>) -> ExpiryStep {
 }
 
 struct FamilyPortPool<'a> {
+    min_port: u16,
+    max_port: u16,
     even: &'a mut Queue<MapData, u16>,
     odd: &'a mut Queue<MapData, u16>,
     free_state: &'a mut Array<MapData, u8>,
@@ -483,61 +485,76 @@ impl SessionManager {
         reserved_ports: &mut Vec<u16>,
         current: &[u16],
         reserved_map: &mut Array<MapData, u8>,
-        free_state: &mut Array<MapData, u8>,
         ob_map: &mut HashMap<MapData, V::Key, V>,
         ib_map: &mut HashMap<MapData, u16, V>,
-    ) -> bool {
+        pool: &mut FamilyPortPool<'_>,
+    ) {
         let (added, removed) = reserved_delta(reserved_ports, current);
         if added.is_empty() && removed.is_empty() {
-            return false;
+            return;
         }
         for port in added {
             let _ = reserved_map.set(port as u32, &1, 0);
-            let _ = free_state.set(port as u32, &0, 0);
+            let _ = pool.free_state.set(port as u32, &0, 0);
             if let Ok(in_val) = ib_map.get(&port, 0) {
                 let ep_key = in_val.make_key();
-                if let Ok(ob_val) = ob_map.get(&ep_key, 0) {
-                    if u16::from_be(ob_val.port_be()) == port {
-                        let _ = ob_map.remove(&ep_key);
-                    }
+                if ob_map
+                    .get(&ep_key, 0)
+                    .is_ok_and(|ob_val| u16::from_be(ob_val.port_be()) == port)
+                {
+                    let _ = ob_map.remove(&ep_key);
                 }
                 let _ = ib_map.remove(&port);
             }
         }
         for port in removed {
             let _ = reserved_map.set(port as u32, &0, 0);
+            if port >= pool.min_port && port <= pool.max_port && ib_map.get(&port, 0).is_err() {
+                Self::release_family_port(port, pool);
+            }
         }
         *reserved_ports = current.to_vec();
-        true
     }
 
     /// Applies updated local listening UDP ports to reserved maps.
     pub fn apply_reserved_ports(&mut self, ports4: Option<&[u16]>, ports6: Option<&[u16]>) {
         if let Some(ports) = ports4 {
-            let changed = Self::sync_family_reserved(
+            let mut pool = FamilyPortPool {
+                min_port: self.min_port,
+                max_port: self.max_port,
+                even: &mut self.free_even4,
+                odd: &mut self.free_odd4,
+                free_state: &mut self.free_state4,
+                reserved_ports: ports,
+                port_flags: &mut self.port_flags,
+            };
+            Self::sync_family_reserved(
                 &mut self.reserved4_ports,
                 ports,
                 &mut self.reserved4,
-                &mut self.free_state4,
                 &mut self.ob_map4,
                 &mut self.ib_map4,
+                &mut pool,
             );
-            if changed {
-                self.rebuild_family4();
-            }
         }
         if let Some(ports) = ports6 {
-            let changed = Self::sync_family_reserved(
+            let mut pool = FamilyPortPool {
+                min_port: self.min_port,
+                max_port: self.max_port,
+                even: &mut self.free_even6,
+                odd: &mut self.free_odd6,
+                free_state: &mut self.free_state6,
+                reserved_ports: ports,
+                port_flags: &mut self.port_flags,
+            };
+            Self::sync_family_reserved(
                 &mut self.reserved6_ports,
                 ports,
                 &mut self.reserved6,
-                &mut self.free_state6,
                 &mut self.ob_map6,
                 &mut self.ib_map6,
+                &mut pool,
             );
-            if changed {
-                self.rebuild_family6();
-            }
         }
     }
 
@@ -548,10 +565,10 @@ impl SessionManager {
         self.apply_reserved_ports(p4.as_deref(), p6.as_deref());
     }
 
-    fn init_family_pool(min_port: u16, max_port: u16, pool: &mut FamilyPortPool<'_>) {
+    fn init_family_pool(pool: &mut FamilyPortPool<'_>) {
         Self::drain_queue(pool.even);
         Self::drain_queue(pool.odd);
-        let mut p = min_port;
+        let mut p = pool.min_port;
         loop {
             let q = if (p & 1) == 0 {
                 &mut *pool.even
@@ -565,7 +582,7 @@ impl SessionManager {
             let _ = pool
                 .free_state
                 .set(p as u32, &(PORT_FREE_BIT | PORT_QUEUED_BIT), 0);
-            if p == max_port {
+            if p == pool.max_port {
                 break;
             }
             p += 1;
@@ -580,28 +597,32 @@ impl SessionManager {
         }
         if enable_v4 {
             let mut pool = FamilyPortPool {
+                min_port: self.min_port,
+                max_port: self.max_port,
                 even: &mut self.free_even4,
                 odd: &mut self.free_odd4,
                 free_state: &mut self.free_state4,
                 reserved_ports: &self.reserved4_ports,
                 port_flags: &mut self.port_flags,
             };
-            Self::init_family_pool(self.min_port, self.max_port, &mut pool);
+            Self::init_family_pool(&mut pool);
         }
         if enable_v6 {
             let mut pool = FamilyPortPool {
+                min_port: self.min_port,
+                max_port: self.max_port,
                 even: &mut self.free_even6,
                 odd: &mut self.free_odd6,
                 free_state: &mut self.free_state6,
                 reserved_ports: &self.reserved6_ports,
                 port_flags: &mut self.port_flags,
             };
-            Self::init_family_pool(self.min_port, self.max_port, &mut pool);
+            Self::init_family_pool(&mut pool);
         }
     }
 
-    fn release_family_port(port: u16, min_port: u16, max_port: u16, pool: &mut FamilyPortPool<'_>) {
-        if port < min_port || port > max_port {
+    fn release_family_port(port: u16, pool: &mut FamilyPortPool<'_>) {
+        if port < pool.min_port || port > pool.max_port {
             return;
         }
         if pool.reserved_ports.binary_search(&port).is_ok() {
@@ -632,39 +653,38 @@ impl SessionManager {
 
     fn release_port4(&mut self, port: u16) {
         let mut pool = FamilyPortPool {
+            min_port: self.min_port,
+            max_port: self.max_port,
             even: &mut self.free_even4,
             odd: &mut self.free_odd4,
             free_state: &mut self.free_state4,
             reserved_ports: &self.reserved4_ports,
             port_flags: &mut self.port_flags,
         };
-        Self::release_family_port(port, self.min_port, self.max_port, &mut pool);
+        Self::release_family_port(port, &mut pool);
     }
 
     fn release_port6(&mut self, port: u16) {
         let mut pool = FamilyPortPool {
+            min_port: self.min_port,
+            max_port: self.max_port,
             even: &mut self.free_even6,
             odd: &mut self.free_odd6,
             free_state: &mut self.free_state6,
             reserved_ports: &self.reserved6_ports,
             port_flags: &mut self.port_flags,
         };
-        Self::release_family_port(port, self.min_port, self.max_port, &mut pool);
+        Self::release_family_port(port, &mut pool);
     }
 
-    fn rebuild_family_ports(
-        min_port: u16,
-        max_port: u16,
-        ib_keys: impl Iterator<Item = u16>,
-        pool: &mut FamilyPortPool<'_>,
-    ) {
+    fn rebuild_family_ports(ib_keys: impl Iterator<Item = u16>, pool: &mut FamilyPortPool<'_>) {
         let mut in_use = [0u64; 1024];
         for key in ib_keys {
             in_use[(key as usize) / 64] |= 1u64 << ((key as usize) % 64);
         }
         Self::drain_queue(pool.even);
         Self::drain_queue(pool.odd);
-        let mut p = min_port;
+        let mut p = pool.min_port;
         loop {
             let is_used = (in_use[(p as usize) / 64] & (1u64 << ((p as usize) % 64))) != 0;
             if is_used {
@@ -686,7 +706,7 @@ impl SessionManager {
             } else {
                 let _ = pool.free_state.set(p as u32, &0, 0);
             }
-            if p == max_port {
+            if p == pool.max_port {
                 break;
             }
             p += 1;
@@ -698,18 +718,15 @@ impl SessionManager {
             return;
         }
         let mut pool = FamilyPortPool {
+            min_port: self.min_port,
+            max_port: self.max_port,
             even: &mut self.free_even4,
             odd: &mut self.free_odd4,
             free_state: &mut self.free_state4,
             reserved_ports: &self.reserved4_ports,
             port_flags: &mut self.port_flags,
         };
-        Self::rebuild_family_ports(
-            self.min_port,
-            self.max_port,
-            self.ib_map4.keys().flatten(),
-            &mut pool,
-        );
+        Self::rebuild_family_ports(self.ib_map4.keys().flatten(), &mut pool);
     }
 
     fn rebuild_family6(&mut self) {
@@ -717,18 +734,15 @@ impl SessionManager {
             return;
         }
         let mut pool = FamilyPortPool {
+            min_port: self.min_port,
+            max_port: self.max_port,
             even: &mut self.free_even6,
             odd: &mut self.free_odd6,
             free_state: &mut self.free_state6,
             reserved_ports: &self.reserved6_ports,
             port_flags: &mut self.port_flags,
         };
-        Self::rebuild_family_ports(
-            self.min_port,
-            self.max_port,
-            self.ib_map6.keys().flatten(),
-            &mut pool,
-        );
+        Self::rebuild_family_ports(self.ib_map6.keys().flatten(), &mut pool);
     }
 
     fn rebuild_port_queues(&mut self) {
@@ -1308,7 +1322,9 @@ mod port_parser_tests {
         let port = socket.local_addr().expect("local addr").port();
 
         let connected_socket = UdpSocket::bind("127.0.0.1:0").expect("bind connected socket");
-        connected_socket.connect("127.0.0.1:53").expect("connect socket");
+        connected_socket
+            .connect("127.0.0.1:53")
+            .expect("connect socket");
         let conn_port = connected_socket.local_addr().expect("local addr").port();
 
         if let Some(ports) = super::scan_netlink_udp_ports(2) {

@@ -14,23 +14,23 @@ use aya_ebpf::{
 };
 use core::mem;
 use flowcone_common::{
-    csum_replace, BindingValue4, BindingValue6, EndpointKey4, EndpointKey6,
-    FragKey4, FragKey6, FragValue4, FragValue6, GlobalConfig, FRAG_MAP_ENTRIES,
-    MAX_BINDINGS, PORT_QUEUE_ENTRIES, PORT_STATE_ENTRIES, SESSION_EVENT_RINGBUF_BYTES,
-    ETH_P_IP, ETH_P_IPV6, IPPROTO_ICMP, IPPROTO_UDP,
+    BindingValue4, BindingValue6, ETH_P_IP, ETH_P_IPV6, EndpointKey4, EndpointKey6,
+    FRAG_MAP_ENTRIES, FragKey4, FragKey6, FragValue4, FragValue6, GlobalConfig, IPPROTO_ICMP,
+    IPPROTO_UDP, MAX_BINDINGS, PORT_QUEUE_ENTRIES, PORT_STATE_ENTRIES, SESSION_EVENT_RINGBUF_BYTES,
+    csum_replace,
 };
 
-pub use parsing::{
-    bypass_special_udp4, bypass_special_udp6, ipv6_eq, ipv6_fragment_offset, locate_ipv6_l4,
-    parse_header, parse_header_at, parse_header_at_mut, parse_header_mut, parse_header_ref,
-    parse_header_ref_mut, parse_l2, read_be16, read_be32, read_u8, Ipv4Hdr, Ipv6Hdr, Ipv6L4,
-    UdpHdr,
-};
 pub use engine::{
-    fixup_csum_v4, fixup_csum_v6, fixup_l3_v4, get_or_create_mapping_v4,
-    get_or_create_mapping_v6, is_short_lived_port, now_sec, port_is_reserved,
-    EGRESS_ALLOC_FALLBACK, EGRESS_ALLOC_PRIMARY, FRAG6_ALLOC_FALLBACK, FRAG6_ALLOC_PRIMARY,
-    FRAG_ALLOC_FALLBACK, FRAG_ALLOC_PRIMARY,
+    EGRESS_ALLOC_FALLBACK, EGRESS_ALLOC_PRIMARY, FRAG_ALLOC_FALLBACK, FRAG_ALLOC_PRIMARY,
+    FRAG6_ALLOC_FALLBACK, FRAG6_ALLOC_PRIMARY, fixup_csum_v4, fixup_csum_v6, fixup_l3_v4,
+    get_or_create_mapping_v4, get_or_create_mapping_v6, is_short_lived_port, now_sec,
+    port_is_reserved,
+};
+pub use parsing::{
+    Ipv4Hdr, Ipv6Hdr, Ipv6L4, UdpHdr, bypass_special_udp4, bypass_special_udp6, ipv6_eq,
+    ipv6_fragment_offset, locate_ipv6_l4, parse_header, parse_header_at, parse_header_at_mut,
+    parse_header_mut, parse_header_ref, parse_header_ref_mut, parse_l2, read_be16, read_be32,
+    read_u8,
 };
 
 pub const BPF_F_PSEUDO_HDR: u64 = 0x10;
@@ -417,20 +417,17 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
             return TC_ACT_UNSPEC;
         }
 
-        let mapped_port = match get_or_create_mapping_v4::<
-            EGRESS_ALLOC_PRIMARY,
-            EGRESS_ALLOC_FALLBACK,
-        >(
-            cfg,
-            src_ip,
-            src_port,
-            now_sec(),
-            is_short_lived_port(u16::from_be(udph.dst_port)),
-        )
-        {
-            Some(p) => p,
-            None => return TC_ACT_SHOT,
-        };
+        let mapped_port =
+            match get_or_create_mapping_v4::<EGRESS_ALLOC_PRIMARY, EGRESS_ALLOC_FALLBACK>(
+                cfg,
+                src_ip,
+                src_port,
+                now_sec(),
+                is_short_lived_port(u16::from_be(udph.dst_port)),
+            ) {
+                Some(p) => p,
+                None => return TC_ACT_SHOT,
+            };
 
         let old_src_ip = iph.src_addr;
         let new_src_ip = cfg.wan_ip4;
@@ -498,20 +495,17 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
         if bypass_special_udp6(&iph.dst_addr, src_port, udph.dst_port) {
             return TC_ACT_UNSPEC;
         }
-        let mapped_port = match get_or_create_mapping_v6::<
-            EGRESS_ALLOC_PRIMARY,
-            EGRESS_ALLOC_FALLBACK,
-        >(
-            cfg,
-            src_addr,
-            src_port,
-            now_sec(),
-            is_short_lived_port(u16::from_be(udph.dst_port)),
-        )
-        {
-            Some(p) => p,
-            None => return TC_ACT_SHOT,
-        };
+        let mapped_port =
+            match get_or_create_mapping_v6::<EGRESS_ALLOC_PRIMARY, EGRESS_ALLOC_FALLBACK>(
+                cfg,
+                src_addr,
+                src_port,
+                now_sec(),
+                is_short_lived_port(u16::from_be(udph.dst_port)),
+            ) {
+                Some(p) => p,
+                None => return TC_ACT_SHOT,
+            };
 
         let old_src_addr = iph.src_addr;
         let new_src_addr = cfg.wan_ip6;
@@ -534,8 +528,6 @@ pub fn flowcone_tcx_egress(ctx: TcContext) -> i32 {
 
     TC_ACT_UNSPEC
 }
-
-
 
 #[classifier]
 pub fn flowcone_frag_v6_ingress(ctx: TcContext) -> i32 {
@@ -1002,8 +994,6 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
     ctx.skb.set_mark(mark | cfg.flowcone_mark);
     TC_ACT_UNSPEC
 }
-
-
 
 /// Inbound ICMP error translation target (RFC 5508).
 #[classifier]

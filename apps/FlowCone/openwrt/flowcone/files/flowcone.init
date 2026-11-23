@@ -33,20 +33,32 @@ resolve_device() {
 start_service() {
 	config_load flowcone
 
-	local enable_v4 enable_v6 interface min_port max_port timeout interval bypass_mark mark manage_nft
+	local enable_v4 enable_v6 interface min_port max_port timeout interval bypass_mark mark manage_nft advanced
 	config_get_bool enable_v4 config enable_v4 1
 	config_get_bool enable_v6 config enable_v6 0
-	config_get_bool manage_nft config manage_nft 1
 
 	[ "$enable_v4" -eq 1 ] || [ "$enable_v6" -eq 1 ] || return 0
 
 	config_get interface config interface ""
-	config_get min_port config min_port "1024"
-	config_get max_port config max_port "65535"
-	config_get timeout config timeout "120"
-	config_get interval config interval "5"
-	config_get bypass_mark config bypass_mark ""
-	config_get mark config mark ""
+
+	config_get_bool advanced config advanced 0
+	if [ "$advanced" -eq 1 ]; then
+		config_get min_port config min_port "1024"
+		config_get max_port config max_port "65535"
+		config_get timeout config timeout "120"
+		config_get interval config interval "5"
+		config_get_bool manage_nft config manage_nft 1
+		config_get bypass_mark config bypass_mark ""
+		config_get mark config mark ""
+	else
+		min_port="1024"
+		max_port="65535"
+		timeout="120"
+		interval="5"
+		manage_nft=1
+		bypass_mark=""
+		mark=""
+	fi
 
 	local dev
 	dev=$(resolve_device "$interface")

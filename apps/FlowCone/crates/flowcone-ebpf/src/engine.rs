@@ -11,11 +11,11 @@ use flowcone_common::{
 
 use crate::parsing::ipv6_eq;
 use crate::{
-    BPF_F_MARK_MANGLED_0, BPF_F_PSEUDO_HDR, BPF_NOEXIST, CSUM_FIELD_U16,
-    CSUM_FIELD_U32, FREE_EVEN_V4, FREE_EVEN_V6, FREE_ODD_V4, FREE_ODD_V6, GC_FLAGS,
-    INBOUND_BINDINGS_V4, INBOUND_BINDINGS_V6, IPV4_CSUM_OFFSET, LAST_SEEN_INTERVAL_SEC,
-    OUTBOUND_BINDINGS_V4, OUTBOUND_BINDINGS_V6, PORT_FLAGS, PORT_FREE_V4, PORT_FREE_V6,
-    RESERVED_V4, RESERVED_V6, SESSION_EVENTS_V4, SESSION_EVENTS_V6, UDP_CSUM_OFFSET,
+    BPF_F_MARK_MANGLED_0, BPF_F_PSEUDO_HDR, BPF_NOEXIST, CSUM_FIELD_U16, CSUM_FIELD_U32,
+    FREE_EVEN_V4, FREE_EVEN_V6, FREE_ODD_V4, FREE_ODD_V6, GC_FLAGS, INBOUND_BINDINGS_V4,
+    INBOUND_BINDINGS_V6, IPV4_CSUM_OFFSET, LAST_SEEN_INTERVAL_SEC, OUTBOUND_BINDINGS_V4,
+    OUTBOUND_BINDINGS_V6, PORT_FLAGS, PORT_FREE_V4, PORT_FREE_V6, RESERVED_V4, RESERVED_V6,
+    SESSION_EVENTS_V4, SESSION_EVENTS_V6, UDP_CSUM_OFFSET,
 };
 
 pub const EGRESS_ALLOC_PRIMARY: usize = 4;
@@ -261,34 +261,41 @@ pub fn claim_port_v6(port: u16, in_val: &BindingValue6) -> bool {
         .is_ok()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AllocStep {
+    Claimed(u16),
+    Stale,
+    Empty,
+}
+
 #[inline(always)]
-pub fn pop_and_claim_v4(q: &Queue<u16>, in_val: &BindingValue4) -> Result<Option<u16>, ()> {
+pub fn pop_and_claim_v4(q: &Queue<u16>, in_val: &BindingValue4) -> AllocStep {
     let port = match q.pop() {
         Ok(Some(port)) => port,
-        _ => return Err(()),
+        _ => return AllocStep::Empty,
     };
     port_state_unqueue(&PORT_FREE_V4, port);
     if claim_port_v4(port, in_val) {
         port_state_bound(&PORT_FREE_V4, port);
-        return Ok(Some(port));
+        return AllocStep::Claimed(port);
     }
     port_state_bound(&PORT_FREE_V4, port);
-    Ok(None)
+    AllocStep::Stale
 }
 
 #[inline(always)]
-pub fn pop_and_claim_v6(q: &Queue<u16>, in_val: &BindingValue6) -> Result<Option<u16>, ()> {
+pub fn pop_and_claim_v6(q: &Queue<u16>, in_val: &BindingValue6) -> AllocStep {
     let port = match q.pop() {
         Ok(Some(port)) => port,
-        _ => return Err(()),
+        _ => return AllocStep::Empty,
     };
     port_state_unqueue(&PORT_FREE_V6, port);
     if claim_port_v6(port, in_val) {
         port_state_bound(&PORT_FREE_V6, port);
-        return Ok(Some(port));
+        return AllocStep::Claimed(port);
     }
     port_state_bound(&PORT_FREE_V6, port);
-    Ok(None)
+    AllocStep::Stale
 }
 
 #[repr(C)]
@@ -311,6 +318,12 @@ pub struct PortAllocCtx6 {
     pub result: u16,
 }
 
+/// Callback invoked by `bpf_loop` to allocate an IPv4 external port.
+///
+/// # Safety
+///
+/// The caller must ensure that `ctx` points to a valid, properly aligned, and mutable
+/// `PortAllocCtx4` instance that remains valid for the duration of the callback.
 #[inline(never)]
 pub unsafe extern "C" fn alloc_cb_v4(_index: u32, ctx: *mut c_void) -> i64 {
     let c = unsafe { &mut *(ctx as *mut PortAllocCtx4) };
@@ -328,16 +341,16 @@ pub unsafe extern "C" fn alloc_cb_v4(_index: u32, ctx: *mut c_void) -> i64 {
     };
 
     match pop_and_claim_v4(q, &c.in_val) {
-        Ok(Some(port)) => {
+        AllocStep::Claimed(port) => {
             c.result = port;
             1
         }
-        Ok(None) => {
+        AllocStep::Stale => {
             c.saw_stale = 1;
             c.index += 1;
             0
         }
-        Err(()) => {
+        AllocStep::Empty => {
             if primary {
                 c.index = c.primary;
                 0
@@ -348,6 +361,12 @@ pub unsafe extern "C" fn alloc_cb_v4(_index: u32, ctx: *mut c_void) -> i64 {
     }
 }
 
+/// Callback invoked by `bpf_loop` to allocate an IPv6 external port.
+///
+/// # Safety
+///
+/// The caller must ensure that `ctx` points to a valid, properly aligned, and mutable
+/// `PortAllocCtx6` instance that remains valid for the duration of the callback.
 #[inline(never)]
 pub unsafe extern "C" fn alloc_cb_v6(_index: u32, ctx: *mut c_void) -> i64 {
     let c = unsafe { &mut *(ctx as *mut PortAllocCtx6) };
@@ -365,16 +384,16 @@ pub unsafe extern "C" fn alloc_cb_v6(_index: u32, ctx: *mut c_void) -> i64 {
     };
 
     match pop_and_claim_v6(q, &c.in_val) {
-        Ok(Some(port)) => {
+        AllocStep::Claimed(port) => {
             c.result = port;
             1
         }
-        Ok(None) => {
+        AllocStep::Stale => {
             c.saw_stale = 1;
             c.index += 1;
             0
         }
-        Err(()) => {
+        AllocStep::Empty => {
             if primary {
                 c.index = c.primary;
                 0

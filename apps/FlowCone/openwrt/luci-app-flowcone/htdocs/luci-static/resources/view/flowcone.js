@@ -41,7 +41,7 @@ function updateStatus(data, targetEl) {
 }
 
 return view.extend({
-	load: function() {
+	load: function () {
 		return Promise.all([
 			L.resolveDefault(callFlowconeStatus(), {}),
 			uci.load('flowcone'),
@@ -50,7 +50,7 @@ return view.extend({
 		]);
 	},
 
-	render: function(res) {
+	render: function (res) {
 		var status = res[0] || {};
 		var nat6Installed = res[3] != null;
 		var m, s, o;
@@ -59,7 +59,7 @@ return view.extend({
 			_('RFC 4787 Full-Cone NAT based on eBPF and TCX.'));
 
 		s = m.section(form.NamedSection, '_status');
-		s.render = function() {
+		s.render = function () {
 			var statusEl = E('span', { 'id': 'flowcone_status', 'style': 'font-weight: 500; margin-right: 15px;' }, [
 				E('em', {}, _('Collecting data...'))
 			]);
@@ -67,15 +67,15 @@ return view.extend({
 			var reloadBtn = E('button', {
 				'type': 'button',
 				'class': 'btn cbi-button cbi-button-action',
-				'click': function(ev) {
+				'click': function (ev) {
 					var btn = ev.target;
 					btn.disabled = true;
 					btn.innerText = _('Reloading...');
-					callFlowconeAction('reload').then(function() {
+					callFlowconeAction('reload').then(function () {
 						btn.disabled = false;
 						btn.innerText = _('Reload Service');
 						ui.addNotification(null, E('p', _('FlowCone service reloaded successfully.')), 'info');
-					}).catch(function(err) {
+					}).catch(function (err) {
 						btn.disabled = false;
 						btn.innerText = _('Reload Service');
 						ui.addNotification(null, E('p', _('Failed to reload FlowCone:') + ' ' + (err.message || err)), 'error');
@@ -96,14 +96,14 @@ return view.extend({
 
 			updateStatus(status, statusEl);
 
-			var pollFn = function() {
+			var pollFn = function () {
 				if (!document.body.contains(statusEl)) {
 					poll.remove(pollFn);
 					return;
 				}
-				return callFlowconeStatus().then(function(stat) {
+				return callFlowconeStatus().then(function (stat) {
 					updateStatus(stat, statusEl);
-				}).catch(function() {});
+				}).catch(function () { });
 			};
 			poll.add(pollFn, 3);
 
@@ -127,10 +127,10 @@ return view.extend({
 			_('Use the nat6 package for ULA/RA/DHCPv6; FlowCone keeps IPv6 UDP fullcone when enabled.'));
 		o.default = o.disabled;
 		o.rmempty = false;
-		o.cfgvalue = function() {
+		o.cfgvalue = function () {
 			return uci.get('firewall', '@defaults[0]', 'nat6') === '1' ? '1' : '0';
 		};
-		o.write = function(section_id, value) {
+		o.write = function (section_id, value) {
 			uci.set('firewall', '@defaults[0]', 'nat6', (value === '1' || value === true) ? '1' : '0');
 		};
 		if (!nat6Installed) {
@@ -144,61 +144,64 @@ return view.extend({
 		o.noaliases = true;
 		o.nobridges = true;
 		o.nocreate = true;
-		o.rmempty = true;
 
-		o = s.option(form.Flag, '_advanced', _('Advanced Settings'),
-			_('Show advanced port range, timeout, and firewall integration options.'));
+		o = s.option(form.Flag, 'advanced', _('Advanced Settings'),
+			_('Show advanced port range, timeout, and firewall integration options. Advanced options will only be used as long as this box is checked.'));
 		o.default = o.disabled;
 		o.rmempty = false;
-		o.cfgvalue = function() { return '0'; };
-		o.write = function() {};
 
 		o = s.option(form.Value, 'min_port', _('Min Port'));
 		o.datatype = 'port';
 		o.placeholder = '1024';
 		o.default = '1024';
-		o.depends('_advanced', '1');
+		o.retain = true;
+		o.depends('advanced', '1');
 
 		o = s.option(form.Value, 'max_port', _('Max Port'));
 		o.datatype = 'port';
 		o.placeholder = '65535';
 		o.default = '65535';
-		o.depends('_advanced', '1');
+		o.retain = true;
+		o.depends('advanced', '1');
 
 		o = s.option(form.Value, 'timeout', _('Timeout (seconds)'));
 		o.datatype = 'uinteger';
 		o.placeholder = '120';
 		o.default = '120';
-		o.validate = function(section_id, value) {
+		o.validate = function (section_id, value) {
 			var v = +value;
 			if (!(v >= 120 && v <= 604800))
 				return _('Timeout must be between 120 and 604800 seconds (RFC 4787 REQ-5).');
 			return true;
 		};
-		o.depends('_advanced', '1');
+		o.retain = true;
+		o.depends('advanced', '1');
 
 		o = s.option(form.Value, 'interval', _('Expiry Scheduler Tick (seconds)'));
 		o.datatype = 'uinteger';
 		o.placeholder = '5';
 		o.default = '5';
-		o.validate = function(section_id, value) {
+		o.validate = function (section_id, value) {
 			var v = +value;
 			if (!(v >= 1 && v <= 3600))
 				return _('Interval must be between 1 and 3600 seconds.');
 			return true;
 		};
-		o.depends('_advanced', '1');
+		o.retain = true;
+		o.depends('advanced', '1');
 
 		o = s.option(form.Flag, 'manage_nft', _('Firewall (fw4) Integration'),
 			_('Automatically insert masquerade bypass and forward rules.'));
 		o.default = o.enabled;
 		o.rmempty = false;
-		o.depends('_advanced', '1');
+		o.retain = true;
+		o.depends('advanced', '1');
 
 		o = s.option(form.Value, 'bypass_mark', _('Bypass Fwmark'),
 			_('Optional fwmark for custom policy routing.'));
 		o.placeholder = '0x100/0xff00';
-		o.depends('_advanced', '1');
+		o.retain = true;
+		o.depends('advanced', '1');
 
 		return m.render();
 	}

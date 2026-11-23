@@ -53,6 +53,12 @@ pub fn parse_header_at_mut<T>(ptr: usize, data_end: usize) -> Option<*mut T> {
     Some(ptr as *mut T)
 }
 
+/// Casts a slice of packet bytes to an immutable reference of type `T`.
+///
+/// # Safety
+///
+/// The caller must ensure `ptr` is properly aligned for `T` and dereferenceable
+/// up to `data_end`.
 #[inline(always)]
 pub unsafe fn parse_header_ref<'a, T>(ptr: usize, data_end: usize) -> Option<&'a T> {
     if ptr + mem::size_of::<T>() > data_end {
@@ -61,6 +67,12 @@ pub unsafe fn parse_header_ref<'a, T>(ptr: usize, data_end: usize) -> Option<&'a
     Some(unsafe { &*(ptr as *const T) })
 }
 
+/// Casts a slice of packet bytes to a mutable reference of type `T`.
+///
+/// # Safety
+///
+/// The caller must ensure `ptr` is properly aligned for `T` and dereferenceable
+/// up to `data_end`.
 #[inline(always)]
 pub unsafe fn parse_header_ref_mut<'a, T>(ptr: usize, data_end: usize) -> Option<&'a mut T> {
     if ptr + mem::size_of::<T>() > data_end {
