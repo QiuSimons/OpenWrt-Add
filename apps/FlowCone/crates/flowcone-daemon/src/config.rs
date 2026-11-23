@@ -212,7 +212,7 @@ pub fn print_help() {
     println!("      --timeout <SEC>        Binding timeout in seconds (default: 120)");
     println!("      --interval <SEC>       Expiry scheduler tick in seconds (default: 5)");
     println!("      --bypass-mark <VAL[/MASK]> Mark filter to bypass FlowCone (e.g. 0x1/0x1)");
-    println!("      --mark <VAL>           Inbound DNAT mark (default: 0x04787000)");
+    println!("      --mark <VAL>           Inbound DNAT mark (default: 0x00800000)");
     println!(
         "      --manage-nft <1|0>     Manage firewall nftables rules automatically (default: 1)"
     );
@@ -258,7 +258,7 @@ mod tests {
             parse_args_from(vec![
                 "flowcone".into(),
                 "--mark".into(),
-                "0x04787000".into()
+                "0x00800000".into()
             ])
             .is_ok()
         );

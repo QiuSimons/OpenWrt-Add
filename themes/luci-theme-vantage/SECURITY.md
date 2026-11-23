@@ -4,10 +4,10 @@
 
 | Version | OpenWrt | Supported |
 |---|---|---|
-| 1.1.x | 25.12 | Yes |
-| 1.1.x | 24.10 | Yes |
-| 1.1.x | 23.05 and older | No (untested) |
-| 1.0.x | any | No: update to 1.1 |
+| 1.2.x | 25.12 | Yes |
+| 1.2.x | 24.10 | Yes |
+| 1.2.x | 23.05 and older | No (untested) |
+| 1.1.x and older | any | No: update to 1.2 |
 
 Fixes go into the latest release. Only the newest release is supported.
 

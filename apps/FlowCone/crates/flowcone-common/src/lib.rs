@@ -303,7 +303,7 @@ pub fn port_state_on_release(state: u8) -> (bool, u8) {
 }
 
 /// Default packet mark applied to inbound DNAT-translated packets.
-pub const DEFAULT_FLOWCONE_MARK: u32 = 0x04787000;
+pub const DEFAULT_FLOWCONE_MARK: u32 = 0x00800000;
 
 pub const IPPROTO_ICMP: u8 = 1;
 pub const IPPROTO_UDP: u8 = 17;
