@@ -1,11 +1,94 @@
-use aya::maps::{Array, HashMap, MapData, Queue, RingBuf};
+use aya::maps::{Array, HashMap, MapData, RingBuf};
 use flowcone_common::{
     BindingValue4, BindingValue6, EndpointKey4, EndpointKey6, FragKey4, FragKey6, FragValue4,
-    FragValue6, GlobalConfig, MAX_BINDINGS, PORT_FREE_BIT, PORT_QUEUED_BIT, SessionEvent4,
-    SessionEvent6, port_state_on_release,
+    FragValue6, GlobalConfig, MAX_BINDINGS, SessionEvent4, SessionEvent6,
 };
+use rustix::mm::{MapFlags, ProtFlags};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Userspace atomic view of a BPF_F_MMAPABLE array map.
+pub struct AtomicBitmap {
+    mmap_ptr: *mut AtomicU64,
+    len: usize,
+    _array: Array<MapData, u64>,
+}
+
+unsafe impl Send for AtomicBitmap {}
+unsafe impl Sync for AtomicBitmap {}
+
+impl AtomicBitmap {
+    pub fn new(array: Array<MapData, u64>) -> Result<Self, String> {
+        use aya::maps::IterableMap;
+        use std::os::fd::AsFd;
+        let len = flowcone_common::PORT_BITMAP_SLOTS as usize;
+        let byte_len = len * std::mem::size_of::<u64>();
+        let map_data = array.map();
+        let map_fd = map_data.fd();
+        let mmap_ptr = unsafe {
+            rustix::mm::mmap(
+                std::ptr::null_mut(),
+                byte_len,
+                ProtFlags::READ | ProtFlags::WRITE,
+                MapFlags::SHARED,
+                map_fd.as_fd(),
+                0,
+            )
+            .map_err(|e| format!("failed to mmap BPF bitmap: {e:?}"))? as *mut AtomicU64
+        };
+        Ok(Self {
+            mmap_ptr,
+            len,
+            _array: array,
+        })
+    }
+
+    #[inline(always)]
+    pub fn fetch_and(&self, slot: u32, mask: u64, order: Ordering) -> u64 {
+        debug_assert!((slot as usize) < self.len);
+        unsafe {
+            let elem = &*self.mmap_ptr.add(slot as usize);
+            elem.fetch_and(mask, order)
+        }
+    }
+
+    #[inline(always)]
+    pub fn fetch_or(&self, slot: u32, mask: u64, order: Ordering) -> u64 {
+        debug_assert!((slot as usize) < self.len);
+        unsafe {
+            let elem = &*self.mmap_ptr.add(slot as usize);
+            elem.fetch_or(mask, order)
+        }
+    }
+
+    #[inline(always)]
+    pub fn store(&self, slot: u32, val: u64, order: Ordering) {
+        debug_assert!((slot as usize) < self.len);
+        unsafe {
+            let elem = &*self.mmap_ptr.add(slot as usize);
+            elem.store(val, order);
+        }
+    }
+
+    #[inline(always)]
+    pub fn load(&self, slot: u32, order: Ordering) -> u64 {
+        debug_assert!((slot as usize) < self.len);
+        unsafe {
+            let elem = &*self.mmap_ptr.add(slot as usize);
+            elem.load(order)
+        }
+    }
+}
+
+impl Drop for AtomicBitmap {
+    fn drop(&mut self) {
+        let byte_len = self.len * std::mem::size_of::<u64>();
+        unsafe {
+            let _ = rustix::mm::munmap(self.mmap_ptr as *mut _, byte_len);
+        }
+    }
+}
 
 type Expiry4 = Reverse<(u32, EndpointKey4, u16)>;
 type Expiry6 = Reverse<(u32, EndpointKey6, u16)>;
@@ -48,6 +131,7 @@ fn scan_netlink_udp_ports(family: u8) -> Option<Vec<u16>> {
 
     let mut buf = [0u8; 8192];
     let mut ports = Vec::new();
+    let mut done = false;
     'recv_loop: loop {
         let (n, _) = recv(&sock, &mut buf, rustix::net::RecvFlags::empty()).ok()?;
         if n == 0 {
@@ -67,6 +151,7 @@ fn scan_netlink_udp_ports(family: u8) -> Option<Vec<u16>> {
             }
             if nlmsg_type == 3 {
                 // NLMSG_DONE: multi-part dump finished normally
+                done = true;
                 break 'recv_loop;
             }
             if nlmsg_type == 20 {
@@ -81,7 +166,7 @@ fn scan_netlink_udp_ports(family: u8) -> Option<Vec<u16>> {
             offset += (nlmsg_len + 3) & !3; // NLMSG_ALIGN
         }
     }
-    if ports.is_empty() { None } else { Some(ports) }
+    if done { Some(ports) } else { None }
 }
 
 /// Parses listening UDP service ports from Netlink INET_DIAG with procfs fallback.
@@ -98,9 +183,7 @@ pub fn scan_local_udp_ports(family: u8, procfs_path: &str) -> Option<Vec<u16>> {
     Some(ports)
 }
 
-/// Parse local UDP ports from /proc/net/udp[6]. Both state 07 (unconnected /
-/// listening) and state 01 (connected client sockets) are reserved to prevent
-/// incoming responses to router services from being hijacked by TCX DNAT.
+/// Extracts local UDP ports in listening (07) and connected (01) states from procfs.
 fn parse_proc_udp_ports(text: &str) -> Vec<u16> {
     let mut out = Vec::new();
     for line in text.lines().skip(1) {
@@ -169,14 +252,12 @@ pub struct SessionManager {
     events4: RingBuf<MapData>,
     events6: RingBuf<MapData>,
     gc_flags: Array<MapData, u32>,
-    free_state4: Array<MapData, u8>,
-    free_state6: Array<MapData, u8>,
     reserved4: Array<MapData, u8>,
     reserved6: Array<MapData, u8>,
-    free_even4: Queue<MapData, u16>,
-    free_odd4: Queue<MapData, u16>,
-    free_even6: Queue<MapData, u16>,
-    free_odd6: Queue<MapData, u16>,
+    bitmap_even4: AtomicBitmap,
+    bitmap_odd4: AtomicBitmap,
+    bitmap_even6: AtomicBitmap,
+    bitmap_odd6: AtomicBitmap,
     port_flags: Array<MapData, u32>,
     pool_enable_v4: bool,
     pool_enable_v6: bool,
@@ -224,6 +305,7 @@ trait ConeBinding: aya::Pod + Copy {
     fn last_seen(&self) -> u32;
     fn make_key(&self) -> Self::Key;
     fn matches_key(&self, key: &Self::Key) -> bool;
+    fn is_short_lived(&self) -> bool;
 }
 
 impl ConeBinding for BindingValue4 {
@@ -247,6 +329,11 @@ impl ConeBinding for BindingValue4 {
 
     fn matches_key(&self, key: &EndpointKey4) -> bool {
         self.ip == key.ip && self.port == key.port
+    }
+
+    #[inline(always)]
+    fn is_short_lived(&self) -> bool {
+        self.is_short_lived()
     }
 }
 
@@ -272,9 +359,14 @@ impl ConeBinding for BindingValue6 {
     fn matches_key(&self, key: &EndpointKey6) -> bool {
         self.ip == key.ip && self.port == key.port
     }
+
+    #[inline(always)]
+    fn is_short_lived(&self) -> bool {
+        self.is_short_lived()
+    }
 }
 
-/// Full-table reconciliation after a lost queue notification.
+/// Reconciles bindings and sweeps expired entries when ring buffer overflows.
 fn sweep_family<V: ConeBinding>(
     ob_map: &mut HashMap<MapData, V::Key, V>,
     ib_map: &mut HashMap<MapData, u16, V>,
@@ -286,7 +378,12 @@ fn sweep_family<V: ConeBinding>(
 ) -> usize {
     expired_buf.clear();
     for (key, val) in ob_map.iter().flatten() {
-        if now.saturating_sub(val.last_seen()) <= timeout {
+        let item_timeout = if val.is_short_lived() {
+            flowcone_common::DEFAULT_SHORT_LIVED_TIMEOUT_SEC
+        } else {
+            timeout
+        };
+        if now.saturating_sub(val.last_seen()) <= item_timeout {
             continue;
         }
         let port_host = u16::from_be(val.port_be());
@@ -294,7 +391,7 @@ fn sweep_family<V: ConeBinding>(
             Ok(iv) if iv.matches_key(&key) => iv.last_seen(),
             _ => 0,
         };
-        if now.saturating_sub(ib_last) > timeout {
+        if now.saturating_sub(ib_last) > item_timeout {
             expired_buf.push((key, port_host));
         }
     }
@@ -303,15 +400,36 @@ fn sweep_family<V: ConeBinding>(
     for &(key, port_host) in expired_buf.iter() {
         // Revalidate against datapath refresh.
         if let Ok(cur_val) = ob_map.get(&key, 0) {
+            if u16::from_be(cur_val.port_be()) != port_host {
+                if ib_map
+                    .get(&port_host, 0)
+                    .map(|iv| iv.matches_key(&key))
+                    .unwrap_or(false)
+                    && ib_map.remove(&port_host).is_ok()
+                {
+                    freed_ports.push(port_host);
+                    swept += 1;
+                }
+                continue;
+            }
+            let item_timeout = if cur_val.is_short_lived() {
+                flowcone_common::DEFAULT_SHORT_LIVED_TIMEOUT_SEC
+            } else {
+                timeout
+            };
             let cur_ib_last = match ib_map.get(&port_host, 0) {
                 Ok(iv) if iv.matches_key(&key) => iv.last_seen(),
                 _ => 0,
             };
-            if now.saturating_sub(cur_val.last_seen().max(cur_ib_last)) <= timeout {
+            if now.saturating_sub(cur_val.last_seen().max(cur_ib_last)) <= item_timeout {
                 continue;
             }
         }
-        let _ = ob_map.remove(&key);
+        if let Ok(cur_val) = ob_map.get(&key, 0) {
+            if u16::from_be(cur_val.port_be()) == port_host {
+                let _ = ob_map.remove(&key);
+            }
+        }
         if ib_map
             .get(&port_host, 0)
             .map(|iv| iv.matches_key(&key))
@@ -362,14 +480,12 @@ pub struct SessionMaps {
     pub events4: RingBuf<MapData>,
     pub events6: RingBuf<MapData>,
     pub gc_flags: Array<MapData, u32>,
-    pub free_state4: Array<MapData, u8>,
-    pub free_state6: Array<MapData, u8>,
     pub reserved4: Array<MapData, u8>,
     pub reserved6: Array<MapData, u8>,
-    pub free_even4: Queue<MapData, u16>,
-    pub free_odd4: Queue<MapData, u16>,
-    pub free_even6: Queue<MapData, u16>,
-    pub free_odd6: Queue<MapData, u16>,
+    pub bitmap_even4: Array<MapData, u64>,
+    pub bitmap_odd4: Array<MapData, u64>,
+    pub bitmap_even6: Array<MapData, u64>,
+    pub bitmap_odd6: Array<MapData, u64>,
     pub port_flags: Array<MapData, u32>,
 }
 
@@ -393,15 +509,13 @@ fn expiry_step(now: u32, timeout: u32, seen: Option<u32>) -> ExpiryStep {
 struct FamilyPortPool<'a> {
     min_port: u16,
     max_port: u16,
-    even: &'a mut Queue<MapData, u16>,
-    odd: &'a mut Queue<MapData, u16>,
-    free_state: &'a mut Array<MapData, u8>,
+    bitmap_even: &'a mut AtomicBitmap,
+    bitmap_odd: &'a mut AtomicBitmap,
     reserved_ports: &'a [u16],
-    port_flags: &'a mut Array<MapData, u32>,
 }
 
 impl SessionManager {
-    pub fn new(maps: SessionMaps) -> Self {
+    pub fn new(maps: SessionMaps) -> Result<Self, String> {
         let SessionMaps {
             config_map,
             active_map,
@@ -416,17 +530,15 @@ impl SessionManager {
             events4,
             events6,
             gc_flags,
-            free_state4,
-            free_state6,
             reserved4,
             reserved6,
-            free_even4,
-            free_odd4,
-            free_even6,
-            free_odd6,
+            bitmap_even4,
+            bitmap_odd4,
+            bitmap_even6,
+            bitmap_odd6,
             port_flags,
         } = maps;
-        Self {
+        Ok(Self {
             config_map,
             active_map,
             ob_map4,
@@ -440,14 +552,12 @@ impl SessionManager {
             events4,
             events6,
             gc_flags,
-            free_state4,
-            free_state6,
             reserved4,
             reserved6,
-            free_even4,
-            free_odd4,
-            free_even6,
-            free_odd6,
+            bitmap_even4: AtomicBitmap::new(bitmap_even4)?,
+            bitmap_odd4: AtomicBitmap::new(bitmap_odd4)?,
+            bitmap_even6: AtomicBitmap::new(bitmap_even6)?,
+            bitmap_odd6: AtomicBitmap::new(bitmap_odd6)?,
             port_flags,
             pool_enable_v4: false,
             pool_enable_v6: false,
@@ -462,7 +572,7 @@ impl SessionManager {
             reserved4_ports: Vec::new(),
             reserved6_ports: Vec::new(),
             lost_notifications: false,
-        }
+        })
     }
 
     pub fn configure_port_pool(&mut self, min_port: u16, max_port: u16) {
@@ -477,10 +587,6 @@ impl SessionManager {
         self.min_port != 0 && self.min_port <= self.max_port
     }
 
-    fn drain_queue(q: &mut Queue<MapData, u16>) {
-        while q.pop(0).is_ok() {}
-    }
-
     fn sync_family_reserved<V: ConeBinding>(
         reserved_ports: &mut Vec<u16>,
         current: &[u16],
@@ -493,24 +599,38 @@ impl SessionManager {
         if added.is_empty() && removed.is_empty() {
             return;
         }
-        for port in added {
-            let _ = reserved_map.set(port as u32, &1, 0);
-            let _ = pool.free_state.set(port as u32, &0, 0);
-            if let Ok(in_val) = ib_map.get(&port, 0) {
+        for port in &added {
+            let _ = reserved_map.set(*port as u32, &1, 0);
+            let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(*port);
+            let map = if is_even {
+                &mut *pool.bitmap_even
+            } else {
+                &mut *pool.bitmap_odd
+            };
+            map.fetch_or(slot, mask, Ordering::Relaxed);
+            if let Ok(in_val) = ib_map.get(port, 0) {
                 let ep_key = in_val.make_key();
-                if ob_map
-                    .get(&ep_key, 0)
-                    .is_ok_and(|ob_val| u16::from_be(ob_val.port_be()) == port)
-                {
-                    let _ = ob_map.remove(&ep_key);
+                let _ = ib_map.remove(port);
+                if let Ok(ob_val) = ob_map.get(&ep_key, 0) {
+                    if u16::from_be(ob_val.port_be()) == *port {
+                        let _ = ob_map.remove(&ep_key);
+                    }
                 }
-                let _ = ib_map.remove(&port);
             }
         }
-        for port in removed {
-            let _ = reserved_map.set(port as u32, &0, 0);
-            if port >= pool.min_port && port <= pool.max_port && ib_map.get(&port, 0).is_err() {
-                Self::release_family_port(port, pool);
+        for port in &removed {
+            let _ = reserved_map.set(*port as u32, &0, 0);
+            if *port >= pool.min_port && *port <= pool.max_port {
+                if let Ok(in_val) = ib_map.get(port, 0) {
+                    let ep_key = in_val.make_key();
+                    let _ = ib_map.remove(port);
+                    if let Ok(ob_val) = ob_map.get(&ep_key, 0) {
+                        if u16::from_be(ob_val.port_be()) == *port {
+                            let _ = ob_map.remove(&ep_key);
+                        }
+                    }
+                }
+                Self::release_family_port(*port, pool);
             }
         }
         *reserved_ports = current.to_vec();
@@ -518,43 +638,55 @@ impl SessionManager {
 
     /// Applies updated local listening UDP ports to reserved maps.
     pub fn apply_reserved_ports(&mut self, ports4: Option<&[u16]>, ports6: Option<&[u16]>) {
+        let mut dirty4 = false;
+        let mut dirty6 = false;
         if let Some(ports) = ports4 {
-            let mut pool = FamilyPortPool {
-                min_port: self.min_port,
-                max_port: self.max_port,
-                even: &mut self.free_even4,
-                odd: &mut self.free_odd4,
-                free_state: &mut self.free_state4,
-                reserved_ports: ports,
-                port_flags: &mut self.port_flags,
-            };
-            Self::sync_family_reserved(
-                &mut self.reserved4_ports,
-                ports,
-                &mut self.reserved4,
-                &mut self.ob_map4,
-                &mut self.ib_map4,
-                &mut pool,
-            );
+            let (added, removed) = reserved_delta(&self.reserved4_ports, ports);
+            if !added.is_empty() || !removed.is_empty() {
+                dirty4 = true;
+                let mut pool = FamilyPortPool {
+                    min_port: self.min_port,
+                    max_port: self.max_port,
+                    bitmap_even: &mut self.bitmap_even4,
+                    bitmap_odd: &mut self.bitmap_odd4,
+                    reserved_ports: ports,
+                };
+                Self::sync_family_reserved(
+                    &mut self.reserved4_ports,
+                    ports,
+                    &mut self.reserved4,
+                    &mut self.ob_map4,
+                    &mut self.ib_map4,
+                    &mut pool,
+                );
+            }
         }
         if let Some(ports) = ports6 {
-            let mut pool = FamilyPortPool {
-                min_port: self.min_port,
-                max_port: self.max_port,
-                even: &mut self.free_even6,
-                odd: &mut self.free_odd6,
-                free_state: &mut self.free_state6,
-                reserved_ports: ports,
-                port_flags: &mut self.port_flags,
-            };
-            Self::sync_family_reserved(
-                &mut self.reserved6_ports,
-                ports,
-                &mut self.reserved6,
-                &mut self.ob_map6,
-                &mut self.ib_map6,
-                &mut pool,
-            );
+            let (added, removed) = reserved_delta(&self.reserved6_ports, ports);
+            if !added.is_empty() || !removed.is_empty() {
+                dirty6 = true;
+                let mut pool = FamilyPortPool {
+                    min_port: self.min_port,
+                    max_port: self.max_port,
+                    bitmap_even: &mut self.bitmap_even6,
+                    bitmap_odd: &mut self.bitmap_odd6,
+                    reserved_ports: ports,
+                };
+                Self::sync_family_reserved(
+                    &mut self.reserved6_ports,
+                    ports,
+                    &mut self.reserved6,
+                    &mut self.ob_map6,
+                    &mut self.ib_map6,
+                    &mut pool,
+                );
+            }
+        }
+        if dirty4 {
+            self.rebuild_family4();
+        }
+        if dirty6 {
+            self.rebuild_family6();
         }
     }
 
@@ -566,26 +698,30 @@ impl SessionManager {
     }
 
     fn init_family_pool(pool: &mut FamilyPortPool<'_>) {
-        Self::drain_queue(pool.even);
-        Self::drain_queue(pool.odd);
+        let mut even_slots = [!0u64; flowcone_common::PORT_BITMAP_SLOTS as usize];
+        let mut odd_slots = [!0u64; flowcone_common::PORT_BITMAP_SLOTS as usize];
+
         let mut p = pool.min_port;
-        loop {
-            let q = if (p & 1) == 0 {
-                &mut *pool.even
-            } else {
-                &mut *pool.odd
-            };
-            if q.push(&p, 0).is_err() {
-                let _ = pool.port_flags.set(0, &1, 0);
-                break;
+        while p <= pool.max_port {
+            if pool.reserved_ports.binary_search(&p).is_err() {
+                let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(p);
+                if is_even {
+                    even_slots[slot as usize] &= !mask;
+                } else {
+                    odd_slots[slot as usize] &= !mask;
+                }
             }
-            let _ = pool
-                .free_state
-                .set(p as u32, &(PORT_FREE_BIT | PORT_QUEUED_BIT), 0);
             if p == pool.max_port {
                 break;
             }
             p += 1;
+        }
+
+        for (slot, &val) in even_slots.iter().enumerate() {
+            pool.bitmap_even.store(slot as u32, val, Ordering::Relaxed);
+        }
+        for (slot, &val) in odd_slots.iter().enumerate() {
+            pool.bitmap_odd.store(slot as u32, val, Ordering::Relaxed);
         }
     }
 
@@ -599,11 +735,9 @@ impl SessionManager {
             let mut pool = FamilyPortPool {
                 min_port: self.min_port,
                 max_port: self.max_port,
-                even: &mut self.free_even4,
-                odd: &mut self.free_odd4,
-                free_state: &mut self.free_state4,
+                bitmap_even: &mut self.bitmap_even4,
+                bitmap_odd: &mut self.bitmap_odd4,
                 reserved_ports: &self.reserved4_ports,
-                port_flags: &mut self.port_flags,
             };
             Self::init_family_pool(&mut pool);
         }
@@ -611,11 +745,9 @@ impl SessionManager {
             let mut pool = FamilyPortPool {
                 min_port: self.min_port,
                 max_port: self.max_port,
-                even: &mut self.free_even6,
-                odd: &mut self.free_odd6,
-                free_state: &mut self.free_state6,
+                bitmap_even: &mut self.bitmap_even6,
+                bitmap_odd: &mut self.bitmap_odd6,
                 reserved_ports: &self.reserved6_ports,
-                port_flags: &mut self.port_flags,
             };
             Self::init_family_pool(&mut pool);
         }
@@ -628,38 +760,22 @@ impl SessionManager {
         if pool.reserved_ports.binary_search(&port).is_ok() {
             return;
         }
-        let state = pool.free_state.get(&(port as u32), 0).unwrap_or(0);
-        let (needs_push, new_state) = port_state_on_release(state);
-        if !needs_push {
-            if new_state != state {
-                let _ = pool.free_state.set(port as u32, &new_state, 0);
-            }
-            return;
-        }
-        let q = if (port & 1) == 0 {
-            &mut *pool.even
+        let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(port);
+        let map = if is_even {
+            &mut *pool.bitmap_even
         } else {
-            &mut *pool.odd
+            &mut *pool.bitmap_odd
         };
-        if q.push(&port, 0).is_err() {
-            let _ = pool.port_flags.set(0, &1, 0);
-            let _ = pool
-                .free_state
-                .set(port as u32, &(state | PORT_FREE_BIT), 0);
-        } else {
-            let _ = pool.free_state.set(port as u32, &new_state, 0);
-        }
+        map.fetch_and(slot, !mask, Ordering::Relaxed);
     }
 
     fn release_port4(&mut self, port: u16) {
         let mut pool = FamilyPortPool {
             min_port: self.min_port,
             max_port: self.max_port,
-            even: &mut self.free_even4,
-            odd: &mut self.free_odd4,
-            free_state: &mut self.free_state4,
+            bitmap_even: &mut self.bitmap_even4,
+            bitmap_odd: &mut self.bitmap_odd4,
             reserved_ports: &self.reserved4_ports,
-            port_flags: &mut self.port_flags,
         };
         Self::release_family_port(port, &mut pool);
     }
@@ -668,48 +784,86 @@ impl SessionManager {
         let mut pool = FamilyPortPool {
             min_port: self.min_port,
             max_port: self.max_port,
-            even: &mut self.free_even6,
-            odd: &mut self.free_odd6,
-            free_state: &mut self.free_state6,
+            bitmap_even: &mut self.bitmap_even6,
+            bitmap_odd: &mut self.bitmap_odd6,
             reserved_ports: &self.reserved6_ports,
-            port_flags: &mut self.port_flags,
         };
         Self::release_family_port(port, &mut pool);
     }
 
-    fn rebuild_family_ports(ib_keys: impl Iterator<Item = u16>, pool: &mut FamilyPortPool<'_>) {
-        let mut in_use = [0u64; 1024];
-        for key in ib_keys {
-            in_use[(key as usize) / 64] |= 1u64 << ((key as usize) % 64);
-        }
-        Self::drain_queue(pool.even);
-        Self::drain_queue(pool.odd);
-        let mut p = pool.min_port;
-        loop {
-            let is_used = (in_use[(p as usize) / 64] & (1u64 << ((p as usize) % 64))) != 0;
-            if is_used {
-                let _ = pool.free_state.set(p as u32, &0, 0);
-            } else if pool.reserved_ports.binary_search(&p).is_err() {
-                let _ = pool
-                    .free_state
-                    .set(p as u32, &(PORT_FREE_BIT | PORT_QUEUED_BIT), 0);
-                let q = if (p & 1) == 0 {
-                    &mut *pool.even
+    fn reconcile_family_ports<V: ConeBinding>(
+        ib_map: &HashMap<MapData, u16, V>,
+        pool: &mut FamilyPortPool<'_>,
+    ) {
+        use std::collections::HashSet;
+        let mut active_ports = HashSet::new();
+        for key in ib_map.keys().flatten() {
+            if key >= pool.min_port && key <= pool.max_port {
+                active_ports.insert(key);
+                let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(key);
+                let map = if is_even {
+                    &mut *pool.bitmap_even
                 } else {
-                    &mut *pool.odd
+                    &mut *pool.bitmap_odd
                 };
-                if q.push(&p, 0).is_err() {
-                    let _ = pool.free_state.set(p as u32, &0, 0);
-                    let _ = pool.port_flags.set(0, &1, 0);
-                    return;
-                }
+                map.fetch_or(slot, mask, Ordering::Relaxed);
+            }
+        }
+
+        for port in pool.reserved_ports {
+            let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(*port);
+            let map = if is_even {
+                &mut *pool.bitmap_even
             } else {
-                let _ = pool.free_state.set(p as u32, &0, 0);
+                &mut *pool.bitmap_odd
+            };
+            map.fetch_or(slot, mask, Ordering::Relaxed);
+        }
+
+        for parity in [true, false] {
+            let map = if parity {
+                &mut *pool.bitmap_even
+            } else {
+                &mut *pool.bitmap_odd
+            };
+            for slot in 0..flowcone_common::PORT_BITMAP_SLOTS {
+                let cur = map.load(slot, Ordering::Relaxed);
+                if cur == 0 {
+                    continue;
+                }
+                let mut orphan_mask = 0u64;
+                for bit in 0..64 {
+                    let mask = 1u64 << bit;
+                    if (cur & mask) != 0 {
+                        let port = flowcone_common::bitmap_coords_to_port(parity, slot, bit);
+                        if port >= pool.min_port
+                            && port <= pool.max_port
+                            && pool.reserved_ports.binary_search(&port).is_err()
+                            && !active_ports.contains(&port)
+                        {
+                            if ib_map.get(&port, 0).is_err() {
+                                orphan_mask |= mask;
+                            }
+                        }
+                    }
+                }
+                if orphan_mask != 0 {
+                    map.fetch_and(slot, !orphan_mask, Ordering::Relaxed);
+                    let mut rescue_mask = 0u64;
+                    for bit in 0..64 {
+                        let mask = 1u64 << bit;
+                        if (orphan_mask & mask) != 0 {
+                            let port = flowcone_common::bitmap_coords_to_port(parity, slot, bit);
+                            if ib_map.get(&port, 0).is_ok() {
+                                rescue_mask |= mask;
+                            }
+                        }
+                    }
+                    if rescue_mask != 0 {
+                        map.fetch_or(slot, rescue_mask, Ordering::Relaxed);
+                    }
+                }
             }
-            if p == pool.max_port {
-                break;
-            }
-            p += 1;
         }
     }
 
@@ -720,13 +874,11 @@ impl SessionManager {
         let mut pool = FamilyPortPool {
             min_port: self.min_port,
             max_port: self.max_port,
-            even: &mut self.free_even4,
-            odd: &mut self.free_odd4,
-            free_state: &mut self.free_state4,
+            bitmap_even: &mut self.bitmap_even4,
+            bitmap_odd: &mut self.bitmap_odd4,
             reserved_ports: &self.reserved4_ports,
-            port_flags: &mut self.port_flags,
         };
-        Self::rebuild_family_ports(self.ib_map4.keys().flatten(), &mut pool);
+        Self::reconcile_family_ports(&self.ib_map4, &mut pool);
     }
 
     fn rebuild_family6(&mut self) {
@@ -736,13 +888,11 @@ impl SessionManager {
         let mut pool = FamilyPortPool {
             min_port: self.min_port,
             max_port: self.max_port,
-            even: &mut self.free_even6,
-            odd: &mut self.free_odd6,
-            free_state: &mut self.free_state6,
+            bitmap_even: &mut self.bitmap_even6,
+            bitmap_odd: &mut self.bitmap_odd6,
             reserved_ports: &self.reserved6_ports,
-            port_flags: &mut self.port_flags,
         };
-        Self::rebuild_family_ports(self.ib_map6.keys().flatten(), &mut pool);
+        Self::reconcile_family_ports(&self.ib_map6, &mut pool);
     }
 
     fn rebuild_port_queues(&mut self) {
@@ -813,6 +963,7 @@ impl SessionManager {
 
     pub fn drain_events(&mut self, now: u32, timeout: u32) -> usize {
         let mut drained = 0;
+        let mut need_rebuild = false;
         if self.pool_enable_v4 {
             while drained < GC_QUEUE_DRAIN_MAX {
                 let ev = if let Some(item) = self.events4.next() {
@@ -835,6 +986,8 @@ impl SessionManager {
                             timeout
                         };
                         self.schedule4(now.saturating_add(ev_timeout), ev.key, ev.port);
+                    } else {
+                        need_rebuild = true;
                     }
                 }
             }
@@ -862,9 +1015,14 @@ impl SessionManager {
                             timeout
                         };
                         self.schedule6(now.saturating_add(ev_timeout), ev.key, ev.port);
+                    } else {
+                        need_rebuild = true;
                     }
                 }
             }
+        }
+        if need_rebuild {
+            self.rebuild_port_queues();
         }
         drained
     }
@@ -1235,6 +1393,12 @@ impl SessionManager {
                 self.freed_ports.clear();
             }
             self.rebuild_heaps(timeout);
+            if self.pool_enable_v4 {
+                self.rebuild_family4();
+            }
+            if self.pool_enable_v6 {
+                self.rebuild_family6();
+            }
         }
 
         self.rebuild_port_queues();
@@ -1260,6 +1424,7 @@ impl SessionManager {
             enabled_v6: 0,
             flowcone_mark: 0,
             frag_epoch: 0,
+            timeout_sec: 0,
         };
         let _ = self.set_config(empty_cfg);
     }

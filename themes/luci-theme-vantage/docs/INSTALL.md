@@ -289,7 +289,7 @@ You need:
   `security-tests/verify_built_apk.js`). The script calls `podman`
   directly and does not use Docker.
 - About **5 GB of disk** for the SDK image
-  (`ghcr.io/openwrt/sdk:x86_64-25.12.4`, pulled by digest) plus a few
+  (`ghcr.io/openwrt/sdk:x86_64-25.12.6`, pulled by digest) plus a few
   hundred MB while building. The container is removed afterwards; the image
   stays.
 - **Network access**: the first run pulls the image, and every build clones
@@ -301,8 +301,8 @@ You need:
 ```sh
 git clone https://github.com/anothaDev/luci-theme-vantage.git
 cd luci-theme-vantage
-dev/build/sdk-build.sh              # SDK 25.12.4, current commit (HEAD)
-dev/build/sdk-build.sh 25.12.4 <tag-or-commit>
+dev/build/sdk-build.sh              # SDK 25.12.6, current commit (HEAD)
+dev/build/sdk-build.sh 25.12.6 <tag-or-commit>
 ```
 
 The first argument is the SDK release, the second any git revision. The
@@ -357,10 +357,11 @@ need the log. It also leaves the SDK's `apk`, `jsmin`, `po2lmo` and
 `luci.mk` in `dist/.tools/` so the packages can be re-checked later:
 
 ```sh
-node security-tests/verify_built_apk.js dist/25.12.4
+node security-tests/verify_built_apk.js dist/25.12.6
 ```
 
-**Other SDK releases.** 25.12.4 and 24.10.8 are pinned. For another release, add
+**Other SDK releases.** 25.12.6 and 24.10.8 are pinned, and 25.12.4, which
+built the releases up to 1.2.0. For another release, add
 its digest and SDK tarball line to the table in `sdk-build.sh` (the comment
 above the table shows how to get and cross-check both), or pass them for
 one build:
@@ -381,9 +382,9 @@ claim, build the release tag with the SDK release it was built with (its
 `BUILDINFO` says which), then compare:
 
 ```sh
-dev/build/sdk-build.sh 25.12.4 <tag>
-diff dist/25.12.4/SHA256SUMS /path/to/downloaded/SHA256SUMS && echo identical
-diff dist/25.12.4/BUILDINFO /path/to/downloaded/BUILDINFO && echo same inputs
+dev/build/sdk-build.sh 25.12.6 <tag>      # 1.2.0 and older: 25.12.4
+diff dist/25.12.6/SHA256SUMS /path/to/downloaded/SHA256SUMS && echo identical
+diff dist/25.12.6/BUILDINFO /path/to/downloaded/BUILDINFO && echo same inputs
 ```
 
 `BUILDINFO` differs only when the builds used different inputs, for
@@ -422,7 +423,7 @@ holds `packages.adb`, the index signed with that key. `BUILDINFO` records
 the public key's SHA-256.
 
 ```sh
-VANTAGE_SIGN_KEY=~/.config/vantage-signing/vantage.key.pem dev/build/sdk-build.sh 25.12.4 <tag>
+VANTAGE_SIGN_KEY=~/.config/vantage-signing/vantage.key.pem dev/build/sdk-build.sh 25.12.6 <tag>
 ```
 
 For 23.05/24.10 (opkg) use a usign key (`usign -G -s key-build -p

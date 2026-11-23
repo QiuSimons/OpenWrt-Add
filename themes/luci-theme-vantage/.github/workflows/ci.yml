@@ -34,7 +34,7 @@ env:
   UCODE_REPO: https://github.com/jow-/ucode.git
   UCODE_REV: 85922056ef7abeace3cca3ab28bc1ac2d88e31b1
   # the SDK releases built (keep in step with the build matrix below)
-  SDK_APK: 25.12.4
+  SDK_APK: 25.12.6
   SDK_IPK: 24.10.8
 
 jobs:
@@ -96,7 +96,9 @@ jobs:
         run: node security-tests/check_private_addresses.js
 
   build:
-    name: Build packages (OpenWrt ${{ matrix.sdk }})
+    # named by OpenWrt line, not point release: the main branch's ruleset
+    # requires these names, so an SDK update does not change them
+    name: Build packages (OpenWrt ${{ matrix.line }})
     needs: checks
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -107,9 +109,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - sdk: 25.12.4
+          - sdk: 25.12.6
+            line: '25.12'
             fmt: apk
           - sdk: 24.10.8
+            line: '24.10'
             fmt: ipk
     env:
       SDK_RELEASE: ${{ matrix.sdk }}

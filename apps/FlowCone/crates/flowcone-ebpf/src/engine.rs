@@ -1,29 +1,28 @@
 use aya_ebpf::{
-    helpers::{bpf_ktime_get_coarse_ns, bpf_loop},
-    maps::{Array, Queue},
+    helpers::bpf_ktime_get_coarse_ns,
+    maps::Array,
     programs::TcContext,
 };
-use core::ffi::c_void;
 use flowcone_common::{
-    BindingValue4, BindingValue6, EndpointKey4, EndpointKey6, GlobalConfig, PORT_FREE_BIT,
-    PORT_QUEUED_BIT, SessionEvent4, SessionEvent6,
+    BindingValue4, BindingValue6, EndpointKey4, EndpointKey6, GlobalConfig,
+    SessionEvent4, SessionEvent6,
 };
 
 use crate::parsing::ipv6_eq;
 use crate::{
-    BPF_F_MARK_MANGLED_0, BPF_F_PSEUDO_HDR, BPF_NOEXIST, CSUM_FIELD_U16, CSUM_FIELD_U32,
-    FREE_EVEN_V4, FREE_EVEN_V6, FREE_ODD_V4, FREE_ODD_V6, GC_FLAGS, INBOUND_BINDINGS_V4,
-    INBOUND_BINDINGS_V6, IPV4_CSUM_OFFSET, LAST_SEEN_INTERVAL_SEC, OUTBOUND_BINDINGS_V4,
-    OUTBOUND_BINDINGS_V6, PORT_FLAGS, PORT_FREE_V4, PORT_FREE_V6, RESERVED_V4, RESERVED_V6,
+    BITMAP_EVEN_V4, BITMAP_EVEN_V6, BITMAP_ODD_V4, BITMAP_ODD_V6, BPF_F_MARK_MANGLED_0,
+    BPF_F_PSEUDO_HDR, BPF_NOEXIST, CSUM_FIELD_U16, CSUM_FIELD_U32, GC_FLAGS,
+    INBOUND_BINDINGS_V4, INBOUND_BINDINGS_V6, IPV4_CSUM_OFFSET, LAST_SEEN_INTERVAL_SEC,
+    OUTBOUND_BINDINGS_V4, OUTBOUND_BINDINGS_V6, PORT_FLAGS, RESERVED_V4, RESERVED_V6,
     SESSION_EVENTS_V4, SESSION_EVENTS_V6, UDP_CSUM_OFFSET,
 };
 
 pub const EGRESS_ALLOC_PRIMARY: usize = 4;
-pub const EGRESS_ALLOC_FALLBACK: usize = 4;
+pub const EGRESS_ALLOC_FALLBACK: usize = 2;
 pub const FRAG_ALLOC_PRIMARY: usize = 4;
-pub const FRAG_ALLOC_FALLBACK: usize = 4;
+pub const FRAG_ALLOC_FALLBACK: usize = 2;
 pub const FRAG6_ALLOC_PRIMARY: usize = 4;
-pub const FRAG6_ALLOC_FALLBACK: usize = 4;
+pub const FRAG6_ALLOC_FALLBACK: usize = 2;
 
 #[inline(always)]
 pub fn now_sec() -> u32 {
@@ -164,244 +163,52 @@ pub fn port_is_reserved(reserved: &Array<u8>, port: u16) -> bool {
 }
 
 #[inline(always)]
-pub fn port_state_unqueue(map: &Array<u8>, port: u16) {
-    if let Some(p) = map.get_ptr_mut(port as u32) {
+pub fn bitmap_set_bit(map: &Array<u64>, slot: u32, mask: u64) {
+    if let Some(p) = map.get_ptr_mut(slot) {
         unsafe {
-            *p = flowcone_common::port_state_on_unqueue(*p);
+            core::arch::asm!(
+                "lock *(u64 *)({p} + 0) |= {mask}",
+                p = in(reg) p,
+                mask = in(reg) mask,
+            );
         }
     }
 }
 
 #[inline(always)]
-pub fn port_state_bound(map: &Array<u8>, port: u16) {
-    if let Some(p) = map.get_ptr_mut(port as u32) {
+pub fn bitmap_clear_bit(map: &Array<u64>, slot: u32, mask: u64) {
+    if let Some(p) = map.get_ptr_mut(slot) {
+        let neg = !mask;
         unsafe {
-            *p = flowcone_common::port_state_on_bound(*p);
-        }
-    }
-}
-
-#[inline(always)]
-pub fn queue_push(q: &Queue<u16>, state: &Array<u8>, port: u16) {
-    if let Some(p) = state.get_ptr_mut(port as u32) {
-        unsafe {
-            if *p & PORT_QUEUED_BIT != 0 {
-                return;
-            }
-            *p |= PORT_QUEUED_BIT;
-        }
-    } else {
-        return;
-    }
-    if q.push(&port, 0).is_err() {
-        let _ = PORT_FLAGS.set(0, &1, 0);
-        if let Some(p) = state.get_ptr_mut(port as u32) {
-            unsafe {
-                *p = flowcone_common::port_state_on_unqueue(*p);
-            }
+            core::arch::asm!(
+                "lock *(u64 *)({p} + 0) &= {neg}",
+                p = in(reg) p,
+                neg = in(reg) neg,
+            );
         }
     }
 }
 
 #[inline(always)]
 pub fn release_port_v4(port: u16) {
-    if let Some(p) = PORT_FREE_V4.get_ptr_mut(port as u32) {
-        unsafe {
-            *p |= PORT_FREE_BIT;
-            if *p & PORT_QUEUED_BIT != 0 {
-                return;
-            }
-        }
+    let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(port);
+    let map = if is_even {
+        &BITMAP_EVEN_V4
     } else {
-        return;
-    }
-    if (port & 1) == 0 {
-        queue_push(&FREE_EVEN_V4, &PORT_FREE_V4, port);
-    } else {
-        queue_push(&FREE_ODD_V4, &PORT_FREE_V4, port);
-    }
+        &BITMAP_ODD_V4
+    };
+    bitmap_clear_bit(map, slot, mask);
 }
 
 #[inline(always)]
 pub fn release_port_v6(port: u16) {
-    if let Some(p) = PORT_FREE_V6.get_ptr_mut(port as u32) {
-        unsafe {
-            *p |= PORT_FREE_BIT;
-            if *p & PORT_QUEUED_BIT != 0 {
-                return;
-            }
-        }
+    let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(port);
+    let map = if is_even {
+        &BITMAP_EVEN_V6
     } else {
-        return;
-    }
-    if (port & 1) == 0 {
-        queue_push(&FREE_EVEN_V6, &PORT_FREE_V6, port);
-    } else {
-        queue_push(&FREE_ODD_V6, &PORT_FREE_V6, port);
-    }
-}
-
-#[inline(always)]
-pub fn claim_port_v4(port: u16, in_val: &BindingValue4) -> bool {
-    if port_is_reserved(&RESERVED_V4, port) {
-        return false;
-    }
-    INBOUND_BINDINGS_V4
-        .insert(&port, in_val, BPF_NOEXIST)
-        .is_ok()
-}
-
-#[inline(always)]
-pub fn claim_port_v6(port: u16, in_val: &BindingValue6) -> bool {
-    if port_is_reserved(&RESERVED_V6, port) {
-        return false;
-    }
-    INBOUND_BINDINGS_V6
-        .insert(&port, in_val, BPF_NOEXIST)
-        .is_ok()
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AllocStep {
-    Claimed(u16),
-    Stale,
-    Empty,
-}
-
-#[inline(always)]
-pub fn pop_and_claim_v4(q: &Queue<u16>, in_val: &BindingValue4) -> AllocStep {
-    let port = match q.pop() {
-        Ok(Some(port)) => port,
-        _ => return AllocStep::Empty,
+        &BITMAP_ODD_V6
     };
-    port_state_unqueue(&PORT_FREE_V4, port);
-    if claim_port_v4(port, in_val) {
-        port_state_bound(&PORT_FREE_V4, port);
-        return AllocStep::Claimed(port);
-    }
-    port_state_bound(&PORT_FREE_V4, port);
-    AllocStep::Stale
-}
-
-#[inline(always)]
-pub fn pop_and_claim_v6(q: &Queue<u16>, in_val: &BindingValue6) -> AllocStep {
-    let port = match q.pop() {
-        Ok(Some(port)) => port,
-        _ => return AllocStep::Empty,
-    };
-    port_state_unqueue(&PORT_FREE_V6, port);
-    if claim_port_v6(port, in_val) {
-        port_state_bound(&PORT_FREE_V6, port);
-        return AllocStep::Claimed(port);
-    }
-    port_state_bound(&PORT_FREE_V6, port);
-    AllocStep::Stale
-}
-
-#[repr(C)]
-pub struct PortAllocCtx4 {
-    pub in_val: BindingValue4,
-    pub primary: u32,
-    pub index: u32,
-    pub parity: u8,
-    pub saw_stale: u8,
-    pub result: u16,
-}
-
-#[repr(C)]
-pub struct PortAllocCtx6 {
-    pub in_val: BindingValue6,
-    pub primary: u32,
-    pub index: u32,
-    pub parity: u8,
-    pub saw_stale: u8,
-    pub result: u16,
-}
-
-/// Callback invoked by `bpf_loop` to allocate an IPv4 external port.
-///
-/// # Safety
-///
-/// The caller must ensure that `ctx` points to a valid, properly aligned, and mutable
-/// `PortAllocCtx4` instance that remains valid for the duration of the callback.
-#[inline(never)]
-pub unsafe extern "C" fn alloc_cb_v4(_index: u32, ctx: *mut c_void) -> i64 {
-    let c = unsafe { &mut *(ctx as *mut PortAllocCtx4) };
-    let primary = c.index < c.primary;
-    let q = if primary {
-        if c.parity == 0 {
-            &FREE_EVEN_V4
-        } else {
-            &FREE_ODD_V4
-        }
-    } else if c.parity == 0 {
-        &FREE_ODD_V4
-    } else {
-        &FREE_EVEN_V4
-    };
-
-    match pop_and_claim_v4(q, &c.in_val) {
-        AllocStep::Claimed(port) => {
-            c.result = port;
-            1
-        }
-        AllocStep::Stale => {
-            c.saw_stale = 1;
-            c.index += 1;
-            0
-        }
-        AllocStep::Empty => {
-            if primary {
-                c.index = c.primary;
-                0
-            } else {
-                1
-            }
-        }
-    }
-}
-
-/// Callback invoked by `bpf_loop` to allocate an IPv6 external port.
-///
-/// # Safety
-///
-/// The caller must ensure that `ctx` points to a valid, properly aligned, and mutable
-/// `PortAllocCtx6` instance that remains valid for the duration of the callback.
-#[inline(never)]
-pub unsafe extern "C" fn alloc_cb_v6(_index: u32, ctx: *mut c_void) -> i64 {
-    let c = unsafe { &mut *(ctx as *mut PortAllocCtx6) };
-    let primary = c.index < c.primary;
-    let q = if primary {
-        if c.parity == 0 {
-            &FREE_EVEN_V6
-        } else {
-            &FREE_ODD_V6
-        }
-    } else if c.parity == 0 {
-        &FREE_ODD_V6
-    } else {
-        &FREE_EVEN_V6
-    };
-
-    match pop_and_claim_v6(q, &c.in_val) {
-        AllocStep::Claimed(port) => {
-            c.result = port;
-            1
-        }
-        AllocStep::Stale => {
-            c.saw_stale = 1;
-            c.index += 1;
-            0
-        }
-        AllocStep::Empty => {
-            if primary {
-                c.index = c.primary;
-                0
-            } else {
-                1
-            }
-        }
-    }
+    bitmap_clear_bit(map, slot, mask);
 }
 
 #[inline(always)]
@@ -411,44 +218,133 @@ pub fn alloc_port_v4<const PRIMARY: usize, const FALLBACK: usize>(
     max: u16,
     in_val: &BindingValue4,
 ) -> Option<u16> {
-    if pref >= min && pref <= max && claim_port_v4(pref, in_val) {
-        port_state_bound(&PORT_FREE_V4, pref);
-        return Some(pref);
+    if pref >= min && pref <= max {
+        let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(pref);
+        let map = if is_even {
+            &BITMAP_EVEN_V4
+        } else {
+            &BITMAP_ODD_V4
+        };
+        if !port_is_reserved(&RESERVED_V4, pref)
+            && INBOUND_BINDINGS_V4
+                .insert(&pref, in_val, BPF_NOEXIST)
+                .is_ok()
+        {
+            bitmap_set_bit(map, slot, mask);
+            return Some(pref);
+        }
+        bitmap_set_bit(map, slot, mask);
     }
-    let mut ctx = PortAllocCtx4 {
-        in_val: *in_val,
-        primary: PRIMARY as u32,
-        index: 0,
-        parity: (pref & 1) as u8,
-        saw_stale: 0,
-        result: 0,
+
+    let pref_even = (pref & 1) == 0;
+    let rnd = unsafe { aya_ebpf::helpers::bpf_get_prandom_u32() };
+    let start_slot = rnd % flowcone_common::PORT_BITMAP_SLOTS;
+
+    let primary_map = if pref_even {
+        &BITMAP_EVEN_V4
+    } else {
+        &BITMAP_ODD_V4
     };
-    unsafe {
-        bpf_loop(
-            (PRIMARY + FALLBACK) as u32,
-            alloc_cb_v4 as *const () as *mut c_void,
-            &mut ctx as *mut PortAllocCtx4 as *mut c_void,
+    let mut i = 0;
+    while i < PRIMARY {
+        let slot = (start_slot + i as u32) % flowcone_common::PORT_BITMAP_SLOTS;
+        if let Some(p) = primary_map.get_ptr_mut(slot) {
+            let val = unsafe { *p };
+            if val != !0u64 {
+                let free_bit = (!val).trailing_zeros();
+                if free_bit < 64 {
+                    let port = flowcone_common::bitmap_coords_to_port(pref_even, slot, free_bit);
+                    let mask = 1u64 << free_bit;
+                    if port >= min
+                        && port <= max
+                        && !port_is_reserved(&RESERVED_V4, port)
+                        && INBOUND_BINDINGS_V4
+                            .insert(&port, in_val, BPF_NOEXIST)
+                            .is_ok()
+                    {
+                        unsafe {
+                            core::arch::asm!(
+                                "lock *(u64 *)({p} + 0) |= {mask}",
+                                p = in(reg) p,
+                                mask = in(reg) mask,
+                            );
+                        }
+                        return Some(port);
+                    }
+                    // Mark occupied on collision or invalid range.
+                    unsafe {
+                        core::arch::asm!(
+                            "lock *(u64 *)({p} + 0) |= {mask}",
+                            p = in(reg) p,
+                            mask = in(reg) mask,
+                        );
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let fallback_even = !pref_even;
+    let fallback_map = if fallback_even {
+        &BITMAP_EVEN_V4
+    } else {
+        &BITMAP_ODD_V4
+    };
+    let mut j = 0;
+    while j < FALLBACK {
+        let slot = (start_slot + j as u32) % flowcone_common::PORT_BITMAP_SLOTS;
+        if let Some(p) = fallback_map.get_ptr_mut(slot) {
+            let val = unsafe { *p };
+            if val != !0u64 {
+                let free_bit = (!val).trailing_zeros();
+                if free_bit < 64 {
+                    let port = flowcone_common::bitmap_coords_to_port(fallback_even, slot, free_bit);
+                    let mask = 1u64 << free_bit;
+                    if port >= min
+                        && port <= max
+                        && !port_is_reserved(&RESERVED_V4, port)
+                        && INBOUND_BINDINGS_V4
+                            .insert(&port, in_val, BPF_NOEXIST)
+                            .is_ok()
+                    {
+                        unsafe {
+                            core::arch::asm!(
+                                "lock *(u64 *)({p} + 0) |= {mask}",
+                                p = in(reg) p,
+                                mask = in(reg) mask,
+                            );
+                        }
+                        return Some(port);
+                    }
+                    // Mark occupied on collision or invalid range.
+                    unsafe {
+                        core::arch::asm!(
+                            "lock *(u64 *)({p} + 0) |= {mask}",
+                            p = in(reg) p,
+                            mask = in(reg) mask,
+                        );
+                    }
+                }
+            }
+        }
+        j += 1;
+    }
+
+    let flag = PORT_FLAGS.get(0).copied().unwrap_or(0);
+    if flag == 0 {
+        let _ = PORT_FLAGS.set(0, &1, 0);
+        push_event_v4(
+            &EndpointKey4 {
+                ip: 0,
+                port: 0,
+                _pad: 0,
+            },
+            0,
             0,
         );
     }
-    if ctx.result != 0 {
-        Some(ctx.result)
-    } else {
-        let flag = PORT_FLAGS.get(0).copied().unwrap_or(0);
-        if flag == 0 {
-            let _ = PORT_FLAGS.set(0, &1, 0);
-            push_event_v4(
-                &EndpointKey4 {
-                    ip: 0,
-                    port: 0,
-                    _pad: 0,
-                },
-                0,
-                0,
-            );
-        }
-        None
-    }
+    None
 }
 
 #[inline(always)]
@@ -458,44 +354,133 @@ pub fn alloc_port_v6<const PRIMARY: usize, const FALLBACK: usize>(
     max: u16,
     in_val: &BindingValue6,
 ) -> Option<u16> {
-    if pref >= min && pref <= max && claim_port_v6(pref, in_val) {
-        port_state_bound(&PORT_FREE_V6, pref);
-        return Some(pref);
+    if pref >= min && pref <= max {
+        let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(pref);
+        let map = if is_even {
+            &BITMAP_EVEN_V6
+        } else {
+            &BITMAP_ODD_V6
+        };
+        if !port_is_reserved(&RESERVED_V6, pref)
+            && INBOUND_BINDINGS_V6
+                .insert(&pref, in_val, BPF_NOEXIST)
+                .is_ok()
+        {
+            bitmap_set_bit(map, slot, mask);
+            return Some(pref);
+        }
+        bitmap_set_bit(map, slot, mask);
     }
-    let mut ctx = PortAllocCtx6 {
-        in_val: *in_val,
-        primary: PRIMARY as u32,
-        index: 0,
-        parity: (pref & 1) as u8,
-        saw_stale: 0,
-        result: 0,
+
+    let pref_even = (pref & 1) == 0;
+    let rnd = unsafe { aya_ebpf::helpers::bpf_get_prandom_u32() };
+    let start_slot = rnd % flowcone_common::PORT_BITMAP_SLOTS;
+
+    let primary_map = if pref_even {
+        &BITMAP_EVEN_V6
+    } else {
+        &BITMAP_ODD_V6
     };
-    unsafe {
-        bpf_loop(
-            (PRIMARY + FALLBACK) as u32,
-            alloc_cb_v6 as *const () as *mut c_void,
-            &mut ctx as *mut PortAllocCtx6 as *mut c_void,
+    let mut i = 0;
+    while i < PRIMARY {
+        let slot = (start_slot + i as u32) % flowcone_common::PORT_BITMAP_SLOTS;
+        if let Some(p) = primary_map.get_ptr_mut(slot) {
+            let val = unsafe { *p };
+            if val != !0u64 {
+                let free_bit = (!val).trailing_zeros();
+                if free_bit < 64 {
+                    let port = flowcone_common::bitmap_coords_to_port(pref_even, slot, free_bit);
+                    let mask = 1u64 << free_bit;
+                    if port >= min
+                        && port <= max
+                        && !port_is_reserved(&RESERVED_V6, port)
+                        && INBOUND_BINDINGS_V6
+                            .insert(&port, in_val, BPF_NOEXIST)
+                            .is_ok()
+                    {
+                        unsafe {
+                            core::arch::asm!(
+                                "lock *(u64 *)({p} + 0) |= {mask}",
+                                p = in(reg) p,
+                                mask = in(reg) mask,
+                            );
+                        }
+                        return Some(port);
+                    }
+                    // Mark occupied on collision or invalid range.
+                    unsafe {
+                        core::arch::asm!(
+                            "lock *(u64 *)({p} + 0) |= {mask}",
+                            p = in(reg) p,
+                            mask = in(reg) mask,
+                        );
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let fallback_even = !pref_even;
+    let fallback_map = if fallback_even {
+        &BITMAP_EVEN_V6
+    } else {
+        &BITMAP_ODD_V6
+    };
+    let mut j = 0;
+    while j < FALLBACK {
+        let slot = (start_slot + j as u32) % flowcone_common::PORT_BITMAP_SLOTS;
+        if let Some(p) = fallback_map.get_ptr_mut(slot) {
+            let val = unsafe { *p };
+            if val != !0u64 {
+                let free_bit = (!val).trailing_zeros();
+                if free_bit < 64 {
+                    let port = flowcone_common::bitmap_coords_to_port(fallback_even, slot, free_bit);
+                    let mask = 1u64 << free_bit;
+                    if port >= min
+                        && port <= max
+                        && !port_is_reserved(&RESERVED_V6, port)
+                        && INBOUND_BINDINGS_V6
+                            .insert(&port, in_val, BPF_NOEXIST)
+                            .is_ok()
+                    {
+                        unsafe {
+                            core::arch::asm!(
+                                "lock *(u64 *)({p} + 0) |= {mask}",
+                                p = in(reg) p,
+                                mask = in(reg) mask,
+                            );
+                        }
+                        return Some(port);
+                    }
+                    // Mark occupied on collision or invalid range.
+                    unsafe {
+                        core::arch::asm!(
+                            "lock *(u64 *)({p} + 0) |= {mask}",
+                            p = in(reg) p,
+                            mask = in(reg) mask,
+                        );
+                    }
+                }
+            }
+        }
+        j += 1;
+    }
+
+    let flag = PORT_FLAGS.get(0).copied().unwrap_or(0);
+    if flag == 0 {
+        let _ = PORT_FLAGS.set(0, &1, 0);
+        push_event_v6(
+            &EndpointKey6 {
+                ip: [0; 16],
+                port: 0,
+                _pad: [0; 3],
+            },
+            0,
             0,
         );
     }
-    if ctx.result != 0 {
-        Some(ctx.result)
-    } else {
-        let flag = PORT_FLAGS.get(0).copied().unwrap_or(0);
-        if flag == 0 {
-            let _ = PORT_FLAGS.set(0, &1, 0);
-            push_event_v6(
-                &EndpointKey6 {
-                    ip: [0; 16],
-                    port: 0,
-                    _pad: [0; 3],
-                },
-                0,
-                0,
-            );
-        }
-        None
-    }
+    None
 }
 
 #[inline(always)]

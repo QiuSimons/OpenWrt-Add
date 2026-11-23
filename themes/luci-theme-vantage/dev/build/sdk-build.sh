@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the Vantage packages with the official OpenWrt SDK image in podman.
 #
-#   dev/build/sdk-build.sh [sdk-release=25.12.4] [git-rev=HEAD]
+#   dev/build/sdk-build.sh [sdk-release=25.12.6] [git-rev=HEAD]
 #
 # Builds from a self-contained clone of <git-rev> (not the working tree and
 # not a git worktree), so file timestamps come from git and the packages are
@@ -31,7 +31,7 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-release=${1:-25.12.4}
+release=${1:-25.12.6}
 packages="luci-theme-vantage luci-app-vantage luci-app-vantage-aps luci-app-vantage-traffic"
 
 die() { echo "sdk-build: $*" >&2; exit 2; }
@@ -52,7 +52,11 @@ rev=$(git -C "$repo" rev-parse --verify --quiet "${2:-HEAD}^{commit}") || die "u
 # OpenWrt release key).
 pinned_sdk() {
 	case $1 in
-	25.12.4)
+	25.12.6)
+		sdk_image=ghcr.io/openwrt/sdk@sha256:a17d6436f7add9207513b6edd0370f5a1aeeceeedf3c9080de8909112892f261
+		sdk_sum='1864152619092e781fa36a401960c8e9ae42d6a364c44ee5f0b197ca5f3c0fcc *openwrt-sdk-25.12.6-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst'
+		;;
+	25.12.4) # releases up to 1.2.0, to rebuild them
 		sdk_image=ghcr.io/openwrt/sdk@sha256:820d614294e64d048059cfe3dac58049fc0ce621a9d3ac21217c2caafb7d9616
 		sdk_sum='28e004c1be4d215d19c1f12a6aa4c8d8f80689549eb707d0ff5a71f16fa8d05f *openwrt-sdk-25.12.4-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst'
 		;;
@@ -105,6 +109,16 @@ fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/vantage-build.XXXXXX")
 git clone --quiet --no-local "$repo" "$work/feed"
 git -C "$work/feed" checkout --quiet --detach "$rev"
+# Since OpenWrt 25.12.5 a package's date (SOURCE_DATE_EPOCH, every file's
+# time in it) is its newest file's, no longer its last commit's; a clone's
+# files all carry the time of the clone. Date each package's files by the
+# last commit that touched the package, as git dated it before, so that
+# every build of a commit stays byte-identical.
+for p in $packages; do
+	t=$(git -C "$work/feed" log -1 --format=%ct -- "$p")
+	[[ $t =~ ^[0-9]+$ ]] || die "no commit date for $p"
+	find "$work/feed/$p" -exec touch -h -d "@$t" {} +
+done
 mkdir "$work/artifacts" "$work/out"
 
 # openwrt/gh-action-sdk@f5813d30eeef3534b58ac7e79c5d8842b6035434 entrypoint.sh;

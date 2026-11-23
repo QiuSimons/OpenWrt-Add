@@ -28,7 +28,7 @@ set -euo pipefail
 
 # the luci feed commit of the pinned SDK (feed= line in dist/<release>/BUILDINFO);
 # update it together with the SDK pin in dev/build/sdk-build.sh
-LUCI_REV=e9ebca7598ce2f754b76267fd66bf2b85e6e4347
+LUCI_REV=75a306df84a020c57a631ef5b4c02ace56d93387
 LUCI_URL=https://github.com/openwrt/luci.git
 
 # package directory:catalogue name

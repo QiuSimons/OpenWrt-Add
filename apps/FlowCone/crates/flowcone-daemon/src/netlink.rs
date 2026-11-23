@@ -1,11 +1,8 @@
-use rustix::event::{PollFd, PollFlags, poll};
-use rustix::fd::{BorrowedFd, OwnedFd};
+use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::net::{
     AddressFamily, SocketFlags, SocketType, bind, netlink::SocketAddrNetlink, recv, send,
     socket_with,
 };
-use rustix::time::Timespec;
-use std::time::Duration;
 
 #[inline(always)]
 fn read_u16_ne(buf: &[u8], off: usize) -> u16 {
@@ -245,34 +242,20 @@ impl EventMonitor {
         Ok(Self { sock })
     }
 
-    /// Wait for a notification, a wake pipe byte or the timeout.
-    pub fn wait(&self, wake: BorrowedFd<'_>, timeout: Duration) -> bool {
-        let ts = Timespec {
-            tv_sec: timeout.as_secs() as i64,
-            tv_nsec: timeout.subsec_nanos() as i64,
-        };
-        let mut fds = [
-            PollFd::new(&self.sock, PollFlags::IN),
-            PollFd::new(&wake, PollFlags::IN),
-        ];
-
-        match poll(&mut fds, Some(&ts)) {
-            Ok(n) if n > 0 => {
-                if fds[0].revents().contains(PollFlags::IN) {
-                    // Drain pending notifications.
-                    let mut buf = [0u8; 4096];
-                    while let Ok((n, _)) =
-                        recv(&self.sock, &mut buf, rustix::net::RecvFlags::DONTWAIT)
-                    {
-                        if n == 0 {
-                            break;
-                        }
-                    }
-                }
-                true
+    /// Drain any pending notifications non-blockingly.
+    pub fn drain(&self) {
+        let mut buf = [0u8; 4096];
+        while let Ok((n, _)) = recv(&self.sock, &mut buf, rustix::net::RecvFlags::DONTWAIT) {
+            if n == 0 {
+                break;
             }
-            _ => false,
         }
+    }
+}
+
+impl AsFd for EventMonitor {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.sock.as_fd()
     }
 }
 

@@ -75,14 +75,19 @@ pub(crate) fn parse_has_ipv6_masq(nft_output: &str) -> bool {
         if trimmed.contains("flowcone-nat6-partial") {
             continue;
         }
-        let has_v4 =
-            family == "ip" || trimmed.contains("nfproto ipv4") || trimmed.contains("bcmfullcone4");
-        let has_v6 = family == "ip6"
+        let has_v4_explicit = family == "ip"
+            || trimmed.contains("nfproto ipv4")
+            || trimmed.contains("ip saddr")
+            || trimmed.contains("ip daddr")
+            || trimmed.contains("bcmfullcone4");
+        let has_v6_explicit = family == "ip6"
             || trimmed.contains("nfproto ipv6")
+            || trimmed.contains("ip6 saddr")
+            || trimmed.contains("ip6 daddr")
             || trimmed.contains("ip6 ")
             || trimmed.contains("ipv6")
             || trimmed.contains("bcmfullcone6");
-        if has_v6 && !has_v4 {
+        if has_v6_explicit || (family == "inet" && !has_v4_explicit) {
             return true;
         }
     }
@@ -533,6 +538,15 @@ table ip6 nat {
         }
 }";
         assert!(parse_has_ipv6_masq(ip6_nat));
+
+        let inet_unqualified_masq = "\
+table inet nat {
+        chain postrouting {
+                type nat hook postrouting priority srcnat; policy accept;
+                oif \"eth0\" masquerade
+        }
+}";
+        assert!(parse_has_ipv6_masq(inet_unqualified_masq));
     }
 
     #[test]

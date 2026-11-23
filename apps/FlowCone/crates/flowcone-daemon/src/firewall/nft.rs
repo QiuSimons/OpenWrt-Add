@@ -11,9 +11,6 @@ use super::fw4::{
     set_definitions,
 };
 
-use std::sync::Mutex;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GenericTable {
     pub family: String,
     pub table: String,
@@ -21,27 +18,6 @@ pub(crate) struct GenericTable {
     pub src_v6: bool,
     pub fwd_v4: bool,
     pub fwd_v6: bool,
-}
-
-static GENERIC_TABLES: Mutex<Vec<GenericTable>> = Mutex::new(Vec::new());
-
-fn generic_lock() -> std::sync::MutexGuard<'static, Vec<GenericTable>> {
-    match GENERIC_TABLES.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
-pub(crate) fn clear_generic_tables() {
-    generic_lock().clear();
-}
-
-pub(crate) fn generic_tables_snapshot() -> Vec<GenericTable> {
-    generic_lock().clone()
-}
-
-pub(crate) fn store_generic_tables(tables: Vec<GenericTable>) {
-    *generic_lock() = tables;
 }
 
 fn collect_table(
@@ -298,8 +274,8 @@ pub(crate) fn generate_standalone_script_live(cfg: &FirewallConfig<'_>) -> Strin
     s
 }
 
-pub(crate) fn generic_liveness_supported() -> bool {
-    !generic_tables_snapshot().is_empty()
+pub(crate) fn generic_liveness_supported(tables: &[GenericTable]) -> bool {
+    !tables.is_empty()
 }
 
 fn refresh_generic_table_cli(t: &GenericTable, is_v6_masq: bool) -> bool {
@@ -330,12 +306,15 @@ fn refresh_generic_table(t: &GenericTable, is_v6_masq: bool, verbose: bool) -> b
     refresh_generic_table_cli(t, is_v6_masq)
 }
 
-pub(crate) fn refresh_generic_liveness(is_v6_masq: bool, verbose: bool) -> bool {
-    let tables = generic_tables_snapshot();
+pub(crate) fn refresh_generic_liveness(
+    tables: &[GenericTable],
+    is_v6_masq: bool,
+    verbose: bool,
+) -> bool {
     if tables.is_empty() {
         return false;
     }
-    for t in &tables {
+    for t in tables {
         if !refresh_generic_table(t, is_v6_masq, verbose) {
             if verbose {
                 eprintln!(
@@ -349,9 +328,8 @@ pub(crate) fn refresh_generic_liveness(is_v6_masq: bool, verbose: bool) -> bool 
     true
 }
 
-pub(crate) fn remove_generic_sets(verbose: bool) {
-    let tables = generic_tables_snapshot();
-    for t in &tables {
+pub(crate) fn remove_generic_sets(tables: &[GenericTable], verbose: bool) {
+    for t in tables {
         for (v6, src, fwd) in [(false, t.src_v4, t.fwd_v4), (true, t.src_v6, t.fwd_v6)] {
             if src {
                 let _ = Command::new("nft")
@@ -369,8 +347,7 @@ pub(crate) fn remove_generic_sets(verbose: bool) {
             }
         }
     }
-    clear_generic_tables();
-    if verbose {
+    if verbose && !tables.is_empty() {
         println!("flowcone: removed generic liveness sets");
     }
 }

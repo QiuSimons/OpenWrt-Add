@@ -189,6 +189,7 @@ pub struct GlobalConfig {
     pub enabled_v6: u32,
     pub flowcone_mark: u32,
     pub frag_epoch: u32,
+    pub timeout_sec: u32,
 }
 
 #[cfg(not(target_arch = "bpf"))]
@@ -275,6 +276,21 @@ pub const FRAG_MAP_ENTRIES: u32 = 4096;
 pub const SESSION_EVENT_RINGBUF_BYTES: u32 = 4194304;
 pub const PORT_STATE_ENTRIES: u32 = 65536;
 pub const PORT_QUEUE_ENTRIES: u32 = 65536;
+pub const PORT_BITMAP_SLOTS: u32 = 512;
+
+#[inline(always)]
+pub fn port_to_bitmap_coords(port: u16) -> (bool, u32, u64) {
+    let is_even = (port & 1) == 0;
+    let idx = (port / 2) as u32;
+    let slot = idx / 64;
+    let bit = idx % 64;
+    (is_even, slot, 1u64 << bit)
+}
+
+#[inline(always)]
+pub fn bitmap_coords_to_port(is_even: bool, slot: u32, bit: u32) -> u16 {
+    ((slot * 64 + bit) * 2 + if is_even { 0 } else { 1 }) as u16
+}
 
 pub const PORT_FREE_BIT: u8 = 1;
 pub const PORT_QUEUED_BIT: u8 = 2;
@@ -478,7 +494,7 @@ pub fn ipv6_fragment_offset_slice(data: &[u8], ip_off: usize, mut nh: u8) -> Opt
             }
             return None;
         }
-        if nh != IPPROTO_HOPOPTS && nh != IPPROTO_DSTOPTS {
+        if nh != IPPROTO_HOPOPTS && nh != IPPROTO_DSTOPTS && nh != IPPROTO_ROUTING {
             return None;
         }
         if cur + 2 > data.len() {
@@ -671,7 +687,7 @@ mod tests {
 
     #[test]
     fn test_global_config_layout() {
-        assert_eq!(core::mem::size_of::<GlobalConfig>(), 56);
+        assert_eq!(core::mem::size_of::<GlobalConfig>(), 60);
         assert_eq!(core::mem::align_of::<GlobalConfig>(), 4);
     }
 
@@ -783,6 +799,25 @@ mod tests {
         match l4_routing {
             Ipv6L4::Udp(off) => assert_eq!(off, 48),
             _ => panic!("expected UDP at offset 48 after Routing header"),
+        }
+    }
+
+    #[test]
+    fn test_ipv6_fragment_offset_slice_routing() {
+        let mut pkt = [0u8; 40 + 8 + 8];
+        pkt[40] = IPPROTO_FRAGMENT;
+        pkt[41] = 0;
+        let off = ipv6_fragment_offset_slice(&pkt, 0, IPPROTO_ROUTING);
+        assert_eq!(off, Some(48));
+    }
+
+    #[test]
+    fn test_bitmap_coords_roundtrip_all_ports() {
+        for port in 0..=65535u16 {
+            let (is_even, slot, mask) = port_to_bitmap_coords(port);
+            assert!(slot < PORT_BITMAP_SLOTS);
+            let bit = mask.trailing_zeros();
+            assert_eq!(bitmap_coords_to_port(is_even, slot, bit), port);
         }
     }
 }

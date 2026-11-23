@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![feature(asm_experimental_arch)]
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 pub mod engine;
@@ -9,15 +10,15 @@ use aya_ebpf::{
     EbpfContext,
     bindings::{__sk_buff, TC_ACT_SHOT, TC_ACT_UNSPEC},
     macros::{classifier, map},
-    maps::{Array, HashMap, LruHashMap, ProgramArray, Queue, RingBuf},
+    maps::{Array, HashMap, LruHashMap, ProgramArray, RingBuf},
     programs::TcContext,
 };
 use core::mem;
 use flowcone_common::{
     BindingValue4, BindingValue6, ETH_P_IP, ETH_P_IPV6, EndpointKey4, EndpointKey6,
     FRAG_MAP_ENTRIES, FragKey4, FragKey6, FragValue4, FragValue6, GlobalConfig, IPPROTO_ICMP,
-    IPPROTO_UDP, MAX_BINDINGS, PORT_QUEUE_ENTRIES, PORT_STATE_ENTRIES, SESSION_EVENT_RINGBUF_BYTES,
-    csum_replace,
+    IPPROTO_UDP, MAX_BINDINGS, PORT_BITMAP_SLOTS, PORT_STATE_ENTRIES,
+    SESSION_EVENT_RINGBUF_BYTES, csum_replace,
 };
 
 pub use engine::{
@@ -128,13 +129,6 @@ pub static SESSION_EVENTS_V6: RingBuf = RingBuf::with_byte_size(SESSION_EVENT_RI
 #[map]
 pub static GC_FLAGS: Array<u32> = Array::with_max_entries(1, 0);
 
-/// Port allocation bitmaps and parity queues.
-#[map]
-pub static PORT_FREE_V4: Array<u8> = Array::with_max_entries(PORT_STATE_ENTRIES, 0);
-
-#[map]
-pub static PORT_FREE_V6: Array<u8> = Array::with_max_entries(PORT_STATE_ENTRIES, 0);
-
 /// Bitmap of ports reserved for host UDP services.
 #[map]
 pub static RESERVED_V4: Array<u8> = Array::with_max_entries(PORT_STATE_ENTRIES, 0);
@@ -142,17 +136,21 @@ pub static RESERVED_V4: Array<u8> = Array::with_max_entries(PORT_STATE_ENTRIES, 
 #[map]
 pub static RESERVED_V6: Array<u8> = Array::with_max_entries(PORT_STATE_ENTRIES, 0);
 
+const BPF_F_MMAPABLE: u32 = 0x400;
+
+/// Port allocation parity bitmaps (512 * 64 = 32768 ports per parity).
+/// BPF_F_MMAPABLE enables userspace atomic operations via mmap.
 #[map]
-pub static FREE_EVEN_V4: Queue<u16> = Queue::with_max_entries(PORT_QUEUE_ENTRIES, 0);
+pub static BITMAP_EVEN_V4: Array<u64> = Array::with_max_entries(PORT_BITMAP_SLOTS, BPF_F_MMAPABLE);
 
 #[map]
-pub static FREE_ODD_V4: Queue<u16> = Queue::with_max_entries(PORT_QUEUE_ENTRIES, 0);
+pub static BITMAP_ODD_V4: Array<u64> = Array::with_max_entries(PORT_BITMAP_SLOTS, BPF_F_MMAPABLE);
 
 #[map]
-pub static FREE_EVEN_V6: Queue<u16> = Queue::with_max_entries(PORT_QUEUE_ENTRIES, 0);
+pub static BITMAP_EVEN_V6: Array<u64> = Array::with_max_entries(PORT_BITMAP_SLOTS, BPF_F_MMAPABLE);
 
 #[map]
-pub static FREE_ODD_V6: Queue<u16> = Queue::with_max_entries(PORT_QUEUE_ENTRIES, 0);
+pub static BITMAP_ODD_V6: Array<u64> = Array::with_max_entries(PORT_BITMAP_SLOTS, BPF_F_MMAPABLE);
 
 #[map]
 pub static PORT_FLAGS: Array<u32> = Array::with_max_entries(1, 0);
@@ -602,6 +600,9 @@ pub fn flowcone_frag_v6_ingress(ctx: TcContext) -> i32 {
         return TC_ACT_UNSPEC;
     }
     let ext_port = u16::from_be(udph.dst_port);
+    if ext_port < cfg.min_port6 || ext_port > cfg.max_port6 {
+        return TC_ACT_UNSPEC;
+    }
     if port_is_reserved(&RESERVED_V6, ext_port) {
         return TC_ACT_UNSPEC;
     }
@@ -835,6 +836,9 @@ pub fn flowcone_frag_target(ctx: TcContext) -> i32 {
             return TC_ACT_UNSPEC;
         };
         let ext_port = u16::from_be(udph.dst_port);
+        if ext_port < cfg.min_port4 || ext_port > cfg.max_port4 {
+            return TC_ACT_UNSPEC;
+        }
         if port_is_reserved(&RESERVED_V4, ext_port) {
             return TC_ACT_UNSPEC;
         }
@@ -1062,6 +1066,9 @@ pub fn flowcone_icmp_target(ctx: TcContext) -> i32 {
         return TC_ACT_UNSPEC;
     };
     let ext_port = u16::from_be(udph.src_port);
+    if ext_port < cfg.min_port4 || ext_port > cfg.max_port4 {
+        return TC_ACT_UNSPEC;
+    }
     if port_is_reserved(&RESERVED_V4, ext_port) {
         return TC_ACT_UNSPEC;
     }
@@ -1099,7 +1106,7 @@ pub fn flowcone_icmp_target(ctx: TcContext) -> i32 {
         u16::from_be_bytes([ob[2], ob[3]]),
         u16::from_be_bytes([nb[2], nb[3]]),
     );
-    emb.check = u16::to_be(ec);
+    emb.check = if ec == 0 { 0xffff } else { u16::to_be(ec) };
 
     // Embedded UDP checksum.
     let new_udp_csum = if old_udp_csum != 0 {
@@ -1174,7 +1181,7 @@ pub fn flowcone_icmp_target(ctx: TcContext) -> i32 {
     TC_ACT_UNSPEC
 }
 
-/// TCX dispatchers for zero-gap atomic reload.
+/// TCX dispatchers for atomic reload.
 #[classifier]
 pub fn flowcone_tcx_ingress_a(ctx: TcContext) -> i32 {
     unsafe {
@@ -1276,6 +1283,9 @@ pub fn flowcone_icmp6_target(ctx: TcContext) -> i32 {
         return TC_ACT_UNSPEC;
     };
     let ext_port = u16::from_be(udph.src_port);
+    if ext_port < cfg.min_port6 || ext_port > cfg.max_port6 {
+        return TC_ACT_UNSPEC;
+    }
     if port_is_reserved(&RESERVED_V6, ext_port) {
         return TC_ACT_UNSPEC;
     }

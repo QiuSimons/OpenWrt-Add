@@ -166,7 +166,7 @@ Leave out `--require-mirror --mirror ...` only when there is no mirror
 changes (Makefiles, `root/`, uci-defaults, postrm), also build:
 
 ```sh
-dev/build/sdk-build.sh 25.12.4      # builds the committed HEAD into dist/25.12.4/
+dev/build/sdk-build.sh 25.12.6      # builds the committed HEAD into dist/25.12.6/
 ```
 
 It builds from a clean clone of a commit, so uncommitted edits are not in

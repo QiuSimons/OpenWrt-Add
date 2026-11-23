@@ -74,7 +74,7 @@ For changes to Makefiles, `root/` files or install scripts, also build the
 packages (commit first; the script builds a clean clone of the commit):
 
 ```sh
-dev/build/sdk-build.sh 25.12.4
+dev/build/sdk-build.sh 25.12.6
 ```
 
 ## Translations
@@ -229,8 +229,8 @@ SDK.
    `overview.js`'s `NEWS_URL` (the "what's new" link;
    `tests/view.test.js` checks it), and commit.
 2. Build that commit locally for both releases:
-   `dev/build/sdk-build.sh 25.12.4` and `dev/build/sdk-build.sh 24.10.8`.
-3. Commit both builds' hashes, `dist/25.12.4/SHA256SUMS` and
+   `dev/build/sdk-build.sh 25.12.6` and `dev/build/sdk-build.sh 24.10.8`.
+3. Commit both builds' hashes, `dist/25.12.6/SHA256SUMS` and
    `dist/24.10.8/SHA256SUMS` in one file, as
    `.release-manifests/v<version>.sha256`, push, then push the tag
    `v<version>` on that commit.

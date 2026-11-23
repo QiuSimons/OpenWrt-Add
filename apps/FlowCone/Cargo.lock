@@ -83,14 +83,14 @@ dependencies = [
 
 [[package]]
 name = "flowcone-common"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "aya",
 ]
 
 [[package]]
 name = "flowcone-daemon"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "aya",
  "flowcone-common",

@@ -1,10 +1,9 @@
 //! In-process Netfilter Netlink batch updates for nftables liveness sets.
 
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 use std::time::Duration;
 
-use rustix::fd::OwnedFd;
 use rustix::net::netlink::SocketAddrNetlink;
 use rustix::net::{
     AddressFamily, Protocol, RecvFlags, SendFlags, SocketFlags, SocketType, bind, recv, send,
@@ -319,68 +318,47 @@ pub(crate) fn refresh_liveness_netlink(
     send_liveness_batch(&batch_bytes)
 }
 
-static LIVENESS_SOCK: Mutex<Option<OwnedFd>> = Mutex::new(None);
-
 fn send_liveness_batch(batch_bytes: &[u8]) -> Result<(), &'static str> {
-    let mut sock_guard = LIVENESS_SOCK
-        .lock()
-        .map_err(|_| "netlink socket lock error")?;
-    for _ in 0..2 {
-        if sock_guard.is_none() {
-            let proto = Protocol::from_raw(
-                std::num::NonZeroU32::new(NETLINK_NETFILTER)
-                    .ok_or("invalid netlink netfilter proto")?,
-            );
-            let sock = socket_with(
-                AddressFamily::NETLINK,
-                SocketType::RAW,
-                SocketFlags::CLOEXEC,
-                Some(proto),
-            )
-            .map_err(|_| "netlink socket error")?;
+    let proto = Protocol::from_raw(
+        std::num::NonZeroU32::new(NETLINK_NETFILTER).ok_or("invalid netlink netfilter proto")?,
+    );
+    let sock = socket_with(
+        AddressFamily::NETLINK,
+        SocketType::RAW,
+        SocketFlags::CLOEXEC,
+        Some(proto),
+    )
+    .map_err(|_| "netlink socket error")?;
 
-            bind(&sock, &SocketAddrNetlink::new(0, 0)).map_err(|_| "netlink bind error")?;
+    bind(&sock, &SocketAddrNetlink::new(0, 0)).map_err(|_| "netlink bind error")?;
 
-            sockopt::set_socket_timeout(
-                &sock,
-                sockopt::Timeout::Recv,
-                Some(Duration::from_millis(500)),
-            )
-            .map_err(|_| "netlink recv timeout error")?;
+    sockopt::set_socket_timeout(
+        &sock,
+        sockopt::Timeout::Recv,
+        Some(Duration::from_millis(500)),
+    )
+    .map_err(|_| "netlink recv timeout error")?;
 
-            *sock_guard = Some(sock);
-        }
+    send(&sock, batch_bytes, SendFlags::empty()).map_err(|_| "netlink send error")?;
 
-        let sock = sock_guard.as_ref().unwrap();
-        if send(sock, batch_bytes, SendFlags::empty()).is_err() {
-            *sock_guard = None;
-            continue;
-        }
+    let mut reply_buf = [0u8; 1024];
+    let (n, _) =
+        recv(&sock, &mut reply_buf, RecvFlags::empty()).map_err(|_| "netlink recv error")?;
 
-        let mut reply_buf = [0u8; 1024];
-        let Ok((n, _)) = recv(sock, &mut reply_buf, RecvFlags::empty()) else {
-            *sock_guard = None;
-            continue;
-        };
-
-        if n < 20 {
-            *sock_guard = None;
-            continue;
-        }
-
-        let nlmsg_type = u16::from_ne_bytes([reply_buf[4], reply_buf[5]]);
-        if nlmsg_type == 2 {
-            let errno =
-                i32::from_ne_bytes([reply_buf[16], reply_buf[17], reply_buf[18], reply_buf[19]]);
-            if errno == 0 {
-                return Ok(());
-            }
-            return Err("netlink batch rejected by kernel");
-        }
-        return Ok(());
+    if n < 20 {
+        return Err("netlink reply too short");
     }
 
-    Err("netlink send/recv failed after retry")
+    let nlmsg_type = u16::from_ne_bytes([reply_buf[4], reply_buf[5]]);
+    if nlmsg_type == 2 {
+        let errno =
+            i32::from_ne_bytes([reply_buf[16], reply_buf[17], reply_buf[18], reply_buf[19]]);
+        if errno == 0 {
+            return Ok(());
+        }
+        return Err("netlink batch rejected by kernel");
+    }
+    Err("unexpected netlink message type, expected NLMSG_ERROR ack")
 }
 
 #[cfg(test)]
