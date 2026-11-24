@@ -162,6 +162,7 @@ pub fn is_link_local_v6(addr: &[u8; 16]) -> bool {
 pub fn bypass_special_udp4(src: u32, dst: u32, sport: u16, dport: u16) -> bool {
     src == 0
         || is_multicast_or_broadcast_v4(src)
+        || is_link_local_v4(src)
         || sport == DHCP_SERVER_PORT_BE
         || sport == DHCP_CLIENT_PORT_BE
         || dport == DHCP_SERVER_PORT_BE
@@ -177,6 +178,7 @@ pub fn bypass_special_udp6(src: &[u8; 16], dst: &[u8; 16], sport: u16, dport: u1
         || dport == DHCPV6_CLIENT_PORT_BE
         || dport == DHCPV6_SERVER_PORT_BE
         || is_multicast_v6(src)
+        || is_link_local_v6(src)
         || is_multicast_v6(dst)
         || is_link_local_v6(dst)
 }

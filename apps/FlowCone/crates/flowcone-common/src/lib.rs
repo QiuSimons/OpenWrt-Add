@@ -197,27 +197,16 @@ pub struct GlobalConfig {
 #[cfg(not(target_arch = "bpf"))]
 unsafe impl aya::Pod for GlobalConfig {}
 
-/// Non-routable IPv4 source ranges matching `is_private_ipv4()` (RFC 6890).
+/// Routable private IPv4 source ranges matching `is_private_ipv4()` (RFC 1918, RFC 6598).
 #[cfg(not(target_arch = "bpf"))]
 pub const INTERNAL_V4_PREFIXES: &[&str] = &[
-    "0.0.0.0/8",
     "10.0.0.0/8",
     "100.64.0.0/10",
-    "127.0.0.0/8",
-    "169.254.0.0/16",
     "172.16.0.0/12",
-    "192.0.0.0/24",
-    "192.0.2.0/24",
-    "192.88.99.0/24",
     "192.168.0.0/16",
-    "198.18.0.0/15",
-    "198.51.100.0/24",
-    "203.0.113.0/24",
-    "224.0.0.0/4",
-    "240.0.0.0/4",
 ];
 
-/// Checks if an IPv4 source address belongs to private, CGNAT, or special-purpose ranges (RFC 6890).
+/// Checks if an IPv4 source address belongs to private or CGNAT ranges (RFC 1918, RFC 6598).
 /// Expects `raw_ip` loaded from wire octets in native memory order [b0, b1, b2, b3].
 #[inline(always)]
 pub fn is_private_ipv4(raw_ip: u32) -> bool {
@@ -226,32 +215,10 @@ pub fn is_private_ipv4(raw_ip: u32) -> bool {
 
 #[inline(always)]
 pub fn is_private_ipv4_octets(b: [u8; 4]) -> bool {
-    if (b[0] == 192 && b[1] == 168) || b[0] == 10 || (b[0] == 172 && (16..=31).contains(&b[1])) {
-        return true;
-    }
-
-    match b[0] {
-        // 0.0.0.0/8 ("this network"), 127.0.0.0/8 (loopback)
-        0 | 127 => true,
-        // 100.64.0.0/10 (CGNAT, RFC 6598)
-        100 => (64..=127).contains(&b[1]),
-        // 169.254.0.0/16 (link-local)
-        169 => b[1] == 254,
-        192 => match b[1] {
-            // 192.0.0.0/24 (IETF protocol assignments), 192.0.2.0/24 (TEST-NET-1)
-            0 => b[2] == 0 || b[2] == 2,
-            // 192.88.99.0/24 (deprecated 6to4 relay anycast)
-            88 => b[2] == 99,
-            _ => false,
-        },
-        // 198.18.0.0/15 (benchmarking), 198.51.100.0/24 (TEST-NET-2)
-        198 => (18..=19).contains(&b[1]) || (b[1] == 51 && b[2] == 100),
-        // 203.0.113.0/24 (TEST-NET-3)
-        203 => b[1] == 0 && b[2] == 113,
-        // 224.0.0.0/4 (multicast), 240.0.0.0/4 (reserved) incl. 255.255.255.255
-        224..=255 => true,
-        _ => false,
-    }
+    (b[0] == 192 && b[1] == 168)
+        || b[0] == 10
+        || (b[0] == 172 && (16..=31).contains(&b[1]))
+        || (b[0] == 100 && (64..=127).contains(&b[1]))
 }
 
 /// Check if IPv6 address belongs to Unique Local Address (ULA fc00::/7)
@@ -580,7 +547,7 @@ mod tests {
         let ip_pub = u32::from_ne_bytes([8, 8, 8, 8]);
         assert!(!is_private_ipv4(ip_pub));
 
-        // IANA special-purpose source ranges must not reach the WAN untranslated.
+        // Non-private / special-purpose ranges must not be treated as internal LAN space.
         for octets in [
             [0, 0, 0, 0],
             [127, 0, 0, 1],
@@ -598,8 +565,8 @@ mod tests {
             [255, 255, 255, 255],
         ] {
             assert!(
-                is_private_ipv4(u32::from_ne_bytes(octets)),
-                "expected {octets:?} to be treated as internal"
+                !is_private_ipv4(u32::from_ne_bytes(octets)),
+                "expected {octets:?} to NOT be treated as internal"
             );
         }
 
