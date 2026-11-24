@@ -80,6 +80,7 @@ uci del dhcp.lan.min_valid_lifetime 2>/dev/null
 uci set dhcp.lan.max_valid_lifetime='5400s'
 uci set dhcp.lan.dns_service='0'
 uci set dhcp.@dnsmasq[0].rebind_protection='0'
+uci set dhcp.@dnsmasq[0].allservers='1'
 uci commit dhcp
 [ -f /etc/dnsmasq.conf ] && sed -i '/log-facility/d' /etc/dnsmasq.conf && echo "log-facility=/dev/null" >> /etc/dnsmasq.conf
 
