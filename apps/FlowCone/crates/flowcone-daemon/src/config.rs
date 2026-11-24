@@ -161,6 +161,28 @@ pub fn parse_args_from<I: IntoIterator<Item = String>>(args: I) -> Result<Config
     if cfg.iface.is_empty() {
         return Err("--iface must not be empty".to_string());
     }
+    if cfg.iface.len() >= 16 {
+        return Err(format!(
+            "Interface name '{}' exceeds Linux IFNAMSIZ (15 chars)",
+            cfg.iface
+        ));
+    }
+    if !cfg
+        .iface
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+    {
+        return Err(format!(
+            "Interface name '{}' contains invalid characters",
+            cfg.iface
+        ));
+    }
+    if !cfg.enable_v4 && !cfg.enable_v6 {
+        return Err(
+            "At least one protocol family must be enabled (--enable-v4 1 or --enable-v6 1/2)"
+                .to_string(),
+        );
+    }
     if cfg.min_port == 0 {
         return Err("--min-port must be >= 1 (port 0 is not a usable UDP source port)".to_string());
     }
@@ -263,5 +285,34 @@ mod tests {
             .is_ok()
         );
         assert!(parse_args_from(vec!["flowcone".into(), "--mark".into(), "0".into()]).is_err());
+    }
+
+    #[test]
+    fn test_iface_validation() {
+        assert!(parse_args_from(vec!["flowcone".into(), "-i".into(), "wan".into()]).is_ok());
+        assert!(parse_args_from(vec!["flowcone".into(), "-i".into(), "eth0.1".into()]).is_ok());
+        assert!(
+            parse_args_from(vec![
+                "flowcone".into(),
+                "-i".into(),
+                "too_long_interface_name".into()
+            ])
+            .is_err()
+        );
+        assert!(parse_args_from(vec!["flowcone".into(), "-i".into(), "wan;drop".into()]).is_err());
+    }
+
+    #[test]
+    fn test_both_families_disabled_error() {
+        assert!(
+            parse_args_from(vec![
+                "flowcone".into(),
+                "--enable-v4".into(),
+                "0".into(),
+                "--enable-v6".into(),
+                "0".into()
+            ])
+            .is_err()
+        );
     }
 }

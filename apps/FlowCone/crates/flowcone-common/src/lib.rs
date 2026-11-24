@@ -142,7 +142,8 @@ unsafe impl aya::Pod for FragKey4 {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FragValue4 {
     pub ip: u32,
-    pub _pad: u32,
+    pub wan_id: u16,
+    pub _pad: u16,
     pub last_seen: u32,
 }
 
@@ -167,6 +168,7 @@ unsafe impl aya::Pod for FragKey6 {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FragValue6 {
     pub ip: [u8; 16],
+    pub wan_id: u32,
     pub last_seen: u32,
 }
 
@@ -338,6 +340,7 @@ pub const PPP_IPV4: u16 = 0x0021;
 pub const PPP_IPV6: u16 = 0x0057;
 
 /// RFC 1624 incremental 16-bit one's complement checksum update.
+/// In one's complement, 0x0000 is converted to 0xffff (RFC 768 / RFC 1624 §5).
 #[inline(always)]
 pub fn csum_replace(csum: u16, old: u16, new: u16) -> u16 {
     let mut sum = (!csum as u32) + (!old as u32) + new as u32;
@@ -346,7 +349,8 @@ pub fn csum_replace(csum: u16, old: u16, new: u16) -> u16 {
         sum = (sum & 0xffff) + (sum >> 16);
         i += 1;
     }
-    !(sum as u16)
+    let res = !(sum as u16);
+    if res == 0 { 0xffff } else { res }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -359,6 +363,7 @@ pub struct L2Info {
 pub enum Ipv6L4 {
     Udp(usize),
     Fragment,
+    Icmp6(usize),
     NonUdp,
     Unsupported,
 }
@@ -450,6 +455,9 @@ pub fn locate_ipv6_l4_slice(data: &[u8], ip_off: usize, mut nh: u8) -> Ipv6L4 {
         if nh == IPPROTO_UDP {
             return Ipv6L4::Udp(cur_off);
         }
+        if nh == IPPROTO_ICMPV6 {
+            return Ipv6L4::Icmp6(cur_off);
+        }
         if nh == IPPROTO_HOPOPTS || nh == IPPROTO_DSTOPTS || nh == IPPROTO_ROUTING {
             if cur_off + 2 > data.len() {
                 return Ipv6L4::NonUdp;
@@ -471,9 +479,43 @@ pub fn locate_ipv6_l4_slice(data: &[u8], ip_off: usize, mut nh: u8) -> Ipv6L4 {
 
     if nh == IPPROTO_UDP {
         Ipv6L4::Udp(cur_off)
+    } else if nh == IPPROTO_ICMPV6 {
+        Ipv6L4::Icmp6(cur_off)
     } else {
         Ipv6L4::Unsupported
     }
+}
+
+#[inline(always)]
+pub fn locate_ipv6_nexthdr_slice(
+    data: &[u8],
+    ip_off: usize,
+    mut nh: u8,
+    target: u8,
+) -> Option<usize> {
+    let mut cur_off = ip_off + 40;
+    let mut iter = 0;
+    while iter < 4 {
+        if nh == target {
+            return Some(cur_off);
+        }
+        if nh == IPPROTO_HOPOPTS || nh == IPPROTO_DSTOPTS || nh == IPPROTO_ROUTING {
+            if cur_off + 2 > data.len() {
+                return None;
+            }
+            let next = data[cur_off];
+            let ext_len = (data[cur_off + 1] as usize + 1) * 8;
+            if cur_off + ext_len > data.len() {
+                return None;
+            }
+            nh = next;
+            cur_off += ext_len;
+        } else {
+            return None;
+        }
+        iter += 1;
+    }
+    if nh == target { Some(cur_off) } else { None }
 }
 
 #[inline(always)]
@@ -728,6 +770,7 @@ mod tests {
         // Identity: replacing with same value must yield same checksum
         let original_csum: u16 = 0x55aa;
         assert_eq!(csum_replace(original_csum, 0x1234, 0x1234), original_csum);
+        assert_eq!(csum_replace(0xffff, 0x1234, 0x1234), 0xffff);
 
         // Replacing zero with a value, then reversing it, must yield original checksum
         let new_csum = csum_replace(original_csum, 0x0000, 0x5678);
@@ -809,6 +852,45 @@ mod tests {
         pkt[41] = 0;
         let off = ipv6_fragment_offset_slice(&pkt, 0, IPPROTO_ROUTING);
         assert_eq!(off, Some(48));
+    }
+
+    #[test]
+    fn test_locate_ipv6_nexthdr_slice() {
+        let mut pkt = [0u8; 40 + 8 + 8 + 8];
+        // Hop-by-Hop at offset 40, length 8 bytes, next header = Routing (43)
+        pkt[40] = IPPROTO_ROUTING;
+        pkt[41] = 0;
+        // Routing at offset 48, length 8 bytes, next header = ICMPv6 (58)
+        pkt[48] = IPPROTO_ICMPV6;
+        pkt[49] = 0;
+        // ICMPv6 at offset 56
+        let off = locate_ipv6_nexthdr_slice(&pkt, 0, IPPROTO_HOPOPTS, IPPROTO_ICMPV6);
+        assert_eq!(off, Some(56));
+
+        // Locate UDP (not present)
+        let off_udp = locate_ipv6_nexthdr_slice(&pkt, 0, IPPROTO_HOPOPTS, IPPROTO_UDP);
+        assert_eq!(off_udp, None);
+    }
+
+    #[test]
+    fn test_multi_bit_slot_probing_simulation() {
+        // Simulate a slot where low bits are blocked/reserved (< 1024)
+        // Ensure probing finds the first valid bit in the slot
+        let val: u64 = 0b0000_0111; // bits 0, 1, 2 occupied
+        let mut mask_avail = !val;
+        let mut tested_bits = [0u32; 64];
+        let mut count = 0;
+        let mut probe = 0;
+        while probe < 64 && mask_avail != 0 {
+            let free_bit = mask_avail.trailing_zeros();
+            let mask = 1u64 << free_bit;
+            mask_avail &= !mask;
+            tested_bits[count] = free_bit;
+            count += 1;
+            probe += 1;
+        }
+        assert_eq!(tested_bits[0], 3);
+        assert_eq!(count, 61);
     }
 
     #[test]

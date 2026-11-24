@@ -134,6 +134,9 @@ fn dump_iface_addrs(ifindex: u32, family: u8) -> Result<Vec<IfaceAddr>, NetlinkE
                 }
             }
 
+            if nlmsg_len < 16 {
+                break;
+            }
             let aligned_len = (nlmsg_len + 3) & !3;
             if aligned_len == 0 || offset + aligned_len > n {
                 break;

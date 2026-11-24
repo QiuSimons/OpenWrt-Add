@@ -253,7 +253,7 @@ footer a { color: var(--text-2); }
 		<div class="wrap">
 			<div class="sec-head">
 				<h2 id="features-h">What you get</h2>
-				<p>Two packages. Installed on its own, the dashboard works under any LuCI theme; with both, it goes with the Vantage theme. The theme is useful without the dashboard.</p>
+				<p>Two packages. Installed on its own, the dashboard works under any LuCI theme; with both, it goes with the Vantage theme. The theme is useful without the dashboard. Two optional add-ons bring in your other access points and, as an experiment, the traffic of devices that share a port.</p>
 			</div>
 			<ul class="highlights">
 				<li class="card">
@@ -264,7 +264,7 @@ footer a { color: var(--text-2); }
 				<li class="card">
 					<div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="19" cy="6" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="19" cy="18" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7.2 12H11m0 0c2 0 2-6 5.8-6M11 12c2 0 2 6 5.8 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
 					<h3>The network path, live</h3>
-					<p>Gateway, access point, radios and SSIDs, plus a Wired branch per port. Packets cross its grid with the live uplink rate; click any node for details.</p>
+					<p>Your internet lines, this device, its radios and SSIDs, plus a Wired branch per port. Packets cross its grid with the live uplink rate; click any node for details.</p>
 				</li>
 				<li class="card">
 					<div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 19c.8-3.4 3.2-5 6-5s5.2 1.6 6 5M16 5.2a3 3 0 0 1 0 5.6M18 14.2c1.6.6 2.6 2 3 4.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
@@ -272,19 +272,34 @@ footer a { color: var(--text-2); }
 					<p>Your alias, reverse DNS, mDNS, DHCP and WPS names or the vendor. Signal, link rate, Wi-Fi generation, live traffic and an experience score that says why. Wired devices too.</p>
 				</li>
 				<li class="card">
+					<div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="1.8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.3 15.7a5.2 5.2 0 0 1 0-7.4M15.7 8.3a5.2 5.2 0 0 1 0 7.4M5.3 18.7a9.5 9.5 0 0 1 0-13.4M18.7 5.3a9.5 9.5 0 0 1 0 13.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
+					<h3>Your other access points</h3>
+					<p>With the optional <code>luci-app-vantage-aps</code>, pair each OpenWrt access point once and its SSIDs, clients and wired devices show beside the router's own. The router reads them over SSH with a key that can only fetch that report.</p>
+				</li>
+				<li class="card">
+					<div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="18" height="10" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7.5 11v2.5M12 11v2.5M16.5 11v2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
+					<h3>Ports, WireGuard and firewall</h3>
+					<p>A tile for every Ethernet port with its link, its traffic and the devices behind it; WireGuard peers with their last handshake; and an overview of what the firewall leaves open from the internet.</p>
+				</li>
+				<li class="card">
+					<div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="3" width="8" height="5" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="10" width="8" height="11" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="3" y="13" width="8" height="8" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></div>
+					<h3>Arranged your way</h3>
+					<p>Drag, resize or hide tiles, with one layout per screen size, and make the network path one line each on a big network. With the theme, your layout is saved on the router, so every browser matches.</p>
+				</li>
+				<li class="card">
 					<div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 4v16" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 9h5.5M12 13h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
 					<h3>LuCI, restyled</h3>
-					<p>An icon rail, breadcrumbs and page tabs, a <span class="keys"><kbd>Ctrl</kbd>+<kbd>K</kbd></span> palette over every page you can open, and light, dark or auto mode without a flash. Tables become cards on phones.</p>
+					<p>An icon rail, breadcrumbs and page tabs, a <span class="keys"><kbd>Ctrl</kbd>+<kbd>K</kbd></span> palette over every page you can open and, on the dashboard, your clients and networks, and light, dark or auto mode without a flash. Tables become cards on phones.</p>
 				</li>
 				<li class="card">
 					<div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5.5c0 4.3 3 7.7 7 9.5 4-1.8 7-5.2 7-9.5V6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m9 12 2.2 2.2L15.5 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
 					<h3>Read-only by design</h3>
-					<p>Apart from device names, which the router validates, the dashboard's permissions grant read methods only: no <code>file.exec</code>, and never Wi-Fi keys.</p>
+					<p>Apart from device names and a device's “Don't warn about its signal” mark, which the router validates, the dashboard's permissions grant read methods only: no <code>file.exec</code>, and never Wi-Fi keys. The one program they can start is <code>ethtool -S</code> for the device's own switch ports.</p>
 				</li>
 				<li class="card">
 					<div class="ico"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M4 7.5 12 12l8-4.5M12 12v9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></div>
 					<h3>Small and self-contained</h3>
-					<p>System fonts and self-drawn icons; nothing loads from the internet unless you click Check for updates, so the UI works offline. Two architecture-independent packages for every target, from signed apk and opkg repositories.</p>
+					<p>System fonts and self-drawn icons; nothing loads from the internet unless you click Check for updates or switch the daily check on, so the UI works offline. Architecture-independent packages for every target, from signed apk and opkg repositories.</p>
 				</li>
 			</ul>
 		</div>
@@ -293,13 +308,13 @@ footer a { color: var(--text-2); }
 	<section aria-labelledby="video-h">
 		<div class="wrap">
 			<div class="sec-head">
-				<h2 id="video-h">Vantage in ten seconds</h2>
+				<h2 id="video-h">Vantage in twenty seconds</h2>
 			</div>
 			<figure class="frame">
-				<video width="1920" height="1080" controls autoplay muted loop playsinline preload="metadata" poster="screenshots/vantage-promo-poster.png" aria-label="A ten-second tour: the dashboard, a client's details, Ctrl K search, and the switch from dark to light">
+				<video width="1920" height="1080" controls autoplay muted loop playsinline preload="metadata" poster="screenshots/vantage-promo-poster.png" aria-label="A twenty-second tour: the live dashboard, a warning and the client behind it, a router with its access points, WireGuard peers and ports, the firewall overview, Ctrl K search, restyled LuCI pages, dark and light, and the phone layout">
 					<source src="screenshots/vantage-promo.mp4" type="video/mp4" media="(prefers-reduced-motion: no-preference)">
 				</video>
-				<figcaption><a href="screenshots/vantage-promo.mp4">Open the video</a> (10 seconds, no sound)</figcaption>
+				<figcaption><a href="screenshots/vantage-promo.mp4">Open the video</a> (21 seconds, no sound)</figcaption>
 			</figure>
 		</div>
 	</section>
@@ -336,10 +351,10 @@ footer a { color: var(--text-2); }
 			<div class="feature">
 				<div class="copy">
 					<h3>Every page, one keystroke away</h3>
-					<p><span class="keys"><kbd>Ctrl</kbd>+<kbd>K</kbd></span> or <kbd>/</kbd> opens a palette with fuzzy search over every page you can open, each named with its place in the menu, and the Appearance choices too.</p>
+					<p><span class="keys"><kbd>Ctrl</kbd>+<kbd>K</kbd></span> or <kbd>/</kbd> opens a palette with fuzzy search over every page you can open, each named with its place in the menu, and the Appearance choices too. On the dashboard it also finds clients, radios, Wi-Fi networks and interfaces.</p>
 				</div>
 				<figure class="frame">
-					<img src="screenshots/palette.png" width="1920" height="1333" loading="lazy" decoding="async" alt="The command palette open over the dashboard, listing the Wireless pages that match a search">
+					<img src="screenshots/palette.png" width="1920" height="1333" loading="lazy" decoding="async" alt="The command palette open over the dashboard, listing the Wi-Fi networks, clients and pages that match a search">
 				</figure>
 			</div>
 
@@ -350,6 +365,46 @@ footer a { color: var(--text-2); }
 				</div>
 				<figure class="frame">
 					<img src="screenshots/network-path.png" width="1792" height="1511" loading="lazy" decoding="async" alt="The network path of a quad-radio access point: the gateway and access point on the left, four radios with ten SSIDs and their clients, and a Wired branch with six ports">
+				</figure>
+			</div>
+
+			<div class="feature">
+				<div class="copy">
+					<h3>The same path, one line each</h3>
+					<p>With several access points and many ports the path runs screens long. Compact, under Customize, makes every network, port and access point one line: its name, its clients and its live rate.</p>
+				</div>
+				<figure class="frame">
+					<img src="screenshots/compact-path.png" width="1792" height="1063" loading="lazy" decoding="async" alt="The same quad-radio access point with the compact network path: each radio, each of its ten networks and each of the six wired ports is one line with a client count and download and upload rates">
+				</figure>
+			</div>
+
+			<div class="feature flip">
+				<div class="copy">
+					<h3>A router and its access points</h3>
+					<p>Two lines to the internet, the router's own networks and ports, and your other access points with their SSIDs, clients and wired devices, once paired with the optional <code>luci-app-vantage-aps</code>. Shown with a router that the development replay generates.</p>
+				</div>
+				<figure class="frame">
+					<img src="screenshots/router.png" width="1920" height="1966" loading="lazy" decoding="async" alt="The dashboard of a router without Wi-Fi: two internet lines on the left, its lan and WireGuard networks and two switch ports, and three paired access points, two of them with their Wi-Fi networks, clients and wired devices and one not reachable">
+				</figure>
+			</div>
+
+			<div class="feature">
+				<div class="copy">
+					<h3>WireGuard peers and every port</h3>
+					<p>Where a tunnel is up, a tile lists its peers with the time since their last handshake and their traffic. On a device with two Ethernet ports or more, another shows each port's link and speed, its traffic and the devices behind it.</p>
+				</div>
+				<figure class="frame">
+					<img src="screenshots/wireguard-ports.png" width="1920" height="1333" loading="lazy" decoding="async" alt="The lower part of the router's dashboard: the end of the clients list, the WireGuard tile with two tunnels and their peers, and the Ports tile with two internet ports and two switch ports">
+				</figure>
+			</div>
+
+			<div class="feature flip">
+				<div class="copy">
+					<h3>What your firewall lets in</h3>
+					<p>Network → Firewall → Overview lists what is open from the internet, on the router itself and into your network, which zone reaches which, and what is switched off. It warns about risky setups, such as the router's SSH open to every address, and every item links to the LuCI page that changes it. Shown with the generated router.</p>
+				</div>
+				<figure class="frame">
+					<img src="screenshots/firewall-overview.png" width="1920" height="1333" loading="lazy" decoding="async" alt="The firewall overview of the router: a warning that SSH is open to the internet, a tile with what is open on the router and three port forwards into the network, the zones lan, wan and guest with where each forwards, and one port forward that is switched off">
 				</figure>
 			</div>
 
@@ -375,6 +430,16 @@ footer a { color: var(--text-2); }
 				<figure class="frame">
 					<img src="screenshots/channel-analysis.png" width="1920" height="1333" loading="lazy" decoding="async" alt="LuCI's Channel Analysis page under the theme: overlapping channel curves of neighbouring networks and their table">
 					<figcaption>Status → Channel Analysis (the neighbouring networks are generated)</figcaption>
+				</figure>
+			</div>
+
+			<div class="feature flip" style="margin-top: clamp(48px, 7vw, 88px)">
+				<div class="copy">
+					<h3>The firewall as a flow chart</h3>
+					<p>Status → Firewall shows the way a packet takes through the chains, which steps drop what matches no rule, and each chain's rules as steps with their verdicts. LuCI's own tables stay one click away.</p>
+				</div>
+				<figure class="frame">
+					<img src="screenshots/firewall-flow.png" width="1920" height="1333" loading="lazy" decoding="async" alt="LuCI's Status Firewall page under the theme: a flow chart from the network through the bridge, prerouting, input, forward, output and postrouting chains, and below it the input and forward chains with their rules and verdicts">
 				</figure>
 			</div>
 

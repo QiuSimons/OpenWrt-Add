@@ -17,6 +17,8 @@
      luci.vantage wired       SYNTHETIC hosts: one alone on lan1, three
                               sharing lan2 (a switch behind it)
      luci-rpc getHostHints    their names and addresses added
+   Its firewall config is a router's too (FIREWALL below), in place of the
+   recorded access point's: the server puts it in the uci overlay at start.
    Added addresses and MACs are documentation ranges only. */
 
 const NETS = [
@@ -36,6 +38,38 @@ const HOSTS = [
 	[ '00:00:5e:00:53:b2', 'lan2', 'nas', '198.51.100.20' ],
 	[ '00:00:5e:00:53:b3', 'lan2', 'printer', '198.51.100.21' ],
 	[ '00:00:5e:00:53:b4', 'lan2', null, '198.51.100.22' ]
+];
+
+/* the router's /etc/config/firewall as [ type, options ]: firewall4's
+   stock config, then what a household adds: a guest zone, the WireGuard
+   ports, port forwards to the hosts above (one for a single address, one
+   switched off) and SSH left open to the internet, which the firewall
+   overview warns about */
+const ICMP6 = [ 'echo-request', 'echo-reply', 'destination-unreachable', 'packet-too-big', 'time-exceeded', 'bad-header', 'unknown-header-type' ];
+const FIREWALL = [
+	[ 'defaults', { syn_flood: '1', input: 'REJECT', output: 'ACCEPT', forward: 'REJECT' } ],
+	[ 'zone', { name: 'lan', network: [ 'lan' ], input: 'ACCEPT', output: 'ACCEPT', forward: 'ACCEPT' } ],
+	[ 'zone', { name: 'wan', network: [ 'wan', 'wan6' ], input: 'REJECT', output: 'ACCEPT', forward: 'REJECT', masq: '1', mtu_fix: '1' } ],
+	[ 'forwarding', { src: 'lan', dest: 'wan' } ],
+	[ 'rule', { name: 'Allow-DHCP-Renew', src: 'wan', proto: 'udp', dest_port: '68', target: 'ACCEPT', family: 'ipv4' } ],
+	[ 'rule', { name: 'Allow-Ping', src: 'wan', proto: 'icmp', icmp_type: 'echo-request', family: 'ipv4', target: 'ACCEPT' } ],
+	[ 'rule', { name: 'Allow-IGMP', src: 'wan', proto: 'igmp', family: 'ipv4', target: 'ACCEPT' } ],
+	[ 'rule', { name: 'Allow-DHCPv6', src: 'wan', proto: 'udp', dest_port: '546', family: 'ipv6', target: 'ACCEPT' } ],
+	[ 'rule', { name: 'Allow-MLD', src: 'wan', proto: 'icmp', src_ip: 'fe80::/10', icmp_type: [ '130/0', '131/0', '132/0', '143/0' ], family: 'ipv6', target: 'ACCEPT' } ],
+	[ 'rule', { name: 'Allow-ICMPv6-Input', src: 'wan', proto: 'icmp', icmp_type: ICMP6.concat([ 'router-solicitation', 'neighbour-solicitation', 'router-advertisement', 'neighbour-advertisement' ]), limit: '1000/sec', family: 'ipv6', target: 'ACCEPT' } ],
+	[ 'rule', { name: 'Allow-ICMPv6-Forward', src: 'wan', dest: '*', proto: 'icmp', icmp_type: ICMP6, limit: '1000/sec', family: 'ipv6', target: 'ACCEPT' } ],
+	[ 'rule', { name: 'Allow-IPSec-ESP', src: 'wan', dest: 'lan', proto: 'esp', target: 'ACCEPT' } ],
+	[ 'rule', { name: 'Allow-ISAKMP', src: 'wan', dest: 'lan', dest_port: '500', proto: 'udp', target: 'ACCEPT' } ],
+	[ 'zone', { name: 'guest', network: [ 'guest' ], input: 'REJECT', output: 'ACCEPT', forward: 'REJECT' } ],
+	[ 'forwarding', { src: 'guest', dest: 'wan' } ],
+	[ 'rule', { name: 'Guest DNS', src: 'guest', dest_port: '53', target: 'ACCEPT' } ],
+	[ 'rule', { name: 'Guest DHCP', src: 'guest', proto: 'udp', dest_port: '67', family: 'ipv4', target: 'ACCEPT' } ],
+	[ 'rule', { name: 'Allow-WireGuard', src: 'wan', proto: 'udp', dest_port: '51820-51821', target: 'ACCEPT' } ],
+	[ 'rule', { name: 'Remote SSH', src: 'wan', proto: 'tcp', dest_port: '22', target: 'ACCEPT' } ],
+	[ 'redirect', { name: 'NAS over HTTPS', src: 'wan', dest: 'lan', proto: 'tcp', src_dport: '8443', dest_ip: '198.51.100.20', dest_port: '443', target: 'DNAT' } ],
+	[ 'redirect', { name: 'Game server', src: 'wan', dest: 'lan', proto: [ 'tcp', 'udp' ], src_dport: '25565', dest_ip: '198.51.100.10', target: 'DNAT' } ],
+	[ 'redirect', { name: 'Backup from the office', src: 'wan', dest: 'lan', proto: 'tcp', src_ip: '203.0.113.40', src_dport: '2222', dest_ip: '198.51.100.20', dest_port: '22', target: 'DNAT' } ],
+	[ 'redirect', { name: 'Old webcam', src: 'wan', dest: 'lan', proto: 'tcp', src_dport: '8080', dest_ip: '198.51.100.30', dest_port: '80', target: 'DNAT', enabled: '0' } ]
 ];
 
 /* deterministic noise in [0, 1), smooth over `period` seconds */
@@ -93,6 +127,20 @@ function hosts(t) {
 	return HOSTS.map((h, i) => ({ mac: h[0], port: h[1], bridge: 'br-lan0', vlan: null, seen: Math.floor(t * (i + 3)) % (40 + 60 * i) }));
 }
 
+/* FIREWALL as `uci get` returns a config. `wan`: more networks of the wan
+   zone (--multiwan's line; 'vpn' as a provider's tunnel with --fullvpn,
+   which otherwise is a server's and sits in lan) */
+function firewall(wan) {
+	const out = {};
+	FIREWALL.forEach(([ type, opts ], i) => {
+		const sid = 'cfg' + (i + 1).toString(16).padStart(2, '0') + Math.floor(hash01(i, 1) * 65536).toString(16).padStart(4, '0');
+		const s = out[sid] = Object.assign({ '.anonymous': true, '.type': type, '.name': sid, '.index': i }, opts);
+		if (type === 'zone' && opts.name === 'wan') s.network = opts.network.concat(wan || []);
+		if (type === 'zone' && opts.name === 'lan' && !(wan || []).includes('vpn')) s.network = opts.network.concat([ 'vpn' ]);
+	});
+	return out;
+}
+
 /* reply: { result: [ status, data ] } from the store; returns the reply to send */
 function transform(object, method, args, reply) {
 	const res = reply && reply.result;
@@ -125,4 +173,4 @@ function transform(object, method, args, reply) {
 	return reply;
 }
 
-module.exports = { transform, modes, counters, NETS, PORTS, HOSTS };
+module.exports = { transform, firewall, modes, counters, NETS, PORTS, HOSTS };

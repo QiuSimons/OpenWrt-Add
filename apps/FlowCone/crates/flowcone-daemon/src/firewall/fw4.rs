@@ -60,19 +60,25 @@ pub(crate) fn has_table_inet_fw4() -> bool {
 /// Detect IPv6 masquerade in ip6 or inet tables.
 pub(crate) fn parse_has_ipv6_masq(nft_output: &str) -> bool {
     let mut family = "";
+    let mut table_name = "";
     for line in nft_output.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("table ") {
             if let Some(rest) = trimmed.strip_prefix("table ") {
-                family = rest.split_whitespace().next().unwrap_or("");
+                let mut parts = rest.split_whitespace();
+                family = parts.next().unwrap_or("");
+                table_name = parts.next().unwrap_or("").trim_end_matches('{').trim();
             }
+            continue;
+        }
+        if table_name == "flowcone" {
             continue;
         }
         if !trimmed.contains("masquerade") {
             continue;
         }
-        // nat6's partial masquerade covers TCP/ICMP only; FlowCone owns UDP.
-        if trimmed.contains("flowcone-nat6-partial") {
+        // Exclude FlowCone's own injected rules (partial nat6 or ULA masquerade comment)
+        if trimmed.contains("comment \"flowcone") || trimmed.contains("flowcone-nat6-partial") {
             continue;
         }
         let has_v4_explicit = family == "ip"
@@ -509,6 +515,22 @@ table ip6 nat {
         }
 }";
         assert!(!parse_has_ipv6_masq(partial));
+
+        let flowcone_own = "\
+table inet fw4 {
+        chain srcnat_wan {
+                meta nfproto ipv6 ip6 saddr fc00::/7 oifname \"wan\" counter masquerade comment \"flowcone\"
+        }
+}";
+        assert!(!parse_has_ipv6_masq(flowcone_own));
+
+        let flowcone_table = "\
+table ip6 flowcone {
+        chain postrouting {
+                meta nfproto ipv6 ip6 saddr != fe80::/10 oifname \"wan\" counter masquerade comment \"flowcone\"
+        }
+}";
+        assert!(!parse_has_ipv6_masq(flowcone_table));
     }
 
     #[test]

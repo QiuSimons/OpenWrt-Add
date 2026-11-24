@@ -1,3 +1,8 @@
+#[cfg(not(target_pointer_width = "64"))]
+compile_error!(
+    "FlowCone requires a 64-bit architecture (e.g. x86_64, aarch64, mips64, riscv64) for lock-free 64-bit atomic bitmaps shared with eBPF."
+);
+
 mod btf;
 mod config;
 mod data_plane;
@@ -299,7 +304,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .min(time_to_liveness);
 
         if monitor.is_none() {
-            let has_wan_addr = applied.ip4 != 0 || applied.ip6 != [0u8; 16];
+            let has_wan_addr = (!config.enable_v4 || applied.ip4 != 0)
+                && (!config.enable_v6 || applied.ip6 != [0u8; 16]);
             let fallback_poll = Duration::from_secs(if has_wan_addr { 5 } else { 1 });
             next_wake = next_wake.min(fallback_poll);
         }
@@ -318,8 +324,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut poll_fds = [
             PollFd::new(&sig_read_end, PollFlags::IN),
             PollFd::new(&wake_read_end, PollFlags::IN),
-            PollFd::new(&ev4_fd, PollFlags::IN),
-            PollFd::new(&ev6_fd, PollFlags::IN),
+            PollFd::new(
+                &ev4_fd,
+                if config.enable_v4 {
+                    PollFlags::IN
+                } else {
+                    PollFlags::empty()
+                },
+            ),
+            PollFd::new(
+                &ev6_fd,
+                if config.enable_v6 {
+                    PollFlags::IN
+                } else {
+                    PollFlags::empty()
+                },
+            ),
             PollFd::new(
                 &mon_borrowed,
                 if monitor.is_some() {
@@ -354,10 +374,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if poll_fds[1].revents().contains(PollFlags::IN) {
             let mut buf = [0u8; 32];
+            let mut eof = false;
             while let Ok(n) = rustix::io::read(&wake_read_end, &mut buf) {
                 if n == 0 {
+                    eof = true;
                     break;
                 }
+            }
+            if eof {
+                eprintln!("flowcone: wake pipe closed, exiting reactor");
+                break;
             }
             has_net_event = true;
         }
@@ -414,7 +440,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let resync = RESYNC_REQUESTED.swap(false, Ordering::Relaxed);
         let reattach_due = applied.present && last_attach_check.elapsed() >= REATTACH_INTERVAL;
-        let has_wan_addr = applied.ip4 != 0 || applied.ip6 != [0u8; 16];
+        let has_wan_addr = (!config.enable_v4 || applied.ip4 != 0)
+            && (!config.enable_v6 || applied.ip6 != [0u8; 16]);
         let needs_probe = has_net_event
             || resync
             || reattach_due
@@ -670,13 +697,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(()) => true,
                         Err(e) => {
                             eprintln!(
-                                "flowcone: re-attach on {} failed: {}; fail-closed (remove nft exemption)",
+                                "flowcone: warning: re-attach on {} failed: {}; will retry on link update",
                                 config.iface, e
                             );
                             if config.manage_nft {
                                 firewall_mgr.remove_rules(config.verbose);
                             }
-                            std::process::exit(1);
+                            false
                         }
                     }
                 } else {

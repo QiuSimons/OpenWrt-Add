@@ -52,6 +52,11 @@ test('store: uci overlay is prototype-safe and validates names like libuci', () 
 	assert.equal(s.uciSeed('__proto__', { x: {} }), false);
 	assert.equal(s.uciSeed('extra', { main: { '.type': 'x', '.name': 'main', a: '1' } }), true);
 	assert.equal(s.uciGet('extra', 'main', 'a'), '1');
+	/* a seed never replaces a config; a scene's own config does */
+	assert.equal(s.uciSeed('extra', { main: { '.type': 'x', '.name': 'main', a: '2' } }), false);
+	assert.equal(s.uciReplace('__proto__', { x: {} }), false);
+	assert.equal(s.uciReplace('extra', { main: { '.type': 'x', '.name': 'main', a: '2' } }), true);
+	assert.deepEqual(s.call('uci', 'get', { config: 'extra', section: 'main', option: 'a' }), { result: [ 0, { value: '2' } ] });
 });
 
 test('store: plugins answer their objects and are listed', () => {
@@ -106,6 +111,28 @@ test('--wired: no radios, the uplink renamed wan, synthetic networks with growin
 	assert.ok(hosts.every(h => /^00:00:5e:00:53:/.test(h.mac) && Number.isInteger(h.seen) && h.seen >= 0));
 	const hints = wired.transform('luci-rpc', 'getHostHints', {}, ok({})).result[1];
 	assert.deepEqual(hints['00:00:5E:00:53:B1'], { ipaddrs: [ '198.51.100.10' ], ip6addrs: [], name: 'desktop' });
+});
+
+test('--wired: a router\'s firewall, as the firewall overview reads it with the scene\'s interfaces', () => {
+	const wired = require('../dev/replay/wired');
+	const glance = require('./luci-stub').load('vantage.fwglance');
+	const dump = wired.transform('network.interface', 'dump', {}, { result: [ 0, { interface: [
+		{ interface: 'lan', up: true, l3_device: 'br-lan', route: [ { target: '0.0.0.0', mask: 0 } ], 'ipv4-address': [ { address: '192.0.2.69', mask: 24 } ] }
+	] } ] }).result[1].interface;
+	const fw = glance.analyse(wired.firewall(), dump);
+	assert.deepEqual([ fw.level, fw.internet, fw.outside, fw.complex, fw.ignored ], [ 'warn', [ 'wan' ], [], [], [] ]);
+	assert.deepEqual(fw.warnings.map(w => [ w.code, w.name ]), [ [ 'admin-open', 'Remote SSH' ] ]);
+	assert.deepEqual(fw.open.map(i => i.name), [ 'Allow-WireGuard', 'Remote SSH' ]);
+	assert.deepEqual(fw.forwards.map(i => [ i.name, i.host, i.from.anywhere ]),
+		[ [ 'NAS over HTTPS', '198.51.100.20', true ], [ 'Game server', '198.51.100.10', true ], [ 'Backup from the office', '198.51.100.20', false ] ]);
+	assert.deepEqual([ fw.standard.length, fw.off.map(i => i.name) ], [ 9, [ 'Old webcam' ] ]);
+	assert.deepEqual(fw.zones.map(z => [ z.name, z.networks, z.to ]), [ [ 'lan', [ 'lan', 'vpn' ], [ 'wan' ] ], [ 'wan', [ 'wan', 'wan6' ], [] ], [ 'guest', [ 'guest' ], [ 'wan' ] ] ]);
+	/* --multiwan's line joins the wan zone; --fullvpn's tunnel moves there from lan */
+	const nets = (v, zone) => Object.values(v).find(s => s['.type'] === 'zone' && s.name === zone).network;
+	const more = wired.firewall([ 'wanb', 'wanb6', 'vpn' ]);
+	assert.deepEqual([ nets(more, 'lan'), nets(more, 'wan') ], [ [ 'lan' ], [ 'wan', 'wan6', 'wanb', 'wanb6', 'vpn' ] ]);
+	assert.deepEqual(Object.values(more).map(s => [ s['.name'], s['.index'], s['.anonymous'] ]), Object.keys(more).map((k, i) => [ k, i, true ]));
+	assert.ok(Object.keys(more).every(k => /^cfg[0-9a-f]{6}$/.test(k)));
 });
 
 test('--multiwan: a backup WAN beside the recorded uplink, also on top of --wired, its counters growing', () => {

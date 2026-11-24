@@ -185,6 +185,16 @@ impl DataPlane {
                 format!("load target flowcone_tcx_egress: {e}").into()
             },
         )?;
+        load_classifier(&mut bpf, "flowcone_frag_v4_ingress").map_err(
+            |e| -> Box<dyn std::error::Error> {
+                format!("load target flowcone_frag_v4_ingress: {e}").into()
+            },
+        )?;
+        load_classifier(&mut bpf, "flowcone_frag_v4_egress").map_err(
+            |e| -> Box<dyn std::error::Error> {
+                format!("load target flowcone_frag_v4_egress: {e}").into()
+            },
+        )?;
         load_classifier(&mut bpf, "flowcone_frag_v6_ingress").map_err(
             |e| -> Box<dyn std::error::Error> {
                 format!("load target flowcone_frag_v6_ingress: {e}").into()
@@ -195,19 +205,24 @@ impl DataPlane {
                 format!("load target flowcone_frag_v6_egress: {e}").into()
             },
         )?;
-        load_classifier(&mut bpf, "flowcone_frag_target").map_err(
-            |e| -> Box<dyn std::error::Error> {
-                format!("load target flowcone_frag_target: {e}").into()
-            },
-        )?;
         load_classifier(&mut bpf, "flowcone_icmp_target").map_err(
             |e| -> Box<dyn std::error::Error> {
                 format!("load target flowcone_icmp_target: {e}").into()
             },
         )?;
+        load_classifier(&mut bpf, "flowcone_icmp_egress_target").map_err(
+            |e| -> Box<dyn std::error::Error> {
+                format!("load target flowcone_icmp_egress_target: {e}").into()
+            },
+        )?;
         load_classifier(&mut bpf, "flowcone_icmp6_target").map_err(
             |e| -> Box<dyn std::error::Error> {
                 format!("load target flowcone_icmp6_target: {e}").into()
+            },
+        )?;
+        load_classifier(&mut bpf, "flowcone_icmp6_egress_target").map_err(
+            |e| -> Box<dyn std::error::Error> {
+                format!("load target flowcone_icmp6_egress_target: {e}").into()
             },
         )?;
 
@@ -223,7 +238,41 @@ impl DataPlane {
         }
         let ingress_target = load_target_map(&mut bpf, "INGRESS_TARGET", "flowcone_tcx_ingress")?;
         let egress_target = load_target_map(&mut bpf, "EGRESS_TARGET", "flowcone_tcx_egress")?;
-        let frag_target = load_target_map(&mut bpf, "FRAG_TARGET", "flowcone_frag_target")?;
+
+        let mut frag_target = ProgramArray::try_from(
+            bpf.take_map("FRAG_TARGET")
+                .ok_or("map FRAG_TARGET not found")?,
+        )?;
+        let prog_frag_in: &SchedClassifier = bpf
+            .program("flowcone_frag_v4_ingress")
+            .ok_or("program flowcone_frag_v4_ingress not found")?
+            .try_into()?;
+        let fd_frag_in = prog_frag_in
+            .fd()
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("flowcone_frag_v4_ingress fd: {e}").into()
+            })?;
+        frag_target
+            .set(0, fd_frag_in, 0)
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("FRAG_TARGET set ingress: {e}").into()
+            })?;
+
+        let prog_frag_out: &SchedClassifier = bpf
+            .program("flowcone_frag_v4_egress")
+            .ok_or("program flowcone_frag_v4_egress not found")?
+            .try_into()?;
+        let fd_frag_out = prog_frag_out
+            .fd()
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("flowcone_frag_v4_egress fd: {e}").into()
+            })?;
+        frag_target
+            .set(1, fd_frag_out, 0)
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("FRAG_TARGET set egress: {e}").into()
+            })?;
+
         let mut frag6_target = ProgramArray::try_from(
             bpf.take_map("FRAG6_TARGET")
                 .ok_or("map FRAG6_TARGET not found")?,
@@ -257,8 +306,74 @@ impl DataPlane {
             .map_err(|e| -> Box<dyn std::error::Error> {
                 format!("FRAG6_TARGET set egress: {e}").into()
             })?;
-        let icmp_target = load_target_map(&mut bpf, "ICMP_TARGET", "flowcone_icmp_target")?;
-        let icmp6_target = load_target_map(&mut bpf, "ICMP6_TARGET", "flowcone_icmp6_target")?;
+
+        let mut icmp_target = ProgramArray::try_from(
+            bpf.take_map("ICMP_TARGET")
+                .ok_or("map ICMP_TARGET not found")?,
+        )?;
+        let prog_icmp_in: &SchedClassifier = bpf
+            .program("flowcone_icmp_target")
+            .ok_or("program flowcone_icmp_target not found")?
+            .try_into()?;
+        let fd_icmp_in = prog_icmp_in
+            .fd()
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("flowcone_icmp_target fd: {e}").into()
+            })?;
+        icmp_target
+            .set(0, fd_icmp_in, 0)
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("ICMP_TARGET set ingress: {e}").into()
+            })?;
+
+        let prog_icmp_out: &SchedClassifier = bpf
+            .program("flowcone_icmp_egress_target")
+            .ok_or("program flowcone_icmp_egress_target not found")?
+            .try_into()?;
+        let fd_icmp_out = prog_icmp_out
+            .fd()
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("flowcone_icmp_egress_target fd: {e}").into()
+            })?;
+        icmp_target
+            .set(1, fd_icmp_out, 0)
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("ICMP_TARGET set egress: {e}").into()
+            })?;
+
+        let mut icmp6_target = ProgramArray::try_from(
+            bpf.take_map("ICMP6_TARGET")
+                .ok_or("map ICMP6_TARGET not found")?,
+        )?;
+        let prog_icmp6_in: &SchedClassifier = bpf
+            .program("flowcone_icmp6_target")
+            .ok_or("program flowcone_icmp6_target not found")?
+            .try_into()?;
+        let fd_icmp6_in = prog_icmp6_in
+            .fd()
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("flowcone_icmp6_target fd: {e}").into()
+            })?;
+        icmp6_target
+            .set(0, fd_icmp6_in, 0)
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("ICMP6_TARGET set ingress: {e}").into()
+            })?;
+
+        let prog_icmp6_out: &SchedClassifier = bpf
+            .program("flowcone_icmp6_egress_target")
+            .ok_or("program flowcone_icmp6_egress_target not found")?
+            .try_into()?;
+        let fd_icmp6_out = prog_icmp6_out
+            .fd()
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("flowcone_icmp6_egress_target fd: {e}").into()
+            })?;
+        icmp6_target
+            .set(1, fd_icmp6_out, 0)
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("ICMP6_TARGET set egress: {e}").into()
+            })?;
         let mut data_plane = Self {
             bpf,
             iface: iface.to_string(),

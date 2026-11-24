@@ -22,7 +22,8 @@
    MACs/addresses, neutral hostname/SSIDs/client names, for screenshots.
 
    --wired serves the device as a router without Wi-Fi (wired.js): no
-   radios, the uplink renamed wan, synthetic lan/vpn/guest interfaces.
+   radios, the uplink renamed wan, synthetic lan/vpn/guest interfaces, a
+   router's firewall config.
 
    --dsa (with --wired) makes lan1 and lan2 a DSA switch's ports, whose
    kernel counters see a trickle, and answers luci.vantage.ports counters
@@ -270,6 +271,10 @@ Object.assign(menuSpecs, appMenu);
 
 const recordedMenu = repairMenu(store.menu() || { action: { type: 'firstchild' }, children: {} }, '');
 const menu = mergeMenu(opts.keepUniwrt ? recordedMenu : dropUniwrt(recordedMenu), appMenu);
+
+/* --wired: a router's firewall config in place of the recorded access
+   point's (wired.js), the other lines' networks in its wan zone */
+if (opts.wired) store.uciReplace('firewall', wired.firewall([].concat(opts.multiwan ? [ multiwan.LINE.iface, multiwan.LINE.iface6 ] : [], opts.fullvpn ? [ fullvpn.VPN.iface ] : [])));
 
 /* fixture configs, before the packages' defaults: new configs are seeded,
    recorded ones only gain the sections they lack (e.g. a WireGuard

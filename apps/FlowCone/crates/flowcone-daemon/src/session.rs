@@ -1,3 +1,8 @@
+#[cfg(not(target_pointer_width = "64"))]
+compile_error!(
+    "FlowCone requires a 64-bit architecture (e.g. x86_64, aarch64, mips64, riscv64) for lock-free 64-bit atomic bitmaps shared with eBPF."
+);
+
 use aya::maps::{Array, HashMap, MapData, RingBuf};
 use flowcone_common::{
     BindingValue4, BindingValue6, EndpointKey4, EndpointKey6, FragKey4, FragKey6, FragValue4,
@@ -12,6 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub struct AtomicBitmap {
     mmap_ptr: *mut AtomicU64,
     len: usize,
+    mmap_byte_len: usize,
     _array: Array<MapData, u64>,
 }
 
@@ -23,13 +29,15 @@ impl AtomicBitmap {
         use aya::maps::IterableMap;
         use std::os::fd::AsFd;
         let len = flowcone_common::PORT_BITMAP_SLOTS as usize;
-        let byte_len = len * std::mem::size_of::<u64>();
+        let min_bytes = len * std::mem::size_of::<u64>();
+        let page_sz = rustix::param::page_size();
+        let mmap_byte_len = (min_bytes + page_sz - 1) & !(page_sz - 1);
         let map_data = array.map();
         let map_fd = map_data.fd();
         let mmap_ptr = unsafe {
             rustix::mm::mmap(
                 std::ptr::null_mut(),
-                byte_len,
+                mmap_byte_len,
                 ProtFlags::READ | ProtFlags::WRITE,
                 MapFlags::SHARED,
                 map_fd.as_fd(),
@@ -40,13 +48,17 @@ impl AtomicBitmap {
         Ok(Self {
             mmap_ptr,
             len,
+            mmap_byte_len,
             _array: array,
         })
     }
 
     #[inline(always)]
     pub fn fetch_and(&self, slot: u32, mask: u64, order: Ordering) -> u64 {
-        debug_assert!((slot as usize) < self.len);
+        assert!(
+            (slot as usize) < self.len,
+            "AtomicBitmap: slot {slot} out of bounds"
+        );
         unsafe {
             let elem = &*self.mmap_ptr.add(slot as usize);
             elem.fetch_and(mask, order)
@@ -55,7 +67,10 @@ impl AtomicBitmap {
 
     #[inline(always)]
     pub fn fetch_or(&self, slot: u32, mask: u64, order: Ordering) -> u64 {
-        debug_assert!((slot as usize) < self.len);
+        assert!(
+            (slot as usize) < self.len,
+            "AtomicBitmap: slot {slot} out of bounds"
+        );
         unsafe {
             let elem = &*self.mmap_ptr.add(slot as usize);
             elem.fetch_or(mask, order)
@@ -64,7 +79,10 @@ impl AtomicBitmap {
 
     #[inline(always)]
     pub fn store(&self, slot: u32, val: u64, order: Ordering) {
-        debug_assert!((slot as usize) < self.len);
+        assert!(
+            (slot as usize) < self.len,
+            "AtomicBitmap: slot {slot} out of bounds"
+        );
         unsafe {
             let elem = &*self.mmap_ptr.add(slot as usize);
             elem.store(val, order);
@@ -73,7 +91,10 @@ impl AtomicBitmap {
 
     #[inline(always)]
     pub fn load(&self, slot: u32, order: Ordering) -> u64 {
-        debug_assert!((slot as usize) < self.len);
+        assert!(
+            (slot as usize) < self.len,
+            "AtomicBitmap: slot {slot} out of bounds"
+        );
         unsafe {
             let elem = &*self.mmap_ptr.add(slot as usize);
             elem.load(order)
@@ -83,9 +104,8 @@ impl AtomicBitmap {
 
 impl Drop for AtomicBitmap {
     fn drop(&mut self) {
-        let byte_len = self.len * std::mem::size_of::<u64>();
         unsafe {
-            let _ = rustix::mm::munmap(self.mmap_ptr as *mut _, byte_len);
+            let _ = rustix::mm::munmap(self.mmap_ptr as *mut _, self.mmap_byte_len);
         }
     }
 }
@@ -129,7 +149,7 @@ fn scan_netlink_udp_ports(family: u8) -> Option<Vec<u16>> {
 
     send(&sock, &req, rustix::net::SendFlags::empty()).ok()?;
 
-    let mut buf = [0u8; 8192];
+    let mut buf = vec![0u8; 32768];
     let mut ports = Vec::new();
     let mut done = false;
     'recv_loop: loop {
@@ -425,10 +445,10 @@ fn sweep_family<V: ConeBinding>(
                 continue;
             }
         }
-        if let Ok(cur_val) = ob_map.get(&key, 0) {
-            if u16::from_be(cur_val.port_be()) == port_host {
-                let _ = ob_map.remove(&key);
-            }
+        if let Ok(cur_val) = ob_map.get(&key, 0)
+            && u16::from_be(cur_val.port_be()) == port_host
+        {
+            let _ = ob_map.remove(&key);
         }
         if ib_map
             .get(&port_host, 0)
@@ -610,10 +630,10 @@ impl SessionManager {
             map.fetch_or(slot, mask, Ordering::Relaxed);
             if let Ok(in_val) = ib_map.get(port, 0) {
                 let ep_key = in_val.make_key();
-                if let Ok(ob_val) = ob_map.get(&ep_key, 0) {
-                    if u16::from_be(ob_val.port_be()) == *port {
-                        let _ = ob_map.remove(&ep_key);
-                    }
+                if let Ok(ob_val) = ob_map.get(&ep_key, 0)
+                    && u16::from_be(ob_val.port_be()) == *port
+                {
+                    let _ = ob_map.remove(&ep_key);
                 }
                 let _ = ib_map.remove(port);
             }
@@ -623,10 +643,10 @@ impl SessionManager {
             if *port >= pool.min_port && *port <= pool.max_port {
                 if let Ok(in_val) = ib_map.get(port, 0) {
                     let ep_key = in_val.make_key();
-                    if let Ok(ob_val) = ob_map.get(&ep_key, 0) {
-                        if u16::from_be(ob_val.port_be()) == *port {
-                            let _ = ob_map.remove(&ep_key);
-                        }
+                    if let Ok(ob_val) = ob_map.get(&ep_key, 0)
+                        && u16::from_be(ob_val.port_be()) == *port
+                    {
+                        let _ = ob_map.remove(&ep_key);
                     }
                     let _ = ib_map.remove(port);
                 }
@@ -757,15 +777,16 @@ impl SessionManager {
         if port < pool.min_port || port > pool.max_port {
             return;
         }
-        if pool.reserved_ports.binary_search(&port).is_ok() {
-            return;
-        }
         let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(port);
         let map = if is_even {
             &mut *pool.bitmap_even
         } else {
             &mut *pool.bitmap_odd
         };
+        if pool.reserved_ports.binary_search(&port).is_ok() {
+            map.fetch_or(slot, mask, Ordering::Relaxed);
+            return;
+        }
         map.fetch_and(slot, !mask, Ordering::Relaxed);
     }
 
@@ -840,27 +861,26 @@ impl SessionManager {
                             && port <= pool.max_port
                             && pool.reserved_ports.binary_search(&port).is_err()
                             && !active_ports.contains(&port)
+                            && ib_map.get(&port, 0).is_err()
                         {
-                            if ib_map.get(&port, 0).is_err() {
-                                orphan_mask |= mask;
-                            }
+                            orphan_mask |= mask;
                         }
                     }
                 }
                 if orphan_mask != 0 {
-                    map.fetch_and(slot, !orphan_mask, Ordering::Relaxed);
-                    let mut rescue_mask = 0u64;
+                    // Pre-verify that no concurrent datapath allocation occurred before clearing.
+                    let mut confirmed_orphan_mask = 0u64;
                     for bit in 0..64 {
                         let mask = 1u64 << bit;
                         if (orphan_mask & mask) != 0 {
                             let port = flowcone_common::bitmap_coords_to_port(parity, slot, bit);
-                            if ib_map.get(&port, 0).is_ok() {
-                                rescue_mask |= mask;
+                            if ib_map.get(&port, 0).is_err() {
+                                confirmed_orphan_mask |= mask;
                             }
                         }
                     }
-                    if rescue_mask != 0 {
-                        map.fetch_or(slot, rescue_mask, Ordering::Relaxed);
+                    if confirmed_orphan_mask != 0 {
+                        map.fetch_and(slot, !confirmed_orphan_mask, Ordering::Relaxed);
                     }
                 }
             }
@@ -926,6 +946,8 @@ impl SessionManager {
         clear_map(&mut self.frag_in4);
         clear_map(&mut self.frag_out4);
         self.heap4.clear();
+        while self.events4.next().is_some() {}
+        self.init_port_pool(true, false);
     }
 
     pub fn clear_v6_mappings(&mut self) {
@@ -936,11 +958,13 @@ impl SessionManager {
         clear_map(&mut self.frag_in6);
         clear_map(&mut self.frag_out6);
         self.heap6.clear();
+        while self.events6.next().is_some() {}
+        self.init_port_pool(false, true);
     }
 
     #[inline]
     fn schedule4(&mut self, deadline: u32, key: EndpointKey4, port: u16) {
-        if self.heap4.len() < MAX_BINDINGS as usize {
+        if self.heap4.len() < (MAX_BINDINGS as usize) * 2 {
             self.heap4.push(Reverse((deadline, key, port)));
         } else {
             self.lost_notifications = true;
@@ -949,7 +973,7 @@ impl SessionManager {
 
     #[inline]
     fn schedule6(&mut self, deadline: u32, key: EndpointKey6, port: u16) {
-        if self.heap6.len() < MAX_BINDINGS as usize {
+        if self.heap6.len() < (MAX_BINDINGS as usize) * 2 {
             self.heap6.push(Reverse((deadline, key, port)));
         } else {
             self.lost_notifications = true;
@@ -991,6 +1015,8 @@ impl SessionManager {
                     }
                 }
             }
+        } else {
+            while self.events4.next().is_some() {}
         }
         if self.pool_enable_v6 {
             let limit = drained + GC_QUEUE_DRAIN_MAX;
@@ -1020,6 +1046,8 @@ impl SessionManager {
                     }
                 }
             }
+        } else {
+            while self.events6.next().is_some() {}
         }
         if need_rebuild {
             self.rebuild_port_queues();
@@ -1105,11 +1133,19 @@ impl SessionManager {
                             if u16::from_be(cur_ob.port) != port {
                                 if let Ok(cur_ib) = self.ib_map4.get(&port, 0)
                                     && cur_ib.matches_key(&key)
-                                    && now.saturating_sub(cur_ib.last_seen) > item_timeout
-                                    && self.ib_map4.remove(&port).is_ok()
                                 {
-                                    self.release_port4(port);
-                                    swept4 += 1;
+                                    if now.saturating_sub(cur_ib.last_seen) > item_timeout {
+                                        if self.ib_map4.remove(&port).is_ok() {
+                                            self.release_port4(port);
+                                            swept4 += 1;
+                                        }
+                                    } else {
+                                        self.schedule4(
+                                            cur_ib.last_seen.saturating_add(item_timeout),
+                                            key,
+                                            port,
+                                        );
+                                    }
                                 }
                                 processed4 += 1;
                                 continue;
@@ -1150,10 +1186,8 @@ impl SessionManager {
                         } else {
                             false
                         };
-                        if ib_removed {
+                        if ib_removed || (ob_removed && self.ib_map4.get(&port, 0).is_err()) {
                             self.release_port4(port);
-                        }
-                        if ob_removed || ib_removed {
                             swept4 += 1;
                         }
                     }
@@ -1236,11 +1270,19 @@ impl SessionManager {
                             if u16::from_be(cur_ob.port) != port {
                                 if let Ok(cur_ib) = self.ib_map6.get(&port, 0)
                                     && cur_ib.matches_key(&key)
-                                    && now.saturating_sub(cur_ib.last_seen) > item_timeout
-                                    && self.ib_map6.remove(&port).is_ok()
                                 {
-                                    self.release_port6(port);
-                                    swept6 += 1;
+                                    if now.saturating_sub(cur_ib.last_seen) > item_timeout {
+                                        if self.ib_map6.remove(&port).is_ok() {
+                                            self.release_port6(port);
+                                            swept6 += 1;
+                                        }
+                                    } else {
+                                        self.schedule6(
+                                            cur_ib.last_seen.saturating_add(item_timeout),
+                                            key,
+                                            port,
+                                        );
+                                    }
                                 }
                                 processed6 += 1;
                                 continue;
@@ -1281,10 +1323,8 @@ impl SessionManager {
                         } else {
                             false
                         };
-                        if ib_removed {
+                        if ib_removed || (ob_removed && self.ib_map6.get(&port, 0).is_err()) {
                             self.release_port6(port);
-                        }
-                        if ob_removed || ib_removed {
                             swept6 += 1;
                         }
                     }
@@ -1321,12 +1361,7 @@ impl SessionManager {
                     timeout
                 };
                 let deadline = val.last_seen().max(ib_last).saturating_add(item_timeout);
-                if entries4.len() < MAX_BINDINGS as usize {
-                    entries4.push(Reverse((deadline, key, port)));
-                } else {
-                    self.lost_notifications = true;
-                    break;
-                }
+                entries4.push(Reverse((deadline, key, port)));
             }
             self.heap4 = BinaryHeap::from(entries4);
         }
@@ -1348,12 +1383,7 @@ impl SessionManager {
                     timeout
                 };
                 let deadline = val.last_seen().max(ib_last).saturating_add(item_timeout);
-                if entries6.len() < MAX_BINDINGS as usize {
-                    entries6.push(Reverse((deadline, key, port)));
-                } else {
-                    self.lost_notifications = true;
-                    break;
-                }
+                entries6.push(Reverse((deadline, key, port)));
             }
             self.heap6 = BinaryHeap::from(entries6);
         }

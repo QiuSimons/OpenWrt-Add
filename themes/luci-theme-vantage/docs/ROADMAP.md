@@ -5,7 +5,7 @@ promised; issues and pull requests for any of it are welcome.
 
 ## Next
 
-What 1.1 shipped and left open.
+What 1.1 and 1.2 shipped and left open.
 
 ### Other access points
 
@@ -14,9 +14,8 @@ and clients of paired OpenWrt access points on the router's dashboard
 (ideas from [#5](https://github.com/anothaDev/luci-theme-vantage/pull/5)
 by @nhAsif and [#127](https://github.com/anothaDev/luci-theme-vantage/pull/127)
 by @Vikk20; see the spec, "Other access points"). Still open: access
-points without Dropbear; per-port traffic that a switch chip forwards
-without the kernel counting it; the collector under a user of its own
-instead of root; finding a moved access point over IPv6.
+points without Dropbear; the collector under a user of its own instead
+of root; finding a moved access point over IPv6.
 
 ### Per-device traffic (experimental)
 
@@ -56,7 +55,7 @@ stable; what reading the session's ACL costs a router with many LuCI
 apps (once a page); more than three such tiles or longer ids, which
 need the theme's stored-layout form widened in its script and its
 template together; letting that one ACL read answer the dashboard's
-four group probes too; OpenWrt 24.10, not tried.
+four group probes too.
 
 ## Later
 

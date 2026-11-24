@@ -230,6 +230,9 @@ test('replay server: --traffic answers luci.vantage.traffic hosts for the wired 
 		assert.ok(a.hosts.every(h => /^00:00:5e:00:53:[0-9a-f]{2}$|^02:00:5e:/.test(h.mac)), 'documentation MACs');
 		/* not without the login */
 		assert.equal((await call(ZERO, 'luci.vantage.traffic', 'hosts')).error.code, -32002);
+		/* --wired: a router's firewall, not the recorded access point's */
+		const fw = Object.values((await call(sid, 'uci', 'get', { config: 'firewall' })).result[1].values);
+		assert.deepEqual(fw.filter(s => s['.type'] === 'zone').map(s => [ s.name, s.network ]), [ [ 'lan', [ 'lan', 'vpn' ] ], [ 'wan', [ 'wan', 'wan6' ] ], [ 'guest', [ 'guest' ] ] ]);
 	}
 	finally {
 		srv.kill('SIGTERM');

@@ -14,6 +14,11 @@ name: CI
 # of the release-signing environment, which only v* tags may use and whose
 # runs the maintainer approves; they reach only the tag build's signing
 # step. Write tokens go only to the release and Pages jobs.
+#
+# The site's page, screenshots and video change between releases too: a
+# manual run on main with "site" ticked publishes them again, around the
+# package repositories exactly as they are live (the job "Republish the
+# site page"). It builds and signs nothing and has no secret.
 
 on:
   push:
@@ -21,12 +26,19 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      site:
+        description: Publish the site page, screenshots and video again (main only)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # a manual site run has a group of its own: it neither waits behind a
+  # push run on main nor takes that run's place in the queue
+  group: ci-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.site && '-site' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -266,6 +278,93 @@ jobs:
           mkdir -p "site/${SDK_APK%.*}" "site/${SDK_IPK%.*}"
           cp "$a"/*.apk "$a"/packages.adb "$a"/SHA256SUMS "site/${SDK_APK%.*}/"
           cp "$i"/*.ipk "$i"/Packages "$i"/Packages.gz "$i"/Packages.sig "$i"/SHA256SUMS "site/${SDK_IPK%.*}/"
+          cp keys/vantage-signing.pem keys/vantage-24.10.usign.pub site/
+          cp dev/build/repo-index.html site/index.html
+          mkdir -p site/screenshots && cp docs/screenshots/*.png docs/screenshots/*.mp4 site/screenshots/
+          find site -type f | sort
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+      # the run's artifact list can lag the upload by a moment, and the
+      # deploy then finds no artifact: on any failure, try once more
+      - name: Deploy to GitHub Pages
+        id: deploy
+        continue-on-error: true
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+      - name: Wait before deploying again
+        if: steps.deploy.outcome == 'failure'
+        run: sleep 30
+
+      - name: Deploy to GitHub Pages (second try)
+        id: deploy_again
+        if: steps.deploy.outcome == 'failure'
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  site:
+    # by hand, on main: the page, its screenshots and the video as they are
+    # on main, around the package repositories as they are live. Those are
+    # fetched from the site and must be the latest release's; nothing is
+    # built or signed, and the job has no secret
+    name: Republish the site page
+    needs: checks
+    if: github.event_name == 'workflow_dispatch' && inputs.site && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy_again.outputs.page_url }}
+    steps:
+      - name: Checkout (public key and site page)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch the live package repositories
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq signify-openbsd
+          live="https://$GITHUB_REPOSITORY_OWNER.github.io/${GITHUB_REPOSITORY#*/}"
+          latest="https://github.com/$GITHUB_REPOSITORY/releases/latest/download"
+          a=${SDK_APK%.*} i=${SDK_IPK%.*}
+          get() { mkdir -p "${2%/*}"; curl -fsSL --retry 3 -o "$2" "$1"; }
+          fetch() { local line=$1 f; shift; for f in "$@"; do get "$live/$line/$f" "site/$line/$f"; done; }
+          get "$latest/SHA256SUMS" release/SHA256SUMS
+          get "$latest/packages.adb" release/packages.adb
+          get "$latest/SHA256SUMS-$i" "release/SHA256SUMS-$i"
+          fetch "$a" SHA256SUMS packages.adb
+          fetch "$i" SHA256SUMS Packages Packages.gz Packages.sig
+          # what is live must be the latest release, before a name in it is used
+          cmp "site/$a/SHA256SUMS" release/SHA256SUMS
+          cmp "site/$a/packages.adb" release/packages.adb
+          cmp "site/$i/SHA256SUMS" "release/SHA256SUMS-$i"
+          fetch "$a" $(awk '{ print $2 }' "site/$a/SHA256SUMS")
+          fetch "$i" $(awk '{ print $2 }' "site/$i/SHA256SUMS")
+          ( cd "site/$a" && sha256sum -c SHA256SUMS )
+          ( cd "site/$i" && sha256sum -c SHA256SUMS )
+          # the 24.10 index is no release asset: it must be signed with the
+          # project's key and list these packages
+          signify-openbsd -V -q -p keys/vantage-24.10.usign.pub -x "site/$i/Packages.sig" -m "site/$i/Packages"
+          gunzip -c "site/$i/Packages.gz" | cmp - "site/$i/Packages"
+          for h in $(awk '{ print $1 }' "site/$i/SHA256SUMS"); do
+            grep -qx "SHA256sum: $h" "site/$i/Packages" || { echo "Packages does not list $h" >&2; exit 1; }
+          done
+          # the keys on main must be the ones that are live
+          for k in vantage-signing.pem vantage-24.10.usign.pub; do
+            get "$live/$k" "release/$k"
+            cmp "release/$k" "keys/$k"
+          done
+
+      - name: Assemble the site
+        run: |
+          set -euo pipefail
           cp keys/vantage-signing.pem keys/vantage-24.10.usign.pub site/
           cp dev/build/repo-index.html site/index.html
           mkdir -p site/screenshots && cp docs/screenshots/*.png docs/screenshots/*.mp4 site/screenshots/

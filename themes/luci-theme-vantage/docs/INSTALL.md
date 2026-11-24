@@ -590,14 +590,15 @@ a new one, then log in). Two reasons:
 | | `luci-theme-vantage` | `luci-app-vantage` |
 |---|---|---|
 | Files | `/www/luci-static/vantage/` (CSS, icons, logo), `/www/luci-static/resources/menu-vantage.js`, `/www/luci-static/resources/vantage-theme/`, `/usr/share/ucode/luci/template/themes/vantage/` | `/www/luci-static/resources/view/vantage/`, `/www/luci-static/resources/vantage/`, `/usr/share/luci/menu.d/zz-luci-app-vantage.json`, `/usr/share/rpcd/acl.d/luci-app-vantage.json`, `/usr/libexec/rpcd/luci.vantage.ports`, `/etc/config/vantage` |
-| Configuration | Registers the theme as `luci.themes.Vantage`. Makes it the active theme (`luci.main.mediaurlbase=/luci-static/vantage`) **only on a first install**, never on an upgrade or reinstall. Adds `/etc/config/vantage_theme` (Appearance, and the dashboard's layout and chart style) and the rpcd group `luci-theme-vantage`. | None besides its own `/etc/config/vantage` (client names). |
+| Configuration | Registers the theme as `luci.themes.Vantage`. Makes it the active theme (`luci.main.mediaurlbase=/luci-static/vantage`) **only on a first install**, never on an upgrade or reinstall. Adds `/etc/config/vantage_theme` (Appearance, and the dashboard's layout and chart style) and the rpcd group `luci-theme-vantage`. | None besides its own `/etc/config/vantage` (client names, and which clients' weak signal is not warned about). |
 | Menu | – | Adds **Dashboard** (`admin/dashboard`) as the first menu entry, so it is the page LuCI opens after login. Status → Overview is unchanged. With `luci-mod-dashboard` also installed, which uses the same entry, Dashboard opens Vantage's and LuCI's moves to Status → Dashboard. With the Vantage theme installed but not selected, Dashboard opens LuCI's own page instead (see [Switch themes](#switch-themes)). |
 | After install | Clears LuCI's caches (`/tmp/luci-indexcache.*`, `/tmp/luci-modulecache/`) and reloads rpcd. | Same. |
 
 Nothing else changes. Neither package adds a service, cron job or init
 script, and neither touches network, wireless, firewall, DHCP or password
-settings. The dashboard only reads status. Its one write is a name you give
-a device, stored in `/etc/config/vantage`.
+settings. The dashboard only reads status. Its only writes are a name you
+give a device and its "Don't warn about its signal" mark, both stored in
+`/etc/config/vantage`.
 
 The dashboard's URL is `http://192.0.2.1/cgi-bin/luci/admin/dashboard`.
 

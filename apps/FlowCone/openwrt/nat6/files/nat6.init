@@ -10,17 +10,17 @@ interface() {
 	for interface_name in $dhcpv6_interface
 	do
 		device=$(uci -q show network.$interface_name.device | grep -o "'.*'" | awk -F"'" '{print $2}')
-		if [ "$(echo $device | grep -c @)" = 1 ]; then
-			alias_interface=$(echo $device | sed 's/@//')
+		if [ "$(echo "$device" | grep -c @)" = 1 ]; then
+			alias_interface=$(echo "$device" | sed 's/@//')
 			device=$(uci -q show network.$alias_interface.device | grep -o "'.*'" | awk -F"'" '{print $2}')
-			if [ -z $(uci -q show network.$alias_interface.device) ]; then
+			if [ -z "$(uci -q show network.$alias_interface.device)" ]; then
 				ipaddr=$(uci -q show network.$alias_interface.ipaddr | grep -o "'.*'" | awk -F"'" '{print $2}')
 				device=$(ifconfig | grep -B 1 "$ipaddr" 2>/dev/null | head -1 | awk '{print $1}')
 			fi
 		fi
-		if [ $(ifconfig "$device" | grep -c "inet6 addr") -gt 0 ]; then
+		if [ $(ifconfig "$device" 2>/dev/null | grep -c "inet6 addr") -gt 0 ]; then
 			ip6gw=$(uci -q show network.$interface_name.ip6gw | grep -o "'.*'" | awk -F"'" '{print $2}')
-			[ -n "$ip6gw" ] && gateway="$ip6gw" || gateway=$(ip -6 route | grep "default from" | awk '{print $5}')
+			[ -n "$ip6gw" ] && gateway="$ip6gw" || gateway=$(ip -6 route | grep "default from" | awk '{print $5; exit}')
 			[ -z "$gateway" ] && gateway=$(ip -6 route | grep "^default via" | awk '{print $3}' | head -n1)
 			break
 		fi

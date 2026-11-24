@@ -366,7 +366,13 @@ class Store {
 	/* a config a package ships (e.g. /etc/config/vantage) and the mirror
 	   has not recorded: known from now on, so 'uci get' answers it */
 	uciSeed(config, values) {
-		if (!uciName(config, UCI_CONFIG) || hasOwn(this.uciCommitted, config) || !values || typeof values !== 'object') return false;
+		return !hasOwn(this.uciCommitted, config) && this.uciReplace(config, values);
+	}
+
+	/* a scene's own config in place of the recorded one (--wired's
+	   firewall) */
+	uciReplace(config, values) {
+		if (!uciName(config, UCI_CONFIG) || !values || typeof values !== 'object') return false;
 		this.uciCommitted[config] = nclone(values);
 		this.uciStaged[config] = nclone(values);
 		return true;

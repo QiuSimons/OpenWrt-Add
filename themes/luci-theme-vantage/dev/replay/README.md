@@ -215,7 +215,12 @@ synthetic `lan`, `vpn` (WireGuard) and `guest` (down) interfaces with
 documentation addresses and growing counters are added. The switch ports
 `lan1` and `lan2` list the link modes they support, as netifd does for a
 port, so with the recorded `eth0` the dashboard's Ports tile has three
-(the recording alone has one port, and no tile). Combine it with
+(the recording alone has one port, and no tile). The firewall config
+is a router's too, in place of the recorded access point's: firewall4's
+stock zones and rules, a guest zone, the WireGuard ports, port forwards
+and SSH left open to the internet, so the firewall overview (Network →
+Firewall → Overview) has every part to show. `--multiwan`'s line joins
+its wan zone, and so does `vpn` with `--fullvpn`. Combine it with
 `--demo` as usual.
 
 ## A DSA switch (`--dsa`)
