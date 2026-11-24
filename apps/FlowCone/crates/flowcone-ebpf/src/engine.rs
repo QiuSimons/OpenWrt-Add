@@ -259,7 +259,7 @@ macro_rules! try_alloc_slot {
                 if val != !0u64 {
                     let mut mask_avail = !val;
                     if base_port < $min {
-                        let low_invalid = (($min - base_port + 1) / 2) as u32;
+                        let low_invalid = ($min - base_port).div_ceil(2) as u32;
                         if low_invalid < 64 {
                             mask_avail &= !((1u64 << low_invalid) - 1);
                         } else {

@@ -402,12 +402,32 @@ mod tests {
         a2[15] = 2;
 
         let list_order_1 = [
-            IfaceAddr { family: 10, flags: 0, scope: 0, addr: a1 },
-            IfaceAddr { family: 10, flags: 0, scope: 0, addr: a2 },
+            IfaceAddr {
+                family: 10,
+                flags: 0,
+                scope: 0,
+                addr: a1,
+            },
+            IfaceAddr {
+                family: 10,
+                flags: 0,
+                scope: 0,
+                addr: a2,
+            },
         ];
         let list_order_2 = [
-            IfaceAddr { family: 10, flags: 0, scope: 0, addr: a2 },
-            IfaceAddr { family: 10, flags: 0, scope: 0, addr: a1 },
+            IfaceAddr {
+                family: 10,
+                flags: 0,
+                scope: 0,
+                addr: a2,
+            },
+            IfaceAddr {
+                family: 10,
+                flags: 0,
+                scope: 0,
+                addr: a1,
+            },
         ];
 
         // Deterministic initial choice.
@@ -423,8 +443,18 @@ mod tests {
         perm[0] = 0x24;
         perm[15] = 9;
         let with_perm = [
-            IfaceAddr { family: 10, flags: 0, scope: 0, addr: a2 },
-            IfaceAddr { family: 10, flags: IFA_F_PERMANENT, scope: 0, addr: perm },
+            IfaceAddr {
+                family: 10,
+                flags: 0,
+                scope: 0,
+                addr: a2,
+            },
+            IfaceAddr {
+                family: 10,
+                flags: IFA_F_PERMANENT,
+                scope: 0,
+                addr: perm,
+            },
         ];
         assert_eq!(pick_gua_v6(&with_perm, Some(a2)), Some(perm));
     }

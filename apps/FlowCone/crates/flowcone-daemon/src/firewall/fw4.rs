@@ -85,12 +85,10 @@ pub(crate) fn parse_has_ipv6_masq(nft_output: &str, wan_iface: &str) -> bool {
             let matches_wan = (trimmed.contains("oifname ") || trimmed.contains("oif "))
                 && (trimmed.contains(&format!("\"{}\"", wan_iface))
                     || trimmed.contains(&format!(" {} ", wan_iface)));
-            if matches_wan {
-                if let Some(target) = trimmed.split(" jump ").nth(1) {
-                    let target_chain = target.split_whitespace().next().unwrap_or("").trim();
-                    if !target_chain.is_empty() && !wan_chains.iter().any(|c| c == target_chain) {
-                        wan_chains.push(target_chain.to_string());
-                    }
+            if matches_wan && let Some(target) = trimmed.split(" jump ").nth(1) {
+                let target_chain = target.split_whitespace().next().unwrap_or("").trim();
+                if !target_chain.is_empty() && !wan_chains.iter().any(|c| c == target_chain) {
+                    wan_chains.push(target_chain.to_string());
                 }
             }
         }
@@ -143,9 +141,13 @@ pub(crate) fn parse_has_ipv6_masq(nft_output: &str, wan_iface: &str) -> bool {
             // Rule without interface constraint: must be in a chain that targets WAN, or a base postrouting chain.
             let is_base_postrouting = current_chain.eq_ignore_ascii_case("srcnat")
                 || current_chain.eq_ignore_ascii_case("postrouting");
-            let is_wan_chain = wan_chains.iter().any(|c| c.eq_ignore_ascii_case(current_chain));
+            let is_wan_chain = wan_chains
+                .iter()
+                .any(|c| c.eq_ignore_ascii_case(current_chain));
             let is_srcnat_subchain = current_chain.to_ascii_lowercase().starts_with("srcnat_")
-                || current_chain.to_ascii_lowercase().starts_with("postrouting_");
+                || current_chain
+                    .to_ascii_lowercase()
+                    .starts_with("postrouting_");
             if is_srcnat_subchain && !is_wan_chain {
                 continue;
             }
