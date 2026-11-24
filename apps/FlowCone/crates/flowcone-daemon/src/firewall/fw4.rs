@@ -141,9 +141,12 @@ pub(crate) fn parse_has_ipv6_masq(nft_output: &str, wan_iface: &str) -> bool {
             }
         } else {
             // Rule without interface constraint: must be in a chain that targets WAN, or a base postrouting chain.
-            let is_base_postrouting = current_chain == "srcnat" || current_chain == "postrouting";
-            let is_wan_chain = wan_chains.iter().any(|c| c == current_chain);
-            if current_chain.starts_with("srcnat_") && !is_wan_chain {
+            let is_base_postrouting = current_chain.eq_ignore_ascii_case("srcnat")
+                || current_chain.eq_ignore_ascii_case("postrouting");
+            let is_wan_chain = wan_chains.iter().any(|c| c.eq_ignore_ascii_case(current_chain));
+            let is_srcnat_subchain = current_chain.to_ascii_lowercase().starts_with("srcnat_")
+                || current_chain.to_ascii_lowercase().starts_with("postrouting_");
+            if is_srcnat_subchain && !is_wan_chain {
                 continue;
             }
             if !is_base_postrouting && !is_wan_chain {
@@ -641,12 +644,12 @@ table inet nat {
         assert!(parse_has_ipv6_masq(inet_unqualified_masq, "eth0"));
         assert!(!parse_has_ipv6_masq(inet_unqualified_masq, "eth1"));
 
-        // Masquerade on another interface (e.g. ZeroTier) must not trigger WAN v6 masq
+        // Masquerade on another interface (e.g. VPN) must not trigger WAN v6 masq
         let other_iface_masq = "\
 table inet fw4 {
         chain srcnat {
                 type nat hook postrouting priority srcnat; policy accept;
-                oifname \"ztrf2wagja\" counter packets 0 bytes 0 masquerade comment \"!fw4: Masquerade ZeroTier traffic ztrf2wagja\"
+                oifname \"vpn0\" counter packets 0 bytes 0 masquerade comment \"!fw4: Masquerade VPN traffic vpn0\"
                 oifname \"eth1\" jump srcnat_wan
         }
         chain srcnat_wan {
@@ -654,6 +657,16 @@ table inet fw4 {
         }
 }";
         assert!(!parse_has_ipv6_masq(other_iface_masq, "eth1"));
+
+        // Standard Linux iptables-nft uppercase POSTROUTING detection
+        let linux_postrouting_masq = "\
+table ip6 nat {
+        chain POSTROUTING {
+                type nat hook postrouting priority srcnat; policy accept;
+                masquerade
+        }
+}";
+        assert!(parse_has_ipv6_masq(linux_postrouting_masq, "eth1"));
     }
 
     #[test]
