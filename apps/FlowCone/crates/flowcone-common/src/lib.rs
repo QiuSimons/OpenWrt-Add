@@ -320,6 +320,16 @@ pub fn csum_replace(csum: u16, old: u16, new: u16) -> u16 {
     if res == 0 { 0xffff } else { res }
 }
 
+#[inline(always)]
+pub fn format_wan_ip_id(counter: u32, cpu: u32) -> u16 {
+    (((counter as u16) & 0x03ff) << 6) | ((cpu as u16) & 0x003f)
+}
+
+#[inline(always)]
+pub fn format_wan_frag_id(counter: u32, cpu: u32) -> u32 {
+    ((counter & 0x00ff_ffff) << 8) | (cpu & 0x0000_00ff)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct L2Info {
     pub proto: u16,
@@ -730,6 +740,26 @@ mod tests {
         let (needs_push, dup_state) = port_state_on_release(PORT_FREE_BIT | PORT_QUEUED_BIT);
         assert!(!needs_push);
         assert_eq!(dup_state, PORT_FREE_BIT | PORT_QUEUED_BIT);
+    }
+
+    #[test]
+    fn test_format_wan_ip_id_no_collision() {
+        for cpu in 0..64 {
+            for counter in 0..2048 {
+                let id = format_wan_ip_id(counter, cpu);
+                assert_eq!(id & 0x003f, (cpu as u16) & 0x003f);
+            }
+        }
+    }
+
+    #[test]
+    fn test_format_wan_frag_id_no_collision() {
+        for cpu in 0..256 {
+            for counter in [0, 1, 2, 0xff, 0x100, 0x7fff, 0x00ff_ffff, 0x0100_0000] {
+                let id = format_wan_frag_id(counter, cpu);
+                assert_eq!(id & 0x00ff, cpu & 0x00ff);
+            }
+        }
     }
 
     #[test]

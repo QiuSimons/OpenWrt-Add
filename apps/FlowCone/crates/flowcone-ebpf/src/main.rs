@@ -9,8 +9,9 @@ pub mod parsing;
 use aya_ebpf::{
     EbpfContext,
     bindings::{__sk_buff, TC_ACT_SHOT, TC_ACT_UNSPEC},
+    helpers::bpf_get_smp_processor_id,
     macros::{classifier, map},
-    maps::{Array, HashMap, LruHashMap, ProgramArray, RingBuf},
+    maps::{Array, HashMap, LruHashMap, PerCpuArray, ProgramArray, RingBuf},
     programs::TcContext,
 };
 use core::mem;
@@ -18,13 +19,13 @@ use flowcone_common::{
     BindingValue4, BindingValue6, ETH_P_IP, ETH_P_IPV6, EndpointKey4, EndpointKey6,
     FRAG_MAP_ENTRIES, FragKey4, FragKey6, FragValue4, FragValue6, GlobalConfig, IPPROTO_ICMP,
     IPPROTO_ICMPV6, IPPROTO_UDP, MAX_BINDINGS, PORT_BITMAP_SLOTS, PORT_STATE_ENTRIES,
-    SESSION_EVENT_RINGBUF_BYTES, csum_replace,
+    SESSION_EVENT_RINGBUF_BYTES, csum_replace, format_wan_frag_id, format_wan_ip_id,
 };
 
 pub use engine::{
     EGRESS_ALLOC_FALLBACK, EGRESS_ALLOC_PRIMARY, FRAG_ALLOC_FALLBACK, FRAG_ALLOC_PRIMARY,
-    FRAG6_ALLOC_FALLBACK, FRAG6_ALLOC_PRIMARY, fixup_csum_v4, fixup_csum_v6, fixup_l3_v4,
-    get_or_create_mapping_v4, get_or_create_mapping_v6, is_short_lived_port, now_sec,
+    FRAG6_ALLOC_FALLBACK, FRAG6_ALLOC_PRIMARY, fixup_csum_v4, fixup_csum_v6, fixup_l3_id_v4,
+    fixup_l3_v4, get_or_create_mapping_v4, get_or_create_mapping_v6, is_short_lived_port, now_sec,
     port_is_reserved,
 };
 pub use parsing::{
@@ -91,43 +92,35 @@ pub static ICMP_TARGET: ProgramArray = ProgramArray::with_max_entries(2, 0);
 pub static ICMP6_TARGET: ProgramArray = ProgramArray::with_max_entries(2, 0);
 
 #[map]
-pub static WAN_IP_ID: Array<u32> = Array::with_max_entries(1, 0);
+pub static WAN_IP_ID: PerCpuArray<u32> = PerCpuArray::with_max_entries(1, 0);
 #[map]
-pub static WAN_FRAG_ID: Array<u32> = Array::with_max_entries(1, 0);
+pub static WAN_FRAG_ID: PerCpuArray<u32> = PerCpuArray::with_max_entries(1, 0);
 
 #[inline(always)]
 pub fn alloc_wan_ip_id() -> u16 {
+    let cpu = unsafe { bpf_get_smp_processor_id() };
     if let Some(ptr) = WAN_IP_ID.get_ptr_mut(0) {
         unsafe {
-            let inc: u32 = 1;
-            core::arch::asm!(
-                "lock *(u32 *)({p} + 0) += {inc}",
-                p = in(reg) ptr,
-                inc = in(reg) inc,
-            );
-            let val = (*ptr) as u16;
-            if val == 0 { 1 } else { val }
+            let next = (*ptr).wrapping_add(1);
+            *ptr = next;
+            format_wan_ip_id(next, cpu)
         }
     } else {
-        1
+        format_wan_ip_id(0, cpu)
     }
 }
 
 #[inline(always)]
 pub fn alloc_wan_frag_id() -> u32 {
+    let cpu = unsafe { bpf_get_smp_processor_id() };
     if let Some(ptr) = WAN_FRAG_ID.get_ptr_mut(0) {
         unsafe {
-            let inc: u32 = 1;
-            core::arch::asm!(
-                "lock *(u32 *)({p} + 0) += {inc}",
-                p = in(reg) ptr,
-                inc = in(reg) inc,
-            );
-            let val = *ptr;
-            if val == 0 { 1 } else { val }
+            let next = (*ptr).wrapping_add(1);
+            *ptr = next;
+            format_wan_frag_id(next, cpu)
         }
     } else {
-        1
+        format_wan_frag_id(0, cpu)
     }
 }
 
@@ -1052,13 +1045,11 @@ pub fn flowcone_frag_v4_egress(ctx: TcContext) -> i32 {
         let new_id = u16::to_be(v.wan_id);
         iph.src_addr = v.ip;
         iph.id = new_id;
-        if !fixup_l3_v4(&ctx, data, ip_off, old_src, v.ip) {
+        if !fixup_l3_v4(&ctx, data, ip_off, old_src, v.ip)
+            || !fixup_l3_id_v4(&ctx, data, ip_off, old_id, new_id)
+        {
             return TC_ACT_SHOT;
         }
-        let l3_csum_off = ip_off - data + IPV4_CSUM_OFFSET;
-        let _ = ctx
-            .skb
-            .l3_csum_replace(l3_csum_off, old_id as u64, new_id as u64, CSUM_FIELD_U16);
 
         let mark = get_mark(&ctx);
         ctx.skb.set_mark(mark | cfg.flowcone_mark);
@@ -1114,13 +1105,10 @@ pub fn flowcone_frag_v4_egress(ctx: TcContext) -> i32 {
         cfg.wan_ip4,
         old_sport,
         mapped,
-    ) {
+    ) || !fixup_l3_id_v4(&ctx, data, ip_off, old_id, new_id)
+    {
         return TC_ACT_SHOT;
     }
-    let l3_csum_off = ip_off - data + IPV4_CSUM_OFFSET;
-    let _ = ctx
-        .skb
-        .l3_csum_replace(l3_csum_off, old_id as u64, new_id as u64, CSUM_FIELD_U16);
 
     let value = FragValue4 {
         ip: cfg.wan_ip4,

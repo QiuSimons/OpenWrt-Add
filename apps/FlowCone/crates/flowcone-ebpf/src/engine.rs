@@ -113,6 +113,18 @@ pub fn fixup_l3_v4(ctx: &TcContext, data: usize, ip_off: usize, old_ip: u32, new
 }
 
 #[inline(always)]
+pub fn fixup_l3_id_v4(ctx: &TcContext, data: usize, ip_off: usize, old_id: u16, new_id: u16) -> bool {
+    ctx.skb
+        .l3_csum_replace(
+            ip_off - data + IPV4_CSUM_OFFSET,
+            old_id as u64,
+            new_id as u64,
+            CSUM_FIELD_U16,
+        )
+        .is_ok()
+}
+
+#[inline(always)]
 pub fn fixup_csum_v6(
     ctx: &TcContext,
     data: usize,
