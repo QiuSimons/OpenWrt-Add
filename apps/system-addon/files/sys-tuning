@@ -33,9 +33,9 @@ start() {
     [ -d /sys/class/net/br-lan ] && \
         sysctl -qw net.ipv4.conf.br-lan.proxy_arp=1
 
-    # 物理网卡硬件卸载与 GRO
+    # 物理网卡硬件卸载、GRO 与链路自协商
     local uci_changed=0
-    local nic_path nic uci_name f
+    local nic_path nic uci_name f speed
     for nic_path in /sys/class/net/*; do
         nic=$(basename "$nic_path")
 
@@ -63,6 +63,12 @@ start() {
         for f in gro sg tso tx-scatter-gather; do
             ethtool -K "$nic" "$f" on 2>/dev/null || true
         done
+
+        # 链路降速重协商
+        speed=$(cat "$nic_path/speed" 2>/dev/null)
+        if [ "$speed" -gt 0 ] 2>/dev/null && [ "$speed" -lt 1000 ] 2>/dev/null; then
+            ethtool -r "$nic" 2>/dev/null || true
+        fi
     done
 
     if [ "$uci_changed" -eq 1 ]; then
