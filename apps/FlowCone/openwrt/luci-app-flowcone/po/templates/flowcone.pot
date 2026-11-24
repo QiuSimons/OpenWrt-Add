@@ -58,7 +58,7 @@ msgstr ""
 msgid "Advanced Settings"
 msgstr ""
 
-msgid "Show advanced port range, timeout, and firewall integration options."
+msgid "Show advanced port range, timeout, and firewall integration options. Advanced options will only be used as long as this box is checked."
 msgstr ""
 
 msgid "Min Port"

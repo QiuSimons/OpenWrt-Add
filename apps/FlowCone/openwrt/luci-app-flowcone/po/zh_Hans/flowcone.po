@@ -58,8 +58,8 @@ msgstr "附加 TCX 程序的 WAN 外部网络设备。留空则自动探测主 W
 msgid "Advanced Settings"
 msgstr "高级设置"
 
-msgid "Show advanced port range, timeout, and firewall integration options."
-msgstr "展开端口范围、超时时间及防火墙集成等高级选项。"
+msgid "Show advanced port range, timeout, and firewall integration options. Advanced options will only be used as long as this box is checked."
+msgstr "展开端口范围、超时时间及防火墙集成等高级选项。仅当勾选此项时高级选项才会生效。"
 
 msgid "Min Port"
 msgstr "起始端口"
