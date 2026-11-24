@@ -37,7 +37,7 @@ endef
 
 define Package/system-addon/install
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
-	$(INSTALL_BIN) ./files/zzz-default-settings $(1)/etc/uci-defaults/99-default-settings
+	$(INSTALL_BIN) ./files/zzz-default-settings $(1)/etc/uci-defaults/zzz-default-settings
 
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/sys-tuning $(1)/etc/init.d/sys-tuning

@@ -94,21 +94,25 @@ done
 #bandix
 [ -f /etc/config/bandix ] && uci set bandix.general.log_level='error' && uci commit bandix
 
-#关闭 CPU 漏洞缓解
-for f in /boot/grub/grub.cfg /boot/efi/boot/grub/grub.cfg /boot/extlinux/extlinux.conf /boot/cmdline.txt; do
-    [ -f "$f" ] || continue
-    grep -qw "mitigations=off" "$f" 2>/dev/null && continue
-    sed -i '/^[[:space:]]*linux/ s/$/ mitigations=off/' "$f" 2>/dev/null
-    sed -i '/^[[:space:]]*append/ s/$/ mitigations=off/' "$f" 2>/dev/null
-    [ "${f##*/}" = "cmdline.txt" ] && sed -i '1 s/$/ mitigations=off/' "$f" 2>/dev/null
-done
-sync
-
 #软链接
 [ ! -f /usr/bin/ip ] && [ -f /sbin/ip ] && ln -sf /sbin/ip /usr/bin/ip
 [ ! -f /usr/bin/wget-ssl ] && [ -f /usr/bin/wget ] && ln -sf /usr/bin/wget /usr/bin/wget-ssl
 
 #清除 LuCI 残留缓存
 rm -rf /tmp/luci-modulecache /tmp/luci-indexcache 2>/dev/null
+
+#关闭 CPU 漏洞缓解
+reboot_needed=0
+for f in /boot/grub/grub.cfg /boot/efi/boot/grub/grub.cfg /boot/extlinux/extlinux.conf /boot/cmdline.txt; do
+    [ -f "$f" ] || continue
+    grep -qw "mitigations=off" "$f" 2>/dev/null && continue
+    sed -i '/^[[:space:]]*linux/ s/$/ mitigations=off/' "$f" 2>/dev/null
+    sed -i '/^[[:space:]]*append/ s/$/ mitigations=off/' "$f" 2>/dev/null
+    [ "${f##*/}" = "cmdline.txt" ] && sed -i '1 s/$/ mitigations=off/' "$f" 2>/dev/null
+    reboot_needed=1
+done
+sync
+
+[ "$reboot_needed" -eq 1 ] && ( sleep 10 && sync && reboot ) >/dev/null 2>&1 &
 
 exit 0
