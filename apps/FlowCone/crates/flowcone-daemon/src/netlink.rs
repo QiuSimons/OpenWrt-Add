@@ -149,36 +149,103 @@ fn dump_iface_addrs(ifindex: u32, family: u8) -> Result<Vec<IfaceAddr>, NetlinkE
 }
 
 /// Pick the global IPv4 address of an interface.
-fn pick_global_v4(addrs: &[IfaceAddr]) -> Option<[u8; 4]> {
-    addrs
-        .iter()
-        .find(|a| a.family == 2 && a.scope == 0 && a.flags & IFA_F_SECONDARY == 0)
-        .map(|a| [a.addr[0], a.addr[1], a.addr[2], a.addr[3]])
+/// Retains the current address if still valid to avoid flapping.
+fn pick_global_v4(addrs: &[IfaceAddr], current: Option<[u8; 4]>) -> Option<[u8; 4]> {
+    let mut current_tier = None;
+    let mut best_primary = None;
+    let mut best_secondary = None;
+
+    for a in addrs {
+        if a.family == 2 && a.scope == 0 {
+            let addr4 = [a.addr[0], a.addr[1], a.addr[2], a.addr[3]];
+            let is_sec = a.flags & IFA_F_SECONDARY != 0;
+            let tier = if is_sec { 1 } else { 0 };
+
+            if Some(addr4) == current {
+                current_tier = Some(tier);
+            }
+
+            if is_sec {
+                best_secondary = Some(best_secondary.map_or(addr4, |b: [u8; 4]| b.min(addr4)));
+            } else {
+                best_primary = Some(best_primary.map_or(addr4, |b: [u8; 4]| b.min(addr4)));
+            }
+        }
+    }
+
+    if let Some(c_tier) = current_tier {
+        let highest_available = if best_primary.is_some() {
+            0
+        } else if best_secondary.is_some() {
+            1
+        } else {
+            2
+        };
+
+        if c_tier <= highest_available {
+            return current;
+        }
+    }
+
+    best_primary.or(best_secondary)
 }
 
 /// Pick a global unicast IPv6 address: permanent first, then a non-temporary
 /// dynamic address, then a privacy/temporary address.
-fn pick_gua_v6(addrs: &[IfaceAddr]) -> Option<[u8; 16]> {
-    let mut fallback = None;
-    let mut temporary = None;
+/// Retains the current address if still valid in the highest available tier.
+fn pick_gua_v6(addrs: &[IfaceAddr], current: Option<[u8; 16]>) -> Option<[u8; 16]> {
+    let mut current_tier = None;
+    let mut best_perm = None;
+    let mut best_dyn = None;
+    let mut best_temp = None;
+
     for a in addrs {
-        // 2000::/3 only (exclude ULA and non-global scope)
         if a.family != 10 || a.scope != 0 || (a.addr[0] & 0xe0) != 0x20 {
             continue;
         }
         if a.flags & (IFA_F_DADFAILED | IFA_F_DEPRECATED | IFA_F_TENTATIVE) != 0 {
             continue;
         }
-        if a.flags & IFA_F_PERMANENT != 0 {
-            return Some(a.addr);
-        }
-        if a.flags & IFA_F_TEMPORARY != 0 {
-            temporary = temporary.or(Some(a.addr));
+
+        let is_perm = a.flags & IFA_F_PERMANENT != 0;
+        let is_temp = a.flags & IFA_F_TEMPORARY != 0;
+
+        let tier = if is_perm {
+            0
+        } else if !is_temp {
+            1
         } else {
-            fallback = fallback.or(Some(a.addr));
+            2
+        };
+
+        if Some(a.addr) == current {
+            current_tier = Some(tier);
+        }
+
+        match tier {
+            0 => best_perm = Some(best_perm.map_or(a.addr, |b: [u8; 16]| b.min(a.addr))),
+            1 => best_dyn = Some(best_dyn.map_or(a.addr, |b: [u8; 16]| b.min(a.addr))),
+            _ => best_temp = Some(best_temp.map_or(a.addr, |b: [u8; 16]| b.min(a.addr))),
         }
     }
-    fallback.or(temporary)
+
+    if let Some(c_tier) = current_tier {
+        let highest_available = if best_perm.is_some() {
+            0
+        } else if best_dyn.is_some() {
+            1
+        } else if best_temp.is_some() {
+            2
+        } else {
+            3
+        };
+
+        if c_tier <= highest_available {
+            return current;
+        }
+    }
+
+    best_perm.or(best_dyn).or(best_temp)
 }
 
 /// Global addresses of one interface.
@@ -188,11 +255,15 @@ pub(crate) struct IfaceAddrs {
 }
 
 /// Global addresses of an interface, from one rtnetlink dump.
-pub fn get_iface_addrs(ifindex: u32) -> Result<IfaceAddrs, NetlinkError> {
+pub fn get_iface_addrs(
+    ifindex: u32,
+    cur_v4: Option<[u8; 4]>,
+    cur_v6: Option<[u8; 16]>,
+) -> Result<IfaceAddrs, NetlinkError> {
     let addrs = dump_iface_addrs(ifindex, 0)?;
     Ok(IfaceAddrs {
-        v4: pick_global_v4(&addrs),
-        v6: pick_gua_v6(&addrs),
+        v4: pick_global_v4(&addrs, cur_v4),
+        v6: pick_gua_v6(&addrs, cur_v6),
     })
 }
 
@@ -288,12 +359,12 @@ mod tests {
 
     #[test]
     fn test_pick_gua_v6_skips_non_global() {
-        assert_eq!(pick_gua_v6(&[addr(2, 10, 0, 0)]), None);
+        assert_eq!(pick_gua_v6(&[addr(2, 10, 0, 0)], None), None);
         let addrs = [
             addr(10, 0xfd, IFA_F_PERMANENT, 0),
             addr(10, 0xfe, IFA_F_PERMANENT, 0x20),
         ];
-        assert_eq!(pick_gua_v6(&addrs), None);
+        assert_eq!(pick_gua_v6(&addrs, None), None);
     }
 
     #[test]
@@ -305,20 +376,57 @@ mod tests {
             addr(10, 0x27, IFA_F_DEPRECATED, 0),
             addr(10, 0x28, IFA_F_PERMANENT, 0),
         ];
-        let picked = pick_gua_v6(&addrs).expect("a GUA");
+        let picked = pick_gua_v6(&addrs, None).expect("a GUA");
         assert_eq!(picked[0], 0x28);
 
         let only_permanent = [addr(10, 0x24, 0x00, 0), addr(10, 0x28, IFA_F_PERMANENT, 0)];
-        assert_eq!(pick_gua_v6(&only_permanent).unwrap()[0], 0x28);
+        assert_eq!(pick_gua_v6(&only_permanent, None).unwrap()[0], 0x28);
     }
 
     #[test]
     fn test_pick_gua_v6_falls_back_to_temporary() {
         let only_temporary = [addr(10, 0x24, IFA_F_TEMPORARY, 0)];
-        assert_eq!(pick_gua_v6(&only_temporary).unwrap()[0], 0x24);
+        assert_eq!(pick_gua_v6(&only_temporary, None).unwrap()[0], 0x24);
 
         let mixed = [addr(10, 0x25, IFA_F_TEMPORARY, 0), addr(10, 0x26, 0, 0)];
-        assert_eq!(pick_gua_v6(&mixed).unwrap()[0], 0x26);
+        assert_eq!(pick_gua_v6(&mixed, None).unwrap()[0], 0x26);
+    }
+
+    #[test]
+    fn test_pick_gua_v6_retains_current_and_prevents_flapping() {
+        let mut a1 = [0u8; 16];
+        a1[0] = 0x24;
+        a1[15] = 1;
+        let mut a2 = [0u8; 16];
+        a2[0] = 0x24;
+        a2[15] = 2;
+
+        let list_order_1 = [
+            IfaceAddr { family: 10, flags: 0, scope: 0, addr: a1 },
+            IfaceAddr { family: 10, flags: 0, scope: 0, addr: a2 },
+        ];
+        let list_order_2 = [
+            IfaceAddr { family: 10, flags: 0, scope: 0, addr: a2 },
+            IfaceAddr { family: 10, flags: 0, scope: 0, addr: a1 },
+        ];
+
+        // Deterministic initial choice.
+        assert_eq!(pick_gua_v6(&list_order_1, None), Some(a1));
+        assert_eq!(pick_gua_v6(&list_order_2, None), Some(a1));
+
+        // When a2 is currently selected, it should be retained despite dump order changes.
+        assert_eq!(pick_gua_v6(&list_order_1, Some(a2)), Some(a2));
+        assert_eq!(pick_gua_v6(&list_order_2, Some(a2)), Some(a2));
+
+        // Upgrades to permanent if one is added.
+        let mut perm = [0u8; 16];
+        perm[0] = 0x24;
+        perm[15] = 9;
+        let with_perm = [
+            IfaceAddr { family: 10, flags: 0, scope: 0, addr: a2 },
+            IfaceAddr { family: 10, flags: IFA_F_PERMANENT, scope: 0, addr: perm },
+        ];
+        assert_eq!(pick_gua_v6(&with_perm, Some(a2)), Some(perm));
     }
 
     #[test]
@@ -328,9 +436,12 @@ mod tests {
             addr(2, 10, 0, 0),
             addr(2, 100, 0, 0),
         ];
-        let picked = pick_global_v4(&addrs).expect("an IPv4 address");
+        let picked = pick_global_v4(&addrs, None).expect("an IPv4 address");
         assert_eq!(picked, [10, 0, 0, 0]);
-        assert_eq!(pick_global_v4(&[addr(2, 10, 0, 0x20)]), None);
+        assert_eq!(pick_global_v4(&[addr(2, 10, 0, 0x20)], None), None);
+
+        let cur = [100, 0, 0, 0];
+        assert_eq!(pick_global_v4(&addrs, Some(cur)), Some(cur));
     }
 
     #[test]

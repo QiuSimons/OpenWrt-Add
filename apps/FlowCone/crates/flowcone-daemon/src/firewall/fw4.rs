@@ -57,10 +57,47 @@ pub(crate) fn has_table_inet_fw4() -> bool {
         .unwrap_or(false)
 }
 
-/// Detect IPv6 masquerade in ip6 or inet tables.
-pub(crate) fn parse_has_ipv6_masq(nft_output: &str) -> bool {
-    let mut family = "";
+/// Detect IPv6 masquerade in ip6 or inet tables for the given WAN interface.
+pub(crate) fn parse_has_ipv6_masq(nft_output: &str, wan_iface: &str) -> bool {
     let mut table_name = "";
+    let mut current_chain = "";
+    let mut wan_chains: Vec<String> = vec![
+        "srcnat_wan".to_string(),
+        "srcnat_wan6".to_string(),
+        format!("srcnat_{}", wan_iface),
+    ];
+
+    // First pass: discover chains jumped from the WAN interface.
+    for line in nft_output.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("table ") {
+            if let Some(rest) = trimmed.strip_prefix("table ") {
+                let mut parts = rest.split_whitespace();
+                let _family = parts.next().unwrap_or("");
+                table_name = parts.next().unwrap_or("").trim_end_matches('{').trim();
+            }
+            continue;
+        }
+        if table_name == "flowcone" {
+            continue;
+        }
+        if trimmed.contains(" jump ") {
+            let matches_wan = (trimmed.contains("oifname ") || trimmed.contains("oif "))
+                && (trimmed.contains(&format!("\"{}\"", wan_iface))
+                    || trimmed.contains(&format!(" {} ", wan_iface)));
+            if matches_wan {
+                if let Some(target) = trimmed.split(" jump ").nth(1) {
+                    let target_chain = target.split_whitespace().next().unwrap_or("").trim();
+                    if !target_chain.is_empty() && !wan_chains.iter().any(|c| c == target_chain) {
+                        wan_chains.push(target_chain.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut family = "";
+    table_name = "";
     for line in nft_output.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("table ") {
@@ -69,9 +106,21 @@ pub(crate) fn parse_has_ipv6_masq(nft_output: &str) -> bool {
                 family = parts.next().unwrap_or("");
                 table_name = parts.next().unwrap_or("").trim_end_matches('{').trim();
             }
+            current_chain = "";
             continue;
         }
         if table_name == "flowcone" {
+            continue;
+        }
+        if trimmed.starts_with("chain ") {
+            if let Some(rest) = trimmed.strip_prefix("chain ") {
+                current_chain = rest
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .trim_end_matches('{')
+                    .trim();
+            }
             continue;
         }
         if !trimmed.contains("masquerade") {
@@ -81,6 +130,27 @@ pub(crate) fn parse_has_ipv6_masq(nft_output: &str) -> bool {
         if trimmed.contains("comment \"flowcone") || trimmed.contains("flowcone-nat6-partial") {
             continue;
         }
+
+        // Interface filter: if the rule explicitly specifies an output interface, it must match wan_iface.
+        let has_oif = trimmed.contains("oifname ") || trimmed.contains("oif ");
+        if has_oif {
+            let matches_wan = trimmed.contains(&format!("\"{}\"", wan_iface))
+                || trimmed.contains(&format!(" {} ", wan_iface));
+            if !matches_wan {
+                continue;
+            }
+        } else {
+            // Rule without interface constraint: must be in a chain that targets WAN, or a base postrouting chain.
+            let is_base_postrouting = current_chain == "srcnat" || current_chain == "postrouting";
+            let is_wan_chain = wan_chains.iter().any(|c| c == current_chain);
+            if current_chain.starts_with("srcnat_") && !is_wan_chain {
+                continue;
+            }
+            if !is_base_postrouting && !is_wan_chain {
+                continue;
+            }
+        }
+
         let has_v4_explicit = family == "ip"
             || trimmed.contains("nfproto ipv4")
             || trimmed.contains("ip saddr")
@@ -100,11 +170,11 @@ pub(crate) fn parse_has_ipv6_masq(nft_output: &str) -> bool {
     false
 }
 
-pub(crate) fn is_ipv6_masq_enabled() -> bool {
+pub(crate) fn is_ipv6_masq_enabled(wan_iface: &str) -> bool {
     if let Ok(out) = Command::new("nft").args(["-t", "list", "ruleset"]).output()
         && out.status.success()
     {
-        return parse_has_ipv6_masq(&String::from_utf8_lossy(&out.stdout));
+        return parse_has_ipv6_masq(&String::from_utf8_lossy(&out.stdout), wan_iface);
     }
     let Ok(out) = Command::new("nft").args(["list", "ruleset"]).output() else {
         return false;
@@ -112,7 +182,7 @@ pub(crate) fn is_ipv6_masq_enabled() -> bool {
     if !out.status.success() {
         return false;
     }
-    parse_has_ipv6_masq(&String::from_utf8_lossy(&out.stdout))
+    parse_has_ipv6_masq(&String::from_utf8_lossy(&out.stdout), wan_iface)
 }
 
 pub(crate) fn write_atomic_if_changed(path: &str, content: &str) -> bool {
@@ -514,7 +584,7 @@ table ip6 nat {
                 oif \"eth1\" meta l4proto != udp masquerade comment \"flowcone-nat6-partial\"
         }
 }";
-        assert!(!parse_has_ipv6_masq(partial));
+        assert!(!parse_has_ipv6_masq(partial, "eth1"));
 
         let flowcone_own = "\
 table inet fw4 {
@@ -522,7 +592,7 @@ table inet fw4 {
                 meta nfproto ipv6 ip6 saddr fc00::/7 oifname \"wan\" counter masquerade comment \"flowcone\"
         }
 }";
-        assert!(!parse_has_ipv6_masq(flowcone_own));
+        assert!(!parse_has_ipv6_masq(flowcone_own, "eth1"));
 
         let flowcone_table = "\
 table ip6 flowcone {
@@ -530,7 +600,7 @@ table ip6 flowcone {
                 meta nfproto ipv6 ip6 saddr != fe80::/10 oifname \"wan\" counter masquerade comment \"flowcone\"
         }
 }";
-        assert!(!parse_has_ipv6_masq(flowcone_table));
+        assert!(!parse_has_ipv6_masq(flowcone_table, "eth1"));
     }
 
     #[test]
@@ -541,7 +611,7 @@ table inet fw4 {
                 meta nfproto ipv4 masquerade comment \"!fw4: Masquerade IPv4 wan traffic\"
         }
 }";
-        assert!(!parse_has_ipv6_masq(v4_only));
+        assert!(!parse_has_ipv6_masq(v4_only, "eth1"));
 
         let v6_masq = "\
 table inet fw4 {
@@ -550,7 +620,7 @@ table inet fw4 {
                 meta nfproto ipv6 masquerade comment \"!fw4: Masquerade IPv6 wan traffic\"
         }
 }";
-        assert!(parse_has_ipv6_masq(v6_masq));
+        assert!(parse_has_ipv6_masq(v6_masq, "eth1"));
 
         let ip6_nat = "\
 table ip6 nat {
@@ -559,7 +629,7 @@ table ip6 nat {
                 oif \"eth1\" masquerade
         }
 }";
-        assert!(parse_has_ipv6_masq(ip6_nat));
+        assert!(parse_has_ipv6_masq(ip6_nat, "eth1"));
 
         let inet_unqualified_masq = "\
 table inet nat {
@@ -568,7 +638,22 @@ table inet nat {
                 oif \"eth0\" masquerade
         }
 }";
-        assert!(parse_has_ipv6_masq(inet_unqualified_masq));
+        assert!(parse_has_ipv6_masq(inet_unqualified_masq, "eth0"));
+        assert!(!parse_has_ipv6_masq(inet_unqualified_masq, "eth1"));
+
+        // Masquerade on another interface (e.g. ZeroTier) must not trigger WAN v6 masq
+        let other_iface_masq = "\
+table inet fw4 {
+        chain srcnat {
+                type nat hook postrouting priority srcnat; policy accept;
+                oifname \"ztrf2wagja\" counter packets 0 bytes 0 masquerade comment \"!fw4: Masquerade ZeroTier traffic ztrf2wagja\"
+                oifname \"eth1\" jump srcnat_wan
+        }
+        chain srcnat_wan {
+                meta nfproto ipv4 masquerade comment \"!fw4: Masquerade IPv4 wan traffic\"
+        }
+}";
+        assert!(!parse_has_ipv6_masq(other_iface_masq, "eth1"));
     }
 
     #[test]

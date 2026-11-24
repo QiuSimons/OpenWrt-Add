@@ -752,25 +752,39 @@ impl SessionManager {
             return;
         }
         if enable_v4 {
-            let mut pool = FamilyPortPool {
-                min_port: self.min_port,
-                max_port: self.max_port,
-                bitmap_even: &mut self.bitmap_even4,
-                bitmap_odd: &mut self.bitmap_odd4,
-                reserved_ports: &self.reserved4_ports,
-            };
-            Self::init_family_pool(&mut pool);
+            self.init_family4_pool();
         }
         if enable_v6 {
-            let mut pool = FamilyPortPool {
-                min_port: self.min_port,
-                max_port: self.max_port,
-                bitmap_even: &mut self.bitmap_even6,
-                bitmap_odd: &mut self.bitmap_odd6,
-                reserved_ports: &self.reserved6_ports,
-            };
-            Self::init_family_pool(&mut pool);
+            self.init_family6_pool();
         }
+    }
+
+    pub fn init_family4_pool(&mut self) {
+        if !self.pool_enable_v4 || !self.pool_ready() {
+            return;
+        }
+        let mut pool = FamilyPortPool {
+            min_port: self.min_port,
+            max_port: self.max_port,
+            bitmap_even: &mut self.bitmap_even4,
+            bitmap_odd: &mut self.bitmap_odd4,
+            reserved_ports: &self.reserved4_ports,
+        };
+        Self::init_family_pool(&mut pool);
+    }
+
+    pub fn init_family6_pool(&mut self) {
+        if !self.pool_enable_v6 || !self.pool_ready() {
+            return;
+        }
+        let mut pool = FamilyPortPool {
+            min_port: self.min_port,
+            max_port: self.max_port,
+            bitmap_even: &mut self.bitmap_even6,
+            bitmap_odd: &mut self.bitmap_odd6,
+            reserved_ports: &self.reserved6_ports,
+        };
+        Self::init_family_pool(&mut pool);
     }
 
     fn release_family_port(port: u16, pool: &mut FamilyPortPool<'_>) {
@@ -947,7 +961,7 @@ impl SessionManager {
         clear_map(&mut self.frag_out4);
         self.heap4.clear();
         while self.events4.next().is_some() {}
-        self.init_port_pool(true, false);
+        self.init_family4_pool();
     }
 
     pub fn clear_v6_mappings(&mut self) {
@@ -959,7 +973,7 @@ impl SessionManager {
         clear_map(&mut self.frag_out6);
         self.heap6.clear();
         while self.events6.next().is_some() {}
-        self.init_port_pool(false, true);
+        self.init_family6_pool();
     }
 
     #[inline]

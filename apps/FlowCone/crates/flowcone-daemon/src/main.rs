@@ -235,8 +235,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     session_mgr.configure_port_pool(config.min_port, config.max_port);
-    session_mgr.init_port_pool(config.enable_v4, config.enable_v6);
     session_mgr.reserve_local_ports();
+    session_mgr.init_port_pool(config.enable_v4, config.enable_v6);
 
     let initial_l2 = netlink::get_iface_l2_len(&config.iface);
     match initial_l2 {
@@ -500,7 +500,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             applied.present = present;
 
-            let iface_addrs = netlink::get_iface_addrs(cur_ifindex);
+            let cur_v4 = if applied.ip4 != 0 {
+                Some(applied.ip4.to_ne_bytes())
+            } else {
+                None
+            };
+            let cur_v6 = if applied.ip6 != [0u8; 16] {
+                Some(applied.ip6)
+            } else {
+                None
+            };
+            let iface_addrs = netlink::get_iface_addrs(cur_ifindex, cur_v4, cur_v6);
             if config.enable_v4 {
                 match iface_addrs.as_ref().map(|a| a.v4) {
                     Ok(Some(ip4_bytes)) => {
@@ -578,7 +588,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if config_dirty {
-                let is_v6_masq = firewall::is_ipv6_masq_enabled();
+                let is_v6_masq = firewall::is_ipv6_masq_enabled(&config.iface);
                 let effective_v6 = if applied.l2_known {
                     resolve_effective_v6(config.enable_v6, resolved_ip6, is_v6_masq)
                 } else {
