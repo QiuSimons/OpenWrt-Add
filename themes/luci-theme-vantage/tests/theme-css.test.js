@@ -341,6 +341,8 @@ test('port status: boxes packed, hidden tooltips add no height, port cards may o
 	/* LuCI's inline grid spreads the boxes over columns as wide as the card */
 	const pack = themeRules.find((r) => r.sel.some((s) => s === 'div:has(> .ifacebox > .ifacebox-head.cbi-tooltip-container)'));
 	assert.ok(pack && /grid-template-columns:[^;]*!important/.test(pack.body));
+	/* #168: a counter stays on one line with its unit (ImmortalWrt's two decimals at a large minimum font size) */
+	assert.match(bodyOf((s) => s === '.ifacebox-head.cbi-tooltip-container + .ifacebox-body > .cbi-tooltip-container', /^$/), /white-space:\s*nowrap/);
 	/* a hidden tooltip parked below its box made the card scroll at 721-1180 px */
 	const parked = themeRules.find((r) => r.sel.includes('.cbi-tooltip-container > .cbi-tooltip'));
 	assert.match(parked.body, /top:\s*0\b/);

@@ -476,7 +476,23 @@ text around it so it looks the same size.
   that holds the route ordinary traffic takes is a full tunnel, drawn as a
   pipe on the line it leaves by, and is not a line of its own. PPPoE counts
   on the port under the session, since flow offloading takes downloads past
-  the session's own counters; lines sharing a port keep their own.
+  the session's own counters; lines sharing a port keep their own. A
+  line counted on a device that also carries VLANs of this device's own
+  networks (an untagged WAN on `eth0` beside `eth0.3`: a switch's CPU
+  port, or one port for everything) has those VLANs' rates taken off its
+  own (#166): the kernel counts their traffic on the device too, so each
+  direction read download plus upload. Only a VLAN with an interface up
+  on it that has a protocol, itself or through its bridge, and never
+  for a line on a bridge (an access point's uplink, counted on the
+  bridge's port): what that port carries for the access point's other
+  networks is bridged on and counted once. The result reads a little high (the kernel counts a few bytes
+  less a packet on the VLAN's device), and the counters since boot in
+  the line's details stay the device's. Known limit: with software flow
+  offloading the kernel does not count on a VLAN's device what an
+  offloaded connection brings in on it, only what it sends out there
+  (measured on 24.10's kernel, a bridge over the VLAN's device): the
+  line's upload is right, and its download still includes the upload.
+  Hardware offloading was not measured.
 - **WireGuard tile** (#129): where the device has a WireGuard tunnel, a
   tile lists each tunnel (interface, UDP listen port, number of peers)
   with its peers: the peer's description from the configuration, else
@@ -865,7 +881,21 @@ text around it so it looks the same size.
   and a VPN daemon may add its own: the network path needs the kernel's
   answer to tell whether a full-tunnel VPN or its line carries ordinary
   traffic. Where `network.wireless status` answers with
-  no radios at all, `wireless` reads the configuration too.
+  no radios at all, `wireless` reads the configuration too. Either way
+  an interface in AP mode also names the interfaces hostapd made for its
+  VLANs, where a password or RADIUS gives a station its VLAN (`vlans`,
+  #164): the AP_VLAN interfaces with its address on its wiphy, 32 in
+  all, from one read-only NL80211 dump of the wireless interfaces
+  (NL80211_CMD_GET_INTERFACE, no message); not a WDS station's
+  interface, and none where two networks of a wiphy share an address.
+  netifd lists only the ones it made itself, and iwinfo lists the
+  stations on one under it alone: the view asks each for its station
+  list every poll (1.2 ms each on a four-core access point, nothing
+  else of it) and counts those stations as the network's clients, with
+  the interface in their details. Their traffic is added to the
+  network's and the radio's from the stations' own counters, since
+  such an interface's counters are netifd's to give only where it made
+  the interface.
   `survey({device})` returns the channel survey of one Wi-Fi interface,
   for the noise floor: `{ mhz, noise }` for each channel the driver gives
   a noise value (dBm, a signed byte), at most 256, from one read-only
@@ -1187,10 +1217,12 @@ dashboard package itself stays read-only.
   the service first).
 - **What an access point tells.** Dropbear runs the report command
   whatever the router asks for (the key's forced command): the
-  hostname, model, uptime and LAN MAC; its access-point interfaces
+  hostname, model, uptime and LAN MAC, with every other address of its
+  own (#167, at most 64); its access-point interfaces
   (SSID, BSSID, frequency, channel); their stations (MAC, signal, link
   rates, byte counts, time connected; iwinfo, as the dashboard reads its
-  own); and the wired hosts behind its ports other than the ones towards
+  own), those on the interface of a network's VLAN under that network
+  (#164: the one with the interface's BSSID); and the wired hosts behind its ports other than the ones towards
   its gateway or the router (none when those are not found), with the
   ports' speed and byte counts: the kernel's, and on a DSA switch its
   chip's own beside them (#156), as the access point's own
@@ -1214,12 +1246,25 @@ dashboard package itself stays read-only.
   entry of this device names neither), and a
   station on this device's own Wi-Fi, the gateway and this device's own
   addresses stay as they are. One case moves an entry: a host this
-  device hears on the very port it hears the access point's own MAC on
+  device hears on the wire it hears the access point's own MAC on
   (a MAC no other paired access point claims, neither the gateway's nor
   one of this device's) and that the access point lists as its station
   is shown as that access point's Wi-Fi client, not as a wired host of
-  this device. A host the access point lists as wired behind it gets a
-  note saying so. Where the access point has it alone on that port (its
+  this device. The wire is that port, or another VLAN of the port's
+  device (`eth0.3` beside `eth0.1`): where each VLAN is a device of its
+  own here, an access point's networks arrive on several (since 1.2.1;
+  before, the very port only). Not across to a port a line to the
+  internet leaves by, or from one: a bridged WAN on `eth0.2` is
+  upstream, and no access point on the LAN's VLAN has its hosts. A host the access point lists as wired behind it gets a
+  note saying so, and one it lists as an address of its own (the bridge
+  of another of its networks, #167) is that access point once more:
+  left out of the wired hosts and named on the access point's own entry
+  there (a tag with their number in its row, the addresses in its
+  details), so that none is taken unseen. Not the MAC of a paired access
+  point, and not an address another of them reports too, as its own,
+  its station or its wired host: a contested claim takes nothing. So
+  the bridges of an access point plugged into another paired one, which
+  that one lists as its wired hosts, stay hosts. Where the access point has it alone on that port (its
   report counts one wired host there), the port's traffic the access
   point reports is the host's in the Clients list (Live, its sort) and
   in its details, said to be counted by the access point on its port;

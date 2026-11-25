@@ -33,7 +33,7 @@ for (let c in cases) {
 			if (type(NET) != 'string' || writefile(NET + '/' + br + '/brforward', b64dec(data)) == null)
 				die(sprintf('harness: cannot write brforward for %s', br));
 
-	global.STUB = { sections: json(sprintf('%J', orig)), seq: 0, committed: false, reverted: false, fail_commit: !!c.fail_commit, ubus: c.ubus ?? {}, wireless: c.wireless_uci, network: c.network_uci ?? 'no load', fdb: c.fdb, lookup: exists(c, 'lookup') ? c.lookup : 'no lookup', survey: exists(c, 'survey') ? c.survey : 'no survey' };
+	global.STUB = { sections: json(sprintf('%J', orig)), seq: 0, committed: false, reverted: false, fail_commit: !!c.fail_commit, ubus: c.ubus ?? {}, wireless: c.wireless_uci, network: c.network_uci ?? 'no load', fdb: c.fdb, lookup: exists(c, 'lookup') ? c.lookup : 'no lookup', survey: exists(c, 'survey') ? c.survey : 'no survey', ifaces: c.ifaces };
 
 	let m = obj[c.method], status = 0, reply = null;
 

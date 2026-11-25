@@ -453,6 +453,53 @@ test('extraUplinks: two lines on DSA ports of one switch keep their own counters
 	assert.deepEqual(model.build({ ifaces: [ LAN, wanIf('wan', 'wan', 10), wanIf('wanb', 'lan4', 20) ], devs: apart }).uplinks.map(x => x.statsDev), [ 'eth0', 'eth1' ]);
 });
 
+test('a line\'s rate leaves out the VLANs of this device\'s own networks on its device (#166)', () => {
+	const s = { rx_bytes: 0, tx_bytes: 0 };
+	const vlan = { type: 'VLAN', devtype: 'vlan', statistics: s };
+	const devs = {
+		eth0: { devtype: 'ethernet', statistics: s }, 'eth0.1': vlan, 'eth0.3': vlan, 'eth0.9': vlan, 'eth1.3': vlan,
+		named: { type: '8021q', devtype: 'vlan', parent: 'eth0', statistics: s },
+		/* no VLAN (a macvlan names a parent too), no counters, and one that is down */
+		mv0: { type: 'macvlan', devtype: 'macvlan', parent: 'eth0', statistics: s }, 'eth0.7': { type: 'VLAN', devtype: 'vlan' }, 'eth0.8': vlan,
+		'br-lan': { type: 'bridge', 'bridge-members': [ 'eth0.1' ], statistics: s }
+	};
+	const net = (name, dev, proto) => ({ interface: name, up: true, proto: proto || 'static', device: dev, l3_device: dev, route: [] });
+	/* an untagged WAN on the device the LAN's VLANs are on: a switch's CPU port */
+	const ifaces = [ LAN, wanIf('wan', 'eth0', 10), net('iot', 'eth0.3'), net('cams', 'named'), net('trunk', 'eth0.9', 'none'), net('other', 'eth1.3'),
+		net('mv', 'mv0'), net('quiet', 'eth0.7'), { ...net('off', 'eth0.8'), up: false } ];
+	const up = model.build({ ifaces, devs }).uplink;
+	assert.deepEqual([ up.statsDev, up.minus.slice().sort() ], [ 'eth0', [ 'eth0.1', 'eth0.3', 'named' ] ],
+		'through its bridge, by its name and by its parent; not an unmanaged one, not another device\'s, no macvlan, none without counters or down');
+	/* every line has its own: a second one on eth1 leaves eth1.3 out */
+	const two = model.build({ ifaces: ifaces.concat([ wanIf('wanb', 'eth1', 20) ]), devs: { ...devs, eth1: { devtype: 'ethernet', statistics: s } } }).uplinks;
+	assert.deepEqual(two.map(x => [ x.iface, x.minus.slice().sort() ]), [ [ 'wan', [ 'eth0.1', 'eth0.3', 'named' ] ], [ 'wanb', [ 'eth1.3' ] ] ]);
+	/* PPPoE on eth0: counted on the device under the session, which carries the LAN's VLANs too */
+	const ppp = model.build({ ifaces: [ LAN, net('iot', 'eth0.3'), { ...wanIf('wan', 'eth0', 10), proto: 'pppoe', l3_device: 'pppoe-wan' } ], devs: { ...devs, 'pppoe-wan': { statistics: s } } }).uplink;
+	assert.deepEqual([ ppp.statsDev, ppp.minus.slice().sort() ], [ 'eth0', [ 'eth0.1', 'eth0.3' ] ]);
+	const rates = { eth0: { rx: 900, tx: 880 }, 'eth0.1': { rx: 50, tx: 600 }, 'eth0.3': { rx: 20, tx: 150 }, named: { rx: 10, tx: 30 } };
+	assert.deepEqual(model.lineRate(up, rates), { rx: 820, tx: 100 });
+	assert.equal(model.lineRate(up, { ...rates, named: undefined }), null, 'none while one of them has no rate');
+	assert.deepEqual(model.lineRate(up, { ...rates, 'eth0.1': { rx: 5000, tx: 5000 } }), { rx: 0, tx: 0 }, 'never below zero');
+	/* nothing to take off: the device's own rate, as before */
+	const plain = model.build({ ifaces: [ LAN, wanIf('wan', 'eth1', 10) ], devs: { ...devs, eth1: { statistics: s } } }).uplink;
+	assert.deepEqual(plain.minus, []);
+	assert.equal(model.lineRate(plain, { eth1: rates.eth0 }), rates.eth0);
+	assert.equal(model.lineRate(plain, {}), null);
+	assert.equal(model.lineRate(null, rates), null);
+	/* an access point's trunk: the VLANs beside its LAN are bridged on to its Wi-Fi and counted once on the port, whether
+	   that network is unmanaged here or has an address of its own */
+	for (const proto of [ 'none', 'static', 'dhcp' ]) {
+		const ap = model.build({ ifaces: [ { ...LAN, route: [ { target: '0.0.0.0', mask: 0, nexthop: '198.51.100.254' } ] }, net('iot', 'br-iot', proto) ], devs: {
+			eth0: { devtype: 'ethernet', carrier: true, statistics: s }, 'eth0.3': vlan,
+			'br-lan': { type: 'bridge', 'bridge-members': [ 'eth0' ], statistics: s }, 'br-iot': { type: 'bridge', 'bridge-members': [ 'eth0.3' ], statistics: s }
+		} }).uplink;
+		assert.deepEqual([ ap.statsDev, ap.minus ], [ 'eth0', [] ], proto);
+	}
+	/* nor a line counted on a bridge itself (several wired ports, the gateway's unknown): its VLANs are the bridge's */
+	const onBridge = model.lineVlans({ statsDev: 'br-lan', dev: 'br-lan', l3dev: 'br-lan' }, { 'br-lan': { type: 'bridge', statistics: s }, 'br-lan.10': vlan }, [ net('ten', 'br-lan.10') ]);
+	assert.deepEqual(onBridge, []);
+});
+
 /* private and shared addresses are built from numbers: the tree holds
    documentation addresses only (check_private_addresses.js) */
 test('lineNat: a router\'s line with a private or a shared address, and nothing else', () => {
@@ -1308,6 +1355,139 @@ test('collector: the report is checked again here: ids, the pairing name, states
 	assert.deepEqual([ a.clients, a.wired, a.rate ], [ 0, 0, null ], 'counted by build(), from what it gives it');
 	for (const x of aps.slice(1, 7)) assert.deepEqual([ x.nodes, x.sta, x.hosts, x.clients, x.wired ], [ [], [], [], 0, 0 ], x.id + ': not reporting, nothing of its report');
 	assert.equal(aps[2].info.model, 'Example AP', 'an offline one still has what it called itself');
+});
+
+/* #164: a network whose passwords (or RADIUS) give a station its VLAN. hostapd makes an interface for each VLAN,
+   luci.vantage wireless names them, and iwinfo lists the stations on one under it alone */
+test('a network\'s VLAN interfaces: their stations are the network\'s clients, and no wired hosts', () => {
+	const sta = (n, bytes) => ({ mac: '00:00:5E:00:53:0' + n, signal: -50 - n, rx: { rate: 866700, bytes }, tx: { rate: 866700, bytes: bytes * 2 } });
+	const wifi = { radio0: { up: true, config: { band: '5g', channel: '36', htmode: 'HE80' }, interfaces: [
+		{ ifname: 'phy0-ap0', config: { ssid: 'Home', mode: 'ap', network: [ 'lan' ] }, vlans: [ 'wlan0.1', 'vl-iot', 'wlan0.1', 'phy0-ap1', 'bad name', 5 ] },
+		{ ifname: 'phy0-ap1', config: { ssid: 'Guest', mode: 'ap', network: [ 'lan' ] }, vlans: 'wlan0.9' } ] } };
+	assert.deepEqual({ ...model.wifiVlans(wifi) }, { 'phy0-ap0': [ 'wlan0.1', 'vl-iot' ] }, 'names of devices, each once, none a network\'s own interface');
+	assert.deepEqual(Object.keys(model.wifiVlans(null)), []);
+	const many = { radio0: { interfaces: [ { ifname: 'a', vlans: Array.from({ length: 20 }, (_, i) => 'a.' + i) }, { ifname: 'b', vlans: Array.from({ length: 20 }, (_, i) => 'b.' + i) } ] } };
+	assert.deepEqual(Object.values(model.wifiVlans(many)).map(l => l.length), [ 20, 12 ], '32 in all');
+	const m = model.build(router(null, {
+		wifi,
+		ifaces: router(null).ifaces.concat([ { interface: 'iot', up: true, l3_device: 'br-iot', device: 'br-iot', 'ipv4-address': [ { address: '198.51.100.1', mask: 24 } ], route: [] } ]),
+		assoc: { 'phy0-ap0': [ sta(1, 10) ], 'wlan0.1': [ sta(5, 100) ], 'vl-iot': [ sta(6, 1000), { mac: 'junk' } ], 'wlan0.9': [ sta(9, 1) ] },
+		hapd: { 'phy0-ap0': { clients: { '00:00:5e:00:53:05': { he: true, wmm: true } } } },
+		hints: Object.assign({}, router(null).hints, { '00:00:5E:00:53:05': { name: 'camera', ipaddrs: [ '198.51.100.5', '192.0.2.105', '203.0.113.9' ] } }),
+		/* the bridges learn them on those interfaces: a name of hostapd's choosing is no Ethernet port */
+		fdb: router(null).fdb.concat([ { mac: '00:00:5e:00:53:05', port: 'wlan0.1', bridge: 'br-iot', seen: 1 }, { mac: '00:00:5e:00:53:06', port: 'vl-iot', bridge: 'br-iot', seen: 1 },
+			/* and one that is no station (a device behind a client there): heard on a Wi-Fi port, so no wired host either */
+			{ mac: '00:00:5e:00:53:77', port: 'vl-iot', bridge: 'br-iot', seen: 1 } ])
+	}));
+	assert.deepEqual(m.clients.map(c => [ c.mac, c.ssid, c.ifname, c.vlanIf ]), [
+		[ '00:00:5e:00:53:01', 'Home', 'phy0-ap0', null ], [ '00:00:5e:00:53:05', 'Home', 'phy0-ap0', 'wlan0.1' ], [ '00:00:5e:00:53:06', 'Home', 'phy0-ap0', 'vl-iot' ]
+	], 'under its network; one named for a network that does not list it is nobody\'s');
+	const cam = m.clients[1];
+	assert.deepEqual([ cam.name, cam.ips, cam.caps.he, cam.wmm, cam.rxBytes, cam.txBytes, cam.signal ], [ 'camera', [ '198.51.100.5', '192.0.2.105' ], true, true, 100, 200, -55 ],
+		'an address on any network of this device, what hostapd knows of it, its own counters');
+	assert.deepEqual(m.ssids.map(x => [ x.ifname, x.vlans, x.clients ]), [ [ 'phy0-ap0', [ 'wlan0.1', 'vl-iot' ], 3 ], [ 'phy0-ap1', [], 0 ] ]);
+	assert.deepEqual([ m.radios[0].clients, m.radios[0].ifnames ], [ 3, [ 'phy0-ap0', 'phy0-ap1' ] ], 'counted on the radio; its interfaces are the networks\' own');
+	assert.deepEqual(m.wiredHosts.map(h => h.mac).sort(), [ HALL_MAC, '00:00:5e:00:53:31', '00:00:5e:00:53:32' ].sort(), 'and none of them a wired host');
+	/* without the plugin's list (1.2.0's, a driver cfg80211 does not see) nothing changes: a name of hostapd's choosing
+	   is an Ethernet port again */
+	const plain = model.build(router(null, { assoc: { 'phy0-ap0': [ sta(1, 10) ], 'wlan0.1': [ sta(5, 100) ] }, fdb: router(null).fdb.concat([ { mac: '00:00:5e:00:53:77', port: 'vl-iot', bridge: 'br-lan', seen: 1 } ]) }));
+	assert.deepEqual(plain.clients.map(c => [ c.mac, c.vlanIf ]), [ [ '00:00:5e:00:53:01', null ] ]);
+	assert.ok(plain.wiredHosts.some(h => h.mac === '00:00:5e:00:53:77'));
+});
+
+/* #167, #164: a router whose VLANs are devices of their own (eth0.1, eth0.3: a switch's CPU port), and an access
+   point that bridges each to a network of its own. The router hears the access point on eth0.1 and its IoT
+   bridge, with the stations on it, on eth0.3 */
+test('paired access points: the wire is the port or another VLAN of its device; an address the access point calls its own is no host', () => {
+	const IOT_BR = '02:00:5e:10:00:03', FAR = '02:00:5e:10:00:04', STA = '00:00:5e:00:53:21', OTHER = '00:00:5e:00:53:33';
+	const vlan = { type: 'VLAN', devtype: 'vlan', carrier: true };
+	const build = (rep, fdb, more) => model.build(router({ aps: [ ap(AP1, 'ap-hall', rep) ] }, Object.assign({}, more, {
+		ifaces: router(null).ifaces.concat([ { interface: 'iot', up: true, l3_device: 'br-iot', device: 'br-iot', 'ipv4-address': [ { address: '198.51.100.1', mask: 24 } ], route: [] } ]),
+		devs: Object.assign({}, router(null).devs, {
+			'br-lan': { devtype: 'bridge', 'bridge-members': [ 'eth0.1', 'lan2', 'phy0-ap0' ], macaddr: '00:00:5e:00:53:f0' },
+			'br-iot': { devtype: 'bridge', 'bridge-members': [ 'eth0.3' ], macaddr: '00:00:5e:00:53:f0' },
+			eth0: { devtype: 'ethernet', carrier: true }, 'eth0.1': vlan, 'eth0.3': vlan
+		}),
+		fdb: [
+			{ mac: HALL_MAC, port: 'eth0.1', bridge: 'br-lan', seen: 1 },
+			{ mac: IOT_BR, port: 'eth0.3', bridge: 'br-iot', seen: 1 },
+			{ mac: STA, port: 'eth0.3', bridge: 'br-iot', seen: 1 },
+			{ mac: OTHER, port: 'eth0.3', bridge: 'br-iot', seen: 1 },
+			{ mac: FAR, port: 'lan2', bridge: 'br-lan', seen: 1 }
+		].concat(fdb || [])
+	})));
+	const listed = m => m.wiredHosts.map(h => [ h.mac, h.port, h.peers ]);
+	/* a report from before 1.2.1 names one address: its bridges are hosts, as they were */
+	const before = build(report({ wired: [], stations: [] }));
+	assert.deepEqual(listed(before), [ [ HALL_MAC, 'eth0.1', 1 ], [ IOT_BR, 'eth0.3', 3 ], [ STA, 'eth0.3', 3 ], [ OTHER, 'eth0.3', 3 ], [ FAR, 'lan2', 1 ] ]);
+	const m = build(report({ wired: [], macs: [ HALL_MAC, IOT_BR, FAR, '00:00:5e:00:53:f0', GW_MAC ] }));
+	assert.deepEqual(listed(m), [ [ HALL_MAC, 'eth0.1', 1 ], [ OTHER, 'eth0.3', 1 ], [ FAR, 'lan2', 1 ] ],
+		'its bridge on another VLAN of the wire is gone, and so is its station there; an address heard on another port stays');
+	const sta = m.clients.filter(c => c.mac === STA)[0];
+	assert.deepEqual([ sta.ap.name, sta.ap.node ], [ 'ap-hall', 'phy1-ap0' ], 'the station is the access point\'s');
+	assert.deepEqual(m.wiredHosts.filter(h => h.mac === HALL_MAC).length, 1, 'and the access point itself stays, once');
+	/* none is taken unseen: what is left out is named on the access point's own entry */
+	assert.deepEqual(m.wiredHosts.filter(h => h.mac === HALL_MAC)[0].own, { id: AP1, name: 'ap-hall', macs: [ '02:00:5E:10:00:03' ] });
+	assert.ok(m.wiredHosts.every(h => h.mac === HALL_MAC || !h.own) && before.wiredHosts.every(h => !h.own));
+	/* A second access point on the same wire. Its own MAC is no one else's to claim; nor is an address that it reports
+	   too, as its own, its station or its wired host: a contested claim takes nothing */
+	const DEN_MAC = '02:00:5e:10:00:09', den = (rep) => ap(AP2, 'ap-den', report(Object.assign({ mac: DEN_MAC, wired: [], stations: [] }, rep)));
+	const both = (hallMacs, denRep) => model.build(router({ aps: [ ap(AP1, 'ap-hall', report({ wired: [], stations: [], macs: hallMacs })), den(denRep) ] }, {
+		devs: Object.assign({}, router(null).devs, { 'br-iot': { devtype: 'bridge', 'bridge-members': [ 'eth0.3' ] }, 'br-lan': { devtype: 'bridge', 'bridge-members': [ 'eth0.1', 'lan2', 'phy0-ap0' ] },
+			eth0: { devtype: 'ethernet', carrier: true }, 'eth0.1': vlan, 'eth0.3': vlan }),
+		fdb: [ { mac: HALL_MAC, port: 'eth0.1', bridge: 'br-lan', seen: 1 }, { mac: DEN_MAC, port: 'eth0.1', bridge: 'br-lan', seen: 1 },
+			{ mac: IOT_BR, port: 'eth0.3', bridge: 'br-iot', seen: 1 }, { mac: OTHER, port: 'eth0.3', bridge: 'br-iot', seen: 1 } ]
+	})).wiredHosts.map(h => h.mac);
+	assert.deepEqual(both([ IOT_BR, OTHER ], {}), [ HALL_MAC, DEN_MAC ], 'the control: uncontested, both are its own');
+	assert.deepEqual(both([ DEN_MAC, IOT_BR ], {}), [ HALL_MAC, DEN_MAC, OTHER ], 'another access point\'s MAC stays (and what it did not claim)');
+	assert.deepEqual(both([ IOT_BR, OTHER ], { macs: [ OTHER ] }), [ HALL_MAC, DEN_MAC, OTHER ], 'two call it their own: it stays');
+	assert.deepEqual(both([ IOT_BR, OTHER ], { wired: [ { mac: OTHER, port: 'lan2', speed: 100, rx: null, tx: null } ] }), [ HALL_MAC, DEN_MAC, OTHER ], 'the other\'s wired host stays');
+	assert.deepEqual(both([ IOT_BR, OTHER ], { stations: [ { mac: IOT_BR, ifname: 'phy1-ap0', signal: -60 } ] }), [ HALL_MAC, DEN_MAC ], 'the other\'s station is that station, as before');
+	/* Pre-release review of 1.2.1. A name given to one of those addresses while it was listed as a device: it is there,
+	   on the access point's entry, and not among the named devices that are not connected */
+	const named = aliases => build(report({ wired: [], stations: [], macs: [ HALL_MAC, IOT_BR ] }), null, { aliases });
+	const withName = named({ [IOT_BR]: { name: 'Camera', sid: 'cfg01' }, '00:00:5e:00:53:99': { name: 'Tablet', sid: 'cfg02' } });
+	assert.deepEqual(withName.offline.map(c => c.name), [ 'Tablet' ], 'only the one that is nowhere');
+	assert.ok(withName.wiredHosts.every(h => h.mac !== IOT_BR));
+	/* An access point that is itself another one's station (a wireless link): its entry is that station, no wired host,
+	   so there is nothing here to name its addresses on, and they stay listed */
+	const linked = model.build(router({ aps: [ ap(AP1, 'ap-hall', report({ wired: [], stations: [], macs: [ HALL_MAC, IOT_BR ] })),
+		den({ stations: [ { mac: HALL_MAC, ifname: 'phy1-ap0', signal: -60 } ] }) ] }, {
+		devs: Object.assign({}, router(null).devs, { 'br-iot': { devtype: 'bridge', 'bridge-members': [ 'eth0.3' ] }, 'br-lan': { devtype: 'bridge', 'bridge-members': [ 'eth0.1', 'lan2', 'phy0-ap0' ] },
+			eth0: { devtype: 'ethernet', carrier: true }, 'eth0.1': vlan, 'eth0.3': vlan }),
+		fdb: [ { mac: HALL_MAC, port: 'eth0.1', bridge: 'br-lan', seen: 1 }, { mac: DEN_MAC, port: 'eth0.1', bridge: 'br-lan', seen: 1 }, { mac: IOT_BR, port: 'eth0.3', bridge: 'br-iot', seen: 1 } ]
+	}));
+	assert.deepEqual(linked.clients.filter(c => c.mac === HALL_MAC).map(c => c.ap.name), [ 'ap-den' ], 'the control: it is ap-den\'s station');
+	assert.deepEqual(linked.wiredHosts.map(h => [ h.mac, !!h.own ]), [ [ DEN_MAC, false ], [ IOT_BR, false ] ], 'its bridge is not taken unseen');
+	/* an address it reports as its station and as its own: that station, once, and on no list of its own addresses */
+	const twice = build(report({ wired: [], macs: [ HALL_MAC, STA, IOT_BR ] }));
+	assert.equal(twice.clients.filter(c => c.mac === STA).length, 1);
+	assert.deepEqual(twice.wiredHosts.filter(h => h.mac === HALL_MAC)[0].own.macs, [ '02:00:5E:10:00:03' ]);
+	/* The wire stops short of a line's own port. A bridged WAN on eth0.2 beside the LAN's eth0.1: what is heard there is
+	   upstream, and an access point on the LAN has none of it, as its own address or as its station */
+	const MODEM = '00:00:5e:00:53:a7';
+	const upstream = rep => model.build(router({ aps: [ ap(AP1, 'ap-hall', report(Object.assign({ wired: [], stations: [] }, rep))) ] }, {
+		ifaces: [ router(null).ifaces[0], { interface: 'wan', up: true, l3_device: 'br-wan', device: 'br-wan', 'ipv4-address': [ { address: '203.0.113.2', mask: 24 } ],
+			route: [ { target: '0.0.0.0', mask: 0, nexthop: '203.0.113.1' } ] } ],
+		devs: Object.assign({}, router(null).devs, { 'br-lan': { devtype: 'bridge', 'bridge-members': [ 'eth0.1', 'lan2', 'phy0-ap0' ] },
+			'br-wan': { type: 'bridge', devtype: 'bridge', 'bridge-members': [ 'eth0.2' ] }, eth0: { devtype: 'ethernet', carrier: true }, 'eth0.1': vlan, 'eth0.2': vlan }),
+		fdb: [ { mac: HALL_MAC, port: 'eth0.1', bridge: 'br-lan', seen: 1 }, { mac: MODEM, port: 'eth0.2', bridge: 'br-wan', seen: 1 }, { mac: GW_MAC, port: 'eth0.2', bridge: 'br-wan', seen: 1 } ]
+	}));
+	for (const rep of [ { macs: [ HALL_MAC, MODEM ] }, { stations: [ { mac: MODEM, ifname: 'phy1-ap0', signal: -60 } ] } ]) {
+		const u = upstream(rep);
+		assert.deepEqual([ u.uplink.port, u.wiredHosts.map(h => h.mac).sort(), u.clients.filter(c => c.mac === MODEM).length, u.wiredHosts.some(h => h.own) ],
+			[ 'eth0.2', [ HALL_MAC, MODEM, GW_MAC ].sort(), 0, false ], JSON.stringify(Object.keys(rep)));
+	}
+	/* an address anyone could claim: never one this device has no wire for, the gateway's or its own */
+	const gw = build(report({ wired: [], stations: [], macs: [ GW_MAC, OTHER ] }), [ { mac: GW_MAC, port: 'eth0.3', bridge: 'br-iot', seen: 1 } ]);
+	assert.deepEqual(listed(gw).map(h => h[0]), [ HALL_MAC, IOT_BR, STA, FAR, GW_MAC ], 'the gateway stays; a host on its wire that it calls its own is taken at its word');
+	const lost = model.build(Object.assign(router({ aps: [ ap(AP1, 'ap-hall', report({ wired: [], stations: [], macs: [ '00:00:5e:00:53:32' ] })) ] }), { fdb: router(null).fdb.filter(h => h.mac !== HALL_MAC) }));
+	assert.ok(lost.wiredHosts.some(h => h.mac === '00:00:5e:00:53:32'), 'an access point this device does not hear has no wire');
+	/* the checks of collectorAps: MACs of one device, each once, of the first 64 sent, and only from one that reports */
+	const a = model.collectorAps({ aps: [
+		ap(AP1, 'ap-hall', report({ macs: [ IOT_BR.toUpperCase(), IOT_BR, 'junk', '01:00:5e:00:53:01', null, FAR ].concat(Array.from({ length: 80 }, (_, i) => '02:00:5e:20:00:' + i.toString(16).padStart(2, '0'))) })),
+		ap(AP2, 'ap-den', report({ macs: [ IOT_BR ] }), { state: 'offline' }), ap('1111111111111111', 'ap-old', report()) ] });
+	assert.deepEqual([ a[0].macs.slice(0, 2), a[0].macs.length, a[1].macs, a[2].macs ], [ [ IOT_BR, FAR ], 60, [], [] ]);
 });
 
 test('collector: caps: 16 access points, 16 SSIDs, 256 stations each and 1024 in all, 128 wired hosts each', () => {

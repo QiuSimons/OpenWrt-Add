@@ -264,77 +264,80 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let verifier_log = std::env::var_os("FLOWCONE_VERIFIER_LOG").is_some();
-    let mut bpf = {
+    let mut data_plane = {
         let custom_btf = btf::load_custom_btf(config.btf_path.as_deref())?;
         let first_level = if verifier_log {
             VerifierLogLevel::DEBUG
         } else {
             VerifierLogLevel::DISABLE
         };
-        match load_ebpf_object(
-            custom_btf.as_ref(),
-            config.enable_v4,
-            config.enable_v6,
-            first_level,
-        ) {
-            Ok(bpf) => bpf,
-            Err(first) => {
+        let try_load = |level| -> Result<DataPlane, Box<dyn std::error::Error>> {
+            let bpf = load_ebpf_object(
+                custom_btf.as_ref(),
+                config.enable_v4,
+                config.enable_v6,
+                level,
+            )?;
+            DataPlane::load(bpf, &config.iface)
+        };
+        match try_load(first_level) {
+            Ok(dp) => dp,
+            Err(first) if !verifier_log => {
                 eprintln!(
                     "flowcone: eBPF load without verifier log failed ({}), retrying with log",
                     first
                 );
-                load_ebpf_object(
-                    custom_btf.as_ref(),
-                    config.enable_v4,
-                    config.enable_v6,
-                    VerifierLogLevel::VERBOSE,
-                )?
+                try_load(VerifierLogLevel::DEBUG)?
             }
+            Err(first) => return Err(first),
         }
     };
 
-    let mut session_mgr = SessionManager::new(
-        SessionMaps {
-            config_map: take_map!(bpf, "CONFIG", Array<MapData, GlobalConfig>),
-            active_map: take_map!(bpf, "ACTIVE_CONFIG", Array<MapData, u32>),
-            ob_map4: take_map!(
-                bpf,
-                "OUTBOUND_BINDINGS_V4",
-                HashMap<MapData, EndpointKey4, BindingValue4>
-            ),
-            ib_map4: take_map!(
-                bpf,
-                "INBOUND_BINDINGS_V4",
-                HashMap<MapData, u16, BindingValue4>
-            ),
-            ob_map6: take_map!(
-                bpf,
-                "OUTBOUND_BINDINGS_V6",
-                HashMap<MapData, EndpointKey6, BindingValue6>
-            ),
-            ib_map6: take_map!(
-                bpf,
-                "INBOUND_BINDINGS_V6",
-                HashMap<MapData, u16, BindingValue6>
-            ),
-            frag_in4: take_map!(bpf, "FRAG_IN_V4", HashMap<MapData, FragKey4, FragValue4>),
-            frag_out4: take_map!(bpf, "FRAG_OUT_V4", HashMap<MapData, FragKey4, FragValue4>),
-            frag_in6: take_map!(bpf, "FRAG_IN_V6", HashMap<MapData, FragKey6, FragValue6>),
-            frag_out6: take_map!(bpf, "FRAG_OUT_V6", HashMap<MapData, FragKey6, FragValue6>),
-            events4: take_map!(bpf, "SESSION_EVENTS_V4", RingBuf<MapData>),
-            events6: take_map!(bpf, "SESSION_EVENTS_V6", RingBuf<MapData>),
-            gc_flags: take_map!(bpf, "GC_FLAGS", Array<MapData, u32>),
-            reserved4: take_map!(bpf, "RESERVED_V4", Array<MapData, u16>),
-            reserved6: take_map!(bpf, "RESERVED_V6", Array<MapData, u16>),
-            bitmap_even4: take_map!(bpf, "BITMAP_EVEN_V4", Array<MapData, u64>),
-            bitmap_odd4: take_map!(bpf, "BITMAP_ODD_V4", Array<MapData, u64>),
-            bitmap_even6: take_map!(bpf, "BITMAP_EVEN_V6", Array<MapData, u64>),
-            bitmap_odd6: take_map!(bpf, "BITMAP_ODD_V6", Array<MapData, u64>),
-            port_flags: take_map!(bpf, "PORT_FLAGS", Array<MapData, u32>),
-        },
-        config.enable_v4,
-        config.enable_v6,
-    )?;
+    let mut session_mgr = {
+        let bpf = data_plane.bpf_mut();
+        SessionManager::new(
+            SessionMaps {
+                config_map: take_map!(bpf, "CONFIG", Array<MapData, GlobalConfig>),
+                active_map: take_map!(bpf, "ACTIVE_CONFIG", Array<MapData, u32>),
+                ob_map4: take_map!(
+                    bpf,
+                    "OUTBOUND_BINDINGS_V4",
+                    HashMap<MapData, EndpointKey4, BindingValue4>
+                ),
+                ib_map4: take_map!(
+                    bpf,
+                    "INBOUND_BINDINGS_V4",
+                    HashMap<MapData, u16, BindingValue4>
+                ),
+                ob_map6: take_map!(
+                    bpf,
+                    "OUTBOUND_BINDINGS_V6",
+                    HashMap<MapData, EndpointKey6, BindingValue6>
+                ),
+                ib_map6: take_map!(
+                    bpf,
+                    "INBOUND_BINDINGS_V6",
+                    HashMap<MapData, u16, BindingValue6>
+                ),
+                frag_in4: take_map!(bpf, "FRAG_IN_V4", HashMap<MapData, FragKey4, FragValue4>),
+                frag_out4: take_map!(bpf, "FRAG_OUT_V4", HashMap<MapData, FragKey4, FragValue4>),
+                frag_in6: take_map!(bpf, "FRAG_IN_V6", HashMap<MapData, FragKey6, FragValue6>),
+                frag_out6: take_map!(bpf, "FRAG_OUT_V6", HashMap<MapData, FragKey6, FragValue6>),
+                events4: take_map!(bpf, "SESSION_EVENTS_V4", RingBuf<MapData>),
+                events6: take_map!(bpf, "SESSION_EVENTS_V6", RingBuf<MapData>),
+                gc_flags: take_map!(bpf, "GC_FLAGS", Array<MapData, u32>),
+                reserved4: take_map!(bpf, "RESERVED_V4", Array<MapData, u16>),
+                reserved6: take_map!(bpf, "RESERVED_V6", Array<MapData, u16>),
+                bitmap_even4: take_map!(bpf, "BITMAP_EVEN_V4", Array<MapData, u64>),
+                bitmap_odd4: take_map!(bpf, "BITMAP_ODD_V4", Array<MapData, u64>),
+                bitmap_even6: take_map!(bpf, "BITMAP_EVEN_V6", Array<MapData, u64>),
+                bitmap_odd6: take_map!(bpf, "BITMAP_ODD_V6", Array<MapData, u64>),
+                port_flags: take_map!(bpf, "PORT_FLAGS", Array<MapData, u32>),
+            },
+            config.enable_v4,
+            config.enable_v6,
+        )?
+    };
 
     let mut udp_scanner = LocalUdpScanner::new();
     session_mgr.configure_port_pool(config.min_port, config.max_port);
@@ -357,7 +360,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     }
 
-    let mut data_plane = DataPlane::start(bpf, &config.iface)?;
+    data_plane.attach(true, true)?;
     let mut firewall_mgr = FirewallManager::new();
     let start_ifindex = netlink::get_ifindex(&config.iface).unwrap_or(0);
 

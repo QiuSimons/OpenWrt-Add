@@ -240,7 +240,8 @@ pub struct GlobalConfig {
 #[cfg(not(target_arch = "bpf"))]
 unsafe impl aya::Pod for GlobalConfig {}
 
-/// Routable private IPv4 source ranges matching `is_private_ipv4()` (RFC 1918, RFC 6598).
+/// Routable private IPv4 source ranges matching `is_private_ipv4()` (RFC 1918,
+/// RFC 6598).
 #[cfg(not(target_arch = "bpf"))]
 pub const INTERNAL_V4_PREFIXES: &[&str] = &[
     "10.0.0.0/8",
@@ -249,8 +250,9 @@ pub const INTERNAL_V4_PREFIXES: &[&str] = &[
     "192.168.0.0/16",
 ];
 
-/// Checks if an IPv4 source address belongs to private or CGNAT ranges (RFC 1918, RFC 6598).
-/// Expects `raw_ip` loaded from wire octets in native memory order [b0, b1, b2, b3].
+/// Checks if an IPv4 source address belongs to private or CGNAT ranges (RFC
+/// 1918, RFC 6598). Expects `raw_ip` loaded from wire octets in native memory
+/// order [b0, b1, b2, b3].
 #[inline(always)]
 pub fn is_private_ipv4(raw_ip: u32) -> bool {
     is_private_ipv4_octets(raw_ip.to_ne_bytes())
@@ -270,7 +272,8 @@ pub fn is_ula_ipv6(addr: &[u8; 16]) -> bool {
     (addr[0] & 0xfe) == 0xfc
 }
 
-/// Checks if an IPv6 address is a routable internal unicast source (ULA fc00::/7, or GUA 2000::/3 if enabled).
+/// Checks if an IPv6 address is a routable internal unicast source (ULA
+/// fc00::/7, or GUA 2000::/3 if enabled).
 #[inline(always)]
 pub fn is_routable_internal_ipv6(addr: &[u8; 16], allow_all_internal: bool) -> bool {
     if is_ula_ipv6(addr) {
@@ -386,10 +389,11 @@ pub unsafe fn read_be32(p: usize) -> u32 {
 }
 
 /// Parse the PPP protocol field (optional 0xff 0x03 address/control, optional
-/// one-byte protocol compression). Returns the IP ethertype and header offset relative to `data`.
+/// one-byte protocol compression). Returns the IP ethertype and header offset
+/// relative to `data`.
 ///
-/// # Safety
-/// `(data + rel)..data_end` must be valid readable packet memory (with `data + rel <= data_end`).
+/// # Safety `(data + rel)..data_end` must be valid readable packet memory (with
+/// `data + rel <= data_end`).
 #[inline(always)]
 pub unsafe fn parse_ppp(data: usize, data_end: usize, mut rel: usize) -> Option<L2Info> {
     if data + rel + 2 > data_end {
@@ -430,13 +434,12 @@ pub unsafe fn parse_ppp(data: usize, data_end: usize, mut rel: usize) -> Option<
     }
 }
 
-/// Parse Ethernet, VLAN tags, and PPPoE session, or handle bare IP frames
-/// (raw IP, TUN, WireGuard, and PPP interfaces where the kernel already stripped
-/// the PPP header).
-/// `l2_len` is 0 for bare IP, 14 for Ethernet.
+/// Parse Ethernet, VLAN tags, and PPPoE session, or handle bare IP frames (raw
+/// IP, TUN, WireGuard, and PPP interfaces where the kernel already stripped the
+/// PPP header). `l2_len` is 0 for bare IP, 14 for Ethernet.
 ///
-/// # Safety
-/// `data..data_end` must be valid readable packet memory (with `data <= data_end`).
+/// # Safety `data..data_end` must be valid readable packet memory (with `data
+/// <= data_end`).
 #[inline(always)]
 pub unsafe fn parse_l2(data: usize, data_end: usize, l2_len: u32) -> Option<L2Info> {
     unsafe {
@@ -555,8 +558,8 @@ pub unsafe fn locate_ipv6_nexthdr(
     }
 }
 
-/// Walk Hop-by-Hop / Destination Options / Routing headers until the Fragment header,
-/// returning its offset relative to `data`.
+/// Walk Hop-by-Hop / Destination Options / Routing headers until the Fragment
+/// header, returning its offset relative to `data`.
 ///
 /// # Safety
 /// `(data + ip_rel + 40)..data_end` must lie within readable packet bounds.
@@ -839,7 +842,8 @@ mod tests {
             Ipv6L4::Fragment
         );
 
-        // 4 extension headers followed by Fragment header must still be recognized as Fragment
+        // 4 extension headers followed by Fragment header must still be
+        // recognized as Fragment
         let mut pkt_4ext_frag = [0u8; 40 + 8 * 4 + 8];
         for i in 0..3 {
             pkt_4ext_frag[40 + i * 8] = IPPROTO_DSTOPTS;

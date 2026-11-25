@@ -93,8 +93,8 @@ fn set_name(v6: bool, forward: bool) -> &'static str {
     }
 }
 
-/// Ensures missing FlowCone timeout sets exist in each target generic table using
-/// one `nft` query and one transaction per table.
+/// Ensures missing FlowCone timeout sets exist in each target generic table
+/// using one `nft` query and one transaction per table.
 pub(crate) fn ensure_generic_sets(tables: &[GenericTable]) -> bool {
     for t in tables {
         let Some(existing) = nft_output(&["-t", "list", "table", &t.family, &t.table]) else {
@@ -218,7 +218,8 @@ pub(crate) fn build_generic_insert_script(
     script
 }
 
-/// Generates standalone `inet flowcone` table script for hosts without existing nftables chains.
+/// Generates standalone `inet flowcone` table script for hosts without existing
+/// nftables chains.
 pub(crate) fn generate_standalone_script_live(cfg: &FirewallConfig<'_>) -> String {
     let FirewallConfig {
         iface,
@@ -281,7 +282,8 @@ pub(crate) fn generic_liveness_supported(tables: &[GenericTable]) -> bool {
     !tables.is_empty()
 }
 
-/// Shared liveness refresher using in-process Netlink batching with `nft` CLI fallback.
+/// Shared liveness refresher using in-process Netlink batching with `nft` CLI
+/// fallback.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn refresh_table_liveness(
     family: &str,
@@ -427,7 +429,8 @@ pub struct NftBaseChain {
     pub prio: String,
 }
 
-/// Parse nftables chains from `nft list chains` to find all base chains with hooks and types.
+/// Parse nftables chains from `nft list chains` to find all base chains with
+/// hooks and types.
 pub(crate) fn parse_nft_base_chains(output: &str) -> Vec<NftBaseChain> {
     let mut chains = Vec::new();
     let mut current_family = String::new();
@@ -509,7 +512,8 @@ pub struct RuleToDelete {
     pub handle: u64,
 }
 
-/// Find all flowcone injected rules across any tables and chains from `nft -a list ruleset`.
+/// Find all flowcone injected rules across any tables and chains from `nft -a
+/// list ruleset`.
 pub(crate) fn find_all_flowcone_rules(ruleset_output: &str) -> Vec<RuleToDelete> {
     let mut rules = Vec::new();
     let mut current_family = String::new();
@@ -589,7 +593,8 @@ pub(crate) fn nft_output(args: &[&str]) -> Option<String> {
     }
 }
 
-/// Queries ruleset with handles (-a) and terse set suppression (-t) for rule enumeration.
+/// Queries ruleset with handles (-a) and terse set suppression (-t) for rule
+/// enumeration.
 pub(crate) fn nft_ruleset_text() -> Option<String> {
     nft_output(&["-a", "-t", "list", "ruleset"])
 }
@@ -616,8 +621,8 @@ pub(crate) fn build_delete_script(rules: &[RuleToDelete]) -> String {
     script
 }
 
-/// Apply `deletes + body`; if stale handles abort the batch, re-query current handles once
-/// before retrying so existing rules are never duplicated.
+/// Apply `deletes + body`; if stale handles abort the batch, re-query current
+/// handles once before retrying so existing rules are never duplicated.
 pub(crate) fn nft_apply_with_fallback(deletes: &str, body: &str, what: &str) -> bool {
     match nft_apply(&format!("{deletes}{body}")) {
         Ok(()) => true,

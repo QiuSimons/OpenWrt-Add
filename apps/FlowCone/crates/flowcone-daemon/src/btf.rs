@@ -9,7 +9,8 @@ const DETACHED_BTF_CANDIDATES: &[&str] = &[
     "/lib/modules/vmlinux",
 ];
 
-/// Eagerly parses a user-supplied `--btf` file, returning an explicit error on failure.
+/// Eagerly parses a user-supplied `--btf` file, returning an explicit error on
+/// failure.
 pub(crate) fn load_custom_btf(custom_path: Option<&str>) -> Result<Option<Btf>, String> {
     let Some(p) = custom_path else {
         return Ok(None);

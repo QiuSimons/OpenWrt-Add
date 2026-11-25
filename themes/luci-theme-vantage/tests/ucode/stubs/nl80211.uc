@@ -2,16 +2,22 @@
 // interface from global STUB.survey, keyed by the interface's name, as
 // nl80211.request returns it (an array of messages; null for a dump
 // without any or a failed one, false for one cut short). 'no survey': a
-// case where none may happen, the default. Fails closed: any other
-// request stops the run. Constants as the kernel's.
+// case where none may happen, the default. And the dump of the wireless
+// interfaces from global STUB.ifaces (null: none), asked without a
+// message. Fails closed: any other request stops the run. Constants as
+// the kernel's.
 'use strict';
 
 const C = {
+	NL80211_CMD_GET_INTERFACE: 5,
 	NL80211_CMD_GET_SURVEY: 50,
 	NLM_F_DUMP: 0x300
 };
 
 function request(cmd, flags, msg) {
+	if (cmd == C.NL80211_CMD_GET_INTERFACE && flags == C.NLM_F_DUMP && msg == null)
+		return global.STUB.ifaces;
+
 	if (cmd != C.NL80211_CMD_GET_SURVEY || flags != C.NLM_F_DUMP || type(msg) != 'object' || length(msg) != 1 || type(msg.dev) != 'string')
 		die(sprintf('nl80211 stub: request %J %J %J', cmd, flags, msg));
 

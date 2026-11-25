@@ -1212,6 +1212,127 @@ test('CPU: 0 % until the first reading, its second sample a second after the fir
 	}
 });
 
+/* #164: the interfaces of a network's VLANs, as luci.vantage wireless names them */
+test('a network\'s VLAN interfaces: their station lists every poll and nothing else; the network\'s and the radio\'s traffic count their stations', async () => {
+	const asked = [];
+	const ifc = (ifname, vlans) => Object.assign({ ifname, section: ifname, config: { mode: 'ap', ssid: 'S-' + ifname } }, vlans ? { vlans } : {});
+	const saved = { L: global.L, window: global.window, now: Date.now };
+	let t = 1.8e12, bytes = 0;
+	Date.now = () => t;
+	global.L = { env: {}, require: () => new Promise(() => {}), resolveDefault: (p, d) => Promise.resolve(p).then(v => v == null ? d : v, () => d) };
+	global.window = { sessionStorage: { getItem: () => null, setItem() {} }, localStorage: { getItem: () => null, setItem() {} } };
+	const sta = (mac, rx, tx) => ({ mac, signal: -50, rx: { bytes: rx, rate: 866700 }, tx: { bytes: tx, rate: 866700 } });
+	const calls = { 'luci.vantage wireless': () => Promise.resolve({ radio0: { up: true, config: { band: '5g' }, interfaces: [ ifc('wl0', [ 'wlan0.1', 'wlan0.3', 'wl1', 'bad name' ]), ifc('wl1') ] } }),
+		'network.device status': () => Promise.resolve({ wl0: { statistics: { rx_bytes: bytes, tx_bytes: bytes } }, wl1: { statistics: { rx_bytes: 0, tx_bytes: 0 } } }),
+		'system info': () => Promise.resolve({ localtime: t / 1000 }),
+		'iwinfo assoclist': device => { asked.push('assoclist ' + device); return Promise.resolve({ wl0: [ sta('00:00:5E:00:53:01', bytes, bytes) ], 'wlan0.1': [ sta('00:00:5E:00:53:05', bytes * 2, bytes * 4) ] }[device] || []); },
+		'iwinfo info': device => { asked.push('info ' + device); return Promise.resolve({ channel: 36, bssid: '00:00:5E:00:53:A0' }); } };
+	for (const ifn of [ 'wl0', 'wl1', 'wlan0.1', 'wlan0.3' ]) for (const m of [ 'get_clients', 'get_status' ])
+		calls['hostapd.' + ifn + ' ' + m] = () => { asked.push(m + ' ' + ifn); return Promise.resolve(m === 'get_status' ? { bssid: '00:00:5e:00:53:a0', ssid: 'S', channel: 36, freq: 5180 } : { clients: {} }); };
+	Object.assign(REPLIES, calls);
+	try {
+		const self = Object.create(view);
+		self.initState({ board: {}, canWrite: false, canRdns: false, mdns: null });
+		const first = await self.fetch();
+		assert.deepEqual(asked.filter(a => /wlan0|bad/.test(a)).sort(), [ 'assoclist wlan0.1', 'assoclist wlan0.3' ],
+			'a VLAN\'s interface: its stations, no hostapd object and no iwinfo info; a name that is no device is not asked');
+		assert.equal(asked.filter(a => a === 'assoclist wl1').length, 1, 'and a network\'s own interface is asked once, as itself');
+		assert.deepEqual(first.assoc['wlan0.1'].map(s => s.mac), [ '00:00:5E:00:53:05' ]);
+		assert.deepEqual(first.assoc['wlan0.3'], []);
+		/* 5 s on: 5000 bytes each way on wl0 itself, 10000 up and 20000 down for the station on wlan0.1 */
+		self.ingest(first);
+		t += 5000; bytes = 5000;
+		self.ingest(await self.fetch());
+		assert.deepEqual(self.st.staRates['00:00:5e:00:53:05'], { rx: 16000, tx: 32000 });
+		assert.deepEqual(self.st.ssidRates.wl0, { rx: 8000 + 16000, tx: 8000 + 32000 }, 'its interface\'s counters and the stations on its VLANs\' interfaces');
+		assert.deepEqual(self.st.radioRates.radio0, { rx: 8000 + 16000, tx: 8000 + 32000 });
+		assert.deepEqual(self.st.ssidRates.wl1, { rx: 0, tx: 0 }, 'another network\'s is its own');
+		assert.deepEqual(self.m.clients.map(c => [ c.mac, c.vlanIf ]), [ [ '00:00:5e:00:53:01', null ], [ '00:00:5e:00:53:05', 'wlan0.1' ] ]);
+	} finally {
+		global.L = saved.L; global.window = saved.window; Date.now = saved.now;
+		for (const k of Object.keys(calls)) delete REPLIES[k];
+	}
+});
+
+/* #166 at the full poll (no fast lane here): two lines, each on a device that carries a LAN's VLAN too */
+test('a line with VLANs to take off: the poll\'s rate, each line\'s history and its details leave them out', () => {
+	const saved = global.window, savedL = global.L;
+	global.L = { env: {} };
+	global.window = { sessionStorage: { getItem: () => null, setItem() {} }, localStorage: { getItem: () => null, setItem() {} } };
+	const net = (name, dev) => ({ interface: name, up: true, proto: 'static', device: dev, l3_device: dev, route: [] });
+	const wan = { interface: 'wan', up: true, proto: 'dhcp', device: 'eth1', l3_device: 'eth1', metric: 10, route: [ { target: '0.0.0.0', mask: 0, nexthop: '203.0.113.1' } ] };
+	const wanb = { ...wan, interface: 'wanb', device: 'eth2', l3_device: 'eth2', metric: 20, route: [ { target: '0.0.0.0', mask: 0, nexthop: '203.0.113.9' } ] };
+	const dev = (rx, tx, extra) => Object.assign({ statistics: { rx_bytes: rx, tx_bytes: tx } }, extra);
+	const vlan = { type: 'VLAN', devtype: 'vlan' };
+	/* bytes a millisecond: 10 each way on eth1, of which the LAN's VLAN takes 1 in and 9 out; 4 on eth2, its VLAN 1 and 3 */
+	const raw = t => ({ at: t, info: { localtime: t / 1000 }, stat: '', ifaces: [ wan, wanb, net('lan', 'eth1.3'), net('lanb', 'eth2.3') ], wifi: null, hints: {}, thermal: [], fdb: [],
+		assoc: {}, hapd: {}, hapdStatus: {}, iwinfo: {}, devs: { eth1: dev(t * 10, t * 10), 'eth1.3': dev(t, t * 9, vlan), eth2: dev(t * 4, t * 4), 'eth2.3': dev(t, t * 3, vlan) } });
+	try {
+		const self = Object.create(view);
+		self.initState({ board: {}, canWrite: false, canRdns: false, mdns: null });
+		const t0 = 1.8e12;
+		for (let k = 0; k < 3; k++) self.ingest(raw(t0 + k * 5000));
+		assert.deepEqual(self.m.uplinks.map(x => [ x.iface, x.minus ]), [ [ 'wan', [ 'eth1.3' ] ], [ 'wanb', [ 'eth2.3' ] ] ]);
+		assert.deepEqual(self.st.uplinkRate, { rx: 72000, tx: 8000 }, 'eth1 reads 80 kbit/s both ways');
+		const last = k => self.st.hist.net[k].slice(-1)[0].slice(1);
+		assert.deepEqual([ last('up:wan'), last('up:wanb') ], [ [ 72000, 8000 ], [ 24000, 8000 ] ], 'the chart of each');
+		withDom(() => {
+			const d = self.drawerUplink('wanb'), all = texts({ children: d.title.concat(d.body) }).join(' | ');
+			assert.ok(all.includes('| 24.0 kbit/s |') && all.includes('| 8 kbit/s |') && !all.includes('32.0 kbit/s'), 'the other line\'s details: ' + all.slice(0, 200));
+		});
+		/* and no place reads a line's device for its rate: all of them go through model.lineRate */
+		const src = fs.readFileSync(path.join(RES, 'view/vantage/overview.js'), 'utf8');
+		assert.doesNotMatch(src, /devRates\[[^\]]*statsDev\]/);
+		assert.equal([ ...src.matchAll(/model\.lineRate\(/g) ].length, 5, 'the poll, the other lines, the path, the details and the fast lane');
+	} finally {
+		global.window = saved;
+		global.L = savedL;
+	}
+});
+
+/* an untagged WAN on the device that carries the LAN's VLANs (#166): the
+   lane samples those VLANs with it and shows the difference */
+test('fast lane: a line with VLANs to take off reads them with its device', async () => {
+	const saved = { window: global.window, L: global.L, doc: global.document, now: Date.now };
+	let t = 1.8e12;
+	const counters = { eth0: [ 0, 0 ], 'eth0.1': [ 0, 0 ] }, asked = [];
+	global.window = { sessionStorage: { getItem: () => null, setItem() {} }, localStorage: { getItem: () => null, setItem() {} }, setTimeout: () => 1 };
+	global.document = { hidden: false, documentElement: { getAttribute: () => null } };
+	global.L = { env: {}, resolveDefault: (p, d) => Promise.resolve(p).then(v => v == null ? d : v, () => d) };
+	Date.now = () => t;
+	REPLIES['file read'] = () => Promise.resolve('');
+	REPLIES['network.device status'] = name => { asked.push(name); return Promise.resolve({ statistics: { rx_bytes: counters[name][0], tx_bytes: counters[name][1] } }); };
+	try {
+		const self = Object.create(view);
+		self.initState({ board: {}, canWrite: false, canRdns: false, mdns: null });
+		self.el = { root: {} };
+		self.m = { uplink: { iface: 'wan', statsDev: 'eth0', minus: [ 'eth0.1' ] } };
+		self.fastLive = () => true;
+		self.idle = () => false;
+		self.paintFast = () => {};
+		await self.refreshFast();
+		assert.deepEqual(asked, [ 'eth0', 'eth0.1' ]);
+		assert.ok(!self.st.uplinkRate, 'one sample: no rate yet');
+		/* 2 s on: a download of 1000 bytes passes eth0 twice, in from the line and out to the LAN */
+		t += 2000;
+		counters.eth0 = [ 1100, 1100 ]; counters['eth0.1'] = [ 100, 1000 ];
+		await self.refreshFast();
+		assert.deepEqual(self.st.uplinkRate, { rx: 4000, tx: 400 });
+		assert.deepEqual(self.st.hist.net['up:wan'].map(p => p.slice(1)), [ [ 4000, 400 ] ]);
+		/* the VLAN did not answer: no rate for the step, not the device's whole traffic */
+		t += 2000;
+		counters.eth0 = [ 2200, 2200 ];
+		REPLIES['network.device status'] = name => name === 'eth0' ? Promise.resolve({ statistics: { rx_bytes: 2200, tx_bytes: 2200 } }) : Promise.reject(new Error('gone'));
+		await self.refreshFast();
+		assert.deepEqual(self.st.uplinkRate, { rx: 4000, tx: 400 }, 'the last one stays');
+		assert.equal(self.st.hist.net['up:wan'].length, 1);
+	} finally {
+		global.window = saved.window; global.L = saved.L; Date.now = saved.now;
+		if (saved.doc === undefined) delete global.document; else global.document = saved.doc;
+		delete REPLIES['file read']; delete REPLIES['network.device status'];
+	}
+});
+
 test('uplink drawer: a router\'s line with a private or a shared address says so in one plain note; no health check does', () => {
 	const ip = (...o) => o.join('.');
 	const self = Object.create(view);
@@ -2106,6 +2227,38 @@ test('paired access points: an SSID node and the wired node never share an id, w
 	assert.equal(new Set(keys).size, keys.length, 'one wire a key');
 	assert.deepEqual(keys.filter(k => k.includes(':ap:')), [ 'r::ap:' + AP_ID, 's::ap:' + AP_ID + ':s:w', 's::ap:' + AP_ID + ':s:wired', 's::ap:' + AP_ID + ':w' ]);
 	assert.deepEqual(self.el.path.find('vt-branch-peer')[0].find('vt-ssid-name').map(n => n.textContent), [ '5 GHz Hall', '5 GHz Hall', 'Wired' ]);
+}));
+
+/* #167: the addresses an access point reports as its own are left out of the wired list; its own row says how many,
+   and its details name them */
+test('paired access points: an access point\'s row counts its other addresses and its details name them', () => withFakeDom(() => {
+	const OWN = '02:00:5e:10:00:77';
+	const self = Object.assign(Object.create(dview), { st: { staRates: {}, devRates: {}, clientHist: {}, gone: [] }, ui: {}, el: {}, quiet: {}, canWrite: false });
+	self.m = apModel({ aps: [ hall({}, { macs: [ '02:00:5e:10:00:01', OWN ] }) ] }, [ { mac: OWN, port: 'lan1', bridge: 'br-lan', seen: 1 } ]);
+	const tree = list => { const n = new FNode('x'); append(n, list); return n; };
+	assert.ok(self.m.wiredHosts.every(h => h.mac !== OWN), 'not a host of its own');
+	const me = self.m.wiredHosts.filter(h => h.mac === '02:00:5e:10:00:01')[0];
+	const pill = tree(self.wiredCells(me, 0)).find('vt-pill-ap').filter(p => /more address/.test(p.textContent))[0];
+	assert.deepEqual([ pill.textContent, pill.getAttribute('title') ], [ '1 more address', 'ap-hall reports these as addresses of its own too: 02:00:5E:10:00:77' ]);
+	const row = tree(self.drawerWired(me).body).find('vt-kv').filter(r => r.children[0].textContent === 'Access point')[0];
+	assert.match(row.children[1].textContent, /^ap-hall.*reports these as addresses of its own too: 02:00:5E:10:00:77$/);
+	/* a host without them has neither */
+	const plain = self.m.wiredHosts.filter(h => h.mac === '00:00:5e:00:53:32')[0];
+	assert.ok(!tree(self.wiredCells(plain, 0)).find('vt-pill-ap').some(p => /more address/.test(p.textContent)));
+	assert.ok(!tree(self.drawerWired(plain).body).find('vt-kv').some(r => r.children[0].textContent === 'Access point'));
+}));
+
+/* #164: a station on the interface of one of its network's VLANs says so in its details */
+test('client details: the interface of a VLAN the station is on, and no row without one', t => withFakeDom(() => {
+	const savedL = global.L;
+	global.L = { url: (...p) => '/cgi-bin/luci/' + p.join('/') };
+	t.after(() => { global.L = savedL; });
+	const m = apModel(null), sta = m.clients[0];
+	const self = Object.assign(Object.create(dview), { m, st: { staRates: {}, devRates: {}, clientHist: {}, gone: [] }, ui: {}, el: {}, quiet: {}, canWrite: false });
+	const rows = () => { const n = new FNode('x'); append(n, self.drawerClient(sta.mac).body); return n.find('vt-kv').filter(r => r.children[0].textContent === 'Interface').map(r => r.children[1].textContent); };
+	assert.deepEqual(rows(), []);
+	sta.vlanIf = 'wlan0.3';
+	assert.deepEqual(rows(), [ 'wlan0.3' ]);
 }));
 
 /* review F8 (names): a pairing name has up to 63 characters */
@@ -3283,6 +3436,8 @@ test('Ports tile: a port with hosts opens the wired list on them; one without is
 	assert.equal(btn.find('vt-port-rates')[0].textContent, '↓ 9↑ 5 kbit/s');
 	assert.equal(btn.getAttribute('title'), 'lan3\n1 Gbit/s · full duplex\nReceived 5 kbit/s, sent 9 kbit/s\nDropped: 9 in · 0 out\nShow the devices on lan3');
 	assert.deepEqual(btn.find('vt-port-note').map(n => n.textContent), [ 'Dropped: 9 in · 0 out' ]);
+	/* #168: its label and its counts are two items, so a narrow cell breaks between them and not before the last word */
+	assert.deepEqual(btn.find('vt-port-note')[0].children.map(n => n.textContent), [ 'Dropped: ', '9 in · 0 out' ]);
 	/* a link going down is written to the same cell */
 	devs.lan3.carrier = false;
 	portsTile({ devs }, self);

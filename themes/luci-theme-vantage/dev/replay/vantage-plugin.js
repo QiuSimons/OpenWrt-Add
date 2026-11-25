@@ -212,12 +212,45 @@ function wirelessFromConfig(sections, exists) {
 	return out;
 }
 
+/* the interfaces hostapd made for a network's VLANs (#164), as the
+   plugin's ap_vlans() reads them from the kernel's dump of the wireless
+   interfaces (`ifaces`, as ucode's nl80211 gives it): { ap interface:
+   [ name ] }. AP_VLAN interfaces (iftype 4) with the address of exactly
+   one access point interface (3) on their wiphy; not a WDS station's
+   (<ifname>.staN); 32 in all */
+function apVlans(ifaces) {
+	const res = Array.isArray(ifaces) ? ifaces : (ifaces && typeof ifaces === 'object') ? [ ifaces ] : [];
+	const key = i => (i && typeof i === 'object' && !Array.isArray(i) && Number.isInteger(i.wiphy) && typeof i.ifname === 'string' && /^[A-Za-z0-9_.-]{1,15}$/.test(i.ifname) && normMac(i.mac))
+		? i.wiphy + ' ' + normMac(i.mac) : null;
+	const aps = new Map(), out = Object.create(null);
+	let n = 0;
+	for (const i of res) {
+		const k = key(i);
+		if (k && i.iftype === 3) aps.set(k, aps.has(k) ? false : i.ifname);
+	}
+	for (const i of res) {
+		if (n >= 32) break;
+		const k = key(i), ap = (k && i.iftype === 4) ? aps.get(k) : null;
+		if (!ap || i.ifname.indexOf(ap + '.sta') === 0) continue;
+		(out[ap] || (out[ap] = [])).push(i.ifname);
+		n++;
+	}
+	for (const ap of Object.keys(out)) out[ap].sort();
+	return out;
+}
+
 /* reply of luci.vantage wireless: network.wireless status, or, when that
    object is missing (status null), the wireless config */
 /* netifd's status, unless it is missing or skipped every radio (no
-   handler for the vendor's driver type): then the config */
-function wirelessReply(status, sections, exists) {
-	return (status && typeof status === 'object' && !Array.isArray(status) && Object.keys(status).length) ? reduceWireless(status) : wirelessFromConfig(sections, exists);
+   handler for the vendor's driver type): then the config. Each access
+   point interface with its VLANs' interfaces (apVlans), where it has any */
+function wirelessReply(status, sections, exists, ifaces) {
+	const out = (status && typeof status === 'object' && !Array.isArray(status) && Object.keys(status).length) ? reduceWireless(status) : wirelessFromConfig(sections, exists);
+	const vl = apVlans(ifaces);
+	for (const r of Object.values(out))
+		for (const i of r.interfaces)
+			if (typeof i.ifname === 'string' && Object.prototype.hasOwnProperty.call(vl, i.ifname)) i.vlans = vl[i.ifname];
+	return out;
 }
 
 /* uci sections of one config from the store, in config order; null when
@@ -461,4 +494,4 @@ function call(store, method, args) {
 	return { result: [ 0, (method === 'set_quiet' ? setQuiet : setAlias)(storeCursor(store), args) ] };
 }
 
-module.exports = { OBJECT, POLICY, MAX_ALIASES, MAX_QUIET, MAX_SURVEY, NAME_MAX, ICONS, normMac, validateName, reduceWireless, wirelessFromConfig, wirelessReply, thermal, wired, routes, kernelLookup, survey, setAlias, setQuiet, argsOk, call };
+module.exports = { OBJECT, POLICY, MAX_ALIASES, MAX_QUIET, MAX_SURVEY, NAME_MAX, ICONS, normMac, validateName, reduceWireless, wirelessFromConfig, wirelessReply, apVlans, thermal, wired, routes, kernelLookup, survey, setAlias, setQuiet, argsOk, call };

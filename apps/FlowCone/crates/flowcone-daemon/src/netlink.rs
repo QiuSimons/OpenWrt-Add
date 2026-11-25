@@ -60,7 +60,8 @@ impl fmt::Display for NetlinkError {
 
 impl std::error::Error for NetlinkError {}
 
-/// Receive one netlink datagram cleanly handling `EINTR` and resizing if `MSG_TRUNC`.
+/// Receive one netlink datagram cleanly handling `EINTR` and resizing if
+/// `MSG_TRUNC`.
 pub(crate) fn recv_netlink_msg(
     sock: &OwnedFd,
     buf: &mut Vec<u8>,
@@ -356,8 +357,8 @@ pub(crate) fn get_iface_addrs(
     })
 }
 
-/// Detect L2 header length for interface.
-/// Returns 14 for Ethernet (`ARPHRD_ETHER = 1`), 0 for PPP/NONE/RAWIP/TUN/WireGuard.
+/// Detect L2 header length for interface. Returns 14 for Ethernet
+/// (`ARPHRD_ETHER = 1`), 0 for PPP/NONE/RAWIP/TUN/WireGuard.
 fn l2_len_for_arp_type(dev_type: u16) -> u32 {
     if dev_type == ARPHRD_ETHER { 14 } else { 0 }
 }
@@ -384,7 +385,8 @@ fn msg_matches_target(msg: &[u8], target_ifindex: u32, target_ifname: &str) -> b
         return true;
     }
     if nlmsg_type == RTM_NEWLINK || nlmsg_type == RTM_DELLINK {
-        // Check IFLA_IFNAME when waiting for interface creation or rename (ifindex == 0 or changed).
+        // Check IFLA_IFNAME when waiting for interface creation or rename
+        // (ifindex == 0 or changed).
         let mut rta_off = 32; // 16 (nlmsghdr) + 16 (ifinfomsg)
         while rta_off + 4 <= msg.len() {
             let rta_len = read_u16_ne(msg, rta_off) as usize;
@@ -433,7 +435,8 @@ impl EventMonitor {
     }
 
     /// Drains all pending notifications and clears socket errors (`ENOBUFS`),
-    /// returning `true` if any event affects `target_ifindex`/`target_ifname` or an overrun occurred.
+    /// returning `true` if any event affects `target_ifindex`/`target_ifname`
+    /// or an overrun occurred.
     pub(crate) fn drain_relevant(&self, target_ifindex: u32, target_ifname: &str) -> bool {
         let mut relevant = false;
         let mut buf = vec![0u8; 4096];
@@ -463,7 +466,8 @@ impl EventMonitor {
                     }
                 }
                 Err(Errno::NOBUFS) => {
-                    // ENOBUFS clears sk_err; keep looping to drain queued messages and force resync.
+                    // ENOBUFS clears sk_err; keep looping to drain queued
+                    // messages and force resync.
                     relevant = true;
                 }
                 Err(Errno::AGAIN) => break,

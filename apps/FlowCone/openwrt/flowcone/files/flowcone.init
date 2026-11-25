@@ -8,6 +8,34 @@ STOP=10
 
 PROG=/usr/bin/flowcone
 STATE_DEV_FILE=/var/run/flowcone.dev
+STATE_ARGS_FILE=/var/run/flowcone.args
+
+read_config_vars() {
+	config_load flowcone
+
+	config_get_bool enable_v4 config enable_v4 1
+	config_get_bool enable_v6 config enable_v6 0
+	config_get interface config interface ""
+	config_get_bool advanced config advanced 0
+
+	if [ "$advanced" -eq 1 ]; then
+		config_get min_port config min_port "1024"
+		config_get max_port config max_port "65535"
+		config_get timeout config timeout "120"
+		config_get interval config interval "5"
+		config_get_bool manage_nft config manage_nft 1
+		config_get bypass_mark config bypass_mark ""
+		config_get mark config mark ""
+	else
+		min_port="1024"
+		max_port="65535"
+		timeout="120"
+		interval="5"
+		manage_nft=1
+		bypass_mark=""
+		mark=""
+	fi
+}
 
 resolve_device() {
 	local iface="$1"
@@ -45,34 +73,24 @@ resolve_device() {
 	echo "$dev"
 }
 
+sync_nat6_mode() {
+	local mode
+	[ -x /etc/init.d/nat6 ] || return 0
+	[ "$(uci -q get firewall.@defaults[0].nat6)" = "1" ] || return 0
+	mode=$(cat /tmp/nat6-flowcone.mode 2>/dev/null)
+	if [ "${1:-0}" -eq 1 ] || [ "$mode" = "1" ]; then
+		/etc/init.d/nat6 reload >/dev/null 2>&1 || true
+	fi
+}
+
 start_service() {
-	config_load flowcone
-
 	local enable_v4 enable_v6 interface min_port max_port timeout interval bypass_mark mark manage_nft advanced
-	config_get_bool enable_v4 config enable_v4 1
-	config_get_bool enable_v6 config enable_v6 0
+	read_config_vars
 
-	[ "$enable_v4" -eq 1 ] || [ "$enable_v6" -eq 1 ] || return 0
-
-	config_get interface config interface ""
-
-	config_get_bool advanced config advanced 0
-	if [ "$advanced" -eq 1 ]; then
-		config_get min_port config min_port "1024"
-		config_get max_port config max_port "65535"
-		config_get timeout config timeout "120"
-		config_get interval config interval "5"
-		config_get_bool manage_nft config manage_nft 1
-		config_get bypass_mark config bypass_mark ""
-		config_get mark config mark ""
-	else
-		min_port="1024"
-		max_port="65535"
-		timeout="120"
-		interval="5"
-		manage_nft=1
-		bypass_mark=""
-		mark=""
+	if [ "$enable_v4" -ne 1 ] && [ "$enable_v6" -ne 1 ]; then
+		rm -f "$STATE_DEV_FILE" "$STATE_ARGS_FILE"
+		sync_nat6_mode 0
+		return 0
 	fi
 
 	local dev
@@ -86,6 +104,10 @@ start_service() {
 
 	mkdir -p /var/run
 	printf '%s\n' "$dev" > "$STATE_DEV_FILE"
+	printf '%s\n' "$dev|$enable_v4|$enable_v6|$min_port|$max_port|$timeout|$interval|$manage_nft|$bypass_mark|$mark" > "$STATE_ARGS_FILE"
+
+	# Update ip6 nat partial exemption before the daemon probes nftables rules.
+	sync_nat6_mode "$enable_v6"
 
 	procd_open_instance
 	# shellcheck disable=SC2086
@@ -104,35 +126,28 @@ start_service() {
 	procd_set_param stdout 1
 	procd_set_param stderr 1
 	procd_close_instance
-
-	if [ "$enable_v6" -eq 1 ] && [ -x /etc/init.d/nat6 ] && [ "$(uci -q get firewall.@defaults[0].nat6)" = "1" ]; then
-		/etc/init.d/nat6 reload >/dev/null 2>&1 || true
-	fi
 }
 
 stop_service() {
-	rm -f "$STATE_DEV_FILE"
-	if [ -x /etc/init.d/nat6 ] && [ "$(uci -q get firewall.@defaults[0].nat6)" = "1" ]; then
-		/etc/init.d/nat6 reload >/dev/null 2>&1 || true
-	fi
+	rm -f "$STATE_DEV_FILE" "$STATE_ARGS_FILE"
+	sync_nat6_mode 0
 }
 
 reload_service() {
-	config_load flowcone
-
-	local enable_v4 enable_v6 interface new_dev old_dev
-	config_get_bool enable_v4 config enable_v4 1
-	config_get_bool enable_v6 config enable_v6 0
-	config_get interface config interface ""
+	local enable_v4 enable_v6 interface min_port max_port timeout interval bypass_mark mark manage_nft advanced
+	read_config_vars
 
 	if [ "$enable_v4" -ne 1 ] && [ "$enable_v6" -ne 1 ]; then
 		stop
 		return 0
 	fi
 
+	local new_dev new_args old_dev old_args
 	new_dev=$(resolve_device "$interface" "$enable_v4" "$enable_v6")
+	new_args="$new_dev|$enable_v4|$enable_v6|$min_port|$max_port|$timeout|$interval|$manage_nft|$bypass_mark|$mark"
 	old_dev=$(cat "$STATE_DEV_FILE" 2>/dev/null)
-	if [ -n "$new_dev" ] && [ "$new_dev" = "$old_dev" ] && procd_send_signal flowcone "" HUP 2>/dev/null; then
+	old_args=$(cat "$STATE_ARGS_FILE" 2>/dev/null)
+	if [ -n "$new_dev" ] && [ "$new_dev" = "$old_dev" ] && [ "$new_args" = "$old_args" ] && procd_send_signal flowcone "" HUP 2>/dev/null; then
 		return 0
 	fi
 
@@ -146,13 +161,21 @@ service_triggers() {
 	procd_add_reload_trigger "firewall"
 
 	config_load flowcone
-	local enable_v6 interface
+	local enable_v6 interface wan6_iface=""
 	config_get_bool enable_v6 config enable_v6 0
 	config_get interface config interface ""
 
 	procd_add_reload_interface_trigger "wan"
-	[ "$enable_v6" -eq 1 ] && procd_add_reload_interface_trigger "wan6"
-	if [ -n "$interface" ] && [ "$interface" != "auto" ] && [ "$interface" != "wan" ] && [ "$interface" != "wan6" ] && [ ! -e "/sys/class/net/$interface" ]; then
+	if [ "$enable_v6" -eq 1 ]; then
+		procd_add_reload_interface_trigger "wan6"
+		# shellcheck disable=SC1091
+		. /lib/functions/network.sh 2>/dev/null || true
+		command -v network_find_wan6 >/dev/null 2>&1 && network_find_wan6 wan6_iface
+		if [ -n "$wan6_iface" ] && [ "$wan6_iface" != "wan" ] && [ "$wan6_iface" != "wan6" ]; then
+			procd_add_reload_interface_trigger "$wan6_iface"
+		fi
+	fi
+	if [ -n "$interface" ] && [ "$interface" != "auto" ] && [ "$interface" != "wan" ] && [ "$interface" != "wan6" ] && [ "$interface" != "$wan6_iface" ] && [ ! -e "/sys/class/net/$interface" ]; then
 		procd_add_reload_interface_trigger "$interface"
 	fi
 }

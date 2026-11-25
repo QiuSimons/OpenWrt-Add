@@ -3,49 +3,66 @@
 # shellcheck disable=SC2034,SC3043
 
 START=90
+NAT6_ROUTE_FILE=/var/run/nat6.route
 
 interface() {
-	local old_ifs dhcpv6_interface interface_name alias_interface ipaddr ip6gw
+	local old_ifs dhcpv6_interface interface_name alias_interface ipaddr ip6gw wan6_iface
 	device=""
 	gateway=""
 
 	# shellcheck disable=SC1091
 	. /lib/functions/network.sh 2>/dev/null || true
 
-	old_ifs="$IFS"
-	IFS='
-'
-	dhcpv6_interface=$(uci -q show network | grep -E "dhcpv6|ip6addr" | sed -n 's/^network\.\([^.]*\)\..*/\1/p' | sort -u)
-	for interface_name in $dhcpv6_interface; do
-		[ "$interface_name" = "lan" ] || [ "$interface_name" = "loopback" ] && continue
-		device=""
-		command -v network_get_device >/dev/null 2>&1 && network_get_device device "$interface_name" 2>/dev/null
-		[ -z "$device" ] && device=$(uci -q get "network.${interface_name}.device")
-		[ -z "$device" ] && device=$(uci -q get "network.${interface_name}.ifname")
-		case "$device" in
-			@*)
-				alias_interface="${device#@}"
-				device=""
-				command -v network_get_device >/dev/null 2>&1 && network_get_device device "$alias_interface" 2>/dev/null
-				[ -z "$device" ] && [ "$(uci -q get "network.${alias_interface}.proto")" = "pppoe" ] && device="pppoe-${alias_interface}"
-				[ -z "$device" ] && device=$(uci -q get "network.${alias_interface}.device")
-				if [ -z "$device" ]; then
-					ipaddr=$(uci -q get "network.${alias_interface}.ipaddr")
-					[ -n "$ipaddr" ] && device=$(ip -4 -o addr show 2>/dev/null | awk -v ip="$ipaddr" 'index($4, ip "/") == 1 { print $2; exit }')
-				fi
-				;;
-		esac
-		if [ -n "$device" ] && ip -6 addr show dev "$device" scope global 2>/dev/null | grep -q "inet6"; then
-			ip6gw=$(uci -q get "network.${interface_name}.ip6gw")
+	if command -v network_find_wan6 >/dev/null 2>&1 && network_find_wan6 wan6_iface; then
+		local wan6_dev=""
+		command -v network_get_device >/dev/null 2>&1 && network_get_device wan6_dev "$wan6_iface" 2>/dev/null
+		if [ -n "$wan6_dev" ] && ip -6 addr show dev "$wan6_dev" scope global 2>/dev/null | grep -q "inet6"; then
+			device="$wan6_dev"
+			ip6gw=$(uci -q get "network.${wan6_iface}.ip6gw")
 			if [ -n "$ip6gw" ]; then
 				gateway="$ip6gw"
 			else
-				gateway=$(ip -6 route show default 2>/dev/null | awk '/via/{for (i = 1; i <= NF; i++) if ($i == "via") { print $(i + 1); exit }}')
+				gateway=$(ip -6 route show default dev "$device" 2>/dev/null | awk '/via/{for (i = 1; i <= NF; i++) if ($i == "via") { print $(i + 1); exit }}')
 			fi
-			break
 		fi
-	done
-	IFS="$old_ifs"
+	fi
+
+	if [ -z "$device" ]; then
+		old_ifs="$IFS"
+		IFS='
+'
+		dhcpv6_interface=$(uci -q show network | grep -E "dhcpv6|ip6addr" | sed -n 's/^network\.\([^.]*\)\..*/\1/p' | sort -u)
+		for interface_name in $dhcpv6_interface; do
+			[ "$interface_name" = "lan" ] || [ "$interface_name" = "loopback" ] && continue
+			device=""
+			command -v network_get_device >/dev/null 2>&1 && network_get_device device "$interface_name" 2>/dev/null
+			[ -z "$device" ] && device=$(uci -q get "network.${interface_name}.device")
+			[ -z "$device" ] && device=$(uci -q get "network.${interface_name}.ifname")
+			case "$device" in
+				@*)
+					alias_interface="${device#@}"
+					device=""
+					command -v network_get_device >/dev/null 2>&1 && network_get_device device "$alias_interface" 2>/dev/null
+					[ -z "$device" ] && [ "$(uci -q get "network.${alias_interface}.proto")" = "pppoe" ] && device="pppoe-${alias_interface}"
+					[ -z "$device" ] && device=$(uci -q get "network.${alias_interface}.device")
+					if [ -z "$device" ]; then
+						ipaddr=$(uci -q get "network.${alias_interface}.ipaddr")
+						[ -n "$ipaddr" ] && device=$(ip -4 -o addr show 2>/dev/null | awk -v ip="$ipaddr" 'index($4, ip "/") == 1 { print $2; exit }')
+					fi
+					;;
+			esac
+			if [ -n "$device" ] && ip -6 addr show dev "$device" scope global 2>/dev/null | grep -q "inet6"; then
+				ip6gw=$(uci -q get "network.${interface_name}.ip6gw")
+				if [ -n "$ip6gw" ]; then
+					gateway="$ip6gw"
+				else
+					gateway=$(ip -6 route show default 2>/dev/null | awk '/via/{for (i = 1; i <= NF; i++) if ($i == "via") { print $(i + 1); exit }}')
+				fi
+				break
+			fi
+		done
+		IFS="$old_ifs"
+	fi
 
 	local default_dev
 	default_dev=$(ip -6 route show default 2>/dev/null | awk '/^default/{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
@@ -93,6 +110,10 @@ flowcone_v6_active() {
 	[ -s /var/run/flowcone.dev ]
 }
 
+signal_flowcone_resync() {
+	ubus call service signal '{"name":"flowcone","signal":1}' >/dev/null 2>&1 || true
+}
+
 start() {
 	if [ "$(uci -q get firewall.@defaults[0].nat6)" != "1" ]; then
 		rm -f /tmp/nat6-flowcone.mode
@@ -106,11 +127,16 @@ start() {
 	echo "$fc_v6" > /tmp/nat6-flowcone.mode
 	interface
 	[ -z "$device" ] && logger -p error -t network -s "nat6: DHCPv6 interface device not configured, IPv6 NAT failed." && return 0
-	if [ -n "$gateway" ]; then
-		ip -6 r replace default via "$gateway" dev "$device" 2>/dev/null
-	elif ! ip -6 route show default dev "$device" 2>/dev/null | grep -q "^default"; then
-		logger -p error -t network -s "nat6: DHCPv6 gateway not found, IPv6 NAT failed."
-		return 0
+	if ! ip -6 route show default dev "$device" 2>/dev/null | grep -q "^default via "; then
+		if [ -n "$gateway" ]; then
+			mkdir -p /var/run
+			if ip -6 r replace default via "$gateway" dev "$device" metric 2048 2>/dev/null; then
+				printf '%s|%s\n' "$gateway" "$device" > "$NAT6_ROUTE_FILE"
+			fi
+		elif ! ip -6 route show default dev "$device" 2>/dev/null | grep -q "^default"; then
+			logger -p error -t network -s "nat6: DHCPv6 gateway not found, IPv6 NAT failed."
+			return 0
+		fi
 	fi
 	common_config
 	nft delete table ip6 nat 2>/dev/null
@@ -123,14 +149,19 @@ start() {
 	else
 		nft add rule ip6 nat postrouting oifname "$device" masquerade 2>/dev/null
 	fi
+	signal_flowcone_resync
 	logger -p notice -t network -s "nat6: IPv6 NAT is ready"
 }
 
 stop() {
-	interface
 	nft delete table ip6 nat 2>/dev/null
 	rm -f /tmp/nat6-flowcone.mode
-	[ -n "$gateway" ] && [ -n "$device" ] && ip -6 r del default via "$gateway" dev "$device" 2>/dev/null
+	if [ -s "$NAT6_ROUTE_FILE" ]; then
+		local rt_gw="" rt_dev=""
+		IFS='|' read -r rt_gw rt_dev < "$NAT6_ROUTE_FILE"
+		[ -n "$rt_gw" ] && [ -n "$rt_dev" ] && ip -6 r del default via "$rt_gw" dev "$rt_dev" metric 2048 2>/dev/null || true
+		rm -f "$NAT6_ROUTE_FILE"
+	fi
 	uci -q batch <<-EOF >/dev/null
 		del dhcp.lan.ra_default
 		commit dhcp
@@ -143,6 +174,7 @@ EOF
 EOF
 	fi
 	/etc/init.d/odhcpd reload
+	signal_flowcone_resync
 }
 
 restart() {

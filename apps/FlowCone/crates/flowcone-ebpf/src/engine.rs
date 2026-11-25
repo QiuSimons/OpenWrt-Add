@@ -1,6 +1,6 @@
 use aya_ebpf::{
     helpers::{bpf_csum_diff, bpf_ktime_get_coarse_ns},
-    maps::Array,
+    maps::{Array, HashMap},
     programs::TcContext,
 };
 use flowcone_common::{
@@ -50,8 +50,8 @@ unsafe fn atomic_load_u32(ptr: *const u32) -> u32 {
     unsafe { core::ptr::read_volatile(ptr) }
 }
 
-/// 32-bit BPF `cmpxchg32_32` (`BPF_ATOMIC | BPF_W | BPF_CMPXCHG`), providing atomic
-/// compare-and-swap and full barrier semantics across CPUs.
+/// 32-bit BPF `cmpxchg32_32` (`BPF_ATOMIC | BPF_W | BPF_CMPXCHG`), providing
+/// atomic compare-and-swap and full barrier semantics across CPUs.
 #[inline(always)]
 unsafe fn atomic_cmpxchg_u32(ptr: *mut u32, expected: u32, new_val: u32) -> u32 {
     let mut prev = expected;
@@ -106,7 +106,8 @@ fn push_port_exhausted_v4() {
     if let Some(mut entry) = SESSION_EVENTS_V4.reserve::<SessionEvent4>(0) {
         let p = entry.as_mut_ptr();
         unsafe {
-            // Non-zero flags sentinel on port=0 prevents LLVM from coalescing writes into memset.
+            // Non-zero flags sentinel on port=0 prevents LLVM from coalescing
+            // writes into memset.
             p.cast::<u64>().write_volatile(0);
             p.cast::<u32>()
                 .add(2)
@@ -224,8 +225,9 @@ pub fn fixup_l3_id_v4(ctx: &TcContext, ip_rel: usize, old_id: u16, new_id: u16) 
         .is_ok()
 }
 
-/// Fix up IPv6 UDP checksum using `bpf_csum_diff` + `BPF_F_IPV6` so `CHECKSUM_COMPLETE`
-/// `skb->csum` is preserved (IPv6 has no L3 header checksum).
+/// Fix up IPv6 UDP checksum using `bpf_csum_diff` + `BPF_F_IPV6` so
+/// `CHECKSUM_COMPLETE` `skb->csum` is preserved (IPv6 has no L3 header
+/// checksum).
 #[inline(always)]
 pub fn fixup_csum_v6(
     ctx: &TcContext,
@@ -289,16 +291,21 @@ pub fn bitmap_set_bit(map: &Array<u64>, slot: u32, mask: u64) {
 }
 
 #[inline(always)]
+unsafe fn bitmap_clear_ptr(p: *mut u64, mask: u64) {
+    let neg = !mask;
+    unsafe {
+        core::arch::asm!(
+            "lock *(u64 *)({p} + 0) &= {neg}",
+            p = in(reg) p,
+            neg = in(reg) neg,
+        );
+    }
+}
+
+#[inline(always)]
 pub fn bitmap_clear_bit(map: &Array<u64>, slot: u32, mask: u64) {
     if let Some(p) = map.get_ptr_mut(slot) {
-        let neg = !mask;
-        unsafe {
-            core::arch::asm!(
-                "lock *(u64 *)({p} + 0) &= {neg}",
-                p = in(reg) p,
-                neg = in(reg) neg,
-            );
-        }
+        unsafe { bitmap_clear_ptr(p, mask) };
     }
 }
 
@@ -397,112 +404,117 @@ impl BindingOps for BindingValue6 {
     }
 }
 
-macro_rules! try_alloc_slot {
-    (
-        $map:expr,
-        $reserved:expr,
-        $inbound:expr,
-        $in_val:expr,
-        $slot:expr,
-        $is_even:expr,
-        $min:expr,
-        $max:expr
-    ) => {{
-        let slot = $slot;
-        let base_port = (slot * 128 + if $is_even { 0 } else { 1 }) as u16;
-        let max_port_in_slot = base_port.saturating_add(126);
-        let mut allocated = 0u32;
+macro_rules! impl_pick_bitmap_port {
+    ($fn_name:ident, $even_map:ident, $odd_map:ident) => {
+        #[inline(never)]
+        fn $fn_name(slot: u32, is_even: bool, min: u16, max: u16) -> u16 {
+            let slot = slot & 0x1ff;
+            let map = if is_even { &$even_map } else { &$odd_map };
+            let base_port = (slot * 128 + if is_even { 0 } else { 1 }) as u16;
+            let max_port_in_slot = base_port.saturating_add(126);
 
-        if max_port_in_slot >= $min && base_port <= $max {
-            if let Some(p) = $map.get_ptr_mut(slot) {
-                let val = unsafe { *p };
-                if val != !0u64 {
-                    let mut mask_avail = !val;
-                    if base_port < $min {
-                        let low_invalid = ($min - base_port).div_ceil(2) as u32;
-                        if low_invalid < 64 {
-                            mask_avail &= !((1u64 << low_invalid) - 1);
-                        } else {
-                            mask_avail = 0;
-                        }
-                    }
-                    if max_port_in_slot > $max {
-                        let high_valid = (($max - base_port) / 2) as u32;
-                        if high_valid < 63 {
-                            mask_avail &= (1u64 << (high_valid + 1)) - 1;
-                        }
-                    }
-
-                    let mut probe = 0;
-                    while probe < 4 && mask_avail != 0 {
-                        let free_bit = mask_avail.trailing_zeros();
-                        let mask = 1u64 << free_bit;
-                        mask_avail &= !mask;
-                        let port = base_port + (free_bit as u16 * 2);
-                        unsafe {
-                            core::arch::asm!(
-                                "lock *(u64 *)({p} + 0) |= {mask}",
-                                p = in(reg) p,
-                                mask = in(reg) mask,
-                            );
-                        }
-
-                        let res_state = port_reserved_state($reserved, port);
-                        if !flowcone_common::reserved_state_is_reserved(res_state) {
-                            let mut cand = *$in_val;
-                            cand.set_reserved_epoch(res_state);
-                            match $inbound.insert(&port, &cand, BPF_NOEXIST) {
-                                Ok(()) => {
-                                    allocated = ((res_state as u32) << 16) | (port as u32);
-                                    break;
-                                }
-                                Err(err) if err != EEXIST_ERR => {
-                                    // Roll back bitmap bit if insert failed due to capacity rather than collision.
-                                    if !port_is_reserved($reserved, port) {
-                                        bitmap_clear_bit($map, slot, mask);
-                                    }
-                                }
-                                Err(_) => {}
-                            }
-                        }
-                        probe += 1;
-                    }
-                }
+            if max_port_in_slot < min || base_port > max {
+                return 0;
             }
+            let Some(p) = map.get_ptr_mut(slot) else {
+                return 0;
+            };
+            let val = unsafe { *p };
+            if val == !0u64 {
+                return 0;
+            }
+            let mut mask_avail = !val;
+            if base_port < min {
+                let low_invalid = ((min - base_port).div_ceil(2) as u32) & 63;
+                mask_avail &= !((1u64 << low_invalid) - 1);
+            }
+            if max_port_in_slot > max {
+                let high_limit = (((max - base_port) / 2 + 1) as u32) & 63;
+                mask_avail &= (1u64 << high_limit) - 1;
+            }
+            if mask_avail == 0 {
+                return 0;
+            }
+            let free_bit = mask_avail.trailing_zeros();
+            let mask = 1u64 << free_bit;
+            unsafe {
+                core::arch::asm!(
+                    "lock *(u64 *)({p} + 0) |= {mask}",
+                    p = in(reg) p,
+                    mask = in(reg) mask,
+                );
+            }
+            base_port + (free_bit as u16 * 2)
         }
-        allocated
-    }};
+    };
 }
+
+impl_pick_bitmap_port!(pick_bitmap_port_v4, BITMAP_EVEN_V4, BITMAP_ODD_V4);
+impl_pick_bitmap_port!(pick_bitmap_port_v6, BITMAP_EVEN_V6, BITMAP_ODD_V6);
 
 macro_rules! impl_alloc_port {
     (
         $fn_name:ident,
+        $exact_name:ident,
+        $claim_name:ident,
         $val_ty:ty,
         $even_map:ident,
         $odd_map:ident,
         $reserved_map:ident,
         $inbound_map:ident,
+        $pick_slot:ident,
         $push_exhausted:ident
     ) => {
+        #[inline(never)]
+        fn $exact_name(port: u16, min: u16, max: u16, in_val: &$val_ty) -> u32 {
+            if port < min || port > max {
+                return 0;
+            }
+            let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(port);
+            let map = if is_even { &$even_map } else { &$odd_map };
+            let res_state = port_reserved_state(&$reserved_map, port);
+            if !flowcone_common::reserved_state_is_reserved(res_state) {
+                let mut cand = *in_val;
+                cand.set_reserved_epoch(res_state);
+                if $inbound_map.insert(&port, &cand, BPF_NOEXIST).is_ok() {
+                    bitmap_set_bit(map, slot, mask);
+                    return ((res_state as u32) << 16) | (port as u32);
+                }
+            } else {
+                bitmap_set_bit(map, slot, mask);
+            }
+            0
+        }
+
+        #[inline(never)]
+        fn $claim_name(port: u16, in_val: &$val_ty) -> u32 {
+            let res_state = port_reserved_state(&$reserved_map, port);
+            if flowcone_common::reserved_state_is_reserved(res_state) {
+                return 0;
+            }
+            let mut cand = *in_val;
+            cand.set_reserved_epoch(res_state);
+            match $inbound_map.insert(&port, &cand, BPF_NOEXIST) {
+                Ok(()) => ((res_state as u32) << 16) | (port as u32),
+                Err(err) => {
+                    if err != EEXIST_ERR && !port_is_reserved(&$reserved_map, port) {
+                        let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(port);
+                        let map = if is_even { &$even_map } else { &$odd_map };
+                        bitmap_clear_bit(map, slot, mask);
+                    }
+                    0
+                }
+            }
+        }
+
         #[inline(never)]
         pub fn $fn_name(pref: u16, min: u16, max: u16, in_val: &$val_ty) -> u32 {
             if min == 0 || min > max {
                 return 0;
             }
-            if pref >= min && pref <= max {
-                let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(pref);
-                let map = if is_even { &$even_map } else { &$odd_map };
-                let res_state = port_reserved_state(&$reserved_map, pref);
-                if !flowcone_common::reserved_state_is_reserved(res_state) {
-                    let mut cand = *in_val;
-                    cand.set_reserved_epoch(res_state);
-                    if $inbound_map.insert(&pref, &cand, BPF_NOEXIST).is_ok() {
-                        bitmap_set_bit(map, slot, mask);
-                        return ((res_state as u32) << 16) | (pref as u32);
-                    }
-                } else {
-                    bitmap_set_bit(map, slot, mask);
-                }
+            let exact = $exact_name(pref, min, max, in_val);
+            if exact != 0 {
+                return exact;
             }
 
             let min_slot = (min as u32) / 128;
@@ -513,45 +525,34 @@ macro_rules! impl_alloc_port {
             let rnd = unsafe { aya_ebpf::helpers::bpf_get_prandom_u32() };
             let start_off = rnd % span;
 
-            let primary_map = if pref_even { &$even_map } else { &$odd_map };
+            let mut cand_port = 0u16;
             let mut step = 0u32;
-            while step < 4 && step < span {
-                let slot = min_slot + ((start_off + step) % span);
-                let p = try_alloc_slot!(
-                    primary_map,
-                    &$reserved_map,
-                    $inbound_map,
-                    in_val,
-                    slot,
-                    pref_even,
-                    min,
-                    max
-                );
-                if p != 0 {
-                    return p;
+            while step < 4 {
+                let off = step & 1;
+                let slot = (min_slot + ((start_off + off) % span)) & 0x1ff;
+                let parity_even = pref_even ^ (step >= 2);
+                cand_port = $pick_slot(slot, parity_even, min, max);
+                if cand_port != 0 {
+                    break;
                 }
                 step += 1;
             }
 
-            let fallback_even = !pref_even;
-            let fallback_map = if fallback_even { &$even_map } else { &$odd_map };
-            let mut fstep = 0u32;
-            while fstep < 2 && fstep < span {
-                let slot = min_slot + ((start_off + fstep) % span);
-                let f = try_alloc_slot!(
-                    fallback_map,
-                    &$reserved_map,
-                    $inbound_map,
-                    in_val,
-                    slot,
-                    fallback_even,
-                    min,
-                    max
-                );
-                if f != 0 {
-                    return f;
+            if cand_port != 0 {
+                let claimed = $claim_name(cand_port, in_val);
+                if claimed != 0 {
+                    return claimed;
                 }
-                fstep += 1;
+                // Rare race (newly-bound local socket or concurrent bit race):
+                // try one opposite-parity fallback slot.
+                let alt_slot = (min_slot + ((start_off + 1) % span)) & 0x1ff;
+                let alt_port = $pick_slot(alt_slot, !pref_even, min, max);
+                if alt_port != 0 {
+                    let claimed = $claim_name(alt_port, in_val);
+                    if claimed != 0 {
+                        return claimed;
+                    }
+                }
             }
 
             if let Some(p) = PORT_FLAGS.get_ptr_mut(0) {
@@ -569,21 +570,27 @@ macro_rules! impl_alloc_port {
 
 impl_alloc_port!(
     alloc_port_v4,
+    try_alloc_exact_v4,
+    claim_picked_port_v4,
     BindingValue4,
     BITMAP_EVEN_V4,
     BITMAP_ODD_V4,
     RESERVED_V4,
     INBOUND_BINDINGS_V4,
+    pick_bitmap_port_v4,
     push_port_exhausted_v4
 );
 
 impl_alloc_port!(
     alloc_port_v6,
+    try_alloc_exact_v6,
+    claim_picked_port_v6,
     BindingValue6,
     BITMAP_EVEN_V6,
     BITMAP_ODD_V6,
     RESERVED_V6,
     INBOUND_BINDINGS_V6,
+    pick_bitmap_port_v6,
     push_port_exhausted_v6
 );
 
@@ -624,9 +631,102 @@ impl_lookup_inbound!(
     release_port_v6
 );
 
+enum OutboundInspect<V> {
+    Missing,
+    Busy,
+    Valid(u16),
+    Stale {
+        val: *mut V,
+        pm1: u32,
+        cur_port: u16,
+        ip_matches: bool,
+        res_state: u16,
+    },
+}
+
+#[inline(always)]
+fn inspect_outbound_binding<K, V, IpEq>(
+    ob_map: &HashMap<K, V>,
+    reserved_map: &Array<u16>,
+    ep_key: &K,
+    wan_ip: &V::Ip,
+    ip_eq: IpEq,
+    now: u32,
+    is_short_lived: bool,
+) -> OutboundInspect<V>
+where
+    V: BindingOps + BindingMeta,
+    IpEq: FnOnce(&V::Ip, &V::Ip) -> bool,
+{
+    let Some(val) = ob_map.get_ptr_mut(ep_key) else {
+        return OutboundInspect::Missing;
+    };
+    let pm_ptr = V::port_meta_ptr(val);
+    let pm1 = unsafe { atomic_load_u32(pm_ptr) };
+    let (cur_port_be, cur_meta) = unpack_port_meta(pm1);
+    if cur_port_be == 0 {
+        return OutboundInspect::Busy;
+    }
+    let cur_ip = V::read_ip(val);
+    let pm2 = unsafe { atomic_load_u32(pm_ptr) };
+    if pm2 != pm1 {
+        return OutboundInspect::Busy;
+    }
+    let cur_port = u16::from_be(cur_port_be);
+    let ip_matches = ip_eq(&cur_ip, wan_ip);
+    let res_state = port_reserved_state(reserved_map, cur_port);
+    if ip_matches && flowcone_common::binding_matches_reserved(res_state, cur_meta) {
+        unsafe {
+            if now.wrapping_sub(*V::last_seen_ptr(val)) >= LAST_SEEN_INTERVAL_SEC {
+                *V::last_seen_ptr(val) = now;
+            }
+        }
+        if !is_short_lived && (cur_meta & BINDING_FLAG_SHORT_LIVED) != 0 {
+            let next_pm = pack_port_meta(cur_port_be, cur_meta & !BINDING_FLAG_SHORT_LIVED);
+            let _ = unsafe { atomic_cmpxchg_u32(pm_ptr, pm1, next_pm) };
+        }
+        return OutboundInspect::Valid(cur_port_be);
+    }
+    OutboundInspect::Stale {
+        val,
+        pm1,
+        cur_port,
+        ip_matches,
+        res_state,
+    }
+}
+
+trait BindingMeta {
+    fn last_seen_ptr(val: *mut Self) -> *mut u32;
+    fn reserved_meta_val(val: *const Self) -> u16;
+}
+
+impl BindingMeta for BindingValue4 {
+    #[inline(always)]
+    fn last_seen_ptr(val: *mut Self) -> *mut u32 {
+        unsafe { core::ptr::addr_of_mut!((*val).last_seen) }
+    }
+    #[inline(always)]
+    fn reserved_meta_val(val: *const Self) -> u16 {
+        unsafe { (*val).reserved_meta() }
+    }
+}
+
+impl BindingMeta for BindingValue6 {
+    #[inline(always)]
+    fn last_seen_ptr(val: *mut Self) -> *mut u32 {
+        unsafe { core::ptr::addr_of_mut!((*val).last_seen) }
+    }
+    #[inline(always)]
+    fn reserved_meta_val(val: *const Self) -> u16 {
+        unsafe { (*val).reserved_meta() }
+    }
+}
+
 macro_rules! impl_get_or_create_mapping {
     (
         $fn_name:ident,
+        $lookup_name:ident,
         $ip_ty:ty,
         $key_ty:ty,
         $val_ty:ty,
@@ -636,6 +736,7 @@ macro_rules! impl_get_or_create_mapping {
         $even_map:ident,
         $odd_map:ident,
         $alloc_fn:ident,
+        $try_exact_fn:ident,
         $release_fn:ident,
         $push_event:ident,
         $make_key:expr,
@@ -645,13 +746,38 @@ macro_rules! impl_get_or_create_mapping {
         $max_port:expr
     ) => {
         #[inline(always)]
-        pub fn $fn_name(
+        pub fn $lookup_name(
             cfg: &GlobalConfig,
             src_ip: $ip_ty,
             src_port: u16,
             now: u32,
             is_short_lived: bool,
         ) -> Option<u16> {
+            let ep_key: $key_ty = $make_key(&src_ip, src_port);
+            match inspect_outbound_binding(
+                &$ob_map,
+                &$reserved_map,
+                &ep_key,
+                &cfg.$wan_ip,
+                $ip_eq,
+                now,
+                is_short_lived,
+            ) {
+                OutboundInspect::Valid(port) => Some(port),
+                _ => None,
+            }
+        }
+
+        /// Returns the mapped UDP port in big-endian (`0` on failure /
+        /// concurrent replacement).
+        #[inline(never)]
+        pub fn $fn_name(
+            cfg: &GlobalConfig,
+            src_ip: $ip_ty,
+            src_port: u16,
+            now: u32,
+            is_short_lived: bool,
+        ) -> u16 {
             let ep_key: $key_ty = $make_key(&src_ip, src_port);
             let wan_ip = &cfg.$wan_ip;
             let flags = if is_short_lived {
@@ -660,63 +786,71 @@ macro_rules! impl_get_or_create_mapping {
                 0
             };
 
-            if let Some(val) = $ob_map.get_ptr_mut(&ep_key) {
-                let pm_ptr = <$val_ty as BindingOps>::port_meta_ptr(val);
-                let pm1 = unsafe { atomic_load_u32(pm_ptr) };
-                let (cur_port_be, cur_meta) = unpack_port_meta(pm1);
-                if cur_port_be == 0 {
-                    // Another CPU is replacing this stale entry in place.
-                    return None;
-                }
-                let cur_ip = <$val_ty as BindingOps>::read_ip(val);
-                let pm2 = unsafe { atomic_load_u32(pm_ptr) };
-                if pm2 != pm1 {
-                    return None;
-                }
-
-                let cur_port = u16::from_be(cur_port_be);
-                let ip_matches = $ip_eq(&cur_ip, wan_ip);
-                let res_state = port_reserved_state(&$reserved_map, cur_port);
-                if ip_matches && flowcone_common::binding_matches_reserved(res_state, cur_meta) {
-                    unsafe {
-                        if now.wrapping_sub((*val).last_seen) >= LAST_SEEN_INTERVAL_SEC {
-                            (*val).last_seen = now;
-                        }
+            let mut stale_val: *mut $val_ty = core::ptr::null_mut();
+            let mut cur_port = 0u16;
+            let mut ip_matches = false;
+            let mut res_state = 0u16;
+            let mut is_res = false;
+            match inspect_outbound_binding(
+                &$ob_map,
+                &$reserved_map,
+                &ep_key,
+                wan_ip,
+                $ip_eq,
+                now,
+                is_short_lived,
+            ) {
+                OutboundInspect::Valid(port) => return port,
+                OutboundInspect::Busy => return 0,
+                OutboundInspect::Stale {
+                    val,
+                    pm1,
+                    cur_port: old_port,
+                    ip_matches: old_ip_match,
+                    res_state: old_res_state,
+                } => {
+                    let pm_ptr = <$val_ty as BindingOps>::port_meta_ptr(val);
+                    // Atomically claim stale eviction (`port = 0`) so a losing
+                    // CPU never deletes the winner's new entry in
+                    // OUTBOUND_BINDINGS.
+                    if unsafe { atomic_cmpxchg_u32(pm_ptr, pm1, 0) } != pm1 {
+                        return 0;
                     }
-                    if !is_short_lived && (cur_meta & BINDING_FLAG_SHORT_LIVED) != 0 {
-                        let next_pm =
-                            pack_port_meta(cur_port_be, cur_meta & !BINDING_FLAG_SHORT_LIVED);
-                        let _ = unsafe { atomic_cmpxchg_u32(pm_ptr, pm1, next_pm) };
+
+                    is_res =
+                        old_ip_match && flowcone_common::reserved_state_is_reserved(old_res_state);
+                    if is_res {
+                        let (is_even, slot, mask) =
+                            flowcone_common::port_to_bitmap_coords(old_port);
+                        let map = if is_even { &$even_map } else { &$odd_map };
+                        bitmap_set_bit(map, slot, mask);
                     }
-                    return Some(cur_port_be);
+                    stale_val = val;
+                    cur_port = old_port;
+                    ip_matches = old_ip_match;
+                    res_state = old_res_state;
                 }
+                OutboundInspect::Missing => {}
+            }
 
-                // Atomically claim stale eviction (`port = 0`) so a losing CPU never deletes
-                // the winner's new entry in OUTBOUND_BINDINGS.
-                if unsafe { atomic_cmpxchg_u32(pm_ptr, pm1, 0) } != pm1 {
-                    return None;
-                }
+            let pref = u16::from_be(src_port);
+            let min_p = $min_port(cfg);
+            let max_p = $max_port(cfg);
+            let in_val = <$val_ty as BindingOps>::new(&src_ip, src_port, flags, now);
+            let mut alloc_packed = $alloc_fn(pref, min_p, max_p, &in_val);
 
-                let is_res = ip_matches && flowcone_common::reserved_state_is_reserved(res_state);
-                if is_res {
-                    let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(cur_port);
-                    let map = if is_even { &$even_map } else { &$odd_map };
-                    bitmap_set_bit(map, slot, mask);
-                }
-
-                // Allocate the replacement port while cur_port still occupies `$ib_map` to
-                // prevent ABA on `cur_port` reuse, falling back after cleanup on 1-port pools.
-                let pref = u16::from_be(src_port);
-                let in_val = <$val_ty as BindingOps>::new(&src_ip, src_port, flags, now);
-                let mut alloc_packed = $alloc_fn(pref, $min_port(cfg), $max_port(cfg), &in_val);
-
+            if !stale_val.is_null() {
+                // Clean up old inbound mapping after replacement attempt to
+                // avoid ABA on cur_port reuse, then allow exact cur_port
+                // reclaim if the replacement attempt failed (e.g. 1-port pool).
                 if let Some(in_ptr) = $ib_map.get_ptr_mut(&cur_port) {
                     let in_ip = <$val_ty as BindingOps>::read_ip(in_ptr);
                     if unsafe { $ip_eq(&in_ip, &src_ip) && (*in_ptr).port == src_port }
                         && (!ip_matches
-                            || !flowcone_common::binding_matches_reserved(res_state, unsafe {
-                                (*in_ptr).reserved_meta()
-                            }))
+                            || !flowcone_common::binding_matches_reserved(
+                                res_state,
+                                <$val_ty as BindingMeta>::reserved_meta_val(in_ptr),
+                            ))
                     {
                         let _ = $ib_map.remove(&cur_port);
                         if !is_res {
@@ -728,32 +862,30 @@ macro_rules! impl_get_or_create_mapping {
                 }
 
                 if (alloc_packed as u16) == 0 {
-                    alloc_packed = $alloc_fn(pref, $min_port(cfg), $max_port(cfg), &in_val);
+                    alloc_packed = $try_exact_fn(cur_port, min_p, max_p, &in_val);
                 }
                 let alloc = alloc_packed as u16;
                 if alloc == 0 {
                     let _ = $ob_map.remove(&ep_key);
-                    return None;
+                    return 0;
                 }
 
                 let m_port = u16::to_be(alloc);
                 let new_meta =
                     flowcone_common::pack_binding_meta(is_short_lived, (alloc_packed >> 16) as u16);
-                <$val_ty as BindingOps>::write_ip(val, wan_ip);
+                let pm_ptr = <$val_ty as BindingOps>::port_meta_ptr(stale_val);
+                <$val_ty as BindingOps>::write_ip(stale_val, wan_ip);
                 unsafe {
-                    (*val).last_seen = now;
+                    (*stale_val).last_seen = now;
                     let _ = atomic_cmpxchg_u32(pm_ptr, 0, pack_port_meta(m_port, new_meta));
                 }
                 $push_event(&ep_key, alloc, flags);
-                return Some(m_port);
+                return m_port;
             }
 
-            let pref = u16::from_be(src_port);
-            let in_val = <$val_ty as BindingOps>::new(&src_ip, src_port, flags, now);
-            let alloc_packed = $alloc_fn(pref, $min_port(cfg), $max_port(cfg), &in_val);
             let alloc = alloc_packed as u16;
             if alloc == 0 {
-                return None;
+                return 0;
             }
             let m_port = u16::to_be(alloc);
             let new_val = <$val_ty as BindingOps>::new(
@@ -764,14 +896,16 @@ macro_rules! impl_get_or_create_mapping {
             );
             if $ob_map.insert(&ep_key, &new_val, BPF_NOEXIST).is_ok() {
                 $push_event(&ep_key, alloc, flags);
-                Some(m_port)
+                m_port
             } else {
                 let _ = $ib_map.remove(&alloc);
                 $release_fn(alloc);
-                let val = $ob_map.get_ptr_mut(&ep_key)?;
+                let Some(val) = $ob_map.get_ptr_mut(&ep_key) else {
+                    return 0;
+                };
                 let pm_ptr = <$val_ty as BindingOps>::port_meta_ptr(val);
                 let (p, _) = unpack_port_meta(unsafe { atomic_load_u32(pm_ptr) });
-                if p == 0 { None } else { Some(p) }
+                p
             }
         }
     };
@@ -779,6 +913,7 @@ macro_rules! impl_get_or_create_mapping {
 
 impl_get_or_create_mapping!(
     get_or_create_mapping_v4,
+    lookup_outbound_v4,
     u32,
     EndpointKey4,
     BindingValue4,
@@ -788,6 +923,7 @@ impl_get_or_create_mapping!(
     BITMAP_EVEN_V4,
     BITMAP_ODD_V4,
     alloc_port_v4,
+    try_alloc_exact_v4,
     release_port_v4,
     push_event_v4,
     |ip: &u32, port| EndpointKey4 {
@@ -803,6 +939,7 @@ impl_get_or_create_mapping!(
 
 impl_get_or_create_mapping!(
     get_or_create_mapping_v6,
+    lookup_outbound_v6,
     [u8; 16],
     EndpointKey6,
     BindingValue6,
@@ -812,6 +949,7 @@ impl_get_or_create_mapping!(
     BITMAP_EVEN_V6,
     BITMAP_ODD_V6,
     alloc_port_v6,
+    try_alloc_exact_v6,
     release_port_v6,
     push_event_v6,
     |ip: &[u8; 16], port| {

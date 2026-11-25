@@ -140,7 +140,7 @@ function runShim(cases) {
 		if (!Object.prototype.hasOwnProperty.call(shim.POLICY, c.method)) return { status: 3, reply: null, sections: orig, reverted };
 		if (!shim.argsOk(c.method, c.args)) return { status: 2, reply: null, sections: orig, reverted };
 		const reply = c.method === 'wireless'
-			? shim.wirelessReply((c.ubus || {})['network.wireless status'] ?? null, c.wireless_uci ?? null, d => NETDEVS.includes(d))
+			? shim.wirelessReply((c.ubus || {})['network.wireless status'] ?? null, c.wireless_uci ?? null, d => NETDEVS.includes(d), c.ifaces ?? null)
 			: c.method === 'wired' ? { hosts: shim.wired(c.fdb ?? null) }
 			: c.method === 'routes' ? { routes: shim.routes(c.lookup ?? null) }
 			: c.method === 'survey' ? { results: shim.survey((c.args || {}).device, (c.survey && typeof c.survey === 'object') ? c.survey[(c.args || {}).device] : null, d => WIFI_NET.includes(d)) }
@@ -426,7 +426,34 @@ const SURVEY_CASES = [
 	{ method: 'survey', args: { device: 'phy2g-ap0', extra: 'x' } }
 ];
 const QCA_CASES = [ { method: 'wireless', ubus: {}, wireless_uci: QCA } ];
-const ALL = BEHAVIOUR.concat(NAME_CASES, MAC_CASES, SURVEY_CASES, QCA_CASES);
+/* #164: the kernel's wireless interfaces as ucode's nl80211 dumps them (iftype 3: an access point, 4: AP_VLAN, the
+   interface hostapd makes for a VLAN its network hands out, or for a WDS station), in the kernel's order */
+const AP_ADDR = '02:00:5e:00:53:a0';
+const nlIf = (ifname, iftype, mac, wiphy, extra) => Object.assign({ ifname, dev: ifname, iftype, mac, wiphy }, extra);
+const NL_IFACES = [
+	nlIf('wlan0.3', 4, AP_ADDR, 0), nlIf('phy2g-ap0', 3, AP_ADDR.toUpperCase(), 0, { ssid: 'Home' }), nlIf('wlan0.1', 4, AP_ADDR, 0),
+	nlIf('phy2g-ap0.sta1', 4, AP_ADDR, 0, { '4addr': 1 }), nlIf('phy2g-sta0', 2, '02:00:5e:00:53:a1', 0),
+	/* that address on another wiphy, an address of no access point, and what is no interface at all */
+	nlIf('wlan9.1', 4, AP_ADDR, 1), nlIf('wlan8.1', 4, '02:00:5e:00:53:a9', 0),
+	nlIf('bad name', 4, AP_ADDR, 0), nlIf('wlan7.1', 4, 'junk', 0), nlIf('wlan6.1', 4, AP_ADDR, '0'), nlIf('wlan5.1', '4', AP_ADDR, 0), 'junk', null
+];
+const withIfaces = ifaces => ({ method: 'wireless', ubus: { 'network.wireless status': WIRELESS }, ifaces });
+const VLAN_CASES = [
+	withIfaces(NL_IFACES),
+	/* no dump, one cut short, a single message: none */
+	withIfaces(null), withIfaces(false), withIfaces(NL_IFACES[0]),
+	/* two access points with one address on a wiphy: the VLAN interface is neither's */
+	withIfaces([ nlIf('phy2g-ap0', 3, AP_ADDR, 0), nlIf('phy2g-sta0', 3, AP_ADDR, 0), nlIf('wlan0.1', 4, AP_ADDR, 0) ]),
+	/* 32 in all */
+	withIfaces([ nlIf('phy2g-ap0', 3, AP_ADDR, 0) ].concat(Array.from({ length: 40 }, (_, i) => nlIf('v' + String(i).padStart(2, '0'), 4, AP_ADDR, 0)))),
+	/* and for a radio read from the config */
+	{ method: 'wireless', ubus: {}, wireless_uci: MTK, ifaces: [ nlIf('ra0', 3, AP_ADDR, 0), nlIf('ra0.7', 4, AP_ADDR, 0) ] },
+	/* an interface may be named anything a device may: these are names of JavaScript's own */
+	{ method: 'wireless', ubus: { 'network.wireless status': { radio0: { up: true, config: {}, interfaces: [ 'constructor', '__proto__', 'toString' ].map(n => ({ section: n, ifname: n, config: { mode: 'ap', ssid: n } })) } } },
+		ifaces: [ nlIf('constructor', 3, AP_ADDR, 0), nlIf('v1', 4, AP_ADDR, 0), nlIf('__proto__', 3, '02:00:5e:00:53:b0', 0), nlIf('v2', 4, '02:00:5e:00:53:b0', 0),
+			nlIf('toString', 3, '02:00:5e:00:53:b1', 0), nlIf('v3', 4, '02:00:5e:00:53:b1', 0) ] }
+];
+const ALL = BEHAVIOUR.concat(NAME_CASES, MAC_CASES, SURVEY_CASES, QCA_CASES, VLAN_CASES);
 
 /* -------------------------------------------------------------- tests */
 
@@ -496,6 +523,22 @@ test('stand-in: wireless keeps the fields the view reads and no secret', () => {
 	assert.equal(sta.config.encryption, 'wpa2+ccmp', 'anything beyond the mode string is dropped');
 	assert.deepEqual(sta.config.network, [ 'wwan' ]);
 	assert.deepEqual(runShim(BEHAVIOUR)[22].reply, {});
+});
+
+test('stand-in: an access point interface names the interfaces of its VLANs, from the kernel\'s dump (#164)', () => {
+	const r = runShim(VLAN_CASES).map(x => x.reply);
+	const vlans = x => x.radio0.interfaces.map(i => [ i.ifname, 'vlans' in i ? i.vlans : null ]);
+	assert.deepEqual(vlans(r[0]), [ [ 'phy2g-ap0', [ 'wlan0.1', 'wlan0.3' ] ], [ 'phy2g-sta0', null ] ],
+		'its address on its wiphy, in name order; not a WDS station\'s, another wiphy\'s or another address\'s');
+	for (const i of [ 1, 2, 3, 4 ]) assert.deepEqual(vlans(r[i]), [ [ 'phy2g-ap0', null ], [ 'phy2g-sta0', null ] ], 'case ' + i);
+	assert.equal(r[5].radio0.interfaces[0].vlans.length, 32);
+	assert.deepEqual(r[6].MT7990_1_1.interfaces.filter(i => i.ifname === 'ra0')[0].vlans, [ 'ra0.7' ]);
+	assert.deepEqual(r[7].radio0.interfaces.map(i => [ i.ifname, i.vlans ]), [ [ 'constructor', [ 'v1' ] ], [ '__proto__', [ 'v2' ] ], [ 'toString', [ 'v3' ] ] ]);
+	/* nothing else of the reply moves */
+	const plain = runShim([ { method: 'wireless', ubus: { 'network.wireless status': WIRELESS } } ])[0].reply;
+	r[0].radio0.interfaces.forEach(i => delete i.vlans);
+	assert.deepEqual(r[0], plain);
+	assert.deepEqual(r[1], plain);
 });
 
 test('the model accepts what wireless returns', () => {

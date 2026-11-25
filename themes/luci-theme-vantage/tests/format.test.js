@@ -67,6 +67,16 @@ test('fmt: traffic reads in bytes when picked; link rates stay bitrates', () => 
 	assert.equal(fmt.bits(8e6), '8 Mbit/s');
 });
 
+/* #168: the Ports tile breaks a note between these two, in every language */
+test('fmt.labelled: a note as its label and the rest, at the first colon, Chinese\'s too', () => {
+	assert.deepEqual(fmt.labelled('Dropped: 0 in · 3 out'), [ 'Dropped: ', '0 in · 3 out' ]);
+	assert.deepEqual(fmt.labelled('已丢弃：0 入 · 3 出'), [ '已丢弃：', '0 入 · 3 出' ]);
+	assert.deepEqual(fmt.labelled('Erreurs : 12 entrantes'), [ 'Erreurs : ', '12 entrantes' ]);
+	assert.deepEqual(fmt.labelled('Ratio: 1:2'), [ 'Ratio: ', '1:2' ], 'the first one');
+	for (const t of [ 'no colon here', 'ends with one:', '', ':' ]) assert.deepEqual(fmt.labelled(t), [ t ], t);
+	assert.deepEqual([ fmt.labelled(null), fmt.labelled(undefined), fmt.labelled(7) ], [ [ '' ], [ '' ], [ '7' ] ]);
+});
+
 test('fmt.daysAgo: days for two months, months for two years, then full years', () => {
 	assert.deepEqual([ 0, 0.9, 1, 1.5, 2, 59, 60, 91, 365, 700, 730, 731, 1095, 1096, 4000 ].map(d => fmt.daysAgo(d)),
 		[ 'today', 'today', '1 day ago', '1 day ago', '2 days ago', '59 days ago', '2 months ago', '3 months ago', '12 months ago', '23 months ago', '24 months ago', '2 years ago', '2 years ago', '3 years ago', '10 years ago' ]);

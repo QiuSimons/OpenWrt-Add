@@ -171,6 +171,7 @@ pub(crate) struct DataPlane {
     active: usize,
     _ingress_target: ProgramArray<MapData>,
     _egress_target: ProgramArray<MapData>,
+    _egress_alloc_target: ProgramArray<MapData>,
     _frag_target: ProgramArray<MapData>,
     _frag6_target: ProgramArray<MapData>,
     _icmp_target: ProgramArray<MapData>,
@@ -186,15 +187,28 @@ impl DataPlane {
         }
     }
 
-    pub(crate) fn start(bpf: aya::Ebpf, iface: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut bpf = bpf;
+    pub(crate) fn bpf_mut(&mut self) -> &mut aya::Ebpf {
+        &mut self.bpf
+    }
+
+    pub(crate) fn load(
+        mut bpf: aya::Ebpf,
+        iface: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         for name in [
             "flowcone_tcx_ingress",
+            "flowcone_ingress_v4",
+            "flowcone_ingress_v6",
             "flowcone_tcx_egress",
+            "flowcone_egress_v4",
+            "flowcone_egress_v6",
+            "flowcone_egress_alloc_v4",
+            "flowcone_egress_alloc_v6",
             "flowcone_frag_v4_ingress",
             "flowcone_frag_v4_egress",
             "flowcone_frag_v6_ingress",
             "flowcone_frag_v6_egress",
+            "flowcone_frag_v6_egress_alloc",
             "flowcone_icmp_target",
             "flowcone_icmp_egress_target",
             "flowcone_icmp6_target",
@@ -207,10 +221,32 @@ impl DataPlane {
             load_classifier(&mut bpf, name)?;
         }
 
-        let ingress_target =
-            load_target_slots(&mut bpf, "INGRESS_TARGET", &[(0, "flowcone_tcx_ingress")])?;
-        let egress_target =
-            load_target_slots(&mut bpf, "EGRESS_TARGET", &[(0, "flowcone_tcx_egress")])?;
+        let ingress_target = load_target_slots(
+            &mut bpf,
+            "INGRESS_TARGET",
+            &[
+                (0, "flowcone_tcx_ingress"),
+                (1, "flowcone_ingress_v4"),
+                (2, "flowcone_ingress_v6"),
+            ],
+        )?;
+        let egress_target = load_target_slots(
+            &mut bpf,
+            "EGRESS_TARGET",
+            &[
+                (0, "flowcone_tcx_egress"),
+                (1, "flowcone_egress_v4"),
+                (2, "flowcone_egress_v6"),
+            ],
+        )?;
+        let egress_alloc_target = load_target_slots(
+            &mut bpf,
+            "EGRESS_ALLOC_TARGET",
+            &[
+                (0, "flowcone_egress_alloc_v4"),
+                (1, "flowcone_egress_alloc_v6"),
+            ],
+        )?;
         let frag_target = load_target_slots(
             &mut bpf,
             "FRAG_TARGET",
@@ -225,6 +261,7 @@ impl DataPlane {
             &[
                 (0, "flowcone_frag_v6_ingress"),
                 (1, "flowcone_frag_v6_egress"),
+                (2, "flowcone_frag_v6_egress_alloc"),
             ],
         )?;
         let icmp_target = load_target_slots(
@@ -254,6 +291,7 @@ impl DataPlane {
             active: 0,
             _ingress_target: ingress_target,
             _egress_target: egress_target,
+            _egress_alloc_target: egress_alloc_target,
             _frag_target: frag_target,
             _frag6_target: frag6_target,
             _icmp_target: icmp_target,
@@ -263,11 +301,11 @@ impl DataPlane {
         data_plane.ingress_ids[1] = loaded_program_id(&data_plane.bpf, "flowcone_tcx_ingress_b")?;
         data_plane.egress_ids[0] = loaded_program_id(&data_plane.bpf, "flowcone_tcx_egress_a")?;
         data_plane.egress_ids[1] = loaded_program_id(&data_plane.bpf, "flowcone_tcx_egress_b")?;
-        data_plane.attach(true, true)?;
         Ok(data_plane)
     }
 
-    /// Attaches the active dispatcher pair atomically (detaches ingress if egress fails).
+    /// Attaches the active dispatcher pair atomically (detaches ingress if
+    /// egress fails).
     pub(crate) fn attach(
         &mut self,
         force_new: bool,

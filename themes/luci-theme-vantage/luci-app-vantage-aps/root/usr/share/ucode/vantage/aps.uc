@@ -36,6 +36,7 @@ const MAX_SSIDS = 16;
 const MAX_STATIONS = 256;
 const MAX_WIRED = 128;
 const MAX_PORTS = 32;
+const MAX_OWN = 64;        // of an access point's own addresses
 const MAX_BYTES = 0x7fffffffffffffff;
 const MAX_STEP = 0x10000000000;   // bytes between two reports that still make a rate (1 TiB)
 
@@ -634,10 +635,24 @@ function normalize(r) {
 
 	let out = {
 		name: text(r.name, 63), model: text(r.model, 64),
-		uptime: int_in(r.uptime, 0, 0x7fffffff), mac: mac(r.mac),
+		uptime: int_in(r.uptime, 0, 0x7fffffff), mac: mac(r.mac), macs: [],
 		ssids: [], stations: [], ports: {}, wired: []
 	};
-	let ifs = {}, stas = {}, seen = {}, nports = 0;
+	let ifs = {}, stas = {}, seen = {}, owns = {}, nports = 0;
+
+	// its own addresses (#167); a report from before them has none
+	for (let m in ((type(r.macs) == 'array') ? r.macs : [])) {
+		if (length(out.macs) >= MAX_OWN)
+			break;
+
+		m = mac(m);
+
+		if (!m || owns[m])
+			continue;
+
+		owns[m] = true;
+		push(out.macs, m);
+	}
 
 	for (let s in ((type(r.ssids) == 'array') ? r.ssids : [])) {
 		if (length(out.ssids) >= MAX_SSIDS)
@@ -742,7 +757,7 @@ function view(r, prev, dt) {
 		pst[x.mac] = x;
 
 	return {
-		name: r.name, model: r.model, uptime: r.uptime, mac: r.mac,
+		name: r.name, model: r.model, uptime: r.uptime, mac: r.mac, macs: r.macs,
 		ssids: map(r.ssids, (x) => ({ ifname: x.ifname, bssid: x.bssid, ssid: x.ssid, freq: x.freq, channel: x.channel, band: band(x.freq) })),
 		stations: map(r.stations, (x) => ({
 			mac: x.mac, ifname: x.ifname, signal: x.signal, rxRate: x.rx_rate, txRate: x.tx_rate,

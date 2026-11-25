@@ -40,8 +40,9 @@
  *   an interface's phy80211 link only, rtnl for one read-only dump of the
  *   bridge forwarding database (luci.vantage wired) and one route lookup
  *   a family, IPv4 and IPv6, of a documentation address (luci.vantage
- *   routes), and nl80211 for one read-only channel survey dump of an
- *   interface (luci.vantage survey); no other file access, no other
+ *   routes), and nl80211 for two read-only dumps: the channel survey of
+ *   an interface (luci.vantage survey) and the list of the wireless
+ *   interfaces (luci.vantage wireless, #164); no other file access, no other
  *   netlink request, no process execution, and no module, cursor or
  *   connection passed on under another name; altered copies of the
  *   plugin check that these rules catch each breach;
@@ -567,12 +568,15 @@ function checkPluginSource(src) {
 	for (const m of rest.matchAll(/\brtnl\b(?:\.const\.(\w+))?/g))
 		assert.ok(CONSTS.includes(m[1]), `"${m[0]}": "rtnl" may appear only as rtnl.const.${CONSTS.join(', ')}${REWORD}`);
 
-	/* nl80211: one request, the read-only channel survey dump (a GET
-	   with NLM_F_DUMP, never a SET, NEW, DEL or TRIGGER) of the one
-	   interface asked about, and nothing else */
+	/* nl80211: two requests, each a read-only dump (a GET with
+	   NLM_F_DUMP, never a SET, NEW, DEL or TRIGGER): the list of the
+	   wireless interfaces, asked without a message (#164: which of them
+	   hostapd made for a network's VLANs), and the channel survey of the
+	   one interface asked about; nothing else */
+	const ifaces = 'let res = nl80211.request(nl80211.const.NL80211_CMD_GET_INTERFACE, nl80211.const.NLM_F_DUMP);';
 	const survey = 'let res = nl80211.request(nl80211.const.NL80211_CMD_GET_SURVEY, nl80211.const.NLM_F_DUMP, { dev });';
-	assert.deepEqual([ ...src.matchAll(/^.*\bnl80211\b.*$/gm) ].map(m => m[0].trim()), [ 'import * as nl80211 from \'nl80211\';', survey ],
-		`"nl80211" may appear only on its import and the survey dump${REWORD}`);
+	assert.deepEqual([ ...src.matchAll(/^.*\bnl80211\b.*$/gm) ].map(m => m[0].trim()), [ 'import * as nl80211 from \'nl80211\';', ifaces, survey ],
+		`"nl80211" may appear only on its import, the interface dump and the survey dump${REWORD}`);
 }
 
 test('the plugin source rules catch writes, other configs and calls, and names passed on', () => {
@@ -619,6 +623,8 @@ test('the plugin source rules catch writes, other configs and calls, and names p
 		'second nl80211 request': add('nl80211.request(nl80211.const.NL80211_CMD_TRIGGER_SCAN, 0, { dev: \'phy0-ap0\' });'),
 		'survey of another interface': plugin.replace('nl80211.const.NLM_F_DUMP, { dev });', 'nl80211.const.NLM_F_DUMP, { dev: \'phy0-ap0\' });'),
 		'nl80211 by reference': add('let n = nl80211;'),
+		'interface dump made a write': plugin.replace('nl80211.const.NL80211_CMD_GET_INTERFACE, nl80211.const.NLM_F_DUMP);', 'nl80211.const.NL80211_CMD_DEL_INTERFACE, 0);'),
+		'interface dump with a message': plugin.replace('nl80211.const.NL80211_CMD_GET_INTERFACE, nl80211.const.NLM_F_DUMP);', 'nl80211.const.NL80211_CMD_GET_INTERFACE, nl80211.const.NLM_F_DUMP, { dev: \'phy0-ap0\' });'),
 		'access elsewhere': add('let seen = access(\'/etc/shadow\');'),
 		'access by reference': add('let a = access;')
 	};

@@ -339,6 +339,8 @@ test('vantage.aps normalize: a hostile report keeps only what fits', { skip: NO_
 	const sta = (n, ifname, extra) => Object.assign({ mac: MAC(n), ifname, signal: -50, rx_rate: 1000, tx_rate: 2000, rx_bytes: 10, tx_bytes: 20, connected: 30 }, extra || {});
 	const report = {
 		v: 1, name: 'ap\u0001', model: 'M'.repeat(65), uptime: -5, mac: MAC(1).toUpperCase(),
+		/* its own addresses (#167): MACs of one device, each once */
+		macs: [ MAC(1).toUpperCase(), MAC(2), MAC(2), 'junk', '01:00:5e:00:53:09', '00:00:00:00:00:00', 5, [ MAC(3) ] ],
 		ssids: [ { ifname: 'phy0-ap0', bssid: MAC(16), ssid: 'Café', freq: 5180, channel: 36 }, { ifname: 'phy0-ap0', ssid: 'again' },
 			{ ifname: 'bad name' }, { ifname: 'phy1-ap0', ssid: 'x'.repeat(33), freq: 'many' }, 'junk' ],
 		stations: [ sta(32, 'phy0-ap0'), sta(32, 'phy0-ap0'), sta(33, 'nowhere'), sta(34, 'phy0-ap0', { signal: 5, rx_rate: 0, rx_bytes: -1, connected: 'x' }),
@@ -352,14 +354,14 @@ test('vantage.aps normalize: a hostile report keeps only what fits', { skip: NO_
 			{ mac: MAC(49), port: 'lan3' }, { mac: MAC(50), port: 'lan9' } ]
 	};
 	const [ r, wrongV, notObj, big ] = runModule([ [ 'normalize', report ], [ 'normalize', Object.assign({}, report, { v: 2 }) ], [ 'normalize', 'x' ],
-		[ 'normalize', { v: 1, ssids: [ { ifname: 'w0' } ], stations: Array.from({ length: 300 }, (_, i) => ({ mac: '02:00:5e:00:' + (i >> 8).toString(16).padStart(2, '0') + ':' + (i & 255).toString(16).padStart(2, '0'), ifname: 'w0' })),
+		[ 'normalize', { v: 1, ssids: [ { ifname: 'w0' } ], macs: Array.from({ length: 100 }, (_, i) => '02:00:5e:02:00:' + i.toString(16).padStart(2, '0')), stations: Array.from({ length: 300 }, (_, i) => ({ mac: '02:00:5e:00:' + (i >> 8).toString(16).padStart(2, '0') + ':' + (i & 255).toString(16).padStart(2, '0'), ifname: 'w0' })),
 			wired: Array.from({ length: 200 }, (_, i) => ({ mac: '02:00:5e:01:' + (i >> 8).toString(16).padStart(2, '0') + ':' + (i & 255).toString(16).padStart(2, '0'), port: 'lan2' })),
 			ports: Object.fromEntries(Array.from({ length: 40 }, (_, i) => [ 'p' + i, { hosts: 1 } ]).concat([ [ 'lan2', { hosts: 1 } ] ])) } ]
 	]);
 	assert.equal(wrongV, null);
 	assert.equal(notObj, null);
 	assert.deepEqual(r, {
-		name: '', model: '', uptime: null, mac: MAC(1),
+		name: '', model: '', uptime: null, mac: MAC(1), macs: [ MAC(1), MAC(2) ],
 		ssids: [ { ifname: 'phy0-ap0', bssid: MAC(16), ssid: 'Café', freq: 5180, channel: 36 }, { ifname: 'phy1-ap0', bssid: null, ssid: '', freq: null, channel: null } ],
 		stations: [ sta(32, 'phy0-ap0', { rx_phy: null, tx_phy: null }),
 			{ mac: MAC(34), ifname: 'phy0-ap0', signal: null, rx_rate: null, tx_rate: 2000, rx_bytes: null, tx_bytes: 20, connected: null, rx_phy: null, tx_phy: null },
@@ -371,6 +373,7 @@ test('vantage.aps normalize: a hostile report keeps only what fits', { skip: NO_
 		wired: [ { mac: MAC(48), port: 'lan2' } ]
 	});
 	assert.equal(big.stations.length, 256);
+	assert.equal(big.macs.length, 64);
 	assert.equal(big.wired.length, 0, 'lan2 is not among the first 32 ports, so its hosts go');
 	assert.equal(Object.keys(big.ports).length, 32);
 });
@@ -396,6 +399,8 @@ test('vantage.aps view: rates from two reports, none across a reset or on a shar
 		{ mac: MAC(49), port: 'lan3', speed: null, rx: null, tx: null }, { mac: MAC(50), port: 'lan3', speed: null, rx: null, tx: null } ]);
 	assert.deepEqual(first.stations[0].rx, null);
 	assert.deepEqual(first.wired[0].rx, null);
+	/* the access point's own addresses go through as they are */
+	assert.deepEqual(runModule([ [ 'view', Object.assign({ macs: [ MAC(1), MAC(2) ] }, cur), null, 0 ] ])[0].macs, [ MAC(1), MAC(2) ]);
 	/* counters a terabyte apart, or near the top of 64 bits: no rate, and no wrapped number */
 	const huge = Object.assign({}, cur, { stations: [ Object.assign({}, cur.stations[0], { rx_bytes: 9223372036854775807, tx_bytes: 1000 + 1099511627776 }) ] });
 	const [ h ] = runModule([ [ 'view', huge, { stations: [ { mac: MAC(32), rx_bytes: 1000, tx_bytes: 1000 } ], ports: {} }, 10 ] ]);
@@ -793,6 +798,8 @@ function reportRun(o) {
 	dev('phy0-ap0', { address: MAC(16) + '\n' });
 	fs.mkdirSync(path.join(net, 'phy0-ap0', 'phy80211'));
 	dev('ra0', { address: MAC(17) + '\n' });
+	/* more devices of its own: { name: address } */
+	for (const [ name, address ] of Object.entries(o.devs || {})) dev(name, { address: address + '\n' });
 	const arp = path.join(dir, 'arp');
 	fs.writeFileSync(arp, 'IP address       HW type     Flags       HW address            Mask     Device\n' + (o.arp || []).map(a => a.join('  ')).join('\n') + '\n');
 	const host = path.join(dir, 'hostname');
@@ -850,6 +857,8 @@ test('report: SSIDs, stations, and the wired hosts past the uplink', { skip: NO_
 	const { out, calls } = reportRun({ ubus: REPORT_UBUS, arp: [ [ '192.0.2.1', '0x1', '0x2', MAC(64), '*', 'br-lan' ], [ '192.0.2.99', '0x1', '0x0', MAC(65), '*', 'br-lan' ] ] });
 	assert.deepEqual(out, {
 		v: 1, name: 'ap-hall', model: 'Example AP', uptime: 1234, mac: MAC(1),
+		/* every address of its own (#167), the LAN bridge's among them */
+		macs: [ MAC(1), MAC(2), MAC(3), MAC(4), MAC(16), MAC(17) ],
 		ssids: [ { ifname: 'phy0-ap0', bssid: MAC(16), ssid: 'Home', freq: 5180, channel: 36 }, { ifname: 'ra0', bssid: MAC(17), ssid: 'Guest', freq: 2437, channel: 6 } ],
 		stations: [
 			{ mac: MAC(32), ifname: 'phy0-ap0', signal: -55, rx_rate: 866000, tx_rate: 650000, rx_bytes: 1000, tx_bytes: 2000, connected: 60,
@@ -864,6 +873,55 @@ test('report: SSIDs, stations, and the wired hosts past the uplink', { skip: NO_
 		wired: [ { mac: MAC(66), port: 'lan2' }, { mac: MAC(67), port: 'lan3' }, { mac: MAC(68), port: 'lan3' } ]
 	});
 	for (const c of calls) assert.ok(REPORT_CALLS.some(k => c === k || c.startsWith(k + ' ')), c);
+});
+
+/* #164: hostapd makes an interface for each VLAN a network's passwords (or RADIUS) give out; iwinfo lists the stations
+   on one under it alone, and it carries the network's BSSID */
+test('report: the stations on a network\'s VLAN interfaces are that network\'s', { skip: NO_UCODE }, () => {
+	const vlan = bssid => ({ mode: 'Master (VLAN)', bssid, frequency: 5180, channel: 36 });
+	const sta = n => ({ mac: MAC(n), signal: -50, rx: { rate: 1000, bytes: 1 }, tx: { rate: 2000, bytes: 2 } });
+	const ubus = Object.assign({}, REPORT_UBUS, {
+		/* in iwinfo's order, which is any: one before its network, one of no network here, one without a BSSID */
+		'iwinfo devices': { devices: [ 'wlan0.3', 'phy0-ap0', 'ra0', 'wlan0.1', 'wlan9.1', 'wlan8.1', 'phy0-ap0.sta1' ] },
+		'iwinfo info wlan0.1': vlan(MAC(16)), 'iwinfo info wlan0.3': vlan(MAC(16).toUpperCase()), 'iwinfo info wlan9.1': vlan(MAC(99)), 'iwinfo info wlan8.1': vlan(null),
+		/* a WDS station's interface is one too: its station is in the network's own list already */
+		'iwinfo info phy0-ap0.sta1': vlan(MAC(16)),
+		'iwinfo assoclist wlan0.1': { results: [ sta(40), sta(32) ] },
+		'iwinfo assoclist wlan0.3': { results: [] },
+		'iwinfo assoclist phy0-ap0.sta1': { results: [ sta(32) ] },
+		'iwinfo assoclist wlan9.1': { results: [ sta(41) ] }, 'iwinfo assoclist wlan8.1': { results: [ sta(42) ] }
+	});
+	const { out, calls } = reportRun({ ubus, arp: [ [ '192.0.2.1', '0x1', '0x2', MAC(64), '*', 'br-lan' ] ] });
+	assert.deepEqual(out.ssids.map(s => s.ifname), [ 'phy0-ap0', 'ra0' ], 'no network of its own');
+	assert.deepEqual(out.stations.map(s => [ s.mac, s.ifname ]), [ [ MAC(32), 'phy0-ap0' ], [ MAC(34), 'ra0' ], [ MAC(40), 'phy0-ap0' ] ],
+		'under its network, a MAC once, none from an interface whose network is not known');
+	assert.deepEqual(out.stations[2], { mac: MAC(40), ifname: 'phy0-ap0', signal: -50, rx_rate: 1000, tx_rate: 2000, rx_bytes: 1, tx_bytes: 2, connected: null,
+		rx_phy: { mhz: null, mcs: null, nss: null, ht: false, vht: false, he: false, eht: false, sgi: false },
+		tx_phy: { mhz: null, mcs: null, nss: null, ht: false, vht: false, he: false, eht: false, sgi: false } });
+	assert.deepEqual(calls.filter(c => c.startsWith('iwinfo assoclist ')).map(c => c.slice(17)).sort(), [ 'phy0-ap0', 'phy0-ap0.sta1', 'ra0', 'wlan0.1', 'wlan0.3' ]);
+	/* the router reads them as any station of that network */
+	const [ n ] = runModule([ [ 'normalize', out ] ]);
+	assert.deepEqual(n.stations.map(s => [ s.mac, s.ifname ]), [ [ MAC(32), 'phy0-ap0' ], [ MAC(34), 'ra0' ], [ MAC(40), 'phy0-ap0' ] ]);
+	assert.deepEqual(n.macs, out.macs);
+});
+
+test('report: at most 32 VLAN interfaces are asked, none whose BSSID two networks share, and 64 of its own addresses', { skip: NO_UCODE }, () => {
+	const vlan = bssid => ({ mode: 'Master (VLAN)', bssid });
+	const names = Array.from({ length: 40 }, (_, i) => 'v' + String(i).padStart(2, '0'));
+	const many = Object.assign({}, REPORT_UBUS, { 'iwinfo devices': { devices: [ 'phy0-ap0', 'ra0' ].concat(names) } },
+		Object.fromEntries(names.map(n => [ 'iwinfo info ' + n, vlan(MAC(16)) ])), Object.fromEntries(names.map(n => [ 'iwinfo assoclist ' + n, { results: [] } ])));
+	const arp = [ [ '192.0.2.1', '0x1', '0x2', MAC(64), '*', 'br-lan' ] ];
+	const asked = r => r.calls.filter(c => c.startsWith('iwinfo assoclist ')).map(c => c.slice(17));
+	assert.equal(asked(reportRun({ ubus: many, arp })).filter(n => /^v\d/.test(n)).length, 32);
+	/* ra0 with phy0-ap0's BSSID: whose stations would they be? */
+	const shared = Object.assign({}, REPORT_UBUS, { 'iwinfo devices': { devices: [ 'phy0-ap0', 'ra0', 'wlan0.1' ] }, 'iwinfo info wlan0.1': vlan(MAC(16)),
+		'iwinfo info ra0': Object.assign({}, REPORT_UBUS['iwinfo info ra0'], { bssid: MAC(16) }), 'iwinfo assoclist wlan0.1': { results: [ { mac: MAC(40), signal: -50 } ] } });
+	const s = reportRun({ ubus: shared, arp });
+	assert.deepEqual([ asked(s).sort(), s.out.stations.map(x => x.mac) ], [ [ 'phy0-ap0', 'ra0' ], [ MAC(32), MAC(34) ] ]);
+	/* 70 more devices, each with an address: the first 64 of them all, in order */
+	const devs = Object.fromEntries(Array.from({ length: 70 }, (_, i) => [ 'x' + i, '02:00:5e:00:54:' + i.toString(16).padStart(2, '0') ]));
+	const own = reportRun({ ubus: REPORT_UBUS, arp, devs }).out.macs;
+	assert.deepEqual([ own.length, own.slice(0, 7), own.slice().sort().join() === own.join() ], [ 64, [ MAC(1), MAC(2), MAC(3), MAC(4), MAC(16), MAC(17), '02:00:5e:00:54:00' ], true ]);
 });
 
 test('report: no uplink found, no wired hosts; the router\'s own address finds it too', { skip: NO_UCODE }, () => {

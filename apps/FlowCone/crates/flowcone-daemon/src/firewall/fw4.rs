@@ -51,8 +51,8 @@ pub(crate) fn has_table_inet_fw4() -> bool {
     nft_table_exists("inet", "fw4")
 }
 
-/// Strip `comment "..."` literals and unquoted `# ...` tail comments so rule classifiers
-/// never match text inside comments.
+/// Strip `comment "..."` literals and unquoted `# ...` tail comments so rule
+/// classifiers never match text inside comments.
 fn strip_rule_comments(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut chars = line.char_indices().peekable();
@@ -126,8 +126,8 @@ fn contains_word(haystack: &str, needle: &str) -> bool {
     false
 }
 
-/// Checks if a rule matches `wan_iface` via positive `oifname`/`oif` equality, returning
-/// `(has_oif_constraint, matches_wan)`.
+/// Checks if a rule matches `wan_iface` via positive `oifname`/`oif` equality,
+/// returning `(has_oif_constraint, matches_wan)`.
 fn rule_oif_status(clean: &str, wan_iface: &str) -> (bool, bool) {
     let normalized = clean
         .replace('{', " { ")
@@ -176,7 +176,8 @@ pub(crate) fn parse_has_ipv6_masq(nft_output: &str, wan_iface: &str) -> bool {
     let mut wan_chains: Vec<(String, String, String)> = Vec::new();
     let mut fw4_has_srcnat_dispatcher = false;
 
-    // First pass: discover subchains jumped/goto'd from WAN oif rules per (family, table).
+    // First pass: discover subchains jumped/goto'd from WAN oif rules per
+    // (family, table).
     for line in nft_output.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("table ") {
@@ -405,7 +406,8 @@ pub(crate) fn clean_fw4_set_definitions() {
     let _ = fs::remove_file(SET_DEFS_FILE);
 }
 
-/// Ensures liveness timeout sets exist in the kernel `inet fw4` table in one transaction.
+/// Ensures liveness timeout sets exist in the kernel `inet fw4` table in one
+/// transaction.
 pub(crate) fn ensure_fw4_sets() -> bool {
     let Some(table_text) = nft_output(&["-t", "list", "table", "inet", "fw4"]) else {
         return false;
@@ -760,7 +762,8 @@ table inet nat {
         assert!(parse_has_ipv6_masq(inet_unqualified_masq, "eth0"));
         assert!(!parse_has_ipv6_masq(inet_unqualified_masq, "eth1"));
 
-        // Masquerade on another interface (e.g. VPN) must not trigger WAN v6 masq
+        // Masquerade on another interface (e.g. VPN) must not trigger WAN v6
+        // masq
         let other_iface_masq = "\
 table inet fw4 {
         chain srcnat {
@@ -828,7 +831,8 @@ table inet nat {
 }";
         assert!(!parse_has_ipv6_masq(brace_no_bleed, "eth1"));
 
-        // Dual-WAN fw4: WAN1 uses IPv6 masq in srcnat_wan, WAN2 uses IPv4-only in srcnat_wan2
+        // Dual-WAN fw4: WAN1 uses IPv6 masq in srcnat_wan, WAN2 uses IPv4-only
+        // in srcnat_wan2
         let dual_wan_fw4 = "\
 table inet fw4 {
         chain srcnat {

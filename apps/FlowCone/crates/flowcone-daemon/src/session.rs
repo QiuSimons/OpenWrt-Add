@@ -129,7 +129,8 @@ const NLMSG_HDRLEN: usize = 16;
 const NLMSG_ERROR: u16 = 2;
 const NLMSG_DONE: u16 = 3;
 
-/// Reusable `NETLINK_INET_DIAG` scanner with per-family fallback to `/proc/net/udp*`.
+/// Reusable `NETLINK_INET_DIAG` scanner with per-family fallback to
+/// `/proc/net/udp*`.
 pub struct LocalUdpScanner {
     sock: Option<OwnedFd>,
     buf: Vec<u8>,
@@ -221,7 +222,8 @@ impl LocalUdpScanner {
 
         let sock = self.ensure_socket()?;
 
-        // 72-byte netlink dump request: 16-byte nlmsghdr + 56-byte inet_diag_req_v2.
+        // 72-byte netlink dump request: 16-byte nlmsghdr + 56-byte
+        // inet_diag_req_v2.
         let mut req = [0u8; 72];
         req[0..4].copy_from_slice(&(72u32).to_ne_bytes());
         req[4..6].copy_from_slice(&SOCK_DIAG_BY_FAMILY.to_ne_bytes());
@@ -248,7 +250,8 @@ impl LocalUdpScanner {
             let sock = self.sock.as_ref()?;
             let Ok(n) = crate::netlink::recv_netlink_msg(sock, &mut self.buf, RecvFlags::empty())
             else {
-                // Drop socket after interrupted/timed-out dump so stale frames cannot leak into the next call.
+                // Drop socket after interrupted/timed-out dump so stale frames
+                // cannot leak into the next call.
                 self.sock = None;
                 return None;
             };
@@ -310,7 +313,8 @@ impl LocalUdpScanner {
         if done { Some(ports) } else { None }
     }
 
-    /// Parses local UDP service ports from `NETLINK_INET_DIAG` with procfs fallback.
+    /// Parses local UDP service ports from `NETLINK_INET_DIAG` with procfs
+    /// fallback.
     pub fn scan_local_udp_ports(&mut self, family: u8, procfs_path: &str) -> Option<Vec<u16>> {
         if let Some(mut ports) = self.scan_netlink_udp_ports(family) {
             ports.sort_unstable();
@@ -325,7 +329,8 @@ impl LocalUdpScanner {
     }
 }
 
-/// Extracts local UDP ports in listening (07) and connected (01) states from procfs.
+/// Extracts local UDP ports in listening (07) and connected (01) states from
+/// procfs.
 fn parse_proc_udp_ports(text: &str) -> Vec<u16> {
     let mut out = Vec::new();
     for line in text.lines().skip(1) {
@@ -380,6 +385,32 @@ fn reserved_delta(previous: &[u16], current: &[u16]) -> (Vec<u16>, Vec<u16>) {
     (added, removed)
 }
 
+enum FamilyBitmap {
+    Active(AtomicBitmap),
+    /// Keeps disabled-family BPF map FDs alive while eBPF programs load and
+    /// execute.
+    Disabled {
+        _array: Array<MapData, u64>,
+    },
+}
+
+impl FamilyBitmap {
+    fn new(array: Array<MapData, u64>, enabled: bool) -> Result<Self, String> {
+        if enabled {
+            AtomicBitmap::new(array).map(Self::Active)
+        } else {
+            Ok(Self::Disabled { _array: array })
+        }
+    }
+
+    fn as_mut(&mut self) -> Option<&mut AtomicBitmap> {
+        match self {
+            Self::Active(bitmap) => Some(bitmap),
+            Self::Disabled { .. } => None,
+        }
+    }
+}
+
 pub struct SessionManager {
     config_map: Array<MapData, GlobalConfig>,
     active_map: Array<MapData, u32>,
@@ -396,10 +427,10 @@ pub struct SessionManager {
     gc_flags: Array<MapData, u32>,
     reserved4: Array<MapData, u16>,
     reserved6: Array<MapData, u16>,
-    bitmap_even4: Option<AtomicBitmap>,
-    bitmap_odd4: Option<AtomicBitmap>,
-    bitmap_even6: Option<AtomicBitmap>,
-    bitmap_odd6: Option<AtomicBitmap>,
+    bitmap_even4: FamilyBitmap,
+    bitmap_odd4: FamilyBitmap,
+    bitmap_even6: FamilyBitmap,
+    bitmap_odd6: FamilyBitmap,
     port_flags: Array<MapData, u32>,
     pool_enable_v4: bool,
     pool_enable_v6: bool,
@@ -707,18 +738,10 @@ impl SessionManager {
             gc_flags,
             reserved4,
             reserved6,
-            bitmap_even4: enable_v4
-                .then(|| AtomicBitmap::new(bitmap_even4))
-                .transpose()?,
-            bitmap_odd4: enable_v4
-                .then(|| AtomicBitmap::new(bitmap_odd4))
-                .transpose()?,
-            bitmap_even6: enable_v6
-                .then(|| AtomicBitmap::new(bitmap_even6))
-                .transpose()?,
-            bitmap_odd6: enable_v6
-                .then(|| AtomicBitmap::new(bitmap_odd6))
-                .transpose()?,
+            bitmap_even4: FamilyBitmap::new(bitmap_even4, enable_v4)?,
+            bitmap_odd4: FamilyBitmap::new(bitmap_odd4, enable_v4)?,
+            bitmap_even6: FamilyBitmap::new(bitmap_even6, enable_v6)?,
+            bitmap_odd6: FamilyBitmap::new(bitmap_odd6, enable_v6)?,
             port_flags,
             pool_enable_v4: enable_v4,
             pool_enable_v6: enable_v6,
@@ -774,7 +797,8 @@ impl SessionManager {
             let _ = ib_map.remove(port);
         }
         for port in &removed {
-            // Drain any stale inbound entry before advancing to the unreserved epoch.
+            // Drain any stale inbound entry before advancing to the unreserved
+            // epoch.
             let _ = ib_map.remove(port);
             let idx = *port as u32;
             let cur_state = reserved_map.get(&idx, 0).unwrap_or(0);
@@ -791,7 +815,7 @@ impl SessionManager {
     pub fn apply_reserved_ports(&mut self, ports4: Option<&[u16]>, ports6: Option<&[u16]>) {
         if self.pool_enable_v4
             && let Some(ports) = ports4
-            && let (Some(even), Some(odd)) = (&mut self.bitmap_even4, &mut self.bitmap_odd4)
+            && let (Some(even), Some(odd)) = (self.bitmap_even4.as_mut(), self.bitmap_odd4.as_mut())
         {
             let mut pool = FamilyPortPool {
                 min_port: self.min_port,
@@ -810,7 +834,7 @@ impl SessionManager {
         }
         if self.pool_enable_v6
             && let Some(ports) = ports6
-            && let (Some(even), Some(odd)) = (&mut self.bitmap_even6, &mut self.bitmap_odd6)
+            && let (Some(even), Some(odd)) = (self.bitmap_even6.as_mut(), self.bitmap_odd6.as_mut())
         {
             let mut pool = FamilyPortPool {
                 min_port: self.min_port,
@@ -890,7 +914,7 @@ impl SessionManager {
         if !self.pool_enable_v4 || !self.pool_ready() {
             return;
         }
-        if let (Some(even), Some(odd)) = (&mut self.bitmap_even4, &mut self.bitmap_odd4) {
+        if let (Some(even), Some(odd)) = (self.bitmap_even4.as_mut(), self.bitmap_odd4.as_mut()) {
             let mut pool = FamilyPortPool {
                 min_port: self.min_port,
                 max_port: self.max_port,
@@ -906,7 +930,7 @@ impl SessionManager {
         if !self.pool_enable_v6 || !self.pool_ready() {
             return;
         }
-        if let (Some(even), Some(odd)) = (&mut self.bitmap_even6, &mut self.bitmap_odd6) {
+        if let (Some(even), Some(odd)) = (self.bitmap_even6.as_mut(), self.bitmap_odd6.as_mut()) {
             let mut pool = FamilyPortPool {
                 min_port: self.min_port,
                 max_port: self.max_port,
@@ -936,7 +960,7 @@ impl SessionManager {
     }
 
     fn release_port4(&mut self, port: u16) {
-        if let (Some(even), Some(odd)) = (&mut self.bitmap_even4, &mut self.bitmap_odd4) {
+        if let (Some(even), Some(odd)) = (self.bitmap_even4.as_mut(), self.bitmap_odd4.as_mut()) {
             let mut pool = FamilyPortPool {
                 min_port: self.min_port,
                 max_port: self.max_port,
@@ -949,7 +973,7 @@ impl SessionManager {
     }
 
     fn release_port6(&mut self, port: u16) {
-        if let (Some(even), Some(odd)) = (&mut self.bitmap_even6, &mut self.bitmap_odd6) {
+        if let (Some(even), Some(odd)) = (self.bitmap_even6.as_mut(), self.bitmap_odd6.as_mut()) {
             let mut pool = FamilyPortPool {
                 min_port: self.min_port,
                 max_port: self.max_port,
@@ -1016,7 +1040,8 @@ impl SessionManager {
                     }
                 }
                 if orphan_mask != 0 {
-                    // Pre-verify that no concurrent datapath allocation occurred before clearing.
+                    // Pre-verify that no concurrent datapath allocation
+                    // occurred before clearing.
                     let mut confirmed_orphan_mask = 0u64;
                     for bit in 0..64 {
                         let mask = 1u64 << bit;
@@ -1039,7 +1064,7 @@ impl SessionManager {
         if !self.pool_enable_v4 || !self.pool_ready() {
             return;
         }
-        if let (Some(even), Some(odd)) = (&mut self.bitmap_even4, &mut self.bitmap_odd4) {
+        if let (Some(even), Some(odd)) = (self.bitmap_even4.as_mut(), self.bitmap_odd4.as_mut()) {
             let mut pool = FamilyPortPool {
                 min_port: self.min_port,
                 max_port: self.max_port,
@@ -1055,7 +1080,7 @@ impl SessionManager {
         if !self.pool_enable_v6 || !self.pool_ready() {
             return;
         }
-        if let (Some(even), Some(odd)) = (&mut self.bitmap_even6, &mut self.bitmap_odd6) {
+        if let (Some(even), Some(odd)) = (self.bitmap_even6.as_mut(), self.bitmap_odd6.as_mut()) {
             let mut pool = FamilyPortPool {
                 min_port: self.min_port,
                 max_port: self.max_port,
@@ -1232,7 +1257,8 @@ impl SessionManager {
                     continue;
                 }
 
-                // Outbound expired; check inbound once before deletion (RFC 4787).
+                // Outbound expired; check inbound once before deletion (RFC
+                // 4787).
                 if let Ok(iv) = state.ib_map.get(&port, 0)
                     && iv.matches_key(&key)
                     && now.saturating_sub(iv.last_seen()) <= item_timeout
@@ -1248,7 +1274,8 @@ impl SessionManager {
                     continue;
                 }
 
-                // Revalidate against datapath refresh once right before removal.
+                // Revalidate against datapath refresh once right before
+                // removal.
                 let cur_ob = state.ob_map.get(&key, 0);
                 if let Ok(c) = &cur_ob {
                     if u16::from_be(c.port_be()) != port {
@@ -1353,7 +1380,7 @@ impl SessionManager {
         let mut backlog6 = false;
 
         if self.pool_enable_v4
-            && let (Some(even), Some(odd)) = (&mut self.bitmap_even4, &mut self.bitmap_odd4)
+            && let (Some(even), Some(odd)) = (self.bitmap_even4.as_mut(), self.bitmap_odd4.as_mut())
         {
             let mut state = FamilyGcState {
                 ob_map: &mut self.ob_map4,
@@ -1372,7 +1399,7 @@ impl SessionManager {
         }
 
         if self.pool_enable_v6
-            && let (Some(even), Some(odd)) = (&mut self.bitmap_even6, &mut self.bitmap_odd6)
+            && let (Some(even), Some(odd)) = (self.bitmap_even6.as_mut(), self.bitmap_odd6.as_mut())
         {
             let mut state = FamilyGcState {
                 ob_map: &mut self.ob_map6,
@@ -1479,7 +1506,8 @@ impl SessionManager {
                 self.freed_ports.clear();
             }
             self.rebuild_heaps(timeout);
-            // Catch events emitted concurrently while scanning tables during heap rebuild.
+            // Catch events emitted concurrently while scanning tables during
+            // heap rebuild.
             self.drain_events(now, timeout);
             if self.pool_enable_v4 {
                 self.rebuild_family4();

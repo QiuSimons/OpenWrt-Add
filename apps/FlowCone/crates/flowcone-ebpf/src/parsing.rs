@@ -45,11 +45,12 @@ pub struct UdpHdr {
     pub check: u16,
 }
 
-/// Ensures at least `need` bytes from `data` are linearly accessible in `ctx.skb`,
-/// pulling paged data if necessary and refreshing `data`/`data_end`.
+/// Ensures at least `need` bytes from `data` are linearly accessible in
+/// `ctx.skb`, pulling paged data if necessary and refreshing `data`/`data_end`.
 ///
-/// Uses direct `data + need <= data_end` comparison instead of `data_end - data`
-/// so the Linux eBPF verifier tracks packet bounds without pointer subtraction.
+/// Uses direct `data + need <= data_end` comparison instead of `data_end -
+/// data` so the Linux eBPF verifier tracks packet bounds without pointer
+/// subtraction.
 ///
 /// Any packet references derived from the old `data` pointer are invalidated if
 /// `pull_data` runs and must be re-acquired afterwards.
@@ -83,13 +84,15 @@ pub fn pull_up_to(ctx: &TcContext, data: &mut usize, data_end: &mut usize, max_n
     } else {
         max_need
     };
-    if pull > 0 && ctx.skb.pull_data(pull as u32).is_ok() {
+    if pull > 0 {
+        let _ = ctx.skb.pull_data(pull as u32);
         *data = ctx.data();
         *data_end = ctx.data_end();
     }
 }
 
-/// Copy a 16-byte IPv6 address using two 64-bit word moves so LLVM never emits `memmove`.
+/// Copy a 16-byte IPv6 address using two 64-bit word moves so LLVM never emits
+/// `memmove`.
 #[inline(always)]
 pub fn copy_ipv6(dst: &mut [u8; 16], src: &[u8; 16]) {
     let s = src.as_ptr() as *const u64;
@@ -117,14 +120,16 @@ pub unsafe fn parse_header_ref_mut<'a, T>(ptr: usize, data_end: usize) -> Option
     Some(unsafe { &mut *(ptr as *mut T) })
 }
 
-/// Compare two IPv6 addresses without alignment assumptions.
+/// Compare two IPv6 addresses without alignment assumptions or short-circuit
+/// branches.
 #[inline(always)]
 pub fn ipv6_eq(a: &[u8; 16], b: &[u8; 16]) -> bool {
     let p_a = a.as_ptr() as *const u64;
     let p_b = b.as_ptr() as *const u64;
     unsafe {
-        core::ptr::read_unaligned(p_a) == core::ptr::read_unaligned(p_b)
-            && core::ptr::read_unaligned(p_a.add(1)) == core::ptr::read_unaligned(p_b.add(1))
+        ((core::ptr::read_unaligned(p_a) ^ core::ptr::read_unaligned(p_b))
+            | (core::ptr::read_unaligned(p_a.add(1)) ^ core::ptr::read_unaligned(p_b.add(1))))
+            == 0
     }
 }
 

@@ -152,3 +152,9 @@ test('a provider tile: a note without a break wraps, and nothing of its body rea
 	/* never downwards: a trend line's stroke at the bottom stays whole */
 	assert.doesNotMatch(rule('.vt-app .vt-ext'), /(?:^|[;\s])overflow(?:-y)?:/);
 });
+
+/* #168: a port's note is its label and its counts; a narrow cell breaks between the two */
+test('Ports tile: a note wraps between its label and its counts', () => {
+	const note = rules.find(r => r.sel === '.vt-app .vt-port-note');
+	assert.ok(note && /display:\s*flex/.test(note.body) && /flex-wrap:\s*wrap/.test(note.body));
+});
