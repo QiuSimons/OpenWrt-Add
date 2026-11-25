@@ -113,7 +113,13 @@ pub fn fixup_l3_v4(ctx: &TcContext, data: usize, ip_off: usize, old_ip: u32, new
 }
 
 #[inline(always)]
-pub fn fixup_l3_id_v4(ctx: &TcContext, data: usize, ip_off: usize, old_id: u16, new_id: u16) -> bool {
+pub fn fixup_l3_id_v4(
+    ctx: &TcContext,
+    data: usize,
+    ip_off: usize,
+    old_id: u16,
+    new_id: u16,
+) -> bool {
     ctx.skb
         .l3_csum_replace(
             ip_off - data + IPV4_CSUM_OFFSET,
@@ -178,8 +184,13 @@ pub fn fixup_csum_v6(
 }
 
 #[inline(always)]
-pub fn port_is_reserved(reserved: &Array<u8>, port: u16) -> bool {
-    reserved.get(port as u32).copied().unwrap_or(0) != 0
+pub fn port_reserved_state(reserved: &Array<u16>, port: u16) -> u16 {
+    reserved.get(port as u32).copied().unwrap_or(0)
+}
+
+#[inline(always)]
+pub fn port_is_reserved(reserved: &Array<u16>, port: u16) -> bool {
+    flowcone_common::reserved_state_is_reserved(port_reserved_state(reserved, port))
 }
 
 #[inline(always)]
@@ -251,7 +262,7 @@ macro_rules! try_alloc_slot {
         let slot = $slot;
         let base_port = (slot * 128 + if $is_even { 0 } else { 1 }) as u16;
         let max_port_in_slot = base_port.saturating_add(126);
-        let mut allocated = 0u16;
+        let mut allocated = 0u32;
 
         if max_port_in_slot >= $min && base_port <= $max {
             if let Some(p) = $map.get_ptr_mut(slot) {
@@ -287,11 +298,14 @@ macro_rules! try_alloc_slot {
                             );
                         }
 
-                        if !port_is_reserved($reserved, port)
-                            && $inbound.insert(&port, $in_val, BPF_NOEXIST).is_ok()
-                        {
-                            allocated = port;
-                            break;
+                        let res_state = port_reserved_state($reserved, port);
+                        if !flowcone_common::reserved_state_is_reserved(res_state) {
+                            let mut cand = *$in_val;
+                            cand.set_reserved_epoch(res_state);
+                            if $inbound.insert(&port, &cand, BPF_NOEXIST).is_ok() {
+                                allocated = ((res_state as u32) << 16) | (port as u32);
+                                break;
+                            }
                         }
                         probe += 1;
                     }
@@ -314,14 +328,18 @@ macro_rules! impl_alloc_port {
         $key_default:expr
     ) => {
         #[inline(never)]
-        pub fn $fn_name(pref: u16, min: u16, max: u16, in_val: &$val_ty) -> u16 {
+        pub fn $fn_name(pref: u16, min: u16, max: u16, in_val: &$val_ty) -> u32 {
             if pref >= min && pref <= max {
                 let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(pref);
                 let map = if is_even { &$even_map } else { &$odd_map };
-                let is_res = port_is_reserved(&$reserved_map, pref);
-                if !is_res && $inbound_map.insert(&pref, in_val, BPF_NOEXIST).is_ok() {
-                    bitmap_set_bit(map, slot, mask);
-                    return pref;
+                let res_state = port_reserved_state(&$reserved_map, pref);
+                if !flowcone_common::reserved_state_is_reserved(res_state) {
+                    let mut cand = *in_val;
+                    cand.set_reserved_epoch(res_state);
+                    if $inbound_map.insert(&pref, &cand, BPF_NOEXIST).is_ok() {
+                        bitmap_set_bit(map, slot, mask);
+                        return ((res_state as u32) << 16) | (pref as u32);
+                    }
                 } else {
                     bitmap_set_bit(map, slot, mask);
                 }
@@ -418,6 +436,42 @@ impl_alloc_port!(
     }
 );
 
+macro_rules! impl_lookup_inbound {
+    ($fn_name:ident, $val_ty:ty, $reserved_map:ident, $inbound_map:ident, $release_fn:ident) => {
+        #[inline(always)]
+        pub fn $fn_name(ext_port: u16) -> Option<*mut $val_ty> {
+            let res_state = port_reserved_state(&$reserved_map, ext_port);
+            if flowcone_common::reserved_state_is_reserved(res_state) {
+                return None;
+            }
+            let target = $inbound_map.get_ptr_mut(&ext_port)?;
+            let meta = unsafe { (*target).reserved_meta() };
+            if !flowcone_common::binding_matches_reserved(res_state, meta) {
+                let _ = $inbound_map.remove(&ext_port);
+                $release_fn(ext_port);
+                return None;
+            }
+            Some(target)
+        }
+    };
+}
+
+impl_lookup_inbound!(
+    lookup_inbound_v4,
+    BindingValue4,
+    RESERVED_V4,
+    INBOUND_BINDINGS_V4,
+    release_port_v4
+);
+
+impl_lookup_inbound!(
+    lookup_inbound_v6,
+    BindingValue6,
+    RESERVED_V6,
+    INBOUND_BINDINGS_V6,
+    release_port_v6
+);
+
 #[inline(always)]
 pub fn get_or_create_mapping_v4<const PRIMARY: usize, const FALLBACK: usize>(
     cfg: &GlobalConfig,
@@ -436,25 +490,40 @@ pub fn get_or_create_mapping_v4<const PRIMARY: usize, const FALLBACK: usize>(
         unsafe {
             if (*val).ip == cfg.wan_ip4 {
                 let cur_port = u16::from_be((*val).port);
-                if port_is_reserved(&RESERVED_V4, cur_port) {
-                    let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(cur_port);
-                    let map = if is_even { &BITMAP_EVEN_V4 } else { &BITMAP_ODD_V4 };
-                    bitmap_set_bit(map, slot, mask);
+                let cur_meta = (*val).reserved_meta();
+                let res_state = port_reserved_state(&RESERVED_V4, cur_port);
+                if !flowcone_common::binding_matches_reserved(res_state, cur_meta) {
+                    let is_res = flowcone_common::reserved_state_is_reserved(res_state);
+                    if is_res {
+                        let (is_even, slot, mask) =
+                            flowcone_common::port_to_bitmap_coords(cur_port);
+                        let map = if is_even {
+                            &BITMAP_EVEN_V4
+                        } else {
+                            &BITMAP_ODD_V4
+                        };
+                        bitmap_set_bit(map, slot, mask);
+                    }
                     let _ = OUTBOUND_BINDINGS_V4.remove(&ep_key);
                     if let Some(in_val) = INBOUND_BINDINGS_V4.get_ptr_mut(&cur_port)
                         && (*in_val).ip == src_ip
                         && (*in_val).port == src_port
+                        && !flowcone_common::binding_matches_reserved(
+                            res_state,
+                            (*in_val).reserved_meta(),
+                        )
                     {
                         let _ = INBOUND_BINDINGS_V4.remove(&cur_port);
+                        if !is_res {
+                            release_port_v4(cur_port);
+                        }
                     }
                 } else {
                     if now.wrapping_sub((*val).last_seen) >= LAST_SEEN_INTERVAL_SEC {
                         (*val).last_seen = now;
                     }
-                    if !is_short_lived
-                        && ((*val)._pad & flowcone_common::BINDING_FLAG_SHORT_LIVED != 0)
-                    {
-                        (*val)._pad &= !flowcone_common::BINDING_FLAG_SHORT_LIVED;
+                    if !is_short_lived && (*val).is_short_lived() {
+                        (*val).clear_short_lived();
                     }
                     return Some((*val).port);
                 }
@@ -485,7 +554,8 @@ pub fn get_or_create_mapping_v4<const PRIMARY: usize, const FALLBACK: usize>(
         _pad: flags,
         last_seen: now,
     };
-    let alloc = alloc_port_v4(pref, cfg.min_port4, cfg.max_port4, &in_val);
+    let alloc_packed = alloc_port_v4(pref, cfg.min_port4, cfg.max_port4, &in_val);
+    let alloc = alloc_packed as u16;
     if alloc == 0 {
         return None;
     }
@@ -493,7 +563,7 @@ pub fn get_or_create_mapping_v4<const PRIMARY: usize, const FALLBACK: usize>(
     let new_val = BindingValue4 {
         ip: cfg.wan_ip4,
         port: m_port,
-        _pad: flags,
+        _pad: flowcone_common::pack_binding_meta(is_short_lived, (alloc_packed >> 16) as u16),
         last_seen: now,
     };
     if OUTBOUND_BINDINGS_V4
@@ -529,25 +599,40 @@ pub fn get_or_create_mapping_v6<const PRIMARY: usize, const FALLBACK: usize>(
         unsafe {
             if ipv6_eq(&(*val).ip, &cfg.wan_ip6) {
                 let cur_port = u16::from_be((*val).port);
-                if port_is_reserved(&RESERVED_V6, cur_port) {
-                    let (is_even, slot, mask) = flowcone_common::port_to_bitmap_coords(cur_port);
-                    let map = if is_even { &BITMAP_EVEN_V6 } else { &BITMAP_ODD_V6 };
-                    bitmap_set_bit(map, slot, mask);
+                let cur_meta = (*val).reserved_meta();
+                let res_state = port_reserved_state(&RESERVED_V6, cur_port);
+                if !flowcone_common::binding_matches_reserved(res_state, cur_meta) {
+                    let is_res = flowcone_common::reserved_state_is_reserved(res_state);
+                    if is_res {
+                        let (is_even, slot, mask) =
+                            flowcone_common::port_to_bitmap_coords(cur_port);
+                        let map = if is_even {
+                            &BITMAP_EVEN_V6
+                        } else {
+                            &BITMAP_ODD_V6
+                        };
+                        bitmap_set_bit(map, slot, mask);
+                    }
                     let _ = OUTBOUND_BINDINGS_V6.remove(&ep_key);
                     if let Some(in_val) = INBOUND_BINDINGS_V6.get_ptr_mut(&cur_port)
                         && ipv6_eq(&(*in_val).ip, &src_ip)
                         && (*in_val).port == src_port
+                        && !flowcone_common::binding_matches_reserved(
+                            res_state,
+                            (*in_val).reserved_meta(),
+                        )
                     {
                         let _ = INBOUND_BINDINGS_V6.remove(&cur_port);
+                        if !is_res {
+                            release_port_v6(cur_port);
+                        }
                     }
                 } else {
                     if now.wrapping_sub((*val).last_seen) >= LAST_SEEN_INTERVAL_SEC {
                         (*val).last_seen = now;
                     }
-                    if !is_short_lived
-                        && ((*val)._pad[0] & flowcone_common::BINDING_FLAG_SHORT_LIVED != 0)
-                    {
-                        (*val)._pad[0] &= !flowcone_common::BINDING_FLAG_SHORT_LIVED;
+                    if !is_short_lived && (*val).is_short_lived() {
+                        (*val).clear_short_lived();
                     }
                     return Some((*val).port);
                 }
@@ -578,7 +663,8 @@ pub fn get_or_create_mapping_v6<const PRIMARY: usize, const FALLBACK: usize>(
         _pad: [flags, 0, 0],
         last_seen: now,
     };
-    let alloc = alloc_port_v6(pref, cfg.min_port6, cfg.max_port6, &in_val);
+    let alloc_packed = alloc_port_v6(pref, cfg.min_port6, cfg.max_port6, &in_val);
+    let alloc = alloc_packed as u16;
     if alloc == 0 {
         return None;
     }
@@ -586,7 +672,11 @@ pub fn get_or_create_mapping_v6<const PRIMARY: usize, const FALLBACK: usize>(
     let new_val = BindingValue6 {
         ip: cfg.wan_ip6,
         port: m_port,
-        _pad: [flags, 0, 0],
+        _pad: [
+            flowcone_common::pack_binding_meta(is_short_lived, (alloc_packed >> 16) as u16),
+            0,
+            0,
+        ],
         last_seen: now,
     };
     if OUTBOUND_BINDINGS_V6

@@ -24,7 +24,10 @@ fn build_ebpf(release: bool) -> Result<(), Box<dyn std::error::Error>> {
         exit(1);
     }
 
-    println!("flowcone-xtask: building flowcone-ebpf (release={})", release);
+    println!(
+        "flowcone-xtask: building flowcone-ebpf (release={})",
+        release
+    );
 
     let mut args = vec![
         "+nightly",

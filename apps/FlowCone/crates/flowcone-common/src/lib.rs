@@ -12,7 +12,52 @@ pub struct EndpointKey4 {
 unsafe impl aya::Pod for EndpointKey4 {}
 
 pub const BINDING_FLAG_SHORT_LIVED: u16 = 1;
+pub const BINDING_EPOCH_MASK: u16 = !BINDING_FLAG_SHORT_LIVED;
+pub const RESERVED_PORT_BIT: u16 = 1;
 pub const DEFAULT_SHORT_LIVED_TIMEOUT_SEC: u32 = 5;
+
+#[inline(always)]
+pub fn reserved_state_is_reserved(state: u16) -> bool {
+    (state & RESERVED_PORT_BIT) != 0
+}
+
+#[inline(always)]
+pub fn reserved_state_next_added(state: u16) -> u16 {
+    if (state & RESERVED_PORT_BIT) == 0 {
+        state.wrapping_add(1)
+    } else {
+        state
+    }
+}
+
+#[inline(always)]
+pub fn reserved_state_next_removed(state: u16) -> u16 {
+    if (state & RESERVED_PORT_BIT) != 0 {
+        state.wrapping_add(1)
+    } else {
+        state
+    }
+}
+
+#[inline(always)]
+pub fn pack_binding_meta(short_lived: bool, res_state: u16) -> u16 {
+    (res_state & BINDING_EPOCH_MASK)
+        | if short_lived {
+            BINDING_FLAG_SHORT_LIVED
+        } else {
+            0
+        }
+}
+
+#[inline(always)]
+pub fn update_binding_epoch(meta: u16, res_state: u16) -> u16 {
+    (meta & BINDING_FLAG_SHORT_LIVED) | (res_state & BINDING_EPOCH_MASK)
+}
+
+#[inline(always)]
+pub fn binding_matches_reserved(res_state: u16, meta: u16) -> bool {
+    (res_state & RESERVED_PORT_BIT) == 0 && ((res_state ^ meta) & BINDING_EPOCH_MASK) == 0
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +72,21 @@ impl BindingValue4 {
     #[inline(always)]
     pub fn is_short_lived(&self) -> bool {
         self._pad & BINDING_FLAG_SHORT_LIVED != 0
+    }
+
+    #[inline(always)]
+    pub fn reserved_meta(&self) -> u16 {
+        self._pad
+    }
+
+    #[inline(always)]
+    pub fn set_reserved_epoch(&mut self, res_state: u16) {
+        self._pad = update_binding_epoch(self._pad, res_state);
+    }
+
+    #[inline(always)]
+    pub fn clear_short_lived(&mut self) {
+        self._pad &= !BINDING_FLAG_SHORT_LIVED;
     }
 }
 
@@ -57,6 +117,21 @@ impl BindingValue6 {
     #[inline(always)]
     pub fn is_short_lived(&self) -> bool {
         self._pad[0] & BINDING_FLAG_SHORT_LIVED != 0
+    }
+
+    #[inline(always)]
+    pub fn reserved_meta(&self) -> u16 {
+        self._pad[0]
+    }
+
+    #[inline(always)]
+    pub fn set_reserved_epoch(&mut self, res_state: u16) {
+        self._pad[0] = update_binding_epoch(self._pad[0], res_state);
+    }
+
+    #[inline(always)]
+    pub fn clear_short_lived(&mut self) {
+        self._pad[0] &= !BINDING_FLAG_SHORT_LIVED;
     }
 }
 
@@ -888,6 +963,67 @@ mod tests {
         }
         assert_eq!(tested_bits[0], 3);
         assert_eq!(count, 61);
+    }
+
+    #[test]
+    fn test_reserved_epoch_state_machine() {
+        let mut s = 0u16;
+        assert!(!reserved_state_is_reserved(s));
+        s = reserved_state_next_added(s);
+        assert_eq!(s, 1);
+        assert!(reserved_state_is_reserved(s));
+        // Adding an already-reserved port is idempotent.
+        assert_eq!(reserved_state_next_added(s), 1);
+
+        s = reserved_state_next_removed(s);
+        assert_eq!(s, 2);
+        assert!(!reserved_state_is_reserved(s));
+        // Removing an already-unreserved port is idempotent.
+        assert_eq!(reserved_state_next_removed(s), 2);
+
+        // Wrap-around across u16::MAX keeps parity alternating cleanly.
+        let high = 0xfffeu16;
+        let high_res = reserved_state_next_added(high);
+        assert_eq!(high_res, 0xffff);
+        assert!(reserved_state_is_reserved(high_res));
+        let wrapped = reserved_state_next_removed(high_res);
+        assert_eq!(wrapped, 0);
+        assert!(!reserved_state_is_reserved(wrapped));
+    }
+
+    #[test]
+    fn test_binding_meta_epoch_and_short_lived_flag() {
+        let mut v4 = BindingValue4 {
+            ip: 0x0a000001,
+            port: 1234,
+            _pad: pack_binding_meta(true, 4),
+            last_seen: 100,
+        };
+        assert!(v4.is_short_lived());
+        assert!(binding_matches_reserved(4, v4.reserved_meta()));
+        assert!(!binding_matches_reserved(5, v4.reserved_meta()));
+        assert!(!binding_matches_reserved(6, v4.reserved_meta()));
+
+        v4.clear_short_lived();
+        assert!(!v4.is_short_lived());
+        assert!(binding_matches_reserved(4, v4.reserved_meta()));
+
+        v4.set_reserved_epoch(6);
+        assert!(!v4.is_short_lived());
+        assert!(binding_matches_reserved(6, v4.reserved_meta()));
+
+        let mut v6 = BindingValue6 {
+            ip: [0; 16],
+            port: 5678,
+            _pad: [pack_binding_meta(true, 10), 0, 0],
+            last_seen: 200,
+        };
+        assert!(v6.is_short_lived());
+        assert!(binding_matches_reserved(10, v6.reserved_meta()));
+        assert!(!binding_matches_reserved(12, v6.reserved_meta()));
+        v6.clear_short_lived();
+        assert!(!v6.is_short_lived());
+        assert!(binding_matches_reserved(10, v6.reserved_meta()));
     }
 
     #[test]

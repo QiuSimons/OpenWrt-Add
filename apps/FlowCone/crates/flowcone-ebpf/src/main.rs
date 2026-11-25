@@ -25,8 +25,8 @@ use flowcone_common::{
 pub use engine::{
     EGRESS_ALLOC_FALLBACK, EGRESS_ALLOC_PRIMARY, FRAG_ALLOC_FALLBACK, FRAG_ALLOC_PRIMARY,
     FRAG6_ALLOC_FALLBACK, FRAG6_ALLOC_PRIMARY, fixup_csum_v4, fixup_csum_v6, fixup_l3_id_v4,
-    fixup_l3_v4, get_or_create_mapping_v4, get_or_create_mapping_v6, is_short_lived_port, now_sec,
-    port_is_reserved,
+    fixup_l3_v4, get_or_create_mapping_v4, get_or_create_mapping_v6, is_short_lived_port,
+    lookup_inbound_v4, lookup_inbound_v6, now_sec,
 };
 pub use parsing::{
     Ipv4Hdr, Ipv6Hdr, Ipv6L4, UdpHdr, bypass_special_udp4, bypass_special_udp6, ipv6_eq,
@@ -166,10 +166,10 @@ pub static GC_FLAGS: Array<u32> = Array::with_max_entries(1, 0);
 
 /// Bitmap of ports reserved for host UDP services.
 #[map]
-pub static RESERVED_V4: Array<u8> = Array::with_max_entries(PORT_STATE_ENTRIES, 0);
+pub static RESERVED_V4: Array<u16> = Array::with_max_entries(PORT_STATE_ENTRIES, 0);
 
 #[map]
-pub static RESERVED_V6: Array<u8> = Array::with_max_entries(PORT_STATE_ENTRIES, 0);
+pub static RESERVED_V6: Array<u16> = Array::with_max_entries(PORT_STATE_ENTRIES, 0);
 
 const BPF_F_MMAPABLE: u32 = 0x400;
 
@@ -263,11 +263,8 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
         if ext_port < cfg.min_port4 || ext_port > cfg.max_port4 {
             return TC_ACT_UNSPEC;
         }
-        if port_is_reserved(&RESERVED_V4, ext_port) {
-            return TC_ACT_UNSPEC;
-        }
 
-        if let Some(target) = INBOUND_BINDINGS_V4.get_ptr_mut(&ext_port) {
+        if let Some(target) = lookup_inbound_v4(ext_port) {
             let new_dst_ip = unsafe { (*target).ip };
             let new_dst_port = unsafe { (*target).port };
             let now = now_sec();
@@ -357,11 +354,8 @@ pub fn flowcone_tcx_ingress(ctx: TcContext) -> i32 {
         if ext_port < cfg.min_port6 || ext_port > cfg.max_port6 {
             return TC_ACT_UNSPEC;
         }
-        if port_is_reserved(&RESERVED_V6, ext_port) {
-            return TC_ACT_UNSPEC;
-        }
 
-        if let Some(target) = INBOUND_BINDINGS_V6.get_ptr_mut(&ext_port) {
+        if let Some(target) = lookup_inbound_v6(ext_port) {
             let new_dst_ip = unsafe { (*target).ip };
             let new_dst_port = unsafe { (*target).port };
             let now = now_sec();
@@ -675,10 +669,7 @@ pub fn flowcone_frag_v6_ingress(ctx: TcContext) -> i32 {
     if ext_port < cfg.min_port6 || ext_port > cfg.max_port6 {
         return TC_ACT_UNSPEC;
     }
-    if port_is_reserved(&RESERVED_V6, ext_port) {
-        return TC_ACT_UNSPEC;
-    }
-    let Some(target) = INBOUND_BINDINGS_V6.get_ptr_mut(&ext_port) else {
+    let Some(target) = lookup_inbound_v6(ext_port) else {
         return TC_ACT_UNSPEC;
     };
     let new_ip = unsafe { (*target).ip };
@@ -758,17 +749,20 @@ pub fn flowcone_frag_v6_egress(ctx: TcContext) -> i32 {
     let offset = frag_field & 0xfff8;
     let more = (frag_field & 1) != 0;
     let id = read_be32(frag_off + 4);
-    let key = FragKey6 {
+    let dst_ip = iph.dst_addr;
+    let now = now_sec();
+
+    let make_frag_key = || FragKey6 {
         epoch: cfg.frag_epoch,
         src: src_ip,
-        dst: iph.dst_addr,
+        dst: dst_ip,
         id,
         proto: next_hdr,
         _pad: [0; 3],
     };
-    let now = now_sec();
 
     if offset != 0 {
+        let key = make_frag_key();
         let Some(v_ptr) = FRAG_OUT_V6.get_ptr_mut(&key) else {
             return TC_ACT_SHOT;
         };
@@ -800,13 +794,14 @@ pub fn flowcone_frag_v6_egress(ctx: TcContext) -> i32 {
         return TC_ACT_SHOT;
     }
     let src_port = udph.src_port;
-    if bypass_special_udp6(&src_ip, &iph.dst_addr, src_port, udph.dst_port) {
-        let value = FragValue6 {
-            ip: [0; 16],
-            wan_id: 0,
-            last_seen: now,
-        };
+    if bypass_special_udp6(&src_ip, &dst_ip, src_port, udph.dst_port) {
         if more {
+            let key = make_frag_key();
+            let value = FragValue6 {
+                ip: [0; 16],
+                wan_id: 0,
+                last_seen: now,
+            };
             let _ = FRAG_OUT_V6.insert(&key, &value, BPF_ANY);
         }
         return TC_ACT_UNSPEC;
@@ -821,7 +816,6 @@ pub fn flowcone_frag_v6_egress(ctx: TcContext) -> i32 {
         Some(p) => p,
         None => return TC_ACT_SHOT,
     };
-    let old_src = iph.src_addr;
     let old_sport = udph.src_port;
     let wan_id = alloc_wan_frag_id();
     let id_ptr = (frag_off + 4) as *mut u32;
@@ -834,19 +828,20 @@ pub fn flowcone_frag_v6_egress(ctx: TcContext) -> i32 {
         &ctx,
         data,
         udp_off,
-        &old_src,
+        &src_ip,
         &cfg.wan_ip6,
         old_sport,
         mapped,
     ) {
         return TC_ACT_SHOT;
     }
-    let value = FragValue6 {
-        ip: cfg.wan_ip6,
-        wan_id,
-        last_seen: now,
-    };
     if more {
+        let key = make_frag_key();
+        let value = FragValue6 {
+            ip: cfg.wan_ip6,
+            wan_id,
+            last_seen: now,
+        };
         let _ = FRAG_OUT_V6.insert(&key, &value, BPF_ANY);
     }
     let mark = get_mark(&ctx);
@@ -934,10 +929,7 @@ pub fn flowcone_frag_v4_ingress(ctx: TcContext) -> i32 {
     if ext_port < cfg.min_port4 || ext_port > cfg.max_port4 {
         return TC_ACT_UNSPEC;
     }
-    if port_is_reserved(&RESERVED_V4, ext_port) {
-        return TC_ACT_UNSPEC;
-    }
-    let Some(target) = INBOUND_BINDINGS_V4.get_ptr_mut(&ext_port) else {
+    let Some(target) = lookup_inbound_v4(ext_port) else {
         return TC_ACT_UNSPEC;
     };
     let new_dst_ip = unsafe { (*target).ip };
@@ -1014,18 +1006,21 @@ pub fn flowcone_frag_v4_egress(ctx: TcContext) -> i32 {
     let frag_off = u16::from_be(iph.frag_off);
     let offset = frag_off & 0x1fff;
     let more = (frag_off & 0x2000) != 0;
+    let dst_ip = iph.dst_addr;
+    let id = iph.id;
+    let now = now_sec();
 
-    let key = FragKey4 {
+    let make_frag_key = || FragKey4 {
         epoch: cfg.frag_epoch,
         src: src_ip,
-        dst: iph.dst_addr,
-        id: iph.id,
+        dst: dst_ip,
+        id,
         proto: IPPROTO_UDP,
         _pad: 0,
     };
-    let now = now_sec();
 
     if offset != 0 {
+        let key = make_frag_key();
         let Some(v_ptr) = FRAG_OUT_V4.get_ptr_mut(&key) else {
             return TC_ACT_SHOT;
         };
@@ -1040,13 +1035,11 @@ pub fn flowcone_frag_v4_egress(ctx: TcContext) -> i32 {
         if v.ip == 0 {
             return TC_ACT_UNSPEC;
         }
-        let old_src = iph.src_addr;
-        let old_id = iph.id;
         let new_id = u16::to_be(v.wan_id);
         iph.src_addr = v.ip;
         iph.id = new_id;
-        if !fixup_l3_v4(&ctx, data, ip_off, old_src, v.ip)
-            || !fixup_l3_id_v4(&ctx, data, ip_off, old_id, new_id)
+        if !fixup_l3_v4(&ctx, data, ip_off, src_ip, v.ip)
+            || !fixup_l3_id_v4(&ctx, data, ip_off, id, new_id)
         {
             return TC_ACT_SHOT;
         }
@@ -1067,7 +1060,8 @@ pub fn flowcone_frag_v4_egress(ctx: TcContext) -> i32 {
         return TC_ACT_SHOT;
     };
     let src_port = udph.src_port;
-    if bypass_special_udp4(src_ip, iph.dst_addr, src_port, udph.dst_port) {
+    if bypass_special_udp4(src_ip, dst_ip, src_port, udph.dst_port) {
+        let key = make_frag_key();
         let value = FragValue4 {
             ip: 0,
             wan_id: 0,
@@ -1087,9 +1081,7 @@ pub fn flowcone_frag_v4_egress(ctx: TcContext) -> i32 {
         Some(p) => p,
         None => return TC_ACT_SHOT,
     };
-    let old_src = iph.src_addr;
     let old_sport = udph.src_port;
-    let old_id = iph.id;
     let wan_id = alloc_wan_ip_id();
     let new_id = u16::to_be(wan_id);
 
@@ -1101,15 +1093,16 @@ pub fn flowcone_frag_v4_egress(ctx: TcContext) -> i32 {
         data,
         ip_off,
         udp_off,
-        old_src,
+        src_ip,
         cfg.wan_ip4,
         old_sport,
         mapped,
-    ) || !fixup_l3_id_v4(&ctx, data, ip_off, old_id, new_id)
+    ) || !fixup_l3_id_v4(&ctx, data, ip_off, id, new_id)
     {
         return TC_ACT_SHOT;
     }
 
+    let key = make_frag_key();
     let value = FragValue4 {
         ip: cfg.wan_ip4,
         wan_id,
@@ -1191,10 +1184,7 @@ pub fn flowcone_icmp_target(ctx: TcContext) -> i32 {
     if ext_port < cfg.min_port4 || ext_port > cfg.max_port4 {
         return TC_ACT_UNSPEC;
     }
-    if port_is_reserved(&RESERVED_V4, ext_port) {
-        return TC_ACT_UNSPEC;
-    }
-    let Some(target) = INBOUND_BINDINGS_V4.get_ptr_mut(&ext_port) else {
+    let Some(target) = lookup_inbound_v4(ext_port) else {
         return TC_ACT_UNSPEC;
     };
     let new_ip = unsafe { (*target).ip };
@@ -1598,10 +1588,7 @@ pub fn flowcone_icmp6_target(ctx: TcContext) -> i32 {
     if ext_port < cfg.min_port6 || ext_port > cfg.max_port6 {
         return TC_ACT_UNSPEC;
     }
-    if port_is_reserved(&RESERVED_V6, ext_port) {
-        return TC_ACT_UNSPEC;
-    }
-    let Some(target) = INBOUND_BINDINGS_V6.get_ptr_mut(&ext_port) else {
+    let Some(target) = lookup_inbound_v6(ext_port) else {
         return TC_ACT_UNSPEC;
     };
     let new_ip = unsafe { (*target).ip };
@@ -1660,12 +1647,7 @@ pub fn flowcone_icmp6_target(ctx: TcContext) -> i32 {
         ]);
         if ctx
             .skb
-            .l4_csum_replace(
-                icmp_csum_off,
-                oo as u64,
-                no as u64,
-                CSUM_FIELD_U32,
-            )
+            .l4_csum_replace(icmp_csum_off, oo as u64, no as u64, CSUM_FIELD_U32)
             .is_err()
         {
             return TC_ACT_SHOT;
@@ -1854,12 +1836,7 @@ pub fn flowcone_icmp6_egress_target(ctx: TcContext) -> i32 {
         ]);
         if ctx
             .skb
-            .l4_csum_replace(
-                icmp_csum_off,
-                oo as u64,
-                no as u64,
-                CSUM_FIELD_U32,
-            )
+            .l4_csum_replace(icmp_csum_off, oo as u64, no as u64, CSUM_FIELD_U32)
             .is_err()
         {
             return TC_ACT_SHOT;
