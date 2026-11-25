@@ -221,6 +221,10 @@ jobs:
               new_name="${name}-${{ matrix.arch }}-openwrt-${{ matrix.sdk }}.${ext}"
             fi
 
+            # GitHub Releases normalizes `~` in asset names to `.`, which breaks
+            # overwrite matching on retries (`already_exists` race).
+            new_name="${new_name//~/.}"
+
             cp "$f" "dist/${new_name}"
           done
 
@@ -255,12 +259,36 @@ jobs:
           path: release-dist
           merge-multiple: true
 
+      - name: Remove colliding release assets before upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            exit 0
+          fi
+          existing_assets=$(gh release view "$RELEASE_TAG" --json assets -q '.assets[].name')
+          for f in release-dist/*; do
+            [ -e "$f" ] || continue
+            base=$(basename "$f")
+            # Also match legacy `~` names before GitHub normalized them to `.`.
+            alt=${base//\./\~}
+            while IFS= read -r asset; do
+              [ -n "$asset" ] || continue
+              if [ "$asset" = "$base" ] || [ "$asset" = "$alt" ] || [ "${asset//\~/.}" = "$base" ]; then
+                echo "Deleting existing asset $asset before re-upload..."
+                gh release delete-asset "$RELEASE_TAG" "$asset" --yes || true
+              fi
+            done <<< "$existing_assets"
+          done
+
       - name: Create or update GitHub release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare.outputs.release_tag }}
           name: ${{ needs.prepare.outputs.release_name }}
           files: release-dist/*
+          overwrite_files: true
           generate_release_notes: true
           token: ${{ secrets.GITHUB_TOKEN }}
 

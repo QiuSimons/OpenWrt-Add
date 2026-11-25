@@ -1102,10 +1102,12 @@ fn rewrite_frag_v6_egress_first(
 const FRAG_FIRST_UNSPEC: u64 = 0;
 const FRAG_FIRST_SHOT: u64 = 1;
 const FRAG_FIRST_HIT: u64 = 2;
+const FRAG_FIRST_ALLOC: u64 = 3;
 
-/// Returns `FRAG_FIRST_UNSPEC`, `FRAG_FIRST_SHOT`, or `(udp_rel << 32) |
-/// (mapped << 16) | FRAG_FIRST_HIT` so `rewrite_frag_v6_egress_first` runs
-/// sequentially after this stack frame pops.
+/// Returns `FRAG_FIRST_UNSPEC`, `FRAG_FIRST_SHOT`, `(udp_rel << 32) |
+/// (mapped << 16) | FRAG_FIRST_HIT`, or `(udp_rel << 32) | FRAG_FIRST_ALLOC`
+/// so both `rewrite_frag_v6_egress_first` and any tail call run from the
+/// top-level `flowcone_frag_v6_egress` frame rather than inside this subprogram.
 #[inline(never)]
 fn frag_v6_egress_first(
     ctx: &TcContext,
@@ -1160,15 +1162,7 @@ fn frag_v6_egress_first(
     if let Some(mapped) = lookup_outbound_v6(cfg, src_ip, src_port, now, short_lived) {
         return ((udp_rel as u64) << 32) | ((mapped as u64) << 16) | FRAG_FIRST_HIT;
     }
-    let _ = tail_call_scratch(
-        ctx,
-        &FRAG6_TARGET,
-        TARGET_FRAG_EGRESS_ALLOC,
-        ip_rel,
-        udp_rel,
-        frag_rel,
-    );
-    FRAG_FIRST_SHOT
+    ((udp_rel as u64) << 32) | FRAG_FIRST_ALLOC
 }
 
 #[classifier]
@@ -1311,6 +1305,14 @@ pub fn flowcone_frag_v6_egress(ctx: TcContext) -> i32 {
                 pack_scratch_offsets(ip_rel, (res >> 32) as usize, frag_rel),
                 ((res >> 16) & 0xffff) as u16,
                 now_sec(),
+            ),
+            FRAG_FIRST_ALLOC => tail_call_scratch(
+                &ctx,
+                &FRAG6_TARGET,
+                TARGET_FRAG_EGRESS_ALLOC,
+                ip_rel,
+                (res >> 32) as usize,
+                frag_rel,
             ),
             _ => TC_ACT_SHOT,
         };
