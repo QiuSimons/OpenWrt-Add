@@ -519,6 +519,262 @@ test('dashboard customization supports presets, multiple traffic panels, Wi-Fi/t
 	} finally { await dark.context.close(); }
 });
 
+test('simple menu customization supports search multi-select, reordering, cancel rollback, persistence, guardrails and mobile drawer handoff', async () => {
+	/* 1. Desktop zh-Hans: live preview with unobstructed sidebar, search/multi-select, reorder, cancel rollback, save & reload, restore default */
+	const { page, context, errors } = await open('/src/preview/index.html?lang=zh-Hans', { width: 1440, height: 1000 });
+	try {
+		await dashboardReady(page);
+		const navLabels = () => page.$$eval('#topmenu .cb-nav-link .cb-nav-label', (els) => els.map((e) => e.textContent));
+		const initial = await navLabels();
+		assert.deepEqual(initial, ['概览', '上网与网络', 'Wi-Fi', '软件包', '管理密码', '备份与升级', '重启']);
+
+		await page.click('.cb-nav-customize');
+		await page.waitForSelector('.cb-sheet.cb-sheet-menu.show');
+		await page.waitForTimeout(300);
+		assert.equal(await page.$eval('.cb-app', (e) => e.hasAttribute('inert')), true, 'shell is inert while menu customizer is open');
+		const geom = await page.evaluate(() => ({
+			sideRight: document.getElementById('cb-sidebar').getBoundingClientRect().right,
+			scrimLeft: document.querySelector('.cb-sheet-scrim-menu').getBoundingClientRect().left
+		}));
+		assert.ok(geom.scrimLeft >= geom.sideRight - 1, 'desktop menu scrim leaves sidebar unobstructed: ' + JSON.stringify(geom));
+		await page.screenshot({ path: path.join(SHOTS, 'simple-menu-edit-desktop.png') });
+
+		/* Open Add-page picker for Common */
+		await page.click('.cb-sheet-group[data-group="common"] .cb-sheet-add');
+		await page.waitForSelector('.cb-sheet-search-input:visible');
+		assert.equal(await page.evaluate(() => document.activeElement.classList.contains('cb-sheet-search-input')), true, 'search input is focused on picker open');
+		/* Items already in System are disabled with badge */
+		const rebootItem = page.locator('.cb-picker-item[data-path="system/reboot"]');
+		assert.equal(await rebootItem.isDisabled(), true);
+		assert.match(await rebootItem.textContent(), /已在「系统」中/);
+
+		/* Search & add System Log */
+		await page.fill('.cb-sheet-search-input', '日志');
+		assert.equal(await page.locator('.cb-picker-item').count(), 1);
+		await page.click('.cb-picker-item[data-path="status/syslog"]');
+		assert.match(await page.locator('.cb-picker-item[data-path="status/syslog"]').textContent(), /已添加/);
+		assert.ok((await navLabels()).includes('系统日志'), 'live sidebar updates immediately on add');
+
+		/* Clear search & multi-select two more pages in a row */
+		await page.click('.cb-sheet-search-clear');
+		await page.click('.cb-picker-item[data-path="network/dhcp"]');
+		await page.click('.cb-picker-item[data-path="network/diagnostics"]');
+		await page.screenshot({ path: path.join(SHOTS, 'simple-menu-picker-desktop.png') });
+
+		/* Escape returns from picker to edit view without closing sheet */
+		await page.keyboard.press('Escape');
+		await page.waitForSelector('.cb-sheet-group[data-group="common"] .cb-sheet-add');
+		assert.equal(await page.locator('.cb-sheet.cb-sheet-menu').isVisible(), true);
+
+		/* Reorder System Log up & remove Password, verify live sidebar */
+		await page.click('[data-row-key="common:status/syslog"] .cbi-button-up');
+		await page.click('[data-row-key="system:system/admin"] .cbi-button-remove');
+		const edited = await navLabels();
+		assert.equal(edited.indexOf('系统日志') < edited.indexOf('Wi-Fi'), true, 'reordered item moves up in live sidebar');
+		assert.equal(edited.includes('管理密码'), false, 'removed item disappears from live sidebar');
+
+		/* Cancel rolls back completely and restores focus to .cb-nav-customize */
+		await page.click('.cb-sheet-foot .cbi-button:has-text("取消")');
+		await page.waitForFunction(() => !document.querySelector('.cb-sheet'));
+		assert.deepEqual(await navLabels(), initial, 'cancel restores previous simple menu');
+		assert.equal(await page.evaluate(() => document.activeElement.classList.contains('cb-nav-customize')), true, 'desktop close restores focus to Customize menu button');
+
+		/* Keyboard focus: Back focuses group Add button; IME Escape stays in Picker; keyboard reorder keeps focus in sheet */
+		await page.click('.cb-nav-customize');
+		await page.waitForSelector('.cb-sheet.cb-sheet-menu.show');
+		await page.click('.cb-sheet-group[data-group="common"] .cb-sheet-add');
+		await page.evaluate(() => {
+			document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true }));
+		});
+		assert.equal(await page.locator('.cb-sheet-search-input').isVisible(), true, 'IME Escape does not exit picker');
+		await page.click('.cb-sheet-back');
+		assert.equal(await page.evaluate(() => document.activeElement.classList.contains('cb-sheet-add')), true, 'Back moves focus to group Add button');
+		await page.focus('[data-row-key="common:network/wireless"] .cbi-button-up');
+		await page.keyboard.press('Enter');
+		assert.equal(await page.evaluate(() => !!document.activeElement.closest('.cb-sheet-body')), true, 'keyboard reorder preserves focus inside drawer');
+		await page.click('.cb-sheet-foot .cbi-button:has-text("取消")');
+		await page.waitForFunction(() => !document.querySelector('.cb-sheet'));
+
+		/* Re-open, add System Log + Connected Devices, remove Reboot, Save & reload */
+		await page.click('.cb-nav-customize');
+		await page.waitForSelector('.cb-sheet.cb-sheet-menu.show');
+		await page.click('.cb-sheet-group[data-group="common"] .cb-sheet-add');
+		await page.click('.cb-picker-item[data-path="status/syslog"]');
+		await page.click('.cb-picker-item[data-path="network/dhcp"]');
+		await page.click('.cb-sheet-back');
+		await page.click('[data-row-key="system:system/reboot"] .cbi-button-remove');
+		await page.click('.cb-sheet-foot .cbi-button-save');
+		await page.waitForFunction(() => !document.querySelector('.cb-sheet'));
+		const savedAttr = await page.evaluate(() => localStorage.getItem('carbon.simpleMenu'));
+		assert.match(savedAttr, /status\/syslog/);
+		assert.match(savedAttr, /network\/dhcp/);
+		assert.doesNotMatch(savedAttr, /system\/reboot/);
+
+		await page.reload();
+		await dashboardReady(page);
+		const persisted = await navLabels();
+		assert.ok(persisted.includes('系统日志') && persisted.includes('已连接设备') && !persisted.includes('重启'), 'custom menu persists after reload: ' + JSON.stringify(persisted));
+
+		/* Restore default & save clears storage */
+		await page.click('.cb-nav-customize');
+		await page.waitForSelector('.cb-sheet.cb-sheet-menu.show');
+		await page.click('.cb-sheet-foot .cbi-button-reset');
+		await page.click('.cb-sheet-foot .cbi-button-save');
+		await page.waitForFunction(() => !document.querySelector('.cb-sheet'));
+		assert.equal(await page.evaluate(() => localStorage.getItem('carbon.simpleMenu')), null, 'restoring default clears localStorage');
+		assert.deepEqual(await navLabels(), initial);
+		assert.deepEqual(errors, []);
+	} finally { await context.close(); }
+
+	/* 2. Guardrails & uninstalled saved path (en, dark) */
+	const dark = await open('/src/preview/index.html?lang=en', {
+		width: 1440, height: 1000, appearance: 'dark',
+		storage: { 'carbon.simpleMenu': 'common=status/overview services/openclash;system=none' }
+	});
+	try {
+		await dashboardReady(dark.page);
+		const links = await dark.page.$$eval('#topmenu .cb-nav-link .cb-nav-label', (els) => els.map((e) => e.textContent));
+		assert.deepEqual(links, ['Overview'], 'uninstalled saved plugin is skipped in sidebar');
+		await dark.page.click('.cb-nav-customize');
+		await dark.page.waitForSelector('.cb-sheet.cb-sheet-menu.show');
+		await dark.page.waitForTimeout(300);
+		assert.match(await dark.page.locator('[data-row-key="common:services/openclash"]').textContent(), /Not installed/);
+		await dark.page.screenshot({ path: path.join(SHOTS, 'simple-menu-drawer-dark.png') });
+		await dark.page.click('[data-row-key="common:services/openclash"] .cbi-button-remove');
+		assert.equal(await dark.page.locator('[data-row-key="common:status/overview"] .cbi-button-remove').isDisabled(), true, 'cannot remove the last remaining menu item');
+		assert.deepEqual(dark.errors, []);
+	} finally { await dark.context.close(); }
+
+	/* 3. Mobile 390px: sidebar drawer closes cleanly before bottom sheet opens, zero overflow */
+	const phone = await open('/src/preview/index.html?lang=zh-Hans', { width: 390, height: 844 });
+	try {
+		await dashboardReady(phone.page);
+		await phone.page.click('#cb-burger');
+		await phone.page.waitForSelector('body.cb-nav-open');
+		await phone.page.click('.cb-nav-customize');
+		await phone.page.waitForSelector('.cb-sheet.cb-sheet-menu.show');
+		await phone.page.waitForTimeout(320);
+		assert.equal(await phone.page.evaluate(() => document.body.classList.contains('cb-nav-open')), false, 'mobile nav drawer closes when customizer opens');
+		const sheetBox = await phone.page.locator('.cb-sheet.cb-sheet-menu').boundingBox();
+		const saveBox = await phone.page.locator('.cb-sheet-foot .cbi-button-save').boundingBox();
+		assert.ok(sheetBox.x >= 0 && sheetBox.x + sheetBox.width <= 391, 'phone bottom sheet stays within viewport');
+		assert.ok(saveBox.y + saveBox.height <= 844.5, 'save button stays visible on phone');
+		assert.equal(await phone.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no horizontal overflow on phone');
+		await phone.page.screenshot({ path: path.join(SHOTS, 'simple-menu-drawer-phone.png') });
+		await phone.page.click('.cb-sheet-group[data-group="common"] .cb-sheet-add');
+		await phone.page.click('.cb-picker-item[data-path="status/syslog"]');
+		await phone.page.click('.cb-sheet-foot .cbi-button-save');
+		await phone.page.waitForFunction(() => !document.querySelector('.cb-sheet'));
+		await phone.page.click('#cb-burger');
+		await phone.page.waitForSelector('body.cb-nav-open');
+		const phoneLabels = await phone.page.$$eval('#topmenu .cb-nav-link .cb-nav-label', (els) => els.map((e) => e.textContent));
+		assert.ok(phoneLabels.includes('系统日志'), 'saved item appears in mobile drawer');
+		assert.deepEqual(phone.errors, []);
+	} finally { await phone.context.close(); }
+
+	/* 4. Router UCI mode: live Save, Simple<->Pro toggle, setSimpleMenuAttr reset, resetSimpleMenu on default, permission denied, Pro-mode preview & all-uninstalled empty state */
+	const uci = await open('/src/preview/index.html?lang=en', { width: 1440, height: 1000 });
+	try {
+		await dashboardReady(uci.page);
+		await uci.page.evaluate(() => {
+			const baseModel = window.Carbon._navModel;
+			window.__uciCalls = [];
+			window.__uciDeny = false;
+			const routerModel = Object.assign({}, baseModel, {
+				simpleMenuAttr: '',
+				saveSimpleMenu: async (cfg) => {
+					window.__uciCalls.push(['set', window.Carbon.simpleMenu.encodeAttr(cfg)]);
+					if (window.__uciDeny) { const e = new Error('denied'); e.code = 'denied'; throw e; }
+					document.querySelector('.cb-app').dataset.simpleMenu = window.Carbon.simpleMenu.encodeAttr(cfg);
+					return { simple_menu_custom: true };
+				},
+				resetSimpleMenu: async () => {
+					window.__uciCalls.push(['reset']);
+					delete document.querySelector('.cb-app').dataset.simpleMenu;
+					return { simple_menu_custom: false };
+				}
+			});
+			window.Carbon.renderNav(routerModel);
+		});
+		const labels = () => uci.page.$$eval('#topmenu .cb-nav-link .cb-nav-label', (els) => els.map((e) => e.textContent));
+
+		/* Save in UCI mode must keep updated sidebar without reverting to stale model.simpleMenuAttr */
+		await uci.page.click('.cb-nav-customize');
+		await uci.page.waitForSelector('.cb-sheet.cb-sheet-menu.show');
+		await uci.page.click('.cb-sheet-group[data-group="common"] .cb-sheet-add');
+		await uci.page.click('.cb-picker-item[data-path="status/syslog"]');
+		await uci.page.click('.cb-sheet-foot .cbi-button-save');
+		await uci.page.waitForFunction(() => !document.querySelector('.cb-sheet'));
+		assert.ok((await labels()).includes('System Log'), 'UCI Save keeps updated sidebar immediately');
+
+		/* Switching to Pro and back to Simple preserves in-session saved menu */
+		await uci.page.click('#cb-mode .cb-seg-btn:last-child');
+		await uci.page.waitForSelector('#topmenu .cb-nav-group');
+		await uci.page.click('#cb-mode .cb-seg-btn:first-child');
+		await uci.page.waitForSelector('#topmenu .cb-nav-customize');
+		assert.ok((await labels()).includes('System Log'), 'Simple <-> Pro toggle preserves UCI saved menu');
+
+		/* Pro mode -> openSimpleMenuCustomizer -> temporary Simple preview -> Cancel restores Pro mode */
+		await uci.page.click('#cb-mode .cb-seg-btn:last-child');
+		await uci.page.waitForSelector('#topmenu .cb-nav-group');
+		await uci.page.evaluate(() => window.Carbon.openSimpleMenuCustomizer(null));
+		await uci.page.waitForSelector('.cb-sheet.cb-sheet-menu.show');
+		assert.ok((await labels()).includes('System Log'), 'opening customizer from Pro mode shows live Simple preview');
+		await uci.page.click('.cb-sheet-foot .cbi-button:has-text("Cancel")');
+		await uci.page.waitForFunction(() => !document.querySelector('.cb-sheet'));
+		assert.ok(await uci.page.locator('#topmenu .cb-nav-group').count() > 0, 'closing customizer returns to Pro mode');
+
+		/* Back to Simple: setSimpleMenuAttr("") resets live sidebar immediately (Settings page Restore default hook) */
+		await uci.page.click('#cb-mode .cb-seg-btn:first-child');
+		await uci.page.waitForSelector('#topmenu .cb-nav-customize');
+		await uci.page.evaluate(() => window.Carbon.setSimpleMenuAttr(''));
+		assert.equal((await labels()).includes('System Log'), false, 'setSimpleMenuAttr("") resets live sidebar immediately');
+
+		/* Permission denied keeps drawer open with draft intact */
+		await uci.page.evaluate(() => { window.__uciDeny = true; });
+		await uci.page.click('.cb-nav-customize');
+		await uci.page.waitForSelector('.cb-sheet.cb-sheet-menu.show');
+		await uci.page.click('.cb-sheet-group[data-group="common"] .cb-sheet-add');
+		await uci.page.click('.cb-picker-item[data-path="status/syslog"]');
+		await uci.page.click('.cb-sheet-foot .cbi-button-save');
+		await uci.page.waitForFunction(() => /Log out and log in again/.test(document.querySelector('.cb-sheet-status')?.textContent || ''));
+		assert.equal(await uci.page.locator('.cb-sheet.cb-sheet-menu').isVisible(), true, 'denied error keeps drawer open');
+
+		/* Restore default + Save invokes resetSimpleMenu */
+		await uci.page.evaluate(() => { window.__uciDeny = false; window.__uciCalls = []; });
+		await uci.page.click('.cb-sheet-foot .cbi-button-reset');
+		await uci.page.click('.cb-sheet-foot .cbi-button-save');
+		await uci.page.waitForFunction(() => !document.querySelector('.cb-sheet'));
+		assert.deepEqual(await uci.page.evaluate(() => window.__uciCalls), [['reset']]);
+
+		/* All saved items uninstalled -> renders empty-state notice above Customize menu button */
+		await uci.page.evaluate(() => window.Carbon.setSimpleMenuAttr('common=services/missing_plugin;system=none'));
+		assert.match(await uci.page.textContent('#topmenu .cb-nav-empty'), /No configured pages are currently installed/);
+		assert.equal(await uci.page.locator('#topmenu .cb-nav-customize').isVisible(), true);
+		assert.deepEqual(uci.errors, []);
+	} finally { await uci.context.close(); }
+
+	/* 5. Settings page Simple menu section: Restore default, event sync, and non-Carbon fallback */
+	const settings = await open('/src/tests/fixtures/settings.html', { width: 1200, height: 900 });
+	try {
+		await settings.page.waitForSelector('body[data-ready]');
+		const sec = settings.page.locator('section.cbi-section', { hasText: '简洁菜单' });
+		assert.match(await sec.locator('.cb-update-note').textContent(), /自定义简洁菜单/);
+		await sec.locator('.cbi-button-reset').click();
+		await settings.page.waitForFunction(() => {
+			const s = [...document.querySelectorAll('section.cbi-section')].find((el) => el.textContent.includes('简洁菜单'));
+			return s && /已恢复默认简洁菜单/.test(s.querySelector('.cb-update-note')?.textContent || '');
+		});
+		assert.equal(await sec.locator('.cbi-button-reset').isDisabled(), true);
+		await settings.page.evaluate(() => {
+			document.dispatchEvent(new CustomEvent('carbon:simple-menu-change', { detail: { custom: true } }));
+		});
+		assert.equal(await sec.locator('.cbi-button-reset').isDisabled(), false, 'carbon:simple-menu-change re-enables Restore default');
+		assert.match(await sec.locator('.cb-update-note').textContent(), /当前使用自定义简洁菜单/);
+		assert.deepEqual(settings.errors, []);
+	} finally { await settings.context.close(); }
+});
+
 test('dashboard clarifies load average status and shows multi-SSID wireless bands and client counts', async () => {
 	/* 1. Default overview (en & zh-Hans): load 1-min + badge + tooltip, wireless card counts & bands */
 	for (const lang of ['en', 'zh-Hans']) {
@@ -1064,6 +1320,196 @@ test('table action cells keep direct buttons compact and centred while preservin
 	}
 });
 
+test('button variants stay consistent across <button> and <input> elements, destructive actions and hover states', async () => {
+	const parseRgb = (s) => (s.match(/[\d.]+/g) || []).slice(0, 3).map(Number);
+	const isReddish = (s) => { const [r, g, b] = parseRgb(s); return r > g + 40 && r > b + 40; };
+	const isGreenish = (s) => { const [r, g, b] = parseRgb(s); return g > r + 25 && g > b + 10; };
+	const isBluish = (s) => { const [r, g, b] = parseRgb(s); return b > r + 25; };
+
+	for (const mount of ['src', 'min']) {
+		for (const appearance of ['light', 'dark']) {
+			const label = `${mount}/${appearance}`;
+			const { page, context, errors } = await open('/src/preview/form.html', { width: 1280, height: 900, appearance });
+			try {
+				await page.setContent(`<!doctype html><html data-darkmode="${appearance === 'dark'}"><head><meta charset="utf-8">
+					<link rel="icon" href="data:,">
+					<link rel="stylesheet" href="/${mount}/htdocs/luci-static/carbon/carbon.css">
+					<style>.demo-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0}</style>
+					</head><body data-page="admin-services-passwall"><main id="maincontent" style="padding:24px"><div id="view">
+					<section class="cbi-section"><div class="cbi-section-node">
+						<div class="demo-row" id="ref-buttons">
+							<button id="btn-base" class="btn cbi-button">取消</button>
+							<button id="btn-neutral" class="cbi-button cbi-button-neutral">重启</button>
+							<button id="btn-toggle" class="cbi-button cbi-button-neutral enable-disable">禁用</button>
+							<button id="btn-iface-down" class="cbi-button cbi-button-neutral down">关闭</button>
+							<button id="btn-add" class="cbi-button cbi-button-add">添加</button>
+							<button id="btn-action" class="cbi-button cbi-button-action">调整</button>
+							<button id="btn-remove" class="cbi-button cbi-button-remove">断开连接</button>
+							<button id="btn-negative" class="cbi-button cbi-button-negative remove">删除</button>
+							<button id="btn-reset" class="cbi-button cbi-button-reset">重置</button>
+							<button id="btn-danger" class="btn danger">危险</button>
+							<button id="btn-error" class="btn error">错误</button>
+							<a id="link-danger" class="btn danger" href="#">危险链接</a>
+							<button id="btn-success" class="btn success">成功</button>
+							<button id="btn-primary" class="cbi-button cbi-button-apply">保存并应用</button>
+							<button id="btn-neg-imp" class="btn cbi-button cbi-button-negative important">断开确认</button>
+							<button id="btn-rem-imp" class="btn cbi-button cbi-button-remove important">强制删除</button>
+							<button id="btn-rst-imp" class="btn cbi-button cbi-button-reset important">恢复出厂</button>
+							<button id="btn-dng-imp" class="btn danger important">危险确认</button>
+						</div>
+						<div class="demo-row pw-toolbar" id="passwall-toolbar">
+							<input id="inp-add" class="btn cbi-button cbi-button-add" type="button" value="添加" />
+							<input id="inp-add-sub" class="btn cbi-button cbi-button-add" type="submit" value="添加节点" />
+							<input id="inp-fieldadd" class="btn cbi-button cbi-button-fieldadd" type="submit" value="添加字段" />
+							<input id="inp-clear" class="btn cbi-button cbi-button-remove" type="button" value="清空所有节点" />
+							<input id="inp-del-sel" class="btn cbi-button cbi-button-remove" type="button" value="删除选择的节点" />
+							<input id="inp-del-sub" class="btn cbi-button cbi-button-remove" type="submit" value="删除" />
+							<input id="inp-group" class="btn cbi-button cbi-button-edit" type="button" value="调整分组" />
+							<input id="inp-apply" class="btn cbi-button cbi-button-apply" type="submit" value="保存并应用" />
+							<input id="inp-reset-btn" class="btn cbi-button cbi-button-reset" type="button" value="重置" />
+							<input id="inp-reset-rst" class="btn cbi-button cbi-button-reset" type="reset" value="复位" />
+							<input id="inp-neutral" class="btn cbi-button cbi-button-neutral" type="button" value="跳过" />
+							<button id="pw-filter-reset" type="button" class="btn cbi-button" data-pw-reset="1">重置筛选</button>
+						</div>
+						<div class="cbi-section-remove right">
+							<input id="sec-remove" type="submit" value="删除" class="btn cbi-button" />
+						</div>
+					</div></section>
+					<table class="table cbi-section-table">
+						<tr class="tr cbi-section-table-row">
+							<td class="td">Singapore-01</td>
+							<td class="td cbi-section-actions"><div>
+								<input id="row-top" class="btn cbi-button cbi-button-edit" type="button" value="置顶" />
+								<input id="row-use" class="btn cbi-button cbi-button-apply" type="button" value="使用" />
+								<input id="row-copy" class="btn cbi-button cbi-button-add" type="button" value="复制" />
+								<input id="row-edit" class="btn cbi-button cbi-button-edit" type="button" value="编辑" />
+								<input id="row-del" class="btn cbi-button cbi-button-remove" type="button" value="删除" />
+							</div></td>
+						</tr>
+					</table>
+					<div class="cbi-page-actions" id="actions-apply">
+						<input id="pa-apply" class="btn cbi-button cbi-button-apply" type="button" value="保存并应用" />
+						<input id="pa-save-after-apply" class="btn cbi-button cbi-button-save" type="submit" value="保存" />
+						<input id="pa-reset" class="btn cbi-button cbi-button-reset" type="button" value="重置" />
+					</div>
+					<div class="cbi-page-actions" id="actions-unchecked" style="position:static;margin-top:12px">
+						<button id="pa-unchecked" class="btn cbi-button cbi-button-negative important">强制应用</button>
+						<button id="pa-save-after-neg" class="cbi-button cbi-button-save">保存</button>
+					</div>
+					</div></main></body></html>`, { waitUntil: 'load' });
+
+				const readStyles = (ids) => page.evaluate((list) => Object.fromEntries(list.map((id) => {
+					const cs = getComputedStyle(document.getElementById(id));
+					return [id, { bg: cs.backgroundColor, fg: cs.color, shadow: cs.boxShadow }];
+				})), ids);
+
+				const ids = [
+					'btn-base', 'btn-neutral', 'btn-toggle', 'btn-iface-down', 'btn-add', 'btn-action',
+					'btn-remove', 'btn-negative', 'btn-reset', 'btn-danger', 'btn-error', 'link-danger',
+					'btn-success', 'btn-primary', 'btn-neg-imp', 'btn-rem-imp', 'btn-rst-imp', 'btn-dng-imp',
+					'inp-add', 'inp-add-sub', 'inp-fieldadd', 'inp-clear', 'inp-del-sel', 'inp-del-sub',
+					'inp-group', 'inp-apply', 'inp-reset-btn', 'inp-reset-rst', 'inp-neutral', 'pw-filter-reset',
+					'sec-remove', 'row-top', 'row-use', 'row-copy', 'row-edit', 'row-del',
+					'pa-apply', 'pa-save-after-apply', 'pa-reset', 'pa-unchecked', 'pa-save-after-neg'
+				];
+				const st = await readStyles(ids);
+
+				/* Tinted red: every destructive/reset button matches regardless of <button> vs <input> */
+				assert.ok(isReddish(st['btn-remove'].fg), `${label}: reference remove button is red (${st['btn-remove'].fg})`);
+				assert.notEqual(st['btn-remove'].bg, st['btn-base'].bg, `${label}: tinted red differs from secondary bg`);
+				for (const id of [
+					'btn-negative', 'btn-reset', 'btn-iface-down', 'btn-danger', 'btn-error', 'link-danger',
+					'inp-clear', 'inp-del-sel', 'inp-del-sub', 'inp-reset-btn', 'inp-reset-rst',
+					'sec-remove', 'row-del', 'pa-reset'
+				]) {
+					assert.deepEqual(st[id], st['btn-remove'], `${label} #${id}: matches tinted red variant`);
+				}
+
+				/* Tinted green: <input> and .btn.success match <button class="cbi-button-add"> */
+				assert.ok(isGreenish(st['btn-add'].fg), `${label}: reference add button is green (${st['btn-add'].fg})`);
+				for (const id of ['btn-success', 'inp-add', 'inp-add-sub', 'inp-fieldadd', 'row-copy']) {
+					assert.deepEqual(st[id], st['btn-add'], `${label} #${id}: matches tinted green variant`);
+				}
+
+				/* Tinted accent: outside .cbi-section-actions, <input class="cbi-button-edit"> matches action tint */
+				assert.ok(isBluish(st['btn-action'].fg), `${label}: reference action button is accent (${st['btn-action'].fg})`);
+				assert.deepEqual(st['inp-group'], st['btn-action'], `${label}: PassWall Reassign Group matches tinted accent`);
+
+				/* Solid primary indigo: applies inside .cbi-section-actions .cbi-button-edit and .cbi-button-apply */
+				assert.ok(isBluish(st['btn-primary'].bg), `${label}: primary button bg is indigo (${st['btn-primary'].bg})`);
+				for (const id of ['inp-apply', 'row-top', 'row-use', 'row-edit', 'pa-apply']) {
+					assert.deepEqual(st[id], st['btn-primary'], `${label} #${id}: matches solid primary indigo`);
+				}
+
+				/* Solid danger red: important destructive variants stay solid red, never solid indigo */
+				assert.ok(isReddish(st['btn-neg-imp'].bg), `${label}: negative.important bg is solid red (${st['btn-neg-imp'].bg})`);
+				assert.notEqual(st['btn-neg-imp'].bg, st['btn-remove'].bg, `${label}: solid danger differs from tinted red`);
+				for (const id of ['btn-rem-imp', 'btn-rst-imp', 'btn-dng-imp', 'pa-unchecked']) {
+					assert.deepEqual(st[id], st['btn-neg-imp'], `${label} #${id}: matches solid red danger`);
+				}
+
+				/* Neutral & secondary buttons stay untouched (no false positives) */
+				assert.deepEqual(st['btn-toggle'], st['btn-neutral'], `${label}: enable-disable stays neutral`);
+				assert.deepEqual(st['inp-neutral'], st['btn-neutral'], `${label}: <input class="cbi-button-neutral"> matches neutral`);
+				assert.notEqual(st['btn-neutral'].bg, st['btn-remove'].bg, `${label}: neutral is not red`);
+				assert.deepEqual(st['pw-filter-reset'], st['btn-base'], `${label}: PassWall filter reset stays secondary chip`);
+				assert.deepEqual(st['pa-save-after-apply'], st['btn-base'], `${label}: Save after Apply stays secondary chip`);
+				assert.deepEqual(st['pa-save-after-neg'], st['btn-base'], `${label}: Save after Apply-unchecked stays secondary chip`);
+				if (mount === 'src')
+					await page.screenshot({ path: path.join(SHOTS, `button-variants-${appearance}.png`), fullPage: true });
+
+				/* Hover states: <input> variants keep their semantic hover color; solid danger never turns indigo */
+				const hoverStyle = async (id) => {
+					await page.hover('#' + id);
+					await page.evaluate((elId) => Promise.all(document.getElementById(elId).getAnimations().map((a) => a.finished)), id);
+					return (await readStyles([id]))[id];
+				};
+
+				const clearHover = await hoverStyle('inp-clear');
+				assert.ok(isReddish(clearHover.fg), `${label}: hovered <input class="cbi-button-remove"> keeps red fg (${clearHover.fg})`);
+				assert.ok(clearHover.shadow.includes(clearHover.fg), `${label}: hovered <input class="cbi-button-remove"> gets red ring (${clearHover.shadow})`);
+
+				const addHover = await hoverStyle('inp-add');
+				assert.ok(isGreenish(addHover.fg), `${label}: hovered <input class="cbi-button-add"> keeps green fg (${addHover.fg})`);
+				assert.ok(addHover.shadow.includes(addHover.fg), `${label}: hovered <input class="cbi-button-add"> gets green ring (${addHover.shadow})`);
+
+				const dangerHover = await hoverStyle('btn-danger');
+				assert.ok(isReddish(dangerHover.fg), `${label}: hovered .btn.danger keeps red fg (${dangerHover.fg})`);
+				assert.ok(dangerHover.shadow.includes(dangerHover.fg), `${label}: hovered .btn.danger gets red ring (${dangerHover.shadow})`);
+
+				const negImpHover = await hoverStyle('btn-neg-imp');
+				assert.ok(isReddish(negImpHover.bg), `${label}: hovered .cbi-button-negative.important stays solid red, never indigo (${negImpHover.bg})`);
+				assert.notEqual(negImpHover.bg, st['btn-neg-imp'].bg, `${label}: hovered solid danger visibly shifts shade`);
+				assert.equal(negImpHover.fg, 'rgb(255, 255, 255)', `${label}: hovered solid danger keeps white text`);
+
+				const secSaveHover = await hoverStyle('pa-save-after-apply');
+				assert.ok(isBluish(secSaveHover.fg), `${label}: hovered secondary Save shows accent hover feedback (${secSaveHover.fg})`);
+
+				/* Clicking <input type="button"> does not trigger text-input focus ring (parity with <button>) */
+				await page.click('#inp-apply');
+				await page.evaluate(() => Promise.all(document.getElementById('inp-apply').getAnimations().map((a) => a.finished)));
+				const clickedApply = (await readStyles(['inp-apply']))['inp-apply'];
+				assert.equal(clickedApply.shadow, st['btn-primary'].shadow, `${label}: mouse-clicking <input type="submit"> keeps button shadow`);
+
+				/* System -> Reboot page: Perform reboot button is solid red at rest and on hover */
+				await page.setContent(`<!doctype html><html data-darkmode="${appearance === 'dark'}"><head><meta charset="utf-8">
+					<link rel="icon" href="data:,">
+					<link rel="stylesheet" href="/${mount}/htdocs/luci-static/carbon/carbon.css">
+					</head><body data-page="admin-system-reboot"><main id="maincontent" style="padding:24px"><div id="view">
+					<h2>重启</h2><p>重启设备的操作系统</p><hr>
+					<button id="reboot-btn" class="cbi-button cbi-button-action important">执行重启</button>
+					</div></main></body></html>`, { waitUntil: 'load' });
+				const rebootRest = (await readStyles(['reboot-btn']))['reboot-btn'];
+				assert.deepEqual(rebootRest, st['btn-neg-imp'], `${label}: System->Reboot button is solid danger red`);
+				const rebootHover = await hoverStyle('reboot-btn');
+				assert.ok(isReddish(rebootHover.bg), `${label}: hovered System->Reboot button stays red (${rebootHover.bg})`);
+
+				assert.deepEqual(errors, []);
+			} finally { await context.close(); }
+		}
+	}
+});
+
 test('lease table avatars stay in the hostname column when hostnames are IP addresses', async () => {
 	for (const mount of ['src', 'min']) {
 		const { page, context, errors } = await open('/src/preview/form.html', { width: 1280, height: 900 });
@@ -1203,7 +1649,7 @@ test('settings page: buttons, links, fields and status text share one centre lin
 			});
 			return { row: row.className, spread: Math.max(...Object.values(lines).map((m) => Math.max(...m) - Math.min(...m))) };
 		}));
-		assert.equal(rows.length, 5, JSON.stringify(rows));
+		assert.equal(rows.length, 6, JSON.stringify(rows));
 		const stray = await page.evaluate(() => [...document.querySelectorAll('#view *')].flatMap((el) => [...el.childNodes])
 			.filter((n) => n.nodeType === 3 && /^(null|undefined)$/.test(n.textContent.trim())).length);
 		assert.equal(stray, 0, 'no "null" / "undefined" text from absent children');

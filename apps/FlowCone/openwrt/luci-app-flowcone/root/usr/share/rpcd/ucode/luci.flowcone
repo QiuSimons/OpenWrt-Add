@@ -5,15 +5,26 @@
 import { readfile } from 'fs';
 import { connect } from 'ubus';
 
-// Persistent connection, created once per module load (see luci.upnp).
-const ubus = connect();
+let ubus_conn = connect();
+
+function ubus_call(object, method, args) {
+	if (!ubus_conn)
+		ubus_conn = connect();
+	if (!ubus_conn)
+		return null;
+
+	let res = ubus_conn.call(object, method, args);
+	if (res == null) {
+		ubus_conn = connect();
+		if (ubus_conn)
+			res = ubus_conn.call(object, method, args);
+	}
+	return res;
+}
 
 // Ask procd instead of forking `pidof flowcone` on every status request.
 function get_flowcone_pid() {
-	if (!ubus)
-		return null;
-
-	const res = ubus.call('service', 'list', { name: 'flowcone', verbose: true });
+	const res = ubus_call('service', 'list', { name: 'flowcone', verbose: true });
 
 	if (type(res) != 'object' ||
 	    type(res.flowcone) != 'object' ||
@@ -57,7 +68,10 @@ const methods = {
 			if (act != 'start' && act != 'stop' && act != 'restart' && act != 'reload') {
 				return { success: false, error: 'Invalid action' };
 			}
-			system('/etc/init.d/flowcone ' + act + ' >/dev/null 2>&1 &');
+			let rc = system('/etc/init.d/flowcone ' + act + ' >/dev/null 2>&1');
+			if (rc != 0) {
+				return { success: false, error: 'Exit code ' + rc };
+			}
 			return { success: true };
 		}
 	}

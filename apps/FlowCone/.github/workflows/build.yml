@@ -13,9 +13,11 @@ on:
       - master
     paths:
       - 'openwrt/**'
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
+      - 'crates/flowcone-daemon/**'
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -25,6 +27,35 @@ env:
   OPENWRT_MAJORS: '25'
 
 jobs:
+  check:
+    name: Format, clippy, unit tests & shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: Run checks
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --locked
+          (cd xtask && cargo fmt --check && cargo clippy --all-targets -- -D warnings)
+          shellcheck -s sh -e SC2034,SC3043 \
+            openwrt/flowcone/files/flowcone.init \
+            openwrt/nat6/files/nat6.init \
+            openwrt/nat6/files/nat6-flowcone.init
+          shellcheck -s sh openwrt/nat6/files/nat6.hotplug
+
   prepare:
     name: Prepare version and matrix
     runs-on: ubuntu-latest
@@ -141,95 +172,6 @@ jobs:
           chmod +x openwrt/flowcone/files/flowcone.bin
           cp LICENSE openwrt/flowcone/files/LICENSE
 
-      - name: Prepare Makefile for SDK build
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - << 'PYEOF'
-          import re
-          import textwrap
-
-          with open('openwrt/flowcone/Makefile', 'r') as f:
-              orig = f.read()
-
-          v_m = re.search(r'^PKG_VERSION:=(.*)$', orig, re.M)
-          r_m = re.search(r'^PKG_RELEASE:=(.*)$', orig, re.M)
-          m_m = re.search(r'^PKG_MAINTAINER:=(.*)$', orig, re.M)
-
-          pkg_version = v_m.group(1).strip() if v_m else "0.1.0"
-          pkg_release = r_m.group(1).strip() if r_m else "1"
-          pkg_maintainer = m_m.group(1).strip() if m_m else "QiuSimons"
-
-          makefile = textwrap.dedent(f"""\
-          include $(TOPDIR)/rules.mk
-
-          PKG_NAME:=flowcone
-          PKG_VERSION:={pkg_version}
-          PKG_RELEASE:={pkg_release}
-
-          PKG_LICENSE:=GPL-3.0-or-later
-          PKG_LICENSE_FILES:=LICENSE
-          PKG_MAINTAINER:={pkg_maintainer}
-
-          include $(INCLUDE_DIR)/package.mk
-
-          FLOWCONE_RUST_ARCH_DEPENDS:=@(aarch64||arm||i386||i686||riscv64||x86_64)
-
-          define Package/flowcone
-            SECTION:=net
-            CATEGORY:=Network
-            SUBMENU:=Routing and Redirection
-            TITLE:=RFC 4787 Full-Cone NAT using eBPF and TCX
-            URL:=https://github.com/QiuSimons/FlowCone
-            DEPENDS:=$(FLOWCONE_RUST_ARCH_DEPENDS) \\
-              +nftables +kmod-sched-core +kmod-sched-bpf +vmlinux-btf
-          endef
-
-          define Package/flowcone/description
-            Dual-stack RFC 4787 Full-Cone NAT for OpenWrt using eBPF and TCX.
-          endef
-
-          define Package/flowcone/conffiles
-          /etc/config/flowcone
-          endef
-
-          define Build/Prepare
-          \tmkdir -p $(PKG_BUILD_DIR)
-          \t$(CP) $(CURDIR)/files/LICENSE $(PKG_BUILD_DIR)/LICENSE
-          endef
-
-          define Build/Configure
-          endef
-
-          define Build/Compile
-          endef
-
-          define Package/flowcone/install
-          \t$(INSTALL_DIR) $(1)/usr/bin/
-          \t$(INSTALL_BIN) $(CURDIR)/files/flowcone.bin $(1)/usr/bin/flowcone
-
-          \t$(INSTALL_DIR) $(1)/etc/config/
-          \t$(INSTALL_CONF) $(CURDIR)/files/flowcone.config $(1)/etc/config/flowcone
-
-          \t$(INSTALL_DIR) $(1)/etc/init.d/
-          \t$(INSTALL_BIN) $(CURDIR)/files/flowcone.init $(1)/etc/init.d/flowcone
-          endef
-
-          define Package/flowcone/postrm
-          #!/bin/sh
-          rm -f /usr/share/nftables.d/chain-pre/srcnat/10-flowcone.nft
-          rm -f /usr/share/nftables.d/chain-pre/forward/10-flowcone.nft
-          rm -f /etc/nftables.d/flowcone.nft
-          exit 0
-          endef
-
-          $(eval $(call BuildPackage,flowcone))
-          """)
-
-          with open('openwrt/flowcone/Makefile', 'w') as f:
-              f.write(makefile)
-          PYEOF
-
       - name: Build packages
         uses: openwrt/gh-action-sdk@main
         env:
@@ -263,7 +205,17 @@ jobs:
               continue
             fi
 
-            if [[ "$name" == *"${{ matrix.arch }}"* ]] || [[ "$name" == *"all"* ]] || [[ "$name" == luci-* ]]; then
+            is_noarch=false
+            if [[ "$name" == *"_all"* ]] || [[ "$name" == *"-noarch"* ]] || [[ "$name" == luci-* ]] || [[ "$name" == nat6* ]]; then
+              is_noarch=true
+            fi
+
+            # Upload architecture-independent packages only once per SDK to prevent merge collisions.
+            if $is_noarch && [ "${{ matrix.arch }}" != "x86_64" ]; then
+              continue
+            fi
+
+            if [[ "$name" == *"${{ matrix.arch }}"* ]] || $is_noarch; then
               new_name="${name}-openwrt-${{ matrix.sdk }}.${ext}"
             else
               new_name="${name}-${{ matrix.arch }}-openwrt-${{ matrix.sdk }}.${ext}"
@@ -293,6 +245,7 @@ jobs:
     name: Publish release
     runs-on: ubuntu-latest
     needs:
+      - check
       - prepare
       - build
     steps:

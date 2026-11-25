@@ -1,42 +1,69 @@
 #!/bin/sh /etc/rc.common
 # Derived from the nat6 package by sbwml.
+# shellcheck disable=SC2034,SC3043
 
 START=90
 
 interface() {
-	local IFS
-	IFS=$'\n'
-	dhcpv6_interface=$(uci -q show network | grep -E "dhcpv6|ip6addr" | grep -o 'network\.\([^\.]*\)' | sed 's/network.//')
-	for interface_name in $dhcpv6_interface
-	do
-		device=$(uci -q show network.$interface_name.device | grep -o "'.*'" | awk -F"'" '{print $2}')
-		if [ "$(echo "$device" | grep -c @)" = 1 ]; then
-			alias_interface=$(echo "$device" | sed 's/@//')
-			device=$(uci -q show network.$alias_interface.device | grep -o "'.*'" | awk -F"'" '{print $2}')
-			if [ -z "$(uci -q show network.$alias_interface.device)" ]; then
-				ipaddr=$(uci -q show network.$alias_interface.ipaddr | grep -o "'.*'" | awk -F"'" '{print $2}')
-				device=$(ifconfig | grep -B 1 "$ipaddr" 2>/dev/null | head -1 | awk '{print $1}')
+	local old_ifs dhcpv6_interface interface_name alias_interface ipaddr ip6gw
+	device=""
+	gateway=""
+
+	# shellcheck disable=SC1091
+	. /lib/functions/network.sh 2>/dev/null || true
+
+	old_ifs="$IFS"
+	IFS='
+'
+	dhcpv6_interface=$(uci -q show network | grep -E "dhcpv6|ip6addr" | sed -n 's/^network\.\([^.]*\)\..*/\1/p' | sort -u)
+	for interface_name in $dhcpv6_interface; do
+		[ "$interface_name" = "lan" ] || [ "$interface_name" = "loopback" ] && continue
+		device=""
+		command -v network_get_device >/dev/null 2>&1 && network_get_device device "$interface_name" 2>/dev/null
+		[ -z "$device" ] && device=$(uci -q get "network.${interface_name}.device")
+		[ -z "$device" ] && device=$(uci -q get "network.${interface_name}.ifname")
+		case "$device" in
+			@*)
+				alias_interface="${device#@}"
+				device=""
+				command -v network_get_device >/dev/null 2>&1 && network_get_device device "$alias_interface" 2>/dev/null
+				[ -z "$device" ] && [ "$(uci -q get "network.${alias_interface}.proto")" = "pppoe" ] && device="pppoe-${alias_interface}"
+				[ -z "$device" ] && device=$(uci -q get "network.${alias_interface}.device")
+				if [ -z "$device" ]; then
+					ipaddr=$(uci -q get "network.${alias_interface}.ipaddr")
+					[ -n "$ipaddr" ] && device=$(ip -4 -o addr show 2>/dev/null | awk -v ip="$ipaddr" 'index($4, ip "/") == 1 { print $2; exit }')
+				fi
+				;;
+		esac
+		if [ -n "$device" ] && ip -6 addr show dev "$device" scope global 2>/dev/null | grep -q "inet6"; then
+			ip6gw=$(uci -q get "network.${interface_name}.ip6gw")
+			if [ -n "$ip6gw" ]; then
+				gateway="$ip6gw"
+			else
+				gateway=$(ip -6 route show default 2>/dev/null | awk '/via/{for (i = 1; i <= NF; i++) if ($i == "via") { print $(i + 1); exit }}')
 			fi
-		fi
-		if [ $(ifconfig "$device" 2>/dev/null | grep -c "inet6 addr") -gt 0 ]; then
-			ip6gw=$(uci -q show network.$interface_name.ip6gw | grep -o "'.*'" | awk -F"'" '{print $2}')
-			[ -n "$ip6gw" ] && gateway="$ip6gw" || gateway=$(ip -6 route | grep "default from" | awk '{print $5; exit}')
-			[ -z "$gateway" ] && gateway=$(ip -6 route | grep "^default via" | awk '{print $3}' | head -n1)
 			break
 		fi
 	done
+	IFS="$old_ifs"
+
 	local default_dev
 	default_dev=$(ip -6 route show default 2>/dev/null | awk '/^default/{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
-	if [ -n "$default_dev" ] && ifconfig "$default_dev" 2>/dev/null | grep -q "inet6 addr"; then
+	if [ -n "$default_dev" ] && ip -6 addr show dev "$default_dev" scope global 2>/dev/null | grep -q "inet6"; then
 		device="$default_dev"
+		if [ -z "$gateway" ]; then
+			gateway=$(ip -6 route show default dev "$device" 2>/dev/null | awk '/via/{for (i = 1; i <= NF; i++) if ($i == "via") { print $(i + 1); exit }}')
+		fi
 	fi
 }
 
 common_config() {
-	if [ -z $(uci -q get network.globals.ula_prefix) ] || [ $(uci -q get network.globals.ula_prefix | grep -c "/48") != 1 ]; then
+	local ula r1 lan_ra lan_dhcp6 lan_ndp lan_ra_default lan_ra_slaac
+	ula="$(uci -q get network.globals.ula_prefix)"
+	if [ -z "$ula" ] || [ "$(printf '%s' "$ula" | grep -c '/48')" != 1 ]; then
 		r1=$(dd if=/dev/urandom bs=1 count=1 2>/dev/null | hexdump -e '1/1 "%02x"')
 		uci -q batch <<-EOF >/dev/null
-			set network.globals.ula_prefix="fd$r1:$(date +%Y)::/48"
+			set network.globals.ula_prefix="fd${r1}:$(date +%Y)::/48"
 			commit network
 EOF
 		/etc/init.d/network reload
@@ -61,23 +88,35 @@ EOF
 	fi
 }
 
+flowcone_v6_active() {
+	[ "$(uci -q get flowcone.config.enable_v6)" = "1" ] || return 1
+	[ -s /var/run/flowcone.dev ]
+}
+
 start() {
-	local fc_v6
-	fc_v6="$(uci -q get flowcone.config.enable_v6)"
-	echo "${fc_v6:-0}" > /tmp/nat6-flowcone.mode
-	if [ "$(uci -q get firewall.@defaults[0].nat6)" != 1 ]; then
+	if [ "$(uci -q get firewall.@defaults[0].nat6)" != "1" ]; then
+		rm -f /tmp/nat6-flowcone.mode
 		nft list table ip6 nat >/dev/null 2>&1 && stop
 		return 0
 	fi
+	local fc_v6=0
+	if flowcone_v6_active; then
+		fc_v6=1
+	fi
+	echo "$fc_v6" > /tmp/nat6-flowcone.mode
 	interface
-	[ -z "$device" ] && logger -p error -t network -s "nat6: DHCPv6 interface device not configured, IPv6 NAT failed." && exit 0
-	[ -z "$gateway" ] && logger -p error -t network -s "nat6: DHCPv6 gateway not found, IPv6 NAT failed." && exit 0
+	[ -z "$device" ] && logger -p error -t network -s "nat6: DHCPv6 interface device not configured, IPv6 NAT failed." && return 0
+	if [ -n "$gateway" ]; then
+		ip -6 r replace default via "$gateway" dev "$device" 2>/dev/null
+	elif ! ip -6 route show default dev "$device" 2>/dev/null | grep -q "^default"; then
+		logger -p error -t network -s "nat6: DHCPv6 gateway not found, IPv6 NAT failed."
+		return 0
+	fi
 	common_config
-	ip -6 r add default via "$gateway" dev "$device" 2>/dev/null
 	nft delete table ip6 nat 2>/dev/null
 	nft add table ip6 nat 2>/dev/null
-	nft add chain ip6 nat prerouting { type nat hook prerouting priority 0\; } 2>/dev/null
-	nft add chain ip6 nat postrouting { type nat hook postrouting priority 100\; } 2>/dev/null
+	nft add chain ip6 nat prerouting '{ type nat hook prerouting priority 0; }' 2>/dev/null
+	nft add chain ip6 nat postrouting '{ type nat hook postrouting priority 100; }' 2>/dev/null
 	if [ "$fc_v6" = "1" ]; then
 		# FlowCone owns UDP fullcone/NAT66; let nat6 cover TCP/ICMP only.
 		nft add rule ip6 nat postrouting oifname "$device" meta l4proto != udp masquerade comment "flowcone-nat6-partial" 2>/dev/null
@@ -90,6 +129,7 @@ start() {
 stop() {
 	interface
 	nft delete table ip6 nat 2>/dev/null
+	rm -f /tmp/nat6-flowcone.mode
 	[ -n "$gateway" ] && [ -n "$device" ] && ip -6 r del default via "$gateway" dev "$device" 2>/dev/null
 	uci -q batch <<-EOF >/dev/null
 		del dhcp.lan.ra_default
@@ -106,13 +146,16 @@ EOF
 }
 
 restart() {
+	if [ "$(uci -q get firewall.@defaults[0].nat6)" != "1" ]; then
+		nft list table ip6 nat >/dev/null 2>&1 && stop
+		return 0
+	fi
 	stop
-	sleep 3
 	start
 }
 
 # Reload is idempotent: start() rebuilds the table and cleans up leftovers
-# when nat6 has been disabled, without the restart() sleep and odhcpd bounce.
+# when nat6 has been disabled, without bouncing odhcpd unnecessarily.
 reload() {
 	start
 }

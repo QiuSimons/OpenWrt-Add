@@ -1,6 +1,6 @@
 #[cfg(not(target_pointer_width = "64"))]
 compile_error!(
-    "FlowCone requires a 64-bit architecture (e.g. x86_64, aarch64, mips64, riscv64) for lock-free 64-bit atomic bitmaps shared with eBPF."
+    "FlowCone requires a 64-bit architecture (e.g. x86_64, aarch64, riscv64) for lock-free 64-bit atomic bitmaps shared with eBPF."
 );
 
 mod btf;
@@ -11,16 +11,17 @@ mod netlink;
 mod session;
 
 use aya::maps::{Array, HashMap, MapData, RingBuf};
-use aya::{EbpfLoader, VerifierLogLevel};
+use aya::{Ebpf, EbpfError, EbpfLoader, VerifierLogLevel};
+use config::CliAction;
 use data_plane::DataPlane;
 use firewall::FirewallManager;
 use flowcone_common::{
     BindingValue4, BindingValue6, EndpointKey4, EndpointKey6, FragKey4, FragKey6, FragValue4,
     FragValue6, GlobalConfig,
 };
-use session::{SessionManager, SessionMaps};
+use session::{LocalUdpScanner, SessionManager, SessionMaps};
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::os::fd::{BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,11 +30,21 @@ use std::time::{Duration, Instant};
 use rustix::event::{PollFd, PollFlags, poll};
 use rustix::time::Timespec;
 
+const SIGINT: i32 = 2;
+const SIGTERM: i32 = 15;
+const SIGHUP: i32 = 1;
+
 /// Interval for periodic TCX tail verification.
 const REATTACH_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Interval for periodic local UDP service port reservation scans.
 const RESERVE_SCAN_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Interval for liveness set timeout refreshes.
+const LIVENESS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Backoff before retrying transient firewall/attach failures.
+const RETRY_INTERVAL: Duration = Duration::from_secs(2);
 
 macro_rules! take_map {
     ($bpf:expr, $name:literal, $ty:ty) => {
@@ -44,7 +55,8 @@ macro_rules! take_map {
     };
 }
 
-static EBPF_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/flowcone-ebpf.bin"));
+static EBPF_BYTES: &[u8] =
+    aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowcone-ebpf.bin"));
 static RUNNING: AtomicBool = AtomicBool::new(true);
 static RESYNC_REQUESTED: AtomicBool = AtomicBool::new(false);
 
@@ -53,8 +65,7 @@ fn setup_signals(sig_write: OwnedFd, wake_write: OwnedFd) {
     let sig_write = Arc::new(sig_write);
     let wake_write = Arc::new(wake_write);
 
-    // SIGINT = 2, SIGTERM = 15
-    for sig in [2, 15] {
+    for sig in [SIGINT, SIGTERM] {
         let sig_write = Arc::clone(&sig_write);
         let wake_write = Arc::clone(&wake_write);
         let handler = move || {
@@ -65,12 +76,12 @@ fn setup_signals(sig_write: OwnedFd, wake_write: OwnedFd) {
         let _ = unsafe { signal_hook_registry::register(sig, handler) };
     }
 
-    // SIGHUP = 1: resync state/rules without dropping the mappings.
+    // SIGHUP: resync state/rules without dropping mappings.
     let handler = move || {
         RESYNC_REQUESTED.store(true, Ordering::Relaxed);
         let _ = rustix::io::write(&*wake_write, &[1u8]);
     };
-    let _ = unsafe { signal_hook_registry::register(1, handler) };
+    let _ = unsafe { signal_hook_registry::register(SIGHUP, handler) };
 }
 
 fn get_monotonic_coarse_ns() -> u64 {
@@ -86,6 +97,55 @@ pub fn resolve_effective_v6(enable_v6: bool, wan_ip6: [u8; 16], has_masq: bool) 
     } else {
         1
     }
+}
+
+fn shrink_disabled_family_maps<'a>(loader: &mut EbpfLoader<'a>, enable_v4: bool, enable_v6: bool) {
+    let ring_min = (rustix::param::page_size() as u32).max(4096);
+    if !enable_v4 {
+        for name in [
+            "OUTBOUND_BINDINGS_V4",
+            "INBOUND_BINDINGS_V4",
+            "FRAG_IN_V4",
+            "FRAG_OUT_V4",
+            "RESERVED_V4",
+            "BITMAP_EVEN_V4",
+            "BITMAP_ODD_V4",
+        ] {
+            loader.map_max_entries(name, 1);
+        }
+        loader.map_max_entries("SESSION_EVENTS_V4", ring_min);
+    }
+    if !enable_v6 {
+        for name in [
+            "OUTBOUND_BINDINGS_V6",
+            "INBOUND_BINDINGS_V6",
+            "FRAG_IN_V6",
+            "FRAG_OUT_V6",
+            "RESERVED_V6",
+            "BITMAP_EVEN_V6",
+            "BITMAP_ODD_V6",
+        ] {
+            loader.map_max_entries(name, 1);
+        }
+        loader.map_max_entries("SESSION_EVENTS_V6", ring_min);
+    }
+}
+
+fn load_ebpf_object(
+    custom_btf: Option<&aya::Btf>,
+    enable_v4: bool,
+    enable_v6: bool,
+    level: VerifierLogLevel,
+) -> Result<Ebpf, EbpfError> {
+    let mut loader = EbpfLoader::new();
+    shrink_disabled_family_maps(&mut loader, enable_v4, enable_v6);
+    if let Some(b) = custom_btf {
+        loader.btf(b);
+    } else {
+        loader.btf_source(btf::load_kernel_btf_with);
+    }
+    loader.verifier_log_level(level);
+    loader.load(EBPF_BYTES)
 }
 
 /// Applied configuration and interface state.
@@ -104,7 +164,8 @@ struct AppliedState {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = match config::parse_args() {
-        Ok(c) => c,
+        Ok(CliAction::Run(c)) => c,
+        Ok(CliAction::ExitOk) => return Ok(()),
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(1);
@@ -144,99 +205,141 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "flowcone: waiting for interface {} to be ready...",
             config.iface
         );
-        let mut wait_fds = [PollFd::new(&sig_read_end, PollFlags::IN)];
-        let wait_ts = Timespec {
-            tv_sec: 0,
-            tv_nsec: 500_000_000,
-        };
-        while RUNNING.load(Ordering::Relaxed) {
-            if Path::new(&iface_path).exists() {
-                println!("flowcone: interface {} is now ready", config.iface);
-                break;
-            }
-            if matches!(poll(&mut wait_fds, Some(&wait_ts)), Ok(n) if n > 0 && wait_fds[0].revents().contains(PollFlags::IN))
+        while RUNNING.load(Ordering::Relaxed) && !Path::new(&iface_path).exists() {
+            let mon_fd = monitor
+                .as_ref()
+                .map(|m| m.as_fd())
+                .unwrap_or(sig_read_end.as_fd());
+            let mut wait_fds = [
+                PollFd::new(&sig_read_end, PollFlags::IN),
+                PollFd::new(
+                    &mon_fd,
+                    if monitor.is_some() {
+                        PollFlags::IN | PollFlags::ERR
+                    } else {
+                        PollFlags::empty()
+                    },
+                ),
+            ];
+            let wait_slice = if monitor.is_some() {
+                &mut wait_fds[..2]
+            } else {
+                &mut wait_fds[..1]
+            };
+            let wait_ts = if monitor.is_some() {
+                Timespec {
+                    tv_sec: 2,
+                    tv_nsec: 0,
+                }
+            } else {
+                Timespec {
+                    tv_sec: 0,
+                    tv_nsec: 500_000_000,
+                }
+            };
+            if let Ok(n) = poll(wait_slice, Some(&wait_ts))
+                && n > 0
             {
-                break;
+                if wait_slice[0].revents().contains(PollFlags::IN) {
+                    break;
+                }
+                if let Some(ref m) = monitor
+                    && wait_slice[1]
+                        .revents()
+                        .intersects(PollFlags::IN | PollFlags::ERR)
+                {
+                    let _ = m.drain_relevant(0, &config.iface);
+                }
             }
+        }
+        if Path::new(&iface_path).exists() {
+            println!("flowcone: interface {} is now ready", config.iface);
         }
     }
     if !RUNNING.load(Ordering::Relaxed) {
         return Ok(());
     }
+    if let Some(ref m) = monitor {
+        let _ = m.drain_relevant(0, &config.iface);
+    }
 
-    let btf = btf::find_btf(config.btf_path.as_deref());
-
-    // Try loading with verifier logs disabled first; on error retry with verbose logging.
     let verifier_log = std::env::var_os("FLOWCONE_VERIFIER_LOG").is_some();
     let mut bpf = {
-        let mut loader = EbpfLoader::new();
-        if let Some(ref b) = btf {
-            loader.btf(b);
-        }
-        loader.verifier_log_level(if verifier_log {
+        let custom_btf = btf::load_custom_btf(config.btf_path.as_deref())?;
+        let first_level = if verifier_log {
             VerifierLogLevel::DEBUG
         } else {
             VerifierLogLevel::DISABLE
-        });
-        match loader.load(EBPF_BYTES) {
+        };
+        match load_ebpf_object(
+            custom_btf.as_ref(),
+            config.enable_v4,
+            config.enable_v6,
+            first_level,
+        ) {
             Ok(bpf) => bpf,
             Err(first) => {
                 eprintln!(
                     "flowcone: eBPF load without verifier log failed ({}), retrying with log",
                     first
                 );
-                let mut loader = EbpfLoader::new();
-                if let Some(ref b) = btf {
-                    loader.btf(b);
-                }
-                loader.verifier_log_level(VerifierLogLevel::VERBOSE);
-                loader.load(EBPF_BYTES)?
+                load_ebpf_object(
+                    custom_btf.as_ref(),
+                    config.enable_v4,
+                    config.enable_v6,
+                    VerifierLogLevel::VERBOSE,
+                )?
             }
         }
     };
 
-    let mut session_mgr = SessionManager::new(SessionMaps {
-        config_map: take_map!(bpf, "CONFIG", Array<MapData, GlobalConfig>),
-        active_map: take_map!(bpf, "ACTIVE_CONFIG", Array<MapData, u32>),
-        ob_map4: take_map!(
-            bpf,
-            "OUTBOUND_BINDINGS_V4",
-            HashMap<MapData, EndpointKey4, BindingValue4>
-        ),
-        ib_map4: take_map!(
-            bpf,
-            "INBOUND_BINDINGS_V4",
-            HashMap<MapData, u16, BindingValue4>
-        ),
-        ob_map6: take_map!(
-            bpf,
-            "OUTBOUND_BINDINGS_V6",
-            HashMap<MapData, EndpointKey6, BindingValue6>
-        ),
-        ib_map6: take_map!(
-            bpf,
-            "INBOUND_BINDINGS_V6",
-            HashMap<MapData, u16, BindingValue6>
-        ),
-        frag_in4: take_map!(bpf, "FRAG_IN_V4", HashMap<MapData, FragKey4, FragValue4>),
-        frag_out4: take_map!(bpf, "FRAG_OUT_V4", HashMap<MapData, FragKey4, FragValue4>),
-        frag_in6: take_map!(bpf, "FRAG_IN_V6", HashMap<MapData, FragKey6, FragValue6>),
-        frag_out6: take_map!(bpf, "FRAG_OUT_V6", HashMap<MapData, FragKey6, FragValue6>),
-        events4: take_map!(bpf, "SESSION_EVENTS_V4", RingBuf<MapData>),
-        events6: take_map!(bpf, "SESSION_EVENTS_V6", RingBuf<MapData>),
-        gc_flags: take_map!(bpf, "GC_FLAGS", Array<MapData, u32>),
-        reserved4: take_map!(bpf, "RESERVED_V4", Array<MapData, u16>),
-        reserved6: take_map!(bpf, "RESERVED_V6", Array<MapData, u16>),
-        bitmap_even4: take_map!(bpf, "BITMAP_EVEN_V4", Array<MapData, u64>),
-        bitmap_odd4: take_map!(bpf, "BITMAP_ODD_V4", Array<MapData, u64>),
-        bitmap_even6: take_map!(bpf, "BITMAP_EVEN_V6", Array<MapData, u64>),
-        bitmap_odd6: take_map!(bpf, "BITMAP_ODD_V6", Array<MapData, u64>),
-        port_flags: take_map!(bpf, "PORT_FLAGS", Array<MapData, u32>),
-    })?;
+    let mut session_mgr = SessionManager::new(
+        SessionMaps {
+            config_map: take_map!(bpf, "CONFIG", Array<MapData, GlobalConfig>),
+            active_map: take_map!(bpf, "ACTIVE_CONFIG", Array<MapData, u32>),
+            ob_map4: take_map!(
+                bpf,
+                "OUTBOUND_BINDINGS_V4",
+                HashMap<MapData, EndpointKey4, BindingValue4>
+            ),
+            ib_map4: take_map!(
+                bpf,
+                "INBOUND_BINDINGS_V4",
+                HashMap<MapData, u16, BindingValue4>
+            ),
+            ob_map6: take_map!(
+                bpf,
+                "OUTBOUND_BINDINGS_V6",
+                HashMap<MapData, EndpointKey6, BindingValue6>
+            ),
+            ib_map6: take_map!(
+                bpf,
+                "INBOUND_BINDINGS_V6",
+                HashMap<MapData, u16, BindingValue6>
+            ),
+            frag_in4: take_map!(bpf, "FRAG_IN_V4", HashMap<MapData, FragKey4, FragValue4>),
+            frag_out4: take_map!(bpf, "FRAG_OUT_V4", HashMap<MapData, FragKey4, FragValue4>),
+            frag_in6: take_map!(bpf, "FRAG_IN_V6", HashMap<MapData, FragKey6, FragValue6>),
+            frag_out6: take_map!(bpf, "FRAG_OUT_V6", HashMap<MapData, FragKey6, FragValue6>),
+            events4: take_map!(bpf, "SESSION_EVENTS_V4", RingBuf<MapData>),
+            events6: take_map!(bpf, "SESSION_EVENTS_V6", RingBuf<MapData>),
+            gc_flags: take_map!(bpf, "GC_FLAGS", Array<MapData, u32>),
+            reserved4: take_map!(bpf, "RESERVED_V4", Array<MapData, u16>),
+            reserved6: take_map!(bpf, "RESERVED_V6", Array<MapData, u16>),
+            bitmap_even4: take_map!(bpf, "BITMAP_EVEN_V4", Array<MapData, u64>),
+            bitmap_odd4: take_map!(bpf, "BITMAP_ODD_V4", Array<MapData, u64>),
+            bitmap_even6: take_map!(bpf, "BITMAP_EVEN_V6", Array<MapData, u64>),
+            bitmap_odd6: take_map!(bpf, "BITMAP_ODD_V6", Array<MapData, u64>),
+            port_flags: take_map!(bpf, "PORT_FLAGS", Array<MapData, u32>),
+        },
+        config.enable_v4,
+        config.enable_v6,
+    )?;
 
+    let mut udp_scanner = LocalUdpScanner::new();
     session_mgr.configure_port_pool(config.min_port, config.max_port);
-    session_mgr.reserve_local_ports();
     session_mgr.init_port_pool(config.enable_v4, config.enable_v6);
+    session_mgr.reserve_local_ports(&mut udp_scanner);
 
     let initial_l2 = netlink::get_iface_l2_len(&config.iface);
     match initial_l2 {
@@ -282,26 +385,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut gc_interval = gc_base_interval;
     let mut rng_state = get_monotonic_coarse_ns() ^ 0x9e3779b97f4a7c15;
     let mut has_net_event = true;
-    let mut cur_ifindex;
-
-    let (ev4_raw, ev6_raw) = session_mgr.event_fds();
-    let ev4_fd = unsafe { BorrowedFd::borrow_raw(ev4_raw) };
-    let ev6_fd = unsafe { BorrowedFd::borrow_raw(ev6_raw) };
+    let mut retry_deadline: Option<Instant> = None;
 
     while RUNNING.load(Ordering::SeqCst) {
         // Calculate poll timeout based on nearest timer.
+        let now_instant = Instant::now();
         let time_to_gc = gc_interval.saturating_sub(last_gc_run.elapsed());
         let time_to_reserve = RESERVE_SCAN_INTERVAL.saturating_sub(last_reserve_scan.elapsed());
-        let time_to_attach = REATTACH_INTERVAL.saturating_sub(last_attach_check.elapsed());
-        let time_to_liveness = if config.manage_nft && applied.liveness {
-            Duration::from_secs(5).saturating_sub(last_liveness_refresh.elapsed())
+        let time_to_attach = if applied.present {
+            REATTACH_INTERVAL.saturating_sub(last_attach_check.elapsed())
         } else {
             Duration::from_secs(3600)
         };
+        let time_to_liveness = if config.manage_nft
+            && applied.liveness
+            && (applied.v4_enabled || applied.effective_v6 != 0)
+        {
+            LIVENESS_REFRESH_INTERVAL.saturating_sub(last_liveness_refresh.elapsed())
+        } else {
+            Duration::from_secs(3600)
+        };
+        let time_to_retry = retry_deadline
+            .map(|d| d.saturating_duration_since(now_instant))
+            .unwrap_or(Duration::from_secs(3600));
         let mut next_wake = time_to_gc
             .min(time_to_reserve)
             .min(time_to_attach)
-            .min(time_to_liveness);
+            .min(time_to_liveness)
+            .min(time_to_retry);
 
         if monitor.is_none() {
             let has_wan_addr = (!config.enable_v4 || applied.ip4 != 0)
@@ -310,13 +421,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             next_wake = next_wake.min(fallback_poll);
         }
 
-        let next_wake = next_wake.clamp(Duration::from_millis(1), Duration::from_secs(60));
+        let immediate_probe = has_net_event
+            || RESYNC_REQUESTED.load(Ordering::Relaxed)
+            || retry_deadline.is_some_and(|d| now_instant >= d);
+        let next_wake = if immediate_probe {
+            Duration::ZERO
+        } else {
+            next_wake.clamp(Duration::from_millis(1), Duration::from_secs(60))
+        };
         let ts = Timespec {
             tv_sec: next_wake.as_secs() as i64,
             tv_nsec: next_wake.subsec_nanos() as i64,
         };
 
-        use std::os::fd::AsFd;
+        let (ev4_fd, ev6_fd) = session_mgr.event_fds();
         let mon_borrowed = monitor
             .as_ref()
             .map(|m| m.as_fd())
@@ -343,7 +461,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             PollFd::new(
                 &mon_borrowed,
                 if monitor.is_some() {
-                    PollFlags::IN
+                    PollFlags::IN | PollFlags::ERR
                 } else {
                     PollFlags::empty()
                 },
@@ -388,10 +506,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             has_net_event = true;
         }
 
-        if monitor.is_some() && poll_fds[4].revents().contains(PollFlags::IN) {
-            if let Some(ref m) = monitor {
-                m.drain();
-            }
+        if let Some(ref m) = monitor
+            && poll_fds[4]
+                .revents()
+                .intersects(PollFlags::IN | PollFlags::ERR)
+            && m.drain_relevant(applied.ifindex, &config.iface)
+        {
             has_net_event = true;
         }
 
@@ -432,26 +552,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if last_reserve_scan.elapsed() >= RESERVE_SCAN_INTERVAL {
-            let p4 = session::scan_local_udp_ports(2, "/proc/net/udp");
-            let p6 = session::scan_local_udp_ports(10, "/proc/net/udp6");
-            session_mgr.apply_reserved_ports(p4.as_deref(), p6.as_deref());
+            session_mgr.reserve_local_ports(&mut udp_scanner);
             last_reserve_scan = Instant::now();
         }
 
         let resync = RESYNC_REQUESTED.swap(false, Ordering::Relaxed);
+        let retry_due = retry_deadline.is_some_and(|d| Instant::now() >= d);
+        if retry_due {
+            retry_deadline = None;
+        }
         let reattach_due = applied.present && last_attach_check.elapsed() >= REATTACH_INTERVAL;
         let has_wan_addr = (!config.enable_v4 || applied.ip4 != 0)
             && (!config.enable_v6 || applied.ip6 != [0u8; 16]);
         let needs_probe = has_net_event
             || resync
-            || reattach_due
-            || !applied.present
-            || !applied.l2_known
-            || !has_wan_addr;
+            || retry_due
+            || (!applied.present && monitor.is_none())
+            || (!has_wan_addr && monitor.is_none());
 
+        let mut rotated_on_probe = false;
         if needs_probe {
             has_net_event = false;
-            let mut config_dirty = resync;
+            let mut config_dirty = resync || retry_due;
             let mut reattach = false;
             let mut force_new_attach = false;
             let mut notable = false;
@@ -482,7 +604,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            cur_ifindex = netlink::get_ifindex(&config.iface).unwrap_or(0);
+            let cur_ifindex = netlink::get_ifindex(&config.iface).unwrap_or(0);
             let present = cur_ifindex != 0;
             if present && (!applied.present || cur_ifindex != applied.ifindex) {
                 println!(
@@ -494,7 +616,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 notable = true;
                 config_dirty = true;
                 last_attach_check = Instant::now();
-            } else if present && reattach_due {
+            } else if !present {
+                applied.ifindex = 0;
+            } else if reattach_due {
                 last_attach_check = Instant::now();
                 reattach = true;
             }
@@ -541,6 +665,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(e) => {
+                        retry_deadline = Some(Instant::now() + RETRY_INTERVAL);
                         if config.verbose {
                             eprintln!(
                                 "flowcone: warning: transient netlink address query error: {:?}",
@@ -577,6 +702,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(e) => {
+                        retry_deadline = Some(Instant::now() + RETRY_INTERVAL);
                         if config.verbose {
                             eprintln!(
                                 "flowcone: warning: transient netlink address query error: {:?}",
@@ -588,7 +714,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if config_dirty {
-                let is_v6_masq = firewall::is_ipv6_masq_enabled(&config.iface);
+                let is_v6_masq =
+                    if config.enable_v6 && resolved_ip6 != [0u8; 16] && applied.l2_known {
+                        firewall::is_ipv6_masq_enabled(&config.iface)
+                    } else {
+                        false
+                    };
                 let effective_v6 = if applied.l2_known {
                     resolve_effective_v6(config.enable_v6, resolved_ip6, is_v6_masq)
                 } else {
@@ -627,7 +758,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         eprintln!(
                             "flowcone: could not stage new firewall rules; keeping old data plane"
                         );
-                        RESYNC_REQUESTED.store(true, Ordering::Relaxed);
+                        retry_deadline = Some(Instant::now() + RETRY_INTERVAL);
                     } else {
                         rules_staged = true;
                     }
@@ -650,21 +781,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         frag_epoch,
                         timeout_sec: config.timeout_sec as u32,
                     };
+                    let clear_frag = frag_epoch == 0;
                     let had_flush = flush_v4 || flush_v6;
                     let set_ok = if had_flush {
                         let ok = session_mgr.set_config(g_cfg);
                         if ok {
                             if flush_v4 {
-                                session_mgr.clear_v4_mappings();
+                                session_mgr.clear_v4_mappings(clear_frag);
                             }
                             if flush_v6 {
-                                session_mgr.clear_v6_mappings();
+                                session_mgr.clear_v6_mappings(clear_frag);
                             }
                             flush_v4 = false;
                             flush_v6 = false;
                         } else {
                             eprintln!("flowcone: could not publish pre-clear config");
-                            RESYNC_REQUESTED.store(true, Ordering::Relaxed);
+                            retry_deadline = Some(Instant::now() + RETRY_INTERVAL);
                         }
                         ok
                     } else {
@@ -673,24 +805,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     if !set_ok {
                         eprintln!("flowcone: could not publish data-plane config");
-                        RESYNC_REQUESTED.store(true, Ordering::Relaxed);
+                        retry_deadline = Some(Instant::now() + RETRY_INTERVAL);
                     } else if config.manage_nft {
                         let sync_ok = rules_staged || firewall_mgr.sync_rules(&fw_cfg);
                         if sync_ok {
                             applied.v4_enabled = active_v4;
                             applied.effective_v6 = effective_v6;
                             applied.v6_masq = is_v6_masq;
-                            applied.liveness = firewall_mgr.liveness_supported();
-                            firewall_mgr.refresh_liveness(
-                                active_v4,
-                                effective_v6 != 0,
-                                is_v6_masq,
-                                config.verbose,
-                            );
-                            last_liveness_refresh = Instant::now();
+                            applied.liveness =
+                                firewall_mgr.liveness_supported(active_v4, effective_v6 != 0);
+                            if applied.liveness {
+                                if !firewall_mgr.refresh_liveness(
+                                    active_v4,
+                                    effective_v6 != 0,
+                                    is_v6_masq,
+                                    config.verbose,
+                                ) {
+                                    retry_deadline = Some(Instant::now() + RETRY_INTERVAL);
+                                }
+                                last_liveness_refresh = Instant::now();
+                            }
                         } else {
                             eprintln!("flowcone: firewall sync failed; will retry");
-                            RESYNC_REQUESTED.store(true, Ordering::Relaxed);
+                            retry_deadline = Some(Instant::now() + RETRY_INTERVAL);
                         }
                     } else {
                         applied.v4_enabled = active_v4;
@@ -702,23 +839,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if reattach {
+                rotated_on_probe = true;
                 let attached = if force_new_attach {
                     match data_plane.attach(true, false) {
                         Ok(()) => true,
                         Err(e) => {
                             eprintln!(
-                                "flowcone: warning: re-attach on {} failed: {}; will retry on link update",
+                                "flowcone: warning: re-attach on {} failed: {}; will retry",
                                 config.iface, e
                             );
+                            session_mgr.disable_fail_open();
                             if config.manage_nft {
                                 firewall_mgr.remove_rules(config.verbose);
                             }
+                            applied.v4_enabled = false;
+                            applied.effective_v6 = 0;
+                            applied.liveness = false;
+                            retry_deadline = Some(Instant::now() + RETRY_INTERVAL);
                             false
                         }
                     }
                 } else {
                     match data_plane.ensure_last(config.verbose) {
-                        Ok(_) => true,
+                        Ok(()) => true,
                         Err(e) => {
                             eprintln!(
                                 "flowcone: TCX tail rotation failed: {}; old links retained",
@@ -745,9 +888,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        if reattach_due && !rotated_on_probe {
+            last_attach_check = Instant::now();
+            match data_plane.ensure_last(config.verbose) {
+                Ok(()) => {
+                    if config.verbose {
+                        println!(
+                            "flowcone: TCX tail verified on {} (ifindex {})",
+                            config.iface, applied.ifindex
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "flowcone: TCX tail rotation failed: {}; old links retained",
+                        e
+                    );
+                }
+            }
+        }
+
         if config.manage_nft
             && applied.liveness
-            && last_liveness_refresh.elapsed() >= Duration::from_secs(5)
+            && (applied.v4_enabled || applied.effective_v6 != 0)
+            && last_liveness_refresh.elapsed() >= LIVENESS_REFRESH_INTERVAL
         {
             if !firewall_mgr.refresh_liveness(
                 applied.v4_enabled,
@@ -758,7 +922,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if config.verbose {
                     eprintln!("flowcone: liveness refresh failed; scheduling resync");
                 }
-                RESYNC_REQUESTED.store(true, Ordering::Relaxed);
+                retry_deadline = Some(Instant::now() + RETRY_INTERVAL);
             }
             last_liveness_refresh = Instant::now();
         }
@@ -797,5 +961,12 @@ mod tests {
 
         assert_eq!(resolve_effective_v6(true, dummy_ip, false), 1);
         assert_eq!(resolve_effective_v6(true, dummy_ip, true), 2);
+    }
+
+    #[test]
+    fn test_ebpf_bytes_elf_and_alignment() {
+        assert!(EBPF_BYTES.len() > 64);
+        assert_eq!(&EBPF_BYTES[0..4], b"\x7fELF");
+        assert_eq!((EBPF_BYTES.as_ptr() as usize) % 4, 0);
     }
 }

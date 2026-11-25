@@ -6,11 +6,13 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use super::fw4::{
-    SET_FWD4, SET_FWD6, SET_V4, SET_V6, build_liveness_script, generate_live_forward_rule_v4,
-    generate_live_forward_rule_v6, generate_live_srcnat_rule_v4, generate_live_srcnat_rule_v6,
-    set_definitions,
+    SET_FWD4, SET_FWD6, SET_V4, SET_V6, build_liveness_script, bypass_clause,
+    generate_live_forward_rule_v4, generate_live_forward_rule_v6, generate_live_srcnat_rule_v4,
+    generate_live_srcnat_rule_v6, set_definitions,
 };
+use super::netlink::{LivenessRefreshSpec, nfproto_for_family, refresh_liveness_netlink};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GenericTable {
     pub family: String,
     pub table: String,
@@ -91,25 +93,31 @@ fn set_name(v6: bool, forward: bool) -> &'static str {
     }
 }
 
-fn ensure_one_set(family: &str, table: &str, name: &str, v6: bool) -> bool {
-    if nft_output(&["list", "set", family, table, name]).is_some() {
-        return true;
-    }
-    let set_type = if v6 { "ipv6_addr" } else { "ipv4_addr" };
-    let script =
-        format!("add set {family} {table} {name} {{ type {set_type}; flags interval,timeout; }}\n");
-    nft_apply(&script).is_ok()
-}
-
+/// Ensures missing FlowCone timeout sets exist in each target generic table using
+/// one `nft` query and one transaction per table.
 pub(crate) fn ensure_generic_sets(tables: &[GenericTable]) -> bool {
     for t in tables {
+        let Some(existing) = nft_output(&["-t", "list", "table", &t.family, &t.table]) else {
+            return false;
+        };
+        let mut script = String::new();
         for (v6, src, fwd) in [(false, t.src_v4, t.fwd_v4), (true, t.src_v6, t.fwd_v6)] {
-            if src && !ensure_one_set(&t.family, &t.table, set_name(v6, false), v6) {
-                return false;
+            let set_type = if v6 { "ipv6_addr" } else { "ipv4_addr" };
+            for (enabled, is_fwd) in [(src, false), (fwd, true)] {
+                if !enabled {
+                    continue;
+                }
+                let name = set_name(v6, is_fwd);
+                if !existing.contains(&format!("set {name} ")) {
+                    script.push_str(&format!(
+                        "add set {} {} {} {{ type {}; flags interval,timeout; }}\n",
+                        t.family, t.table, name, set_type
+                    ));
+                }
             }
-            if fwd && !ensure_one_set(&t.family, &t.table, set_name(v6, true), v6) {
-                return false;
-            }
+        }
+        if nft_apply(&script).is_err() {
+            return false;
         }
     }
     true
@@ -210,13 +218,12 @@ pub(crate) fn build_generic_insert_script(
     script
 }
 
-/// Generates standalone inet flowcone table script for hosts without existing nftables rules.
+/// Generates standalone `inet flowcone` table script for hosts without existing nftables chains.
 pub(crate) fn generate_standalone_script_live(cfg: &FirewallConfig<'_>) -> String {
     let FirewallConfig {
         iface,
         enable_v4,
         enable_v6,
-        is_v6_masq,
         mark,
         bypass_mask,
         bypass_val,
@@ -251,7 +258,8 @@ pub(crate) fn generate_standalone_script_live(cfg: &FirewallConfig<'_>) -> Strin
             generate_live_srcnat_rule_v4(iface, bypass_mask, bypass_val)
         ));
         s.push_str(&format!(
-            "        meta nfproto ipv4 ip saddr != 0.0.0.0/8 oifname \"{iface}\" counter masquerade comment \"flowcone\"\n"
+            "        oifname \"{iface}\" meta nfproto ipv4{} ip saddr != {{ 0.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16 }} ip daddr != {{ 224.0.0.0/4, 255.0.0.0/8 }} counter masquerade comment \"flowcone\"\n",
+            bypass_clause(bypass_mask, bypass_val)
         ));
     }
     if enable_v6 {
@@ -259,15 +267,10 @@ pub(crate) fn generate_standalone_script_live(cfg: &FirewallConfig<'_>) -> Strin
             "        {}\n",
             generate_live_srcnat_rule_v6(iface, bypass_mask, bypass_val)
         ));
-        if is_v6_masq {
-            s.push_str(&format!(
-                "        meta nfproto ipv6 ip6 saddr != fe80::/10 oifname \"{iface}\" counter masquerade comment \"flowcone\"\n"
-            ));
-        } else {
-            s.push_str(&format!(
-                "        meta nfproto ipv6 ip6 saddr fc00::/7 oifname \"{iface}\" counter masquerade comment \"flowcone\"\n"
-            ));
-        }
+        s.push_str(&format!(
+            "        oifname \"{iface}\" meta nfproto ipv6{} ip6 saddr fc00::/7 counter masquerade comment \"flowcone\"\n",
+            bypass_clause(bypass_mask, bypass_val)
+        ));
     }
     s.push_str("    }\n");
     s.push_str("}\n");
@@ -278,32 +281,54 @@ pub(crate) fn generic_liveness_supported(tables: &[GenericTable]) -> bool {
     !tables.is_empty()
 }
 
-fn refresh_generic_table_cli(t: &GenericTable, is_v6_masq: bool) -> bool {
-    let script = build_liveness_script(
-        &t.family, &t.table, t.src_v4, t.fwd_v4, t.src_v6, t.fwd_v6, is_v6_masq,
-    );
-    if script.is_empty() {
+/// Shared liveness refresher using in-process Netlink batching with `nft` CLI fallback.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn refresh_table_liveness(
+    family: &str,
+    table: &str,
+    src_v4: bool,
+    fwd_v4: bool,
+    src_v6: bool,
+    fwd_v6: bool,
+    is_v6_masq: bool,
+    verbose: bool,
+) -> bool {
+    if !(src_v4 || fwd_v4 || src_v6 || fwd_v6) {
         return true;
     }
-    nft_apply(&script).is_ok()
-}
-
-fn refresh_generic_table(t: &GenericTable, is_v6_masq: bool, verbose: bool) -> bool {
-    let v4 = t.src_v4 || t.fwd_v4;
-    let v6 = t.src_v6 || t.fwd_v6;
-    // Netlink batch requires matching src and forward sets.
-    let netlink_sets_match = t.src_v4 == t.fwd_v4 && t.src_v6 == t.fwd_v6;
-    if t.family == "inet" && netlink_sets_match {
-        match super::netlink::refresh_liveness_netlink(&t.table, v4, v6, is_v6_masq) {
+    if let Some(family_proto) = nfproto_for_family(family) {
+        let spec = LivenessRefreshSpec {
+            family_proto,
+            table,
+            src_v4,
+            fwd_v4,
+            src_v6,
+            fwd_v6,
+            is_v6_masq,
+        };
+        match refresh_liveness_netlink(&spec) {
             Ok(()) => return true,
             Err(e) if verbose => eprintln!(
-                "flowcone: netlink generic liveness refresh failed for {} {} ({}), falling back to CLI",
-                t.family, t.table, e
+                "flowcone: netlink liveness refresh failed for {} {} ({}), falling back to CLI",
+                family, table, e
             ),
             Err(_) => {}
         }
     }
-    refresh_generic_table_cli(t, is_v6_masq)
+
+    let script = build_liveness_script(family, table, src_v4, fwd_v4, src_v6, fwd_v6, is_v6_masq);
+    match nft_apply(&script) {
+        Ok(()) => true,
+        Err(e) => {
+            if verbose {
+                eprintln!(
+                    "flowcone: liveness refresh failed for {} {}: {}",
+                    family, table, e
+                );
+            }
+            false
+        }
+    }
 }
 
 pub(crate) fn refresh_generic_liveness(
@@ -315,13 +340,9 @@ pub(crate) fn refresh_generic_liveness(
         return false;
     }
     for t in tables {
-        if !refresh_generic_table(t, is_v6_masq, verbose) {
-            if verbose {
-                eprintln!(
-                    "flowcone: generic liveness refresh failed for {} {}",
-                    t.family, t.table
-                );
-            }
+        if !refresh_table_liveness(
+            &t.family, &t.table, t.src_v4, t.fwd_v4, t.src_v6, t.fwd_v6, is_v6_masq, verbose,
+        ) {
             return false;
         }
     }
@@ -329,26 +350,55 @@ pub(crate) fn refresh_generic_liveness(
 }
 
 pub(crate) fn remove_generic_sets(tables: &[GenericTable], verbose: bool) {
+    let mut script = String::new();
     for t in tables {
+        let Some(existing) = nft_output(&["-t", "list", "table", &t.family, &t.table]) else {
+            continue;
+        };
         for (v6, src, fwd) in [(false, t.src_v4, t.fwd_v4), (true, t.src_v6, t.fwd_v6)] {
-            if src {
-                let _ = Command::new("nft")
-                    .args(["delete", "set", &t.family, &t.table, set_name(v6, false)])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-            }
-            if fwd {
-                let _ = Command::new("nft")
-                    .args(["delete", "set", &t.family, &t.table, set_name(v6, true)])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
+            for (enabled, is_fwd) in [(src, false), (fwd, true)] {
+                if !enabled {
+                    continue;
+                }
+                let name = set_name(v6, is_fwd);
+                if existing.contains(&format!("set {name} ")) {
+                    script.push_str(&format!("delete set {} {} {}\n", t.family, t.table, name));
+                }
             }
         }
     }
+    let _ = nft_apply(&script);
     if verbose && !tables.is_empty() {
         println!("flowcone: removed generic liveness sets");
+    }
+}
+
+/// Remove sets in `old_tables` that are no longer needed by `keep_tables`.
+pub(crate) fn cleanup_obsolete_generic_sets(
+    old_tables: &[GenericTable],
+    keep_tables: &[GenericTable],
+) {
+    let mut obsolete = Vec::new();
+    for old in old_tables {
+        let keep = keep_tables
+            .iter()
+            .find(|k| k.family == old.family && k.table == old.table);
+        let (k_sv4, k_fv4, k_sv6, k_fv6) = match keep {
+            Some(k) => (k.src_v4, k.fwd_v4, k.src_v6, k.fwd_v6),
+            None => (false, false, false, false),
+        };
+        collect_table(
+            &mut obsolete,
+            &old.family,
+            &old.table,
+            old.src_v4 && !k_sv4,
+            old.src_v6 && !k_sv6,
+            old.fwd_v4 && !k_fv4,
+            old.fwd_v6 && !k_fv6,
+        );
+    }
+    if !obsolete.is_empty() {
+        remove_generic_sets(&obsolete, false);
     }
 }
 
@@ -362,32 +412,9 @@ pub(crate) fn refresh_standalone_liveness(
     if !nft_table_exists("inet", "flowcone") {
         return false;
     }
-    match super::netlink::refresh_liveness_netlink("flowcone", enable_v4, enable_v6, is_v6_masq) {
-        Ok(()) => return true,
-        Err(e) if verbose => {
-            eprintln!(
-                "flowcone: netlink standalone liveness refresh failed ({}), falling back to CLI",
-                e
-            );
-        }
-        Err(_) => {}
-    }
-
-    let script = build_liveness_script(
-        "inet", "flowcone", enable_v4, enable_v4, enable_v6, enable_v6, is_v6_masq,
-    );
-    if script.is_empty() {
-        return true;
-    }
-    match nft_apply(&script) {
-        Ok(()) => true,
-        Err(e) => {
-            if verbose {
-                eprintln!("flowcone: standalone liveness refresh failed: {}", e);
-            }
-            false
-        }
-    }
+    refresh_table_liveness(
+        "inet", "flowcone", enable_v4, enable_v4, enable_v6, enable_v6, is_v6_masq, verbose,
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -400,7 +427,7 @@ pub struct NftBaseChain {
     pub prio: String,
 }
 
-/// Parse nftables chains from `nft list chains` to find all base chains with hooks and types
+/// Parse nftables chains from `nft list chains` to find all base chains with hooks and types.
 pub(crate) fn parse_nft_base_chains(output: &str) -> Vec<NftBaseChain> {
     let mut chains = Vec::new();
     let mut current_family = String::new();
@@ -469,13 +496,9 @@ pub(crate) fn parse_nft_base_chains(output: &str) -> Vec<NftBaseChain> {
 }
 
 pub(crate) fn get_existing_base_chains() -> Vec<NftBaseChain> {
-    let Ok(out) = Command::new("nft").args(["list", "chains"]).output() else {
-        return Vec::new();
-    };
-    if out.status.success() {
-        return parse_nft_base_chains(&String::from_utf8_lossy(&out.stdout));
-    }
-    Vec::new()
+    nft_output(&["list", "chains"])
+        .map(|text| parse_nft_base_chains(&text))
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -486,7 +509,7 @@ pub struct RuleToDelete {
     pub handle: u64,
 }
 
-/// Find all flowcone injected rules across any tables and chains from `nft -a list ruleset`
+/// Find all flowcone injected rules across any tables and chains from `nft -a list ruleset`.
 pub(crate) fn find_all_flowcone_rules(ruleset_output: &str) -> Vec<RuleToDelete> {
     let mut rules = Vec::new();
     let mut current_family = String::new();
@@ -593,22 +616,30 @@ pub(crate) fn build_delete_script(rules: &[RuleToDelete]) -> String {
     script
 }
 
-/// Apply `deletes + body`; retry without the deletes if a handle is gone.
+/// Apply `deletes + body`; if stale handles abort the batch, re-query current handles once
+/// before retrying so existing rules are never duplicated.
 pub(crate) fn nft_apply_with_fallback(deletes: &str, body: &str, what: &str) -> bool {
     match nft_apply(&format!("{deletes}{body}")) {
         Ok(()) => true,
         Err(e) => {
-            eprintln!(
-                "flowcone: warning: {} transaction failed ({}), retrying without stale rule deletes",
-                what, e
-            );
-            match nft_apply(body) {
-                Ok(()) => true,
-                Err(e) => {
-                    eprintln!("flowcone: error: {} failed: {}", what, e);
-                    false
+            if !deletes.is_empty() {
+                eprintln!(
+                    "flowcone: warning: {} transaction failed ({}), re-querying handles",
+                    what, e
+                );
+                let fresh_deletes = nft_ruleset_text()
+                    .map(|text| build_delete_script(&find_all_flowcone_rules(&text)))
+                    .unwrap_or_default();
+                match nft_apply(&format!("{fresh_deletes}{body}")) {
+                    Ok(()) => return true,
+                    Err(e2) => {
+                        eprintln!("flowcone: error: {} failed: {}", what, e2);
+                        return false;
+                    }
                 }
             }
+            eprintln!("flowcone: error: {} failed: {}", what, e);
+            false
         }
     }
 }

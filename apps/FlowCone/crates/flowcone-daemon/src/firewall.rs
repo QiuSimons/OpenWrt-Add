@@ -64,9 +64,8 @@ impl FirewallManager {
             .unwrap_or_default();
 
         if has_table_inet_fw4() {
-            self.generic_tables.clear();
-            let native_includes = use_chain_pre();
-            let set_file_ok = write_fw4_set_definitions();
+            let old_generic = std::mem::take(&mut self.generic_tables);
+            cleanup_obsolete_generic_sets(&old_generic, &[]);
             if !ensure_fw4_sets() {
                 eprintln!("flowcone: error: could not create fw4 liveness sets");
                 return false;
@@ -81,7 +80,9 @@ impl FirewallManager {
             );
             let ok = nft_apply_with_fallback(&deletes, &body, "inet fw4 rule sync");
             if ok {
-                let chain_pre_ok = native_includes
+                let native_includes = use_chain_pre();
+                let set_file_ok = native_includes && write_fw4_set_definitions();
+                let chain_pre_ok = set_file_ok
                     && update_chain_pre_files_live(
                         iface,
                         enable_v4,
@@ -90,19 +91,15 @@ impl FirewallManager {
                         bypass_mask,
                         bypass_val,
                     );
-                if native_includes && set_file_ok && chain_pre_ok {
-                    clean_firewall4_user_file();
-                } else {
-                    if native_includes && (!set_file_ok || !chain_pre_ok) {
-                        eprintln!("flowcone: error: could not persist fw4 chain-pre rules");
-                    }
-                    clean_chain_pre_files();
-                    clean_firewall4_user_file();
+                clean_firewall4_user_file();
+                if native_includes && (!set_file_ok || !chain_pre_ok) {
+                    eprintln!("flowcone: error: could not persist fw4 chain-pre rules");
                 }
-                refresh_fw4_liveness(enable_v4, enable_v6, is_v6_masq, verbose);
-                if native_includes && set_file_ok && chain_pre_ok {
+                if chain_pre_ok {
                     self.report_layer(1, "fw4 chain-pre includes", verbose);
                 } else {
+                    clean_chain_pre_files();
+                    clean_fw4_set_definitions();
                     self.report_layer(2, "live fw4 rules (reload is recovered by SIGHUP)", verbose);
                 }
             } else {
@@ -144,6 +141,7 @@ impl FirewallManager {
                 enable_v6,
             );
             if !ensure_generic_sets(&generic_tables) {
+                cleanup_obsolete_generic_sets(&generic_tables, &self.generic_tables);
                 eprintln!("flowcone: error: could not create generic firewall timeout sets");
                 return false;
             }
@@ -161,15 +159,25 @@ impl FirewallManager {
 
         let ok = nft_apply_with_fallback(&deletes, &body, "Linux firewall rule sync");
         if ok {
+            let old_tables = std::mem::take(&mut self.generic_tables);
             if standalone {
-                self.generic_tables.clear();
-                refresh_standalone_liveness(enable_v4, enable_v6, is_v6_masq, verbose);
-                self.report_layer(4, "standalone table inet flowcone", verbose);
+                cleanup_obsolete_generic_sets(&old_tables, &[]);
+                if enable_v4 || enable_v6 {
+                    self.report_layer(4, "standalone table inet flowcone", verbose);
+                } else {
+                    self.last_layer = u8::MAX;
+                }
             } else {
+                cleanup_obsolete_generic_sets(&old_tables, &generic_tables);
                 self.generic_tables = generic_tables;
-                self.report_layer(3, "existing nftables chains", verbose);
+                if enable_v4 || enable_v6 {
+                    self.report_layer(3, "existing nftables chains", verbose);
+                } else {
+                    self.last_layer = u8::MAX;
+                }
             }
         } else {
+            cleanup_obsolete_generic_sets(&generic_tables, &self.generic_tables);
             eprintln!("flowcone: error: Linux firewall rule sync failed");
         }
 
@@ -202,11 +210,16 @@ impl FirewallManager {
         }
     }
 
-    pub(crate) fn liveness_supported(&self) -> bool {
-        if self.last_layer == 3 && generic_liveness_supported(&self.generic_tables) {
-            return true;
+    pub(crate) fn liveness_supported(&self, enable_v4: bool, enable_v6: bool) -> bool {
+        if !enable_v4 && !enable_v6 {
+            return false;
         }
-        has_table_inet_fw4() || nft_table_exists("inet", "flowcone")
+        match self.last_layer {
+            1 | 2 => has_table_inet_fw4(),
+            3 => generic_liveness_supported(&self.generic_tables),
+            4 => nft_table_exists("inet", "flowcone"),
+            _ => false,
+        }
     }
 
     pub(crate) fn remove_rules(&mut self, verbose: bool) {

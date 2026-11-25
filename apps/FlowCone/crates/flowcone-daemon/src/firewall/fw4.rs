@@ -3,9 +3,9 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
-use super::nft::nft_apply;
+use super::nft::{nft_apply, nft_output, nft_table_exists, refresh_table_liveness};
 
 pub(crate) const FW4_USER_PATH: &str = "/etc/firewall4.user";
 pub(crate) const FW4_NFTABLES_D_DIR: &str = "/usr/share/nftables.d";
@@ -48,106 +48,236 @@ pub(crate) fn check_hardware_offload_warning() {
 }
 
 pub(crate) fn has_table_inet_fw4() -> bool {
-    Command::new("nft")
-        .args(["list", "table", "inet", "fw4"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    nft_table_exists("inet", "fw4")
+}
+
+/// Strip `comment "..."` literals and unquoted `# ...` tail comments so rule classifiers
+/// never match text inside comments.
+fn strip_rule_comments(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.char_indices().peekable();
+    let mut in_quotes = false;
+    let mut escape = false;
+    while let Some((idx, ch)) = chars.next() {
+        if in_quotes {
+            out.push(ch);
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_quotes = false;
+            }
+            continue;
+        }
+        if ch == '#' {
+            break;
+        }
+        if ch == '"' {
+            in_quotes = true;
+            out.push(ch);
+            continue;
+        }
+        if line[idx..].starts_with("comment \"") {
+            let prev_ok =
+                idx == 0 || line[..idx].ends_with(|c: char| c.is_whitespace() || c == ';');
+            if prev_ok {
+                for _ in 0.."comment \"".len() - 1 {
+                    chars.next();
+                }
+                let mut esc = false;
+                for (_, qch) in chars.by_ref() {
+                    if esc {
+                        esc = false;
+                    } else if qch == '\\' {
+                        esc = true;
+                    } else if qch == '"' {
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn contains_word(haystack: &str, needle: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(needle) {
+        let abs = start + pos;
+        let end = abs + needle.len();
+        let left_ok = abs == 0
+            || !haystack[..abs]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        let right_ok = end == haystack.len()
+            || !haystack[end..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if left_ok && right_ok {
+            return true;
+        }
+        start = abs + needle.len();
+    }
+    false
+}
+
+/// Checks if a rule matches `wan_iface` via positive `oifname`/`oif` equality, returning
+/// `(has_oif_constraint, matches_wan)`.
+fn rule_oif_status(clean: &str, wan_iface: &str) -> (bool, bool) {
+    let normalized = clean
+        .replace('{', " { ")
+        .replace('}', " } ")
+        .replace(',', " ");
+    let tokens: Vec<&str> = normalized.split_whitespace().collect();
+    let mut has_oif = false;
+    let mut matches_wan = false;
+    let quoted = format!("\"{}\"", wan_iface);
+
+    for (i, tok) in tokens.iter().enumerate() {
+        if *tok == "oif" || *tok == "oifname" {
+            has_oif = true;
+            let mut idx = i + 1;
+            if tokens.get(idx) == Some(&"!=") {
+                continue;
+            }
+            if tokens.get(idx) == Some(&"==") {
+                idx += 1;
+            }
+            if tokens.get(idx) == Some(&"{") {
+                idx += 1;
+                while let Some(elem) = tokens.get(idx) {
+                    if *elem == "}" {
+                        break;
+                    }
+                    if *elem == quoted || *elem == wan_iface {
+                        matches_wan = true;
+                    }
+                    idx += 1;
+                }
+            } else if let Some(next) = tokens.get(idx)
+                && (*next == quoted || *next == wan_iface)
+            {
+                matches_wan = true;
+            }
+        }
+    }
+    (has_oif, matches_wan)
 }
 
 /// Detect IPv6 masquerade in ip6 or inet tables for the given WAN interface.
 pub(crate) fn parse_has_ipv6_masq(nft_output: &str, wan_iface: &str) -> bool {
+    let mut family = "";
     let mut table_name = "";
-    let mut current_chain = "";
-    let mut wan_chains: Vec<String> = vec![
-        "srcnat_wan".to_string(),
-        "srcnat_wan6".to_string(),
-        format!("srcnat_{}", wan_iface),
-    ];
+    let mut wan_chains: Vec<(String, String, String)> = Vec::new();
+    let mut fw4_has_srcnat_dispatcher = false;
 
-    // First pass: discover chains jumped from the WAN interface.
+    // First pass: discover subchains jumped/goto'd from WAN oif rules per (family, table).
     for line in nft_output.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("table ") {
-            if let Some(rest) = trimmed.strip_prefix("table ") {
-                let mut parts = rest.split_whitespace();
-                let _family = parts.next().unwrap_or("");
-                table_name = parts.next().unwrap_or("").trim_end_matches('{').trim();
-            }
+        if let Some(rest) = trimmed.strip_prefix("table ") {
+            let mut parts = rest.split_whitespace();
+            family = parts.next().unwrap_or("");
+            table_name = parts.next().unwrap_or("").trim_end_matches('{').trim();
             continue;
         }
-        if table_name == "flowcone" {
+        if table_name == "flowcone" || trimmed == "}" || trimmed.starts_with("chain ") {
             continue;
         }
-        if trimmed.contains(" jump ") {
-            let matches_wan = (trimmed.contains("oifname ") || trimmed.contains("oif "))
-                && (trimmed.contains(&format!("\"{}\"", wan_iface))
-                    || trimmed.contains(&format!(" {} ", wan_iface)));
-            if matches_wan && let Some(target) = trimmed.split(" jump ").nth(1) {
-                let target_chain = target.split_whitespace().next().unwrap_or("").trim();
-                if !target_chain.is_empty() && !wan_chains.iter().any(|c| c == target_chain) {
-                    wan_chains.push(target_chain.to_string());
+        let clean = strip_rule_comments(trimmed);
+        for kw in ["jump", "goto"] {
+            let pattern = format!(" {} ", kw);
+            if clean.contains(&pattern)
+                && let Some(target_part) = clean.split(&pattern).nth(1)
+            {
+                let (has_oif, matches_wan) = rule_oif_status(&clean, wan_iface);
+                let target_chain = target_part.split_whitespace().next().unwrap_or("").trim();
+                let lower_target = target_chain.to_ascii_lowercase();
+                if table_name == "fw4"
+                    && has_oif
+                    && (lower_target.starts_with("srcnat_")
+                        || lower_target.starts_with("postrouting_"))
+                {
+                    fw4_has_srcnat_dispatcher = true;
+                }
+                if has_oif
+                    && matches_wan
+                    && !target_chain.is_empty()
+                    && !wan_chains
+                        .iter()
+                        .any(|(f, t, c)| f == family && t == table_name && c == target_chain)
+                {
+                    wan_chains.push((
+                        family.to_string(),
+                        table_name.to_string(),
+                        target_chain.to_string(),
+                    ));
                 }
             }
         }
     }
 
-    let mut family = "";
+    family = "";
     table_name = "";
+    let mut current_chain = "";
     for line in nft_output.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("table ") {
-            if let Some(rest) = trimmed.strip_prefix("table ") {
-                let mut parts = rest.split_whitespace();
-                family = parts.next().unwrap_or("");
-                table_name = parts.next().unwrap_or("").trim_end_matches('{').trim();
-            }
+        if let Some(rest) = trimmed.strip_prefix("table ") {
+            let mut parts = rest.split_whitespace();
+            family = parts.next().unwrap_or("");
+            table_name = parts.next().unwrap_or("").trim_end_matches('{').trim();
             current_chain = "";
             continue;
         }
         if table_name == "flowcone" {
             continue;
         }
-        if trimmed.starts_with("chain ") {
-            if let Some(rest) = trimmed.strip_prefix("chain ") {
-                current_chain = rest
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .trim_end_matches('{')
-                    .trim();
-            }
+        if trimmed == "}" {
+            current_chain = "";
             continue;
         }
-        if !trimmed.contains("masquerade") {
+        if let Some(rest) = trimmed.strip_prefix("chain ") {
+            current_chain = rest
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_end_matches('{')
+                .trim();
             continue;
         }
-        // Exclude FlowCone's own injected rules (partial nat6 or ULA masquerade comment)
+        // Exclude FlowCone's own injected rules before stripping rule comments.
         if trimmed.contains("comment \"flowcone") || trimmed.contains("flowcone-nat6-partial") {
             continue;
         }
+        let clean = strip_rule_comments(trimmed);
+        let is_nat_action = contains_word(&clean, "masquerade") || contains_word(&clean, "snat");
+        if !is_nat_action {
+            continue;
+        }
 
-        // Interface filter: if the rule explicitly specifies an output interface, it must match wan_iface.
-        let has_oif = trimmed.contains("oifname ") || trimmed.contains("oif ");
+        let (has_oif, matches_wan) = rule_oif_status(&clean, wan_iface);
         if has_oif {
-            let matches_wan = trimmed.contains(&format!("\"{}\"", wan_iface))
-                || trimmed.contains(&format!(" {} ", wan_iface));
             if !matches_wan {
                 continue;
             }
         } else {
-            // Rule without interface constraint: must be in a chain that targets WAN, or a base postrouting chain.
             let is_base_postrouting = current_chain.eq_ignore_ascii_case("srcnat")
                 || current_chain.eq_ignore_ascii_case("postrouting");
-            let is_wan_chain = wan_chains
-                .iter()
-                .any(|c| c.eq_ignore_ascii_case(current_chain));
-            let is_srcnat_subchain = current_chain.to_ascii_lowercase().starts_with("srcnat_")
-                || current_chain
-                    .to_ascii_lowercase()
-                    .starts_with("postrouting_");
+            let fallback_fw4_wan = table_name == "fw4"
+                && (!fw4_has_srcnat_dispatcher || wan_iface == "wan")
+                && (current_chain.eq_ignore_ascii_case("srcnat_wan")
+                    || current_chain.eq_ignore_ascii_case("srcnat_wan6"));
+            let is_wan_chain = wan_chains.iter().any(|(f, t, c)| {
+                f == family && t == table_name && c.eq_ignore_ascii_case(current_chain)
+            }) || fallback_fw4_wan
+                || current_chain.eq_ignore_ascii_case(&format!("srcnat_{}", wan_iface));
+            let lower_chain = current_chain.to_ascii_lowercase();
+            let is_srcnat_subchain =
+                lower_chain.starts_with("srcnat_") || lower_chain.starts_with("postrouting_");
             if is_srcnat_subchain && !is_wan_chain {
                 continue;
             }
@@ -157,17 +287,20 @@ pub(crate) fn parse_has_ipv6_masq(nft_output: &str, wan_iface: &str) -> bool {
         }
 
         let has_v4_explicit = family == "ip"
-            || trimmed.contains("nfproto ipv4")
-            || trimmed.contains("ip saddr")
-            || trimmed.contains("ip daddr")
-            || trimmed.contains("bcmfullcone4");
+            || clean.contains("nfproto ipv4")
+            || clean.contains("ip saddr")
+            || clean.contains("ip daddr")
+            || clean.contains("ip protocol")
+            || clean.contains("ip dscp")
+            || clean.contains("ip ttl")
+            || clean.contains("snat ip ")
+            || clean.contains("bcmfullcone4");
         let has_v6_explicit = family == "ip6"
-            || trimmed.contains("nfproto ipv6")
-            || trimmed.contains("ip6 saddr")
-            || trimmed.contains("ip6 daddr")
-            || trimmed.contains("ip6 ")
-            || trimmed.contains("ipv6")
-            || trimmed.contains("bcmfullcone6");
+            || clean.contains("nfproto ipv6")
+            || clean.contains("ip6 ")
+            || contains_word(&clean, "ipv6")
+            || clean.contains("snat ip6 ")
+            || clean.contains("bcmfullcone6");
         if has_v6_explicit || (family == "inet" && !has_v4_explicit) {
             return true;
         }
@@ -176,18 +309,10 @@ pub(crate) fn parse_has_ipv6_masq(nft_output: &str, wan_iface: &str) -> bool {
 }
 
 pub(crate) fn is_ipv6_masq_enabled(wan_iface: &str) -> bool {
-    if let Ok(out) = Command::new("nft").args(["-t", "list", "ruleset"]).output()
-        && out.status.success()
-    {
-        return parse_has_ipv6_masq(&String::from_utf8_lossy(&out.stdout), wan_iface);
+    if let Some(text) = nft_output(&["-t", "list", "ruleset"]) {
+        return parse_has_ipv6_masq(&text, wan_iface);
     }
-    let Ok(out) = Command::new("nft").args(["list", "ruleset"]).output() else {
-        return false;
-    };
-    if !out.status.success() {
-        return false;
-    }
-    parse_has_ipv6_masq(&String::from_utf8_lossy(&out.stdout), wan_iface)
+    nft_output(&["list", "ruleset"]).is_some_and(|text| parse_has_ipv6_masq(&text, wan_iface))
 }
 
 pub(crate) fn write_atomic_if_changed(path: &str, content: &str) -> bool {
@@ -199,6 +324,9 @@ pub(crate) fn write_atomic_if_changed(path: &str, content: &str) -> bool {
     let tmp_path = format!("{}.tmp.{}", path, std::process::id());
     if fs::write(&tmp_path, content).is_err() {
         return false;
+    }
+    if let Ok(meta) = fs::metadata(path) {
+        let _ = fs::set_permissions(&tmp_path, meta.permissions());
     }
     if fs::rename(&tmp_path, path).is_err() {
         let _ = fs::remove_file(&tmp_path);
@@ -216,7 +344,15 @@ pub(crate) fn strip_fw4_user_block(content: &str) -> String {
         if start < end {
             let before = &result[..start];
             let after = &result[end + FLOWCONE_TAG_END.len()..];
-            result = format!("{}{}", before.trim_end(), after);
+            if after.is_empty() {
+                let mut trimmed = before.trim_end().to_string();
+                if !trimmed.is_empty() {
+                    trimmed.push('\n');
+                }
+                result = trimmed;
+            } else {
+                result = format!("{}{}", before.trim_end(), after);
+            }
         } else {
             break;
         }
@@ -269,41 +405,26 @@ pub(crate) fn clean_fw4_set_definitions() {
     let _ = fs::remove_file(SET_DEFS_FILE);
 }
 
-fn nft_set_exists(set: &str) -> bool {
-    Command::new("nft")
-        .args(["list", "set", "inet", "fw4", set])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-fn add_fw4_set(set: &str, family: &str) -> bool {
-    let script = format!(
-        "add set inet fw4 {} {{ type {}; flags interval,timeout; }}\n",
-        set, family
-    );
-    nft_apply(&script).is_ok()
-}
-
-/// Ensures liveness timeout sets exist in the kernel inet fw4 table.
+/// Ensures liveness timeout sets exist in the kernel `inet fw4` table in one transaction.
 pub(crate) fn ensure_fw4_sets() -> bool {
-    if !has_table_inet_fw4() {
+    let Some(table_text) = nft_output(&["-t", "list", "table", "inet", "fw4"]) else {
         return false;
-    }
-    let mut ok = true;
+    };
+    let mut script = String::new();
     for (set, family) in [
         (SET_V4, "ipv4_addr"),
         (SET_V6, "ipv6_addr"),
         (SET_FWD4, "ipv4_addr"),
         (SET_FWD6, "ipv6_addr"),
     ] {
-        if !nft_set_exists(set) && !add_fw4_set(set, family) {
-            ok = false;
+        if !table_text.contains(&format!("set {set} ")) {
+            script.push_str(&format!(
+                "add set inet fw4 {} {{ type {}; flags interval,timeout; }}\n",
+                set, family
+            ));
         }
     }
-    ok
+    nft_apply(&script).is_ok()
 }
 
 pub(crate) fn bypass_clause(mask: u32, val: u32) -> String {
@@ -314,14 +435,14 @@ pub(crate) fn bypass_clause(mask: u32, val: u32) -> String {
     }
 }
 
-/// Extra guards matching the eBPF bypass_special_udp4() checks.
+/// Extra destination/port guards matching eBPF `bypass_special_udp4()`.
 pub(crate) fn special_v4_clause() -> &'static str {
-    " ip saddr != 0.0.0.0 ip saddr != 169.254.0.0/16 udp sport != { 67, 68 } udp dport != { 67, 68 } ip daddr != 255.0.0.0/8 ip daddr != 224.0.0.0/4 ip daddr != 169.254.0.0/16"
+    " udp sport != { 67, 68 } udp dport != { 67, 68 } ip daddr != 255.0.0.0/8 ip daddr != 224.0.0.0/4 ip daddr != 169.254.0.0/16"
 }
 
-/// Extra guards matching the eBPF bypass_special_udp6() checks.
+/// Extra destination/port guards matching eBPF `bypass_special_udp6()`.
 pub(crate) fn special_v6_clause() -> &'static str {
-    " ip6 saddr != fe80::/10 udp sport != { 546, 547 } udp dport != { 546, 547 } ip6 daddr != ff00::/8 ip6 daddr != fe80::/10"
+    " udp sport != { 546, 547 } udp dport != { 546, 547 } ip6 daddr != ff00::/8 ip6 daddr != fe80::/10"
 }
 
 pub(crate) fn generate_live_srcnat_rule_v4(
@@ -511,45 +632,27 @@ pub(crate) fn v6_elements(is_masq: bool) -> &'static str {
     }
 }
 
-/// Refreshes element timeouts in the liveness sets.
+/// Refreshes element timeouts in `inet fw4` liveness sets.
 pub(crate) fn refresh_fw4_liveness(
     enable_v4: bool,
     enable_v6: bool,
     is_v6_masq: bool,
     verbose: bool,
 ) -> bool {
-    match super::netlink::refresh_liveness_netlink("fw4", enable_v4, enable_v6, is_v6_masq) {
-        Ok(()) => return true,
-        Err(e) if verbose => {
-            eprintln!(
-                "flowcone: netlink fw4 liveness refresh failed ({}), falling back to CLI",
-                e
-            );
-        }
-        Err(_) => {}
-    }
-
-    let script = build_liveness_script(
-        "inet", "fw4", enable_v4, enable_v4, enable_v6, enable_v6, is_v6_masq,
-    );
-    if script.is_empty() {
-        return true;
-    }
-    match nft_apply(&script) {
-        Ok(()) => true,
-        Err(e) => {
-            if verbose {
-                eprintln!("flowcone: liveness refresh failed: {}", e);
-            }
-            false
-        }
-    }
+    refresh_table_liveness(
+        "inet", "fw4", enable_v4, enable_v4, enable_v6, enable_v6, is_v6_masq, verbose,
+    )
 }
 
 pub(crate) fn remove_fw4_sets() {
+    let Some(table_text) = nft_output(&["-t", "list", "table", "inet", "fw4"]) else {
+        return;
+    };
     let mut script = String::new();
     for set in [SET_V4, SET_V6, SET_FWD4, SET_FWD6] {
-        script.push_str(&format!("delete set inet fw4 {}\n", set));
+        if table_text.contains(&format!("set {set} ")) {
+            script.push_str(&format!("delete set inet fw4 {}\n", set));
+        }
     }
     let _ = nft_apply(&script);
 }
@@ -580,8 +683,9 @@ pub(crate) fn auto_includes_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn test_parse_has_ipv6_masq_ignores_nat6_partial() {
+    fn test_parse_has_ipv6_masq_ignores_nat6_partial_and_comments() {
         let partial = "\
 table ip6 nat {
         chain postrouting {
@@ -606,6 +710,16 @@ table ip6 flowcone {
         }
 }";
         assert!(!parse_has_ipv6_masq(flowcone_table, "eth1"));
+
+        // Negated oifname or comment mentioning ipv6 must not match.
+        let comment_with_ipv6 = "\
+table inet fw4 {
+        chain srcnat {
+                oifname != \"eth1\" masquerade
+                oifname \"eth1\" ip protocol udp masquerade comment \"allow ipv6 bypass\"
+        }
+}";
+        assert!(!parse_has_ipv6_masq(comment_with_ipv6, "eth1"));
     }
 
     #[test]
@@ -660,6 +774,20 @@ table inet fw4 {
 }";
         assert!(!parse_has_ipv6_masq(other_iface_masq, "eth1"));
 
+        // Custom WAN goto chain in table inet filter
+        let custom_goto = "\
+table inet myfw {
+        chain post {
+                type nat hook postrouting priority srcnat; policy accept;
+                oifname \"pppoe-wan\" goto wan_snat
+        }
+        chain wan_snat {
+                snat ip6 to 2001:db8::1
+        }
+}";
+        assert!(parse_has_ipv6_masq(custom_goto, "pppoe-wan"));
+        assert!(!parse_has_ipv6_masq(custom_goto, "eth1"));
+
         // Standard Linux iptables-nft uppercase POSTROUTING detection
         let linux_postrouting_masq = "\
 table ip6 nat {
@@ -669,6 +797,64 @@ table ip6 nat {
         }
 }";
         assert!(parse_has_ipv6_masq(linux_postrouting_masq, "eth1"));
+
+        // Escaped quotes and empty comment string in comment stripping
+        assert_eq!(
+            strip_rule_comments("oifname \"eth1\" comment \"\\\"ipv6\\\"\" masquerade"),
+            "oifname \"eth1\"  masquerade"
+        );
+        assert_eq!(
+            strip_rule_comments("oifname \"eth1\" comment \"\" masquerade"),
+            "oifname \"eth1\"  masquerade"
+        );
+
+        // `oifname ==` and brace set `{ ... }`, without bleeding into `iifname`
+        let oif_eq_set = "\
+table inet nat {
+        chain postrouting {
+                type nat hook postrouting priority srcnat; policy accept;
+                oifname == { \"eth1.10\", \"eth1\" } masquerade
+        }
+}";
+        assert!(parse_has_ipv6_masq(oif_eq_set, "eth1"));
+        assert!(!parse_has_ipv6_masq(oif_eq_set, "eth2"));
+
+        let brace_no_bleed = "\
+table inet nat {
+        chain postrouting {
+                type nat hook postrouting priority srcnat; policy accept;
+                oifname { \"vpn0\", \"tun0\" } iifname \"eth1\" masquerade
+        }
+}";
+        assert!(!parse_has_ipv6_masq(brace_no_bleed, "eth1"));
+
+        // Dual-WAN fw4: WAN1 uses IPv6 masq in srcnat_wan, WAN2 uses IPv4-only in srcnat_wan2
+        let dual_wan_fw4 = "\
+table inet fw4 {
+        chain srcnat {
+                type nat hook postrouting priority srcnat; policy accept;
+                oifname \"eth1\" jump srcnat_wan
+                oifname \"eth2\" jump srcnat_wan2
+        }
+        chain srcnat_wan {
+                masquerade
+        }
+        chain srcnat_wan2 {
+                meta nfproto ipv4 masquerade
+        }
+}";
+        assert!(parse_has_ipv6_masq(dual_wan_fw4, "eth1"));
+        assert!(!parse_has_ipv6_masq(dual_wan_fw4, "eth2"));
+
+        // `snat ip to ...` in inet table is IPv4-only
+        let inet_snat4 = "\
+table inet nat {
+        chain postrouting {
+                type nat hook postrouting priority srcnat; policy accept;
+                oifname \"eth1\" snat ip to 203.0.113.1
+        }
+}";
+        assert!(!parse_has_ipv6_masq(inet_snat4, "eth1"));
     }
 
     #[test]
@@ -677,20 +863,21 @@ table ip6 nat {
         let stripped = strip_fw4_user_block(original);
         assert_eq!(stripped, "#!/bin/sh\n# custom rule\n# footer\n");
 
+        let eof_block = "#!/bin/sh\n# --- flowcone start ---\ninjected\n# --- flowcone end ---";
+        assert_eq!(strip_fw4_user_block(eof_block), "#!/bin/sh\n");
+
         let no_block = "#!/bin/sh\necho hi\n";
         assert_eq!(strip_fw4_user_block(no_block), no_block);
     }
+
     #[test]
     fn test_live_rules_use_sets_and_new_state() {
         let r4 = generate_live_srcnat_rule_v4("eth1", 0, 0);
         assert!(r4.contains("ip saddr @flowcone_v4"));
-        assert!(r4.contains("ip saddr != 0.0.0.0"));
-        assert!(r4.contains("ip saddr != 169.254.0.0/16"));
         assert!(r4.contains("255.0.0.0/8"));
         assert!(!r4.contains("255.255.255.255"));
         let r6_srcnat = generate_live_srcnat_rule_v6("eth1", 0, 0);
         assert!(r6_srcnat.contains("ip6 saddr @flowcone_v6"));
-        assert!(r6_srcnat.contains("ip6 saddr != fe80::/10"));
         assert!(r6_srcnat.contains("udp sport != { 546, 547 }"));
         assert!(r6_srcnat.contains("ip6 daddr != ff00::/8"));
         assert!(r6_srcnat.contains("ip6 daddr != fe80::/10"));

@@ -1,7 +1,7 @@
 use flowcone_common::DEFAULT_FLOWCONE_MARK;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Config {
+pub(crate) struct Config {
     pub iface: String,
     pub btf_path: Option<String>,
     pub enable_v4: bool,
@@ -15,6 +15,12 @@ pub struct Config {
     pub flowcone_mark: u32,
     pub manage_nft: bool,
     pub verbose: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CliAction {
+    Run(Config),
+    ExitOk,
 }
 
 impl Default for Config {
@@ -37,7 +43,7 @@ impl Default for Config {
     }
 }
 
-pub fn parse_u32_mark(s: &str) -> Option<u32> {
+pub(crate) fn parse_u32_mark(s: &str) -> Option<u32> {
     let s = s.trim();
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         u32::from_str_radix(hex, 16).ok()
@@ -69,11 +75,13 @@ fn take_value<'a>(args: &'a [String], i: &mut usize, opt: &str) -> Result<&'a st
     Ok(args[*i].as_str())
 }
 
-pub fn parse_args() -> Result<Config, String> {
+pub(crate) fn parse_args() -> Result<CliAction, String> {
     parse_args_from(std::env::args())
 }
 
-pub fn parse_args_from<I: IntoIterator<Item = String>>(args: I) -> Result<Config, String> {
+pub(crate) fn parse_args_from<I: IntoIterator<Item = String>>(
+    args: I,
+) -> Result<CliAction, String> {
     let args: Vec<String> = args.into_iter().collect();
     let mut cfg = Config::default();
 
@@ -145,11 +153,11 @@ pub fn parse_args_from<I: IntoIterator<Item = String>>(args: I) -> Result<Config
             }
             "-V" | "--version" => {
                 println!("flowcone {}", env!("CARGO_PKG_VERSION"));
-                std::process::exit(0);
+                return Ok(CliAction::ExitOk);
             }
             "-h" | "--help" => {
                 print_help();
-                std::process::exit(0);
+                return Ok(CliAction::ExitOk);
             }
             arg => {
                 return Err(format!("Unknown option: {}", arg));
@@ -158,8 +166,8 @@ pub fn parse_args_from<I: IntoIterator<Item = String>>(args: I) -> Result<Config
         i += 1;
     }
 
-    if cfg.iface.is_empty() {
-        return Err("--iface must not be empty".to_string());
+    if cfg.iface.is_empty() || cfg.iface == "." || cfg.iface == ".." {
+        return Err(format!("Invalid interface name '{}'", cfg.iface));
     }
     if cfg.iface.len() >= 16 {
         return Err(format!(
@@ -179,7 +187,7 @@ pub fn parse_args_from<I: IntoIterator<Item = String>>(args: I) -> Result<Config
     }
     if !cfg.enable_v4 && !cfg.enable_v6 {
         return Err(
-            "At least one protocol family must be enabled (--enable-v4 1 or --enable-v6 1/2)"
+            "At least one protocol family must be enabled (--enable-v4 1 or --enable-v6 1)"
                 .to_string(),
         );
     }
@@ -213,20 +221,17 @@ pub fn parse_args_from<I: IntoIterator<Item = String>>(args: I) -> Result<Config
     if cfg.bypass_mark_val & !cfg.bypass_mark_mask != 0 {
         return Err("Invalid --bypass-mark: value has bits outside the mask".to_string());
     }
-    if cfg.bypass_mark_mask == 0 && cfg.bypass_mark_val != 0 {
-        return Err("Invalid --bypass-mark: a zero mask cannot match a non-zero value".to_string());
-    }
 
-    Ok(cfg)
+    Ok(CliAction::Run(cfg))
 }
 
-pub fn print_help() {
+pub(crate) fn print_help() {
     println!("FlowCone — Dual-Stack RFC 4787 Full-Cone NAT for Linux");
     println!("Usage: flowcone [OPTIONS]");
     println!();
     println!("Options:");
     println!("  -i, --iface <IFACE>        WAN interface (default: wan)");
-    println!("  -b, --btf <PATH>           Path to vmlinux BTF (optional, auto-detected)");
+    println!("  -b, --btf <PATH>           Path to vmlinux BTF (optional, if CO-RE is used)");
     println!("      --enable-v4 <1|0>      Enable IPv4 Full-Cone NAT (default: 1)");
     println!("      --enable-v6 <1|0>      Enable IPv6 Full-Cone NAT (auto-adaptive, default: 0)");
     println!("      --min-port <PORT>      Port pool start (default: 1024)");
@@ -270,27 +275,38 @@ mod tests {
     #[test]
     fn test_timeout_minimum() {
         assert!(Config::default().timeout_sec >= 120);
-        assert!(parse_args_from(vec!["flowcone".into(), "--timeout".into(), "30".into()]).is_ok());
+        assert!(matches!(
+            parse_args_from(vec!["flowcone".into(), "--timeout".into(), "30".into()]),
+            Ok(CliAction::Run(_))
+        ));
         assert!(parse_args_from(vec!["flowcone".into(), "--timeout".into(), "0".into()]).is_err());
     }
 
     #[test]
     fn test_mark_validation() {
-        assert!(
+        assert!(matches!(
             parse_args_from(vec![
                 "flowcone".into(),
                 "--mark".into(),
                 "0x00800000".into()
-            ])
-            .is_ok()
-        );
+            ]),
+            Ok(CliAction::Run(_))
+        ));
         assert!(parse_args_from(vec!["flowcone".into(), "--mark".into(), "0".into()]).is_err());
     }
 
     #[test]
     fn test_iface_validation() {
-        assert!(parse_args_from(vec!["flowcone".into(), "-i".into(), "wan".into()]).is_ok());
-        assert!(parse_args_from(vec!["flowcone".into(), "-i".into(), "eth0.1".into()]).is_ok());
+        assert!(matches!(
+            parse_args_from(vec!["flowcone".into(), "-i".into(), "wan".into()]),
+            Ok(CliAction::Run(_))
+        ));
+        assert!(matches!(
+            parse_args_from(vec!["flowcone".into(), "-i".into(), "eth0.1".into()]),
+            Ok(CliAction::Run(_))
+        ));
+        assert!(parse_args_from(vec!["flowcone".into(), "-i".into(), ".".into()]).is_err());
+        assert!(parse_args_from(vec!["flowcone".into(), "-i".into(), "..".into()]).is_err());
         assert!(
             parse_args_from(vec![
                 "flowcone".into(),
@@ -303,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn test_both_families_disabled_error() {
+    fn test_both_families_disabled_and_help_exit() {
         assert!(
             parse_args_from(vec![
                 "flowcone".into(),
@@ -313,6 +329,10 @@ mod tests {
                 "0".into()
             ])
             .is_err()
+        );
+        assert_eq!(
+            parse_args_from(vec!["flowcone".into(), "--help".into()]),
+            Ok(CliAction::ExitOk)
         );
     }
 }

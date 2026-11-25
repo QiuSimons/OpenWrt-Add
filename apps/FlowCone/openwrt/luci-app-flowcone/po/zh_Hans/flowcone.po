@@ -67,6 +67,15 @@ msgstr "起始端口"
 msgid "Max Port"
 msgstr "结束端口"
 
+msgid "Port must be between 1 and 65535."
+msgstr "端口号必须在 1 到 65535 之间。"
+
+msgid "Min Port cannot be greater than Max Port."
+msgstr "起始端口不能大于结束端口。"
+
+msgid "Max Port cannot be less than Min Port."
+msgstr "结束端口不能小于起始端口。"
+
 msgid "Timeout (seconds)"
 msgstr "超时时间 (秒)"
 
@@ -85,6 +94,27 @@ msgstr "豁免 fwmark"
 msgid "Optional fwmark for custom policy routing."
 msgstr "可选的策略路由自定义豁免 fwmark 标记。"
 
+msgid "Invalid fwmark syntax (expected VAL or VAL/MASK)."
+msgstr "fwmark 格式无效（应为 VAL 或 VAL/MASK）。"
+
+msgid "Invalid fwmark value."
+msgstr "fwmark 值无效。"
+
+msgid "Invalid fwmark mask."
+msgstr "fwmark 掩码无效。"
+
+msgid "Fwmark value has bits set outside the mask."
+msgstr "fwmark 值包含掩码范围之外的比特位。"
+
+msgid "Inbound DNAT Mark"
+msgstr "入站 DNAT 标记"
+
+msgid "Non-zero fwmark applied to inbound translated UDP packets."
+msgstr "附加到入站 DNAT 转发 UDP 报文的非零 fwmark 标记。"
+
+msgid "Inbound DNAT mark must be a non-zero 32-bit integer (e.g. 0x00800000)."
+msgstr "入站 DNAT 标记必须为非零 32 位整数（如 0x00800000）。"
+
 msgid "Timeout must be between 120 and 604800 seconds (RFC 4787 REQ-5)."
 msgstr "超时时间必须在 120 到 604800 秒之间（RFC 4787 REQ-5）。"
 
@@ -99,5 +129,3 @@ msgstr "使用 nat6 包管理 ULA/RA/DHCPv6；启用时 FlowCone 仍负责 IPv6 
 
 msgid "The nat6 package is not installed."
 msgstr "nat6 包未安装。"
-
-

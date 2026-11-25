@@ -67,6 +67,15 @@ msgstr ""
 msgid "Max Port"
 msgstr ""
 
+msgid "Port must be between 1 and 65535."
+msgstr ""
+
+msgid "Min Port cannot be greater than Max Port."
+msgstr ""
+
+msgid "Max Port cannot be less than Min Port."
+msgstr ""
+
 msgid "Timeout (seconds)"
 msgstr ""
 
@@ -85,6 +94,27 @@ msgstr ""
 msgid "Optional fwmark for custom policy routing."
 msgstr ""
 
+msgid "Invalid fwmark syntax (expected VAL or VAL/MASK)."
+msgstr ""
+
+msgid "Invalid fwmark value."
+msgstr ""
+
+msgid "Invalid fwmark mask."
+msgstr ""
+
+msgid "Fwmark value has bits set outside the mask."
+msgstr ""
+
+msgid "Inbound DNAT Mark"
+msgstr ""
+
+msgid "Non-zero fwmark applied to inbound translated UDP packets."
+msgstr ""
+
+msgid "Inbound DNAT mark must be a non-zero 32-bit integer (e.g. 0x00800000)."
+msgstr ""
+
 msgid "Timeout must be between 120 and 604800 seconds (RFC 4787 REQ-5)."
 msgstr ""
 
@@ -99,5 +129,3 @@ msgstr ""
 
 msgid "The nat6 package is not installed."
 msgstr ""
-
-

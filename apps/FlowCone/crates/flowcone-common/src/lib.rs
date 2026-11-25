@@ -59,36 +59,43 @@ pub fn binding_matches_reserved(res_state: u16, meta: u16) -> bool {
     (res_state & RESERVED_PORT_BIT) == 0 && ((res_state ^ meta) & BINDING_EPOCH_MASK) == 0
 }
 
+macro_rules! impl_binding_meta {
+    ($ty:ty) => {
+        impl $ty {
+            #[inline(always)]
+            pub fn is_short_lived(&self) -> bool {
+                self.meta & BINDING_FLAG_SHORT_LIVED != 0
+            }
+
+            #[inline(always)]
+            pub fn reserved_meta(&self) -> u16 {
+                self.meta
+            }
+
+            #[inline(always)]
+            pub fn set_reserved_epoch(&mut self, res_state: u16) {
+                self.meta = update_binding_epoch(self.meta, res_state);
+            }
+
+            #[inline(always)]
+            pub fn clear_short_lived(&mut self) {
+                self.meta &= !BINDING_FLAG_SHORT_LIVED;
+            }
+        }
+    };
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BindingValue4 {
     pub ip: u32,
     pub port: u16,
-    pub _pad: u16,
+    /// Bit 0: `BINDING_FLAG_SHORT_LIVED`; bits 1..=15: reservation epoch.
+    pub meta: u16,
     pub last_seen: u32,
 }
 
-impl BindingValue4 {
-    #[inline(always)]
-    pub fn is_short_lived(&self) -> bool {
-        self._pad & BINDING_FLAG_SHORT_LIVED != 0
-    }
-
-    #[inline(always)]
-    pub fn reserved_meta(&self) -> u16 {
-        self._pad
-    }
-
-    #[inline(always)]
-    pub fn set_reserved_epoch(&mut self, res_state: u16) {
-        self._pad = update_binding_epoch(self._pad, res_state);
-    }
-
-    #[inline(always)]
-    pub fn clear_short_lived(&mut self) {
-        self._pad &= !BINDING_FLAG_SHORT_LIVED;
-    }
-}
+impl_binding_meta!(BindingValue4);
 
 #[cfg(not(target_arch = "bpf"))]
 unsafe impl aya::Pod for BindingValue4 {}
@@ -98,7 +105,7 @@ unsafe impl aya::Pod for BindingValue4 {}
 pub struct EndpointKey6 {
     pub ip: [u8; 16],
     pub port: u16,
-    pub _pad: [u16; 3],
+    pub _pad: u16,
 }
 
 #[cfg(not(target_arch = "bpf"))]
@@ -109,31 +116,12 @@ unsafe impl aya::Pod for EndpointKey6 {}
 pub struct BindingValue6 {
     pub ip: [u8; 16],
     pub port: u16,
-    pub _pad: [u16; 3],
+    /// Bit 0: `BINDING_FLAG_SHORT_LIVED`; bits 1..=15: reservation epoch.
+    pub meta: u16,
     pub last_seen: u32,
 }
 
-impl BindingValue6 {
-    #[inline(always)]
-    pub fn is_short_lived(&self) -> bool {
-        self._pad[0] & BINDING_FLAG_SHORT_LIVED != 0
-    }
-
-    #[inline(always)]
-    pub fn reserved_meta(&self) -> u16 {
-        self._pad[0]
-    }
-
-    #[inline(always)]
-    pub fn set_reserved_epoch(&mut self, res_state: u16) {
-        self._pad[0] = update_binding_epoch(self._pad[0], res_state);
-    }
-
-    #[inline(always)]
-    pub fn clear_short_lived(&mut self) {
-        self._pad[0] &= !BINDING_FLAG_SHORT_LIVED;
-    }
-}
+impl_binding_meta!(BindingValue6);
 
 #[cfg(not(target_arch = "bpf"))]
 unsafe impl aya::Pod for BindingValue6 {}
@@ -145,23 +133,13 @@ unsafe impl aya::Pod for BindingValue6 {}
 pub struct SessionEvent4 {
     pub key: EndpointKey4,
     pub port: u16,
-    pub _pad: u16,
+    pub flags: u16,
 }
 
 impl SessionEvent4 {
     #[inline(always)]
     pub fn is_short_lived(&self) -> bool {
-        self._pad & BINDING_FLAG_SHORT_LIVED != 0
-    }
-
-    #[inline(always)]
-    pub fn internal_port_host(&self) -> u16 {
-        u16::from_be(self.key.port)
-    }
-
-    #[inline(always)]
-    pub fn external_port_host(&self) -> u16 {
-        self.port
+        self.flags & BINDING_FLAG_SHORT_LIVED != 0
     }
 }
 
@@ -175,23 +153,13 @@ unsafe impl aya::Pod for SessionEvent4 {}
 pub struct SessionEvent6 {
     pub key: EndpointKey6,
     pub port: u16,
-    pub _pad: [u16; 3],
+    pub flags: u16,
 }
 
 impl SessionEvent6 {
     #[inline(always)]
     pub fn is_short_lived(&self) -> bool {
-        self._pad[0] & BINDING_FLAG_SHORT_LIVED != 0
-    }
-
-    #[inline(always)]
-    pub fn internal_port_host(&self) -> u16 {
-        u16::from_be(self.key.port)
-    }
-
-    #[inline(always)]
-    pub fn external_port_host(&self) -> u16 {
-        self.port
+        self.flags & BINDING_FLAG_SHORT_LIVED != 0
     }
 }
 
@@ -317,9 +285,8 @@ pub fn is_routable_internal_ipv6(addr: &[u8; 16], allow_all_internal: bool) -> b
 
 pub const MAX_BINDINGS: u32 = 65536;
 pub const FRAG_MAP_ENTRIES: u32 = 4096;
-pub const SESSION_EVENT_RINGBUF_BYTES: u32 = 4194304;
+pub const SESSION_EVENT_RINGBUF_BYTES: u32 = 524_288;
 pub const PORT_STATE_ENTRIES: u32 = 65536;
-pub const PORT_QUEUE_ENTRIES: u32 = 65536;
 pub const PORT_BITMAP_SLOTS: u32 = 512;
 
 #[inline(always)]
@@ -334,32 +301,6 @@ pub fn port_to_bitmap_coords(port: u16) -> (bool, u32, u64) {
 #[inline(always)]
 pub fn bitmap_coords_to_port(is_even: bool, slot: u32, bit: u32) -> u16 {
     ((slot * 64 + bit) * 2 + if is_even { 0 } else { 1 }) as u16
-}
-
-pub const PORT_FREE_BIT: u8 = 1;
-pub const PORT_QUEUED_BIT: u8 = 2;
-
-/// Clears `PORT_QUEUED_BIT`.
-#[inline(always)]
-pub fn port_state_on_unqueue(state: u8) -> u8 {
-    state & !PORT_QUEUED_BIT
-}
-
-/// Clears `PORT_FREE_BIT`.
-#[inline(always)]
-pub fn port_state_on_bound(state: u8) -> u8 {
-    state & !PORT_FREE_BIT
-}
-
-/// Evaluates state on port release; returns `(needs_queue_push, new_state)`.
-#[inline(always)]
-pub fn port_state_on_release(state: u8) -> (bool, u8) {
-    let next = state | PORT_FREE_BIT;
-    if next & PORT_QUEUED_BIT != 0 {
-        (false, next)
-    } else {
-        (true, next | PORT_QUEUED_BIT)
-    }
 }
 
 /// Default packet mark applied to inbound DNAT-translated packets.
@@ -408,231 +349,255 @@ pub fn format_wan_frag_id(counter: u32, cpu: u32) -> u32 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct L2Info {
     pub proto: u16,
-    pub ip_off: usize,
+    /// IP header byte offset relative to packet `data`.
+    pub ip_rel: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ipv6L4 {
+    /// UDP header byte offset relative to packet `data`.
     Udp(usize),
     Fragment,
+    /// ICMPv6 header byte offset relative to packet `data`.
     Icmp6(usize),
     NonUdp,
     Unsupported,
 }
 
+/// # Safety
+/// `p` must point to a readable `u8` inside the packet or slice bounds.
 #[inline(always)]
-pub fn parse_ppp_slice(data: &[u8], mut off: usize) -> Option<L2Info> {
-    if off + 2 > data.len() {
+pub unsafe fn read_u8(p: usize) -> u8 {
+    unsafe { *(p as *const u8) }
+}
+
+/// # Safety
+/// `p..p + 2` must point to readable bytes inside the packet or slice bounds.
+#[inline(always)]
+pub unsafe fn read_be16(p: usize) -> u16 {
+    unsafe { u16::from_be_bytes([read_u8(p), read_u8(p + 1)]) }
+}
+
+/// # Safety
+/// `p..p + 4` must point to readable bytes inside the packet or slice bounds.
+#[inline(always)]
+pub unsafe fn read_be32(p: usize) -> u32 {
+    unsafe { u32::from_be_bytes([read_u8(p), read_u8(p + 1), read_u8(p + 2), read_u8(p + 3)]) }
+}
+
+/// Parse the PPP protocol field (optional 0xff 0x03 address/control, optional
+/// one-byte protocol compression). Returns the IP ethertype and header offset relative to `data`.
+///
+/// # Safety
+/// `(data + rel)..data_end` must be valid readable packet memory (with `data + rel <= data_end`).
+#[inline(always)]
+pub unsafe fn parse_ppp(data: usize, data_end: usize, mut rel: usize) -> Option<L2Info> {
+    if data + rel + 2 > data_end {
         return None;
     }
-    if data[off] == 0xff && off + 2 <= data.len() && data[off + 1] == 0x03 {
-        off += 2;
-    }
-    if off + 2 > data.len() {
-        return None;
-    }
-    let b0 = data[off];
-    if (b0 & 1) != 0 {
-        let proto = match b0 as u16 {
-            0x21 => ETH_P_IP,
-            0x57 => ETH_P_IPV6,
+    unsafe {
+        if read_u8(data + rel) == 0xff && read_u8(data + rel + 1) == 0x03 {
+            rel += 2;
+        }
+        if data + rel >= data_end {
+            return None;
+        }
+        let b0 = read_u8(data + rel);
+        if (b0 & 1) != 0 {
+            let proto = match b0 as u16 {
+                0x21 => ETH_P_IP,
+                0x57 => ETH_P_IPV6,
+                _ => return None,
+            };
+            return Some(L2Info {
+                proto,
+                ip_rel: rel + 1,
+            });
+        }
+        if data + rel + 2 > data_end {
+            return None;
+        }
+        let raw = read_be16(data + rel);
+        let proto = match raw {
+            PPP_IPV4 => ETH_P_IP,
+            PPP_IPV6 => ETH_P_IPV6,
             _ => return None,
         };
-        return Some(L2Info {
+        Some(L2Info {
             proto,
-            ip_off: off + 1,
-        });
+            ip_rel: rel + 2,
+        })
     }
-    if off + 2 > data.len() {
-        return None;
-    }
-    let raw = u16::from_be_bytes([data[off], data[off + 1]]);
-    let proto = match raw {
-        PPP_IPV4 => ETH_P_IP,
-        PPP_IPV6 => ETH_P_IPV6,
-        _ => return None,
-    };
-    Some(L2Info {
-        proto,
-        ip_off: off + 2,
-    })
 }
 
+/// Parse Ethernet, VLAN tags, and PPPoE session, or handle bare IP frames
+/// (raw IP, TUN, WireGuard, and PPP interfaces where the kernel already stripped
+/// the PPP header).
+/// `l2_len` is 0 for bare IP, 14 for Ethernet.
+///
+/// # Safety
+/// `data..data_end` must be valid readable packet memory (with `data <= data_end`).
 #[inline(always)]
-pub fn parse_l2_slice(data: &[u8], l2_len: u32) -> Option<L2Info> {
-    if l2_len == 14 {
-        if data.len() < 14 {
+pub unsafe fn parse_l2(data: usize, data_end: usize, l2_len: u32) -> Option<L2Info> {
+    unsafe {
+        if l2_len == 14 {
+            if data + 14 > data_end {
+                return None;
+            }
+            let mut proto = read_be16(data + 12);
+            let mut ip_rel = 14usize;
+            let mut tags = 0;
+            while (proto == ETH_P_8021Q || proto == ETH_P_8021AD) && tags < 2 {
+                if data + ip_rel + 4 > data_end {
+                    return None;
+                }
+                proto = read_be16(data + ip_rel + 2);
+                ip_rel += 4;
+                tags += 1;
+            }
+            if proto == ETH_P_PPPOE {
+                if data + ip_rel + 6 > data_end {
+                    return None;
+                }
+                return parse_ppp(data, data_end, ip_rel + 6);
+            }
+            if proto == ETH_P_IP || proto == ETH_P_IPV6 {
+                return Some(L2Info { proto, ip_rel });
+            }
             return None;
         }
-        let mut proto = u16::from_be_bytes([data[12], data[13]]);
-        let mut ip_off = 14;
-        let mut tags = 0;
-        while (proto == ETH_P_8021Q || proto == ETH_P_8021AD) && tags < 2 {
-            if ip_off + 4 > data.len() {
-                return None;
-            }
-            proto = u16::from_be_bytes([data[ip_off + 2], data[ip_off + 3]]);
-            ip_off += 4;
-            tags += 1;
-        }
-        if proto == ETH_P_PPPOE {
-            if ip_off + 6 > data.len() {
-                return None;
-            }
-            return parse_ppp_slice(data, ip_off + 6);
-        }
-        if proto == ETH_P_IP || proto == ETH_P_IPV6 {
-            return Some(L2Info { proto, ip_off });
-        }
-        return None;
-    }
 
-    if data.len() < 2 {
-        return None;
-    }
-    let ver = data[0] >> 4;
-    let proto = match ver {
-        4 => ETH_P_IP,
-        6 => ETH_P_IPV6,
-        _ => return None,
-    };
-    Some(L2Info { proto, ip_off: 0 })
-}
-
-#[inline(always)]
-pub fn locate_ipv6_l4_slice(data: &[u8], ip_off: usize, mut nh: u8) -> Ipv6L4 {
-    let mut cur_off = ip_off + 40;
-    let mut iter = 0;
-    while iter < 4 {
-        if nh == IPPROTO_UDP {
-            return Ipv6L4::Udp(cur_off);
+        if data + 2 > data_end {
+            return None;
         }
-        if nh == IPPROTO_ICMPV6 {
-            return Ipv6L4::Icmp6(cur_off);
-        }
-        if nh == IPPROTO_HOPOPTS || nh == IPPROTO_DSTOPTS || nh == IPPROTO_ROUTING {
-            if cur_off + 2 > data.len() {
-                return Ipv6L4::NonUdp;
-            }
-            let next = data[cur_off];
-            let ext_len = (data[cur_off + 1] as usize + 1) * 8;
-            if cur_off + ext_len > data.len() {
-                return Ipv6L4::NonUdp;
-            }
-            nh = next;
-            cur_off += ext_len;
-        } else if nh == IPPROTO_FRAGMENT {
-            return Ipv6L4::Fragment;
-        } else {
-            return Ipv6L4::NonUdp;
-        }
-        iter += 1;
-    }
-
-    if nh == IPPROTO_UDP {
-        Ipv6L4::Udp(cur_off)
-    } else if nh == IPPROTO_ICMPV6 {
-        Ipv6L4::Icmp6(cur_off)
-    } else {
-        Ipv6L4::Unsupported
+        let ver = read_u8(data) >> 4;
+        let proto = match ver {
+            4 => ETH_P_IP,
+            6 => ETH_P_IPV6,
+            _ => return None,
+        };
+        Some(L2Info { proto, ip_rel: 0 })
     }
 }
 
 #[inline(always)]
-pub fn locate_ipv6_nexthdr_slice(
-    data: &[u8],
-    ip_off: usize,
+unsafe fn walk_ipv6_ext(
+    data: usize,
+    data_end: usize,
+    ip_rel: usize,
     mut nh: u8,
+) -> Option<(u8, usize, bool)> {
+    let mut cur_rel = ip_rel + 40;
+    let mut iter = 0;
+    unsafe {
+        while iter < 4 {
+            if nh == IPPROTO_HOPOPTS || nh == IPPROTO_DSTOPTS || nh == IPPROTO_ROUTING {
+                let cur_off = data + cur_rel;
+                if cur_off + 2 > data_end {
+                    return None;
+                }
+                let next = read_u8(cur_off);
+                let ext_len = (read_u8(cur_off + 1) as usize + 1) * 8;
+                if cur_off + ext_len > data_end {
+                    return None;
+                }
+                nh = next;
+                cur_rel += ext_len;
+                iter += 1;
+            } else {
+                return Some((nh, cur_rel, false));
+            }
+        }
+    }
+    Some((nh, cur_rel, true))
+}
+
+/// Walk up to 4 Hop-by-Hop / Destination Options / Routing extension headers
+/// and locate the upper-layer protocol or Fragment header. Returns byte offsets
+/// relative to `data`.
+///
+/// # Safety
+/// `(data + ip_rel + 40)..data_end` must lie within readable packet bounds.
+#[inline(always)]
+pub unsafe fn locate_ipv6_l4(data: usize, data_end: usize, ip_rel: usize, nh: u8) -> Ipv6L4 {
+    let Some((final_nh, cur_rel, hit_limit)) =
+        (unsafe { walk_ipv6_ext(data, data_end, ip_rel, nh) })
+    else {
+        return Ipv6L4::NonUdp;
+    };
+    match final_nh {
+        IPPROTO_UDP => Ipv6L4::Udp(cur_rel),
+        IPPROTO_ICMPV6 => Ipv6L4::Icmp6(cur_rel),
+        IPPROTO_FRAGMENT => Ipv6L4::Fragment,
+        _ if hit_limit => Ipv6L4::Unsupported,
+        _ => Ipv6L4::NonUdp,
+    }
+}
+
+/// Walk Hop-by-Hop / Destination Options / Routing headers to locate `target`,
+/// returning its offset relative to `data`.
+///
+/// # Safety
+/// `(data + ip_rel + 40)..data_end` must lie within readable packet bounds.
+#[inline(always)]
+pub unsafe fn locate_ipv6_nexthdr(
+    data: usize,
+    data_end: usize,
+    ip_rel: usize,
+    nh: u8,
     target: u8,
 ) -> Option<usize> {
-    let mut cur_off = ip_off + 40;
-    let mut iter = 0;
-    while iter < 4 {
-        if nh == target {
-            return Some(cur_off);
-        }
-        if nh == IPPROTO_HOPOPTS || nh == IPPROTO_DSTOPTS || nh == IPPROTO_ROUTING {
-            if cur_off + 2 > data.len() {
-                return None;
-            }
-            let next = data[cur_off];
-            let ext_len = (data[cur_off + 1] as usize + 1) * 8;
-            if cur_off + ext_len > data.len() {
-                return None;
-            }
-            nh = next;
-            cur_off += ext_len;
-        } else {
-            return None;
-        }
-        iter += 1;
+    let (final_nh, cur_rel, _) = unsafe { walk_ipv6_ext(data, data_end, ip_rel, nh) }?;
+    if final_nh == target {
+        Some(cur_rel)
+    } else {
+        None
     }
-    if nh == target { Some(cur_off) } else { None }
 }
 
+/// Walk Hop-by-Hop / Destination Options / Routing headers until the Fragment header,
+/// returning its offset relative to `data`.
+///
+/// # Safety
+/// `(data + ip_rel + 40)..data_end` must lie within readable packet bounds.
 #[inline(always)]
-pub fn ipv6_fragment_offset_slice(data: &[u8], ip_off: usize, mut nh: u8) -> Option<usize> {
-    if nh == IPPROTO_FRAGMENT {
-        let cur = ip_off + 40;
-        if cur + 8 <= data.len() {
-            return Some(cur);
-        }
-        return None;
+pub unsafe fn ipv6_fragment_offset(
+    data: usize,
+    data_end: usize,
+    ip_rel: usize,
+    nh: u8,
+) -> Option<usize> {
+    let (final_nh, cur_rel, _) = unsafe { walk_ipv6_ext(data, data_end, ip_rel, nh) }?;
+    if final_nh == IPPROTO_FRAGMENT && data + cur_rel + 8 <= data_end {
+        Some(cur_rel)
+    } else {
+        None
     }
-    let mut cur = ip_off + 40;
-    let mut iter = 0;
-    while iter < 4 {
-        if nh == IPPROTO_FRAGMENT {
-            if cur + 8 <= data.len() {
-                return Some(cur);
-            }
-            return None;
-        }
-        if nh != IPPROTO_HOPOPTS && nh != IPPROTO_DSTOPTS && nh != IPPROTO_ROUTING {
-            return None;
-        }
-        if cur + 2 > data.len() {
-            return None;
-        }
-        let next = data[cur];
-        let len = (data[cur + 1] as usize + 1) * 8;
-        if cur + len > data.len() {
-            return None;
-        }
-        nh = next;
-        cur += len;
-        iter += 1;
-    }
-    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::mem::{align_of, size_of};
+
+    fn slice_bounds(buf: &[u8]) -> (usize, usize) {
+        let start = buf.as_ptr() as usize;
+        (start, start + buf.len())
+    }
 
     #[test]
     fn test_private_ipv4() {
-        // 192.168.1.100 in native u32
         let ip_192 = u32::from_ne_bytes([192, 168, 1, 100]);
         assert!(is_private_ipv4(ip_192));
-
-        // 10.1.2.3
         let ip_10 = u32::from_ne_bytes([10, 1, 2, 3]);
         assert!(is_private_ipv4(ip_10));
-
-        // 172.20.5.6 (within 172.16.0.0/12)
         let ip_172 = u32::from_ne_bytes([172, 20, 5, 6]);
         assert!(is_private_ipv4(ip_172));
-
-        // 100.64.1.2 (CGNAT RFC 6598)
         let ip_cgnat = u32::from_ne_bytes([100, 64, 1, 2]);
         assert!(is_private_ipv4(ip_cgnat));
-
-        // 8.8.8.8 (Public)
         let ip_pub = u32::from_ne_bytes([8, 8, 8, 8]);
         assert!(!is_private_ipv4(ip_pub));
 
-        // Non-private / special-purpose ranges must not be treated as internal LAN space.
         for octets in [
             [0, 0, 0, 0],
             [127, 0, 0, 1],
@@ -655,7 +620,6 @@ mod tests {
             );
         }
 
-        // Neighbouring public space must stay untouched.
         for octets in [
             [1, 1, 1, 1],
             [8, 8, 4, 4],
@@ -680,14 +644,12 @@ mod tests {
 
     #[test]
     fn test_routable_internal_ipv6() {
-        // ULA fd00::1
         let mut ula = [0u8; 16];
         ula[0] = 0xfd;
         ula[15] = 1;
         assert!(is_routable_internal_ipv6(&ula, false));
         assert!(is_routable_internal_ipv6(&ula, true));
 
-        // Link-Local fe80::1 (Must be blocked)
         let mut ll = [0u8; 16];
         ll[0] = 0xfe;
         ll[1] = 0x80;
@@ -695,7 +657,6 @@ mod tests {
         assert!(!is_routable_internal_ipv6(&ll, false));
         assert!(!is_routable_internal_ipv6(&ll, true));
 
-        // Multicast ff02::1 (Must be blocked)
         let mut mc = [0u8; 16];
         mc[0] = 0xff;
         mc[1] = 0x02;
@@ -703,54 +664,32 @@ mod tests {
         assert!(!is_routable_internal_ipv6(&mc, false));
         assert!(!is_routable_internal_ipv6(&mc, true));
 
-        // Loopback ::1 (Must be blocked)
         let mut loopback = [0u8; 16];
         loopback[15] = 1;
         assert!(!is_routable_internal_ipv6(&loopback, false));
         assert!(!is_routable_internal_ipv6(&loopback, true));
 
-        // GUA 240e:1234::1
         let mut gua = [0u8; 16];
         gua[0] = 0x24;
         gua[1] = 0x0e;
         gua[15] = 1;
-        // False if allow_all_internal is false (ULA only mode)
         assert!(!is_routable_internal_ipv6(&gua, false));
-        // True if allow_all_internal is true (GUA+ULA mode)
         assert!(is_routable_internal_ipv6(&gua, true));
 
-        // Exact 2000::/3 boundaries and non-GUA exclusions
-        let mut pfx_100 = [0u8; 16];
-        pfx_100[0] = 0x01;
-        pfx_100[15] = 1;
-        assert!(!is_routable_internal_ipv6(&pfx_100, false));
-        assert!(!is_routable_internal_ipv6(&pfx_100, true));
-
-        let mut pfx_1fff = [0u8; 16];
-        pfx_1fff[0] = 0x1f;
-        pfx_1fff[1] = 0xff;
-        pfx_1fff[15] = 1;
-        assert!(!is_routable_internal_ipv6(&pfx_1fff, false));
-        assert!(!is_routable_internal_ipv6(&pfx_1fff, true));
-
-        let mut pfx_2000 = [0u8; 16];
-        pfx_2000[0] = 0x20;
-        pfx_2000[15] = 1;
-        assert!(!is_routable_internal_ipv6(&pfx_2000, false));
-        assert!(is_routable_internal_ipv6(&pfx_2000, true));
-
-        let mut pfx_3fff = [0u8; 16];
-        pfx_3fff[0] = 0x3f;
-        pfx_3fff[1] = 0xff;
-        pfx_3fff[15] = 1;
-        assert!(!is_routable_internal_ipv6(&pfx_3fff, false));
-        assert!(is_routable_internal_ipv6(&pfx_3fff, true));
-
-        let mut pfx_4000 = [0u8; 16];
-        pfx_4000[0] = 0x40;
-        pfx_4000[15] = 1;
-        assert!(!is_routable_internal_ipv6(&pfx_4000, false));
-        assert!(!is_routable_internal_ipv6(&pfx_4000, true));
+        for (b0, b1, expected_all) in [
+            (0x01, 0x00, false),
+            (0x1f, 0xff, false),
+            (0x20, 0x00, true),
+            (0x3f, 0xff, true),
+            (0x40, 0x00, false),
+        ] {
+            let mut pfx = [0u8; 16];
+            pfx[0] = b0;
+            pfx[1] = b1;
+            pfx[15] = 1;
+            assert!(!is_routable_internal_ipv6(&pfx, false));
+            assert_eq!(is_routable_internal_ipv6(&pfx, true), expected_all);
+        }
     }
 
     #[test]
@@ -761,8 +700,6 @@ mod tests {
             for (i, part) in base.split('.').enumerate() {
                 octets[i] = part.parse().unwrap();
             }
-            // The matcher is defined over raw packet bytes, i.e. network byte
-            // order. Build the first and last address in that same order.
             let base_raw = u32::from_ne_bytes(octets);
             let base_be = u32::from_be_bytes(octets);
             let host_bits = 32 - len.parse::<u32>().unwrap();
@@ -780,41 +717,28 @@ mod tests {
     }
 
     #[test]
-    fn test_global_config_layout() {
-        assert_eq!(core::mem::size_of::<GlobalConfig>(), 60);
-        assert_eq!(core::mem::align_of::<GlobalConfig>(), 4);
-    }
-
-    #[test]
-    fn test_port_lifecycle_state_machine() {
-        let initial = PORT_FREE_BIT | PORT_QUEUED_BIT;
-        assert_eq!(initial, 0x03);
-
-        let unqueued = port_state_on_unqueue(initial);
-        assert_eq!(unqueued, PORT_FREE_BIT);
-
-        let bound = port_state_on_bound(unqueued);
-        assert_eq!(bound, 0);
-
-        let (needs_push, released) = port_state_on_release(bound);
-        assert!(needs_push);
-        assert_eq!(released, PORT_FREE_BIT | PORT_QUEUED_BIT);
-
-        // Port preservation flow: bound directly from initial state
-        let preserved_bound = port_state_on_bound(initial);
-        assert_eq!(preserved_bound, PORT_QUEUED_BIT);
-
-        let stale_popped = port_state_on_unqueue(preserved_bound);
-        assert_eq!(stale_popped, 0);
-
-        let (needs_push, refreshed) = port_state_on_release(preserved_bound);
-        assert!(!needs_push);
-        assert_eq!(refreshed, PORT_FREE_BIT | PORT_QUEUED_BIT);
-
-        // Duplicate release guard
-        let (needs_push, dup_state) = port_state_on_release(PORT_FREE_BIT | PORT_QUEUED_BIT);
-        assert!(!needs_push);
-        assert_eq!(dup_state, PORT_FREE_BIT | PORT_QUEUED_BIT);
+    fn test_shared_pod_layouts() {
+        use core::mem::offset_of;
+        assert_eq!(size_of::<EndpointKey4>(), 8);
+        assert_eq!(align_of::<EndpointKey4>(), 4);
+        assert_eq!(size_of::<BindingValue4>(), 12);
+        assert_eq!(align_of::<BindingValue4>(), 4);
+        assert_eq!(offset_of!(BindingValue4, port), 4);
+        assert_eq!(offset_of!(BindingValue4, meta), 6);
+        assert_eq!(size_of::<EndpointKey6>(), 20);
+        assert_eq!(align_of::<EndpointKey6>(), 2);
+        assert_eq!(size_of::<BindingValue6>(), 24);
+        assert_eq!(align_of::<BindingValue6>(), 4);
+        assert_eq!(offset_of!(BindingValue6, port), 16);
+        assert_eq!(offset_of!(BindingValue6, meta), 18);
+        assert_eq!(size_of::<SessionEvent4>(), 12);
+        assert_eq!(size_of::<SessionEvent6>(), 24);
+        assert_eq!(size_of::<FragKey4>(), 16);
+        assert_eq!(size_of::<FragValue4>(), 12);
+        assert_eq!(size_of::<FragKey6>(), 44);
+        assert_eq!(size_of::<FragValue6>(), 24);
+        assert_eq!(size_of::<GlobalConfig>(), 60);
+        assert_eq!(align_of::<GlobalConfig>(), 4);
     }
 
     #[test]
@@ -839,12 +763,10 @@ mod tests {
 
     #[test]
     fn test_rfc1624_csum_replace() {
-        // Identity: replacing with same value must yield same checksum
         let original_csum: u16 = 0x55aa;
         assert_eq!(csum_replace(original_csum, 0x1234, 0x1234), original_csum);
         assert_eq!(csum_replace(0xffff, 0x1234, 0x1234), 0xffff);
 
-        // Replacing zero with a value, then reversing it, must yield original checksum
         let new_csum = csum_replace(original_csum, 0x0000, 0x5678);
         assert_ne!(new_csum, original_csum);
         let restored = csum_replace(new_csum, 0x5678, 0x0000);
@@ -852,23 +774,26 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_l2_slice_ethernet_and_raw_ip() {
+    fn test_parse_l2_ethernet_pppoe_and_raw_ip() {
         let raw_v4 = [0x45, 0x00, 0x00, 0x28];
-        let l2_raw4 = parse_l2_slice(&raw_v4, 0).expect("raw ipv4");
+        let (s, e) = slice_bounds(&raw_v4);
+        let l2_raw4 = unsafe { parse_l2(s, e, 0) }.expect("raw ipv4");
         assert_eq!(l2_raw4.proto, ETH_P_IP);
-        assert_eq!(l2_raw4.ip_off, 0);
+        assert_eq!(l2_raw4.ip_rel, 0);
 
         let raw_v6 = [0x60, 0x00, 0x00, 0x00];
-        let l2_raw6 = parse_l2_slice(&raw_v6, 0).expect("raw ipv6");
+        let (s, e) = slice_bounds(&raw_v6);
+        let l2_raw6 = unsafe { parse_l2(s, e, 0) }.expect("raw ipv6");
         assert_eq!(l2_raw6.proto, ETH_P_IPV6);
-        assert_eq!(l2_raw6.ip_off, 0);
+        assert_eq!(l2_raw6.ip_rel, 0);
 
         let mut eth_v4 = [0u8; 14 + 20];
         eth_v4[12] = 0x08;
         eth_v4[13] = 0x00;
-        let l2_eth4 = parse_l2_slice(&eth_v4, 14).expect("eth ipv4");
+        let (s, e) = slice_bounds(&eth_v4);
+        let l2_eth4 = unsafe { parse_l2(s, e, 14) }.expect("eth ipv4");
         assert_eq!(l2_eth4.proto, ETH_P_IP);
-        assert_eq!(l2_eth4.ip_off, 14);
+        assert_eq!(l2_eth4.ip_rel, 14);
 
         let mut vlan_v6 = [0u8; 18 + 40];
         vlan_v6[12] = 0x81;
@@ -877,92 +802,76 @@ mod tests {
         vlan_v6[15] = 100;
         vlan_v6[16] = 0x86;
         vlan_v6[17] = 0xdd;
-        let l2_vlan = parse_l2_slice(&vlan_v6, 14).expect("vlan ipv6");
+        let (s, e) = slice_bounds(&vlan_v6);
+        let l2_vlan = unsafe { parse_l2(s, e, 14) }.expect("vlan ipv6");
         assert_eq!(l2_vlan.proto, ETH_P_IPV6);
-        assert_eq!(l2_vlan.ip_off, 18);
+        assert_eq!(l2_vlan.ip_rel, 18);
+
+        // Compressed 1-byte PPP protocol inside PPPoE session frame
+        let mut pppoe_comp = [0u8; 14 + 6 + 1 + 20];
+        pppoe_comp[12] = 0x88;
+        pppoe_comp[13] = 0x64;
+        pppoe_comp[20] = 0x21;
+        let (s, e) = slice_bounds(&pppoe_comp);
+        let l2_ppp = unsafe { parse_l2(s, e, 14) }.expect("pppoe compressed ipv4");
+        assert_eq!(l2_ppp.proto, ETH_P_IP);
+        assert_eq!(l2_ppp.ip_rel, 21);
     }
 
     #[test]
-    fn test_locate_ipv6_l4_slice() {
+    fn test_locate_ipv6_l4_and_fragment_after_4_ext_headers() {
         let mut pkt_udp = [0u8; 40 + 8];
-        pkt_udp[6] = IPPROTO_UDP;
-        let l4 = locate_ipv6_l4_slice(&pkt_udp, 0, IPPROTO_UDP);
-        match l4 {
-            Ipv6L4::Udp(off) => assert_eq!(off, 40),
-            _ => panic!("expected UDP at offset 40"),
-        }
+        let (s, e) = slice_bounds(&pkt_udp);
+        assert_eq!(
+            unsafe { locate_ipv6_l4(s, e, 0, IPPROTO_UDP) },
+            Ipv6L4::Udp(40)
+        );
 
-        let mut pkt_hbh = [0u8; 40 + 8 + 8];
-        pkt_hbh[40] = IPPROTO_UDP;
-        pkt_hbh[41] = 0;
-        let l4_hbh = locate_ipv6_l4_slice(&pkt_hbh, 0, IPPROTO_HOPOPTS);
-        match l4_hbh {
-            Ipv6L4::Udp(off) => assert_eq!(off, 48),
-            _ => panic!("expected UDP at offset 48 after HBH"),
-        }
+        pkt_udp[40] = IPPROTO_UDP;
+        pkt_udp[41] = 0;
+        let (s, e) = slice_bounds(&pkt_udp);
+        assert_eq!(
+            unsafe { locate_ipv6_l4(s, e, 0, IPPROTO_HOPOPTS) },
+            Ipv6L4::Udp(48)
+        );
+        assert_eq!(
+            unsafe { locate_ipv6_l4(s, e, 0, IPPROTO_FRAGMENT) },
+            Ipv6L4::Fragment
+        );
 
-        let l4_frag = locate_ipv6_l4_slice(&pkt_hbh, 0, IPPROTO_FRAGMENT);
-        match l4_frag {
-            Ipv6L4::Fragment => {}
-            _ => panic!("expected Fragment"),
+        // 4 extension headers followed by Fragment header must still be recognized as Fragment
+        let mut pkt_4ext_frag = [0u8; 40 + 8 * 4 + 8];
+        for i in 0..3 {
+            pkt_4ext_frag[40 + i * 8] = IPPROTO_DSTOPTS;
         }
-
-        let mut pkt_routing = [0u8; 40 + 8 + 8];
-        pkt_routing[40] = IPPROTO_UDP;
-        pkt_routing[41] = 0;
-        let l4_routing = locate_ipv6_l4_slice(&pkt_routing, 0, IPPROTO_ROUTING);
-        match l4_routing {
-            Ipv6L4::Udp(off) => assert_eq!(off, 48),
-            _ => panic!("expected UDP at offset 48 after Routing header"),
-        }
+        pkt_4ext_frag[40 + 3 * 8] = IPPROTO_FRAGMENT;
+        let (s, e) = slice_bounds(&pkt_4ext_frag);
+        assert_eq!(
+            unsafe { locate_ipv6_l4(s, e, 0, IPPROTO_HOPOPTS) },
+            Ipv6L4::Fragment
+        );
+        assert_eq!(
+            unsafe { ipv6_fragment_offset(s, e, 0, IPPROTO_HOPOPTS) },
+            Some(40 + 32)
+        );
     }
 
     #[test]
-    fn test_ipv6_fragment_offset_slice_routing() {
-        let mut pkt = [0u8; 40 + 8 + 8];
-        pkt[40] = IPPROTO_FRAGMENT;
-        pkt[41] = 0;
-        let off = ipv6_fragment_offset_slice(&pkt, 0, IPPROTO_ROUTING);
-        assert_eq!(off, Some(48));
-    }
-
-    #[test]
-    fn test_locate_ipv6_nexthdr_slice() {
+    fn test_locate_ipv6_nexthdr() {
         let mut pkt = [0u8; 40 + 8 + 8 + 8];
-        // Hop-by-Hop at offset 40, length 8 bytes, next header = Routing (43)
         pkt[40] = IPPROTO_ROUTING;
         pkt[41] = 0;
-        // Routing at offset 48, length 8 bytes, next header = ICMPv6 (58)
         pkt[48] = IPPROTO_ICMPV6;
         pkt[49] = 0;
-        // ICMPv6 at offset 56
-        let off = locate_ipv6_nexthdr_slice(&pkt, 0, IPPROTO_HOPOPTS, IPPROTO_ICMPV6);
-        assert_eq!(off, Some(56));
-
-        // Locate UDP (not present)
-        let off_udp = locate_ipv6_nexthdr_slice(&pkt, 0, IPPROTO_HOPOPTS, IPPROTO_UDP);
-        assert_eq!(off_udp, None);
-    }
-
-    #[test]
-    fn test_multi_bit_slot_probing_simulation() {
-        // Simulate a slot where low bits are blocked/reserved (< 1024)
-        // Ensure probing finds the first valid bit in the slot
-        let val: u64 = 0b0000_0111; // bits 0, 1, 2 occupied
-        let mut mask_avail = !val;
-        let mut tested_bits = [0u32; 64];
-        let mut count = 0;
-        let mut probe = 0;
-        while probe < 64 && mask_avail != 0 {
-            let free_bit = mask_avail.trailing_zeros();
-            let mask = 1u64 << free_bit;
-            mask_avail &= !mask;
-            tested_bits[count] = free_bit;
-            count += 1;
-            probe += 1;
-        }
-        assert_eq!(tested_bits[0], 3);
-        assert_eq!(count, 61);
+        let (s, e) = slice_bounds(&pkt);
+        assert_eq!(
+            unsafe { locate_ipv6_nexthdr(s, e, 0, IPPROTO_HOPOPTS, IPPROTO_ICMPV6) },
+            Some(56)
+        );
+        assert_eq!(
+            unsafe { locate_ipv6_nexthdr(s, e, 0, IPPROTO_HOPOPTS, IPPROTO_UDP) },
+            None
+        );
     }
 
     #[test]
@@ -972,16 +881,13 @@ mod tests {
         s = reserved_state_next_added(s);
         assert_eq!(s, 1);
         assert!(reserved_state_is_reserved(s));
-        // Adding an already-reserved port is idempotent.
         assert_eq!(reserved_state_next_added(s), 1);
 
         s = reserved_state_next_removed(s);
         assert_eq!(s, 2);
         assert!(!reserved_state_is_reserved(s));
-        // Removing an already-unreserved port is idempotent.
         assert_eq!(reserved_state_next_removed(s), 2);
 
-        // Wrap-around across u16::MAX keeps parity alternating cleanly.
         let high = 0xfffeu16;
         let high_res = reserved_state_next_added(high);
         assert_eq!(high_res, 0xffff);
@@ -996,7 +902,7 @@ mod tests {
         let mut v4 = BindingValue4 {
             ip: 0x0a000001,
             port: 1234,
-            _pad: pack_binding_meta(true, 4),
+            meta: pack_binding_meta(true, 4),
             last_seen: 100,
         };
         assert!(v4.is_short_lived());
@@ -1015,7 +921,7 @@ mod tests {
         let mut v6 = BindingValue6 {
             ip: [0; 16],
             port: 5678,
-            _pad: [pack_binding_meta(true, 10), 0, 0],
+            meta: pack_binding_meta(true, 10),
             last_seen: 200,
         };
         assert!(v6.is_short_lived());

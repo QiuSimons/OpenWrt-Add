@@ -6,9 +6,15 @@ on:
       - master
     paths:
       - 'crates/flowcone-ebpf/**'
+      - 'crates/flowcone-common/**'
+      - 'xtask/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
   workflow_dispatch:
+
+concurrency:
+  group: ebpf-build
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -25,18 +31,33 @@ jobs:
         with:
           fetch-depth: 0
 
+      # dtolnay/rust-toolchain accepts exactly one toolchain name in `toolchain`,
+      # so stable and nightly must be installed by separate steps. The action
+      # makes the last installed toolchain the default, hence the explicit
+      # `rustup default stable` afterwards (xtask invokes `cargo +nightly` itself).
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
         with:
-          components: rust-src
+          components: rust-src,clippy,rustfmt
 
-      - name: Install bpf-linker
+      - name: Use stable as default toolchain
+        shell: bash
+        run: rustup default stable
+
+      - name: Install LLVM tools and bpf-linker
         shell: bash
         run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends llvm binutils
           curl -sSfL https://github.com/aya-rs/bpf-linker/releases/latest/download/bpf-linker-x86_64-unknown-linux-musl.tar.zst | sudo tar --zstd -xf - -C /usr/local/bin
           bpf-linker --version
 
-      - name: Build flowcone-ebpf
+      - name: Check common tests and eBPF lints
         shell: bash
         run: |
           SYSROOT=$(rustc +nightly --print sysroot)
@@ -47,11 +68,15 @@ jobs:
             fi
           done
 
-          cd crates/flowcone-ebpf
-          cargo +nightly build --release --target=bpfel-unknown-none -Z build-std=core
-          mkdir -p ../flowcone-daemon/ebpf
-          cp target/bpfel-unknown-none/release/flowcone-ebpf ../flowcone-daemon/ebpf/flowcone-ebpf.bin
-          readelf -S ../flowcone-daemon/ebpf/flowcone-ebpf.bin | grep -q '\.BTF'
+          cargo test --locked -p flowcone-common
+          (cd crates/flowcone-ebpf && cargo +nightly fmt --check && cargo +nightly clippy --locked --target=bpfel-unknown-none -Z build-std=core -- -D warnings)
+
+      - name: Build flowcone-ebpf
+        shell: bash
+        run: |
+          cargo run --locked --manifest-path xtask/Cargo.toml -- build-ebpf
+          readelf -S crates/flowcone-daemon/ebpf/flowcone-ebpf.bin | grep -q '\.BTF'
+          ! readelf -S crates/flowcone-daemon/ebpf/flowcone-ebpf.bin | grep -q '\.debug_info'
 
       - name: Commit changes
         id: commit
@@ -78,6 +103,7 @@ jobs:
           branch: master
 
       - name: Trigger build packages
+        if: github.event_name == 'push' || steps.commit.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

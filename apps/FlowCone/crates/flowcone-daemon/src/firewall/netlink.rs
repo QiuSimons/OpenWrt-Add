@@ -4,6 +4,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use rustix::io::Errno;
 use rustix::net::netlink::SocketAddrNetlink;
 use rustix::net::{
     AddressFamily, Protocol, RecvFlags, SendFlags, SocketFlags, SocketType, bind, recv, send,
@@ -21,6 +22,7 @@ const NLM_F_REQUEST: u16 = 0x01;
 const NLM_F_ACK: u16 = 0x04;
 const NLM_F_CREATE: u16 = 0x0400;
 const NLA_F_NESTED: u16 = 0x8000;
+const NLMSG_ERROR: u16 = 2;
 
 const NFTA_SET_ELEM_LIST_TABLE: u16 = 1;
 const NFTA_SET_ELEM_LIST_SET: u16 = 2;
@@ -32,7 +34,29 @@ const NFTA_SET_ELEM_TIMEOUT: u16 = 4;
 const NFTA_DATA_VALUE: u16 = 1;
 
 const NFT_SET_ELEM_INTERVAL_END: u32 = 1;
-const NFPROTO_INET: u8 = 1;
+pub(crate) const NFPROTO_INET: u8 = 1;
+pub(crate) const NFPROTO_IPV4: u8 = 2;
+pub(crate) const NFPROTO_IPV6: u8 = 10;
+
+pub(crate) fn nfproto_for_family(family: &str) -> Option<u8> {
+    match family {
+        "inet" => Some(NFPROTO_INET),
+        "ip" => Some(NFPROTO_IPV4),
+        "ip6" => Some(NFPROTO_IPV6),
+        _ => None,
+    }
+}
+
+#[derive(Copy, Clone)]
+pub(crate) struct LivenessRefreshSpec<'a> {
+    pub family_proto: u8,
+    pub table: &'a str,
+    pub src_v4: bool,
+    pub fwd_v4: bool,
+    pub src_v6: bool,
+    pub fwd_v6: bool,
+    pub is_v6_masq: bool,
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct IpRange {
@@ -183,7 +207,7 @@ impl NetlinkBatch {
         self.buf.resize(self.buf.len() + pad, 0);
     }
 
-    pub(crate) fn flush_set(&mut self, table: &str, set: &str) {
+    pub(crate) fn flush_set(&mut self, family_proto: u8, table: &str, set: &str) {
         let msg_start = self.buf.len();
         self.buf.resize(msg_start + 20, 0);
 
@@ -198,7 +222,7 @@ impl NetlinkBatch {
         self.buf[msg_start + 6..msg_start + 8].copy_from_slice(&flags.to_ne_bytes());
         self.buf[msg_start + 8..msg_start + 12].copy_from_slice(&self.seq.to_ne_bytes());
         self.buf[msg_start + 12..msg_start + 16].copy_from_slice(&0u32.to_ne_bytes());
-        self.buf[msg_start + 16] = NFPROTO_INET;
+        self.buf[msg_start + 16] = family_proto;
         self.buf[msg_start + 17] = 0;
         self.buf[msg_start + 18] = 0;
         self.buf[msg_start + 19] = 0;
@@ -208,6 +232,7 @@ impl NetlinkBatch {
 
     pub(crate) fn add_set_elements(
         &mut self,
+        family_proto: u8,
         table: &str,
         set: &str,
         ranges: &[IpRange],
@@ -255,7 +280,7 @@ impl NetlinkBatch {
         self.buf[msg_start + 6..msg_start + 8].copy_from_slice(&flags.to_ne_bytes());
         self.buf[msg_start + 8..msg_start + 12].copy_from_slice(&self.seq.to_ne_bytes());
         self.buf[msg_start + 12..msg_start + 16].copy_from_slice(&0u32.to_ne_bytes());
-        self.buf[msg_start + 16] = NFPROTO_INET;
+        self.buf[msg_start + 16] = family_proto;
         self.buf[msg_start + 17] = 0;
         self.buf[msg_start + 18] = 0;
         self.buf[msg_start + 19] = 0;
@@ -263,62 +288,78 @@ impl NetlinkBatch {
         self.seq += 1;
     }
 
-    pub(crate) fn finish(mut self) -> Vec<u8> {
+    pub(crate) fn finish(mut self) -> (Vec<u8>, u32) {
+        let ack_seq = self.seq;
         self.buf.extend_from_slice(&20u32.to_ne_bytes());
         self.buf
             .extend_from_slice(&NFNL_MSG_BATCH_END.to_ne_bytes());
         self.buf
             .extend_from_slice(&(NLM_F_REQUEST | NLM_F_ACK).to_ne_bytes());
-        self.buf.extend_from_slice(&self.seq.to_ne_bytes());
+        self.buf.extend_from_slice(&ack_seq.to_ne_bytes());
         self.buf.extend_from_slice(&0u32.to_ne_bytes());
         self.buf.push(0);
         self.buf.push(0);
         self.buf
             .extend_from_slice(&(NFNL_SUBSYS_NFTABLES as u16).to_be_bytes());
-        self.buf
+        (self.buf, ack_seq)
     }
 }
 
 /// Refresh liveness set timeouts via an in-process Netlink batch transaction.
-pub(crate) fn refresh_liveness_netlink(
-    table: &str,
-    enable_v4: bool,
-    enable_v6: bool,
-    is_v6_masq: bool,
-) -> Result<(), &'static str> {
-    if !enable_v4 && !enable_v6 {
+pub(crate) fn refresh_liveness_netlink(spec: &LivenessRefreshSpec<'_>) -> Result<(), &'static str> {
+    if !(spec.src_v4 || spec.fwd_v4 || spec.src_v6 || spec.fwd_v6) {
         return Ok(());
     }
 
     let timeout_ms = super::fw4::LIVENESS_TIMEOUT_SEC * 1000;
     let mut batch = NetlinkBatch::new();
+    let proto = spec.family_proto;
 
-    if enable_v4 {
-        batch.flush_set(table, super::fw4::SET_V4);
-        batch.add_set_elements(table, super::fw4::SET_V4, &STATIC_V4_RANGES, timeout_ms);
-
-        batch.flush_set(table, super::fw4::SET_FWD4);
-        batch.add_set_elements(table, super::fw4::SET_FWD4, &*STATIC_FWD4_RANGE, timeout_ms);
+    if spec.src_v4 {
+        batch.flush_set(proto, spec.table, super::fw4::SET_V4);
+        batch.add_set_elements(
+            proto,
+            spec.table,
+            super::fw4::SET_V4,
+            &STATIC_V4_RANGES,
+            timeout_ms,
+        );
     }
-
-    if enable_v6 {
-        let v6_ranges: &[IpRange] = if is_v6_masq {
+    if spec.fwd_v4 {
+        batch.flush_set(proto, spec.table, super::fw4::SET_FWD4);
+        batch.add_set_elements(
+            proto,
+            spec.table,
+            super::fw4::SET_FWD4,
+            &*STATIC_FWD4_RANGE,
+            timeout_ms,
+        );
+    }
+    if spec.src_v6 {
+        let v6_ranges: &[IpRange] = if spec.is_v6_masq {
             &*STATIC_V6_MASQ_RANGES
         } else {
             &*STATIC_V6_ULA_RANGES
         };
-        batch.flush_set(table, super::fw4::SET_V6);
-        batch.add_set_elements(table, super::fw4::SET_V6, v6_ranges, timeout_ms);
-
-        batch.flush_set(table, super::fw4::SET_FWD6);
-        batch.add_set_elements(table, super::fw4::SET_FWD6, &*STATIC_FWD6_RANGE, timeout_ms);
+        batch.flush_set(proto, spec.table, super::fw4::SET_V6);
+        batch.add_set_elements(proto, spec.table, super::fw4::SET_V6, v6_ranges, timeout_ms);
+    }
+    if spec.fwd_v6 {
+        batch.flush_set(proto, spec.table, super::fw4::SET_FWD6);
+        batch.add_set_elements(
+            proto,
+            spec.table,
+            super::fw4::SET_FWD6,
+            &*STATIC_FWD6_RANGE,
+            timeout_ms,
+        );
     }
 
-    let batch_bytes = batch.finish();
-    send_liveness_batch(&batch_bytes)
+    let (batch_bytes, ack_seq) = batch.finish();
+    send_liveness_batch(&batch_bytes, ack_seq)
 }
 
-fn send_liveness_batch(batch_bytes: &[u8]) -> Result<(), &'static str> {
+fn send_liveness_batch(batch_bytes: &[u8], expected_seq: u32) -> Result<(), &'static str> {
     let proto = Protocol::from_raw(
         std::num::NonZeroU32::new(NETLINK_NETFILTER).ok_or("invalid netlink netfilter proto")?,
     );
@@ -339,26 +380,54 @@ fn send_liveness_batch(batch_bytes: &[u8]) -> Result<(), &'static str> {
     )
     .map_err(|_| "netlink recv timeout error")?;
 
-    send(&sock, batch_bytes, SendFlags::empty()).map_err(|_| "netlink send error")?;
-
-    let mut reply_buf = [0u8; 1024];
-    let (n, _) =
-        recv(&sock, &mut reply_buf, RecvFlags::empty()).map_err(|_| "netlink recv error")?;
-
-    if n < 20 {
-        return Err("netlink reply too short");
-    }
-
-    let nlmsg_type = u16::from_ne_bytes([reply_buf[4], reply_buf[5]]);
-    if nlmsg_type == 2 {
-        let errno =
-            i32::from_ne_bytes([reply_buf[16], reply_buf[17], reply_buf[18], reply_buf[19]]);
-        if errno == 0 {
-            return Ok(());
+    loop {
+        match send(&sock, batch_bytes, SendFlags::empty()) {
+            Ok(_) => break,
+            Err(Errno::INTR) => continue,
+            Err(_) => return Err("netlink send error"),
         }
-        return Err("netlink batch rejected by kernel");
     }
-    Err("unexpected netlink message type, expected NLMSG_ERROR ack")
+
+    let mut reply_buf = [0u8; 2048];
+    loop {
+        let n = loop {
+            match recv(&sock, &mut reply_buf, RecvFlags::empty()) {
+                Ok((n, _)) => break n,
+                Err(Errno::INTR) => continue,
+                Err(_) => return Err("netlink recv error"),
+            }
+        };
+        if n < 20 {
+            return Err("netlink reply too short");
+        }
+        let mut offset = 0;
+        while offset + 20 <= n {
+            let nlmsg_len =
+                u32::from_ne_bytes(reply_buf[offset..offset + 4].try_into().unwrap()) as usize;
+            let nlmsg_type =
+                u16::from_ne_bytes(reply_buf[offset + 4..offset + 6].try_into().unwrap());
+            let nlmsg_seq =
+                u32::from_ne_bytes(reply_buf[offset + 8..offset + 12].try_into().unwrap());
+            if nlmsg_len < 16 || offset + nlmsg_len > n {
+                return Err("netlink malformed reply");
+            }
+            if nlmsg_type == NLMSG_ERROR && offset + 20 <= n {
+                let errno =
+                    i32::from_ne_bytes(reply_buf[offset + 16..offset + 20].try_into().unwrap());
+                if errno != 0 {
+                    return Err("netlink batch rejected by kernel");
+                }
+                if nlmsg_seq == expected_seq {
+                    return Ok(());
+                }
+            }
+            let aligned = (nlmsg_len + 3) & !3;
+            if aligned == 0 {
+                return Err("netlink malformed header");
+            }
+            offset += aligned;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -402,13 +471,14 @@ mod tests {
     #[test]
     fn test_batch_serialization_layout() {
         let mut batch = NetlinkBatch::new();
-        batch.flush_set("fw4", "flowcone_v4");
+        batch.flush_set(NFPROTO_INET, "fw4", "flowcone_v4");
         let ranges = [v4_range("10.0.0.0/8")];
-        batch.add_set_elements("fw4", "flowcone_v4", &ranges, 15000);
-        let bytes = batch.finish();
+        batch.add_set_elements(NFPROTO_INET, "fw4", "flowcone_v4", &ranges, 15000);
+        let (bytes, ack_seq) = batch.finish();
 
         // Must start with BATCH_BEGIN (type 16, len 20)
         assert!(bytes.len() > 80);
+        assert_eq!(ack_seq, 4);
         let len0 = u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
         let type0 = u16::from_ne_bytes([bytes[4], bytes[5]]);
         assert_eq!(len0, 20);
@@ -436,17 +506,23 @@ mod tests {
 
     #[test]
     fn test_refresh_liveness_nonexistent_table_fails_gracefully() {
-        let res = refresh_liveness_netlink("non_existent_table_xyz", true, false, false);
+        let spec = LivenessRefreshSpec {
+            family_proto: NFPROTO_INET,
+            table: "non_existent_table_xyz",
+            src_v4: true,
+            fwd_v4: true,
+            src_v6: false,
+            fwd_v6: false,
+            is_v6_masq: false,
+        };
+        let res = refresh_liveness_netlink(&spec);
         assert!(res.is_err());
     }
 
     #[test]
     fn test_refresh_liveness_atomic_reset() {
         let setup = std::process::Command::new("nft")
-            .args([
-                "-f",
-                "-",
-            ])
+            .args(["-f", "-"])
             .stdin(std::process::Stdio::piped())
             .spawn()
             .and_then(|mut child| {
@@ -468,12 +544,21 @@ mod tests {
             return;
         }
 
-        let res1 = refresh_liveness_netlink("flowcone_nl_test", true, true, false);
+        let spec = LivenessRefreshSpec {
+            family_proto: NFPROTO_INET,
+            table: "flowcone_nl_test",
+            src_v4: true,
+            fwd_v4: true,
+            src_v6: true,
+            fwd_v6: true,
+            is_v6_masq: false,
+        };
+        let res1 = refresh_liveness_netlink(&spec);
         assert!(res1.is_ok());
 
         std::thread::sleep(Duration::from_millis(300));
 
-        let res2 = refresh_liveness_netlink("flowcone_nl_test", true, true, false);
+        let res2 = refresh_liveness_netlink(&spec);
         assert!(res2.is_ok());
 
         let _ = std::process::Command::new("nft")

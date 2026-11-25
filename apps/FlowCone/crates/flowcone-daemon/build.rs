@@ -13,16 +13,19 @@ fn main() {
     println!("cargo:rerun-if-env-changed=FLOWCONE_EBPF_PATH");
 
     // 1. External override via FLOWCONE_EBPF_PATH
-    if let Ok(value) = env::var("FLOWCONE_EBPF_PATH") {
-        let path = PathBuf::from(value);
-        if path.is_file() {
-            fs::copy(&path, &dest).expect("copy eBPF from FLOWCONE_EBPF_PATH");
-            return;
+    if let Ok(value) = env::var("FLOWCONE_EBPF_PATH")
+        && !value.is_empty()
+    {
+        let path = PathBuf::from(&value);
+        println!("cargo:rerun-if-changed={}", path.display());
+        if !path.is_file() {
+            panic!(
+                "FLOWCONE_EBPF_PATH is set to '{}', which is not a file",
+                path.display()
+            );
         }
-        println!(
-            "cargo:warning=FLOWCONE_EBPF_PATH is not a file: {}",
-            path.display()
-        );
+        fs::copy(&path, &dest).expect("copy eBPF from FLOWCONE_EBPF_PATH");
+        return;
     }
 
     // 2. Prebuilt embedded binary (default for OpenWrt and release builds)

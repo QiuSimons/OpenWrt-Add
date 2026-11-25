@@ -22,6 +22,32 @@ const callFlowconeAction = rpc.declare({
 	expect: { '': {} }
 });
 
+function parseU32Mark(s) {
+	if (typeof s !== 'string') return null;
+	var trimmed = s.trim();
+	if (/^0[xX][0-9a-fA-F]{1,8}$/.test(trimmed)) {
+		var hv = parseInt(trimmed.slice(2), 16);
+		return (hv >= 0 && hv <= 0xffffffff) ? (hv >>> 0) : null;
+	}
+	if (/^[0-9]{1,10}$/.test(trimmed)) {
+		var dv = Number(trimmed);
+		return (Number.isSafeInteger(dv) && dv >= 0 && dv <= 0xffffffff) ? (dv >>> 0) : null;
+	}
+	return null;
+}
+
+function readSiblingPort(option, section_id, name) {
+	try {
+		var sib = option.section && option.section.getOption ? option.section.getOption(name) : null;
+		if (!sib || !sib.isActive(section_id)) return NaN;
+		var raw = sib.formvalue(section_id);
+		if (raw == null || raw === '') return NaN;
+		return +raw;
+	} catch (e) {
+		return NaN;
+	}
+}
+
 function updateStatus(data, targetEl) {
 	var el = targetEl || document.getElementById('flowcone_status');
 	if (!el) return;
@@ -71,10 +97,14 @@ return view.extend({
 					var btn = ev.target;
 					btn.disabled = true;
 					btn.innerText = _('Reloading...');
-					callFlowconeAction('reload').then(function () {
+					callFlowconeAction('reload').then(function (resp) {
 						btn.disabled = false;
 						btn.innerText = _('Reload Service');
-						ui.addNotification(null, E('p', _('FlowCone service reloaded successfully.')), 'info');
+						if (resp && resp.success === false) {
+							ui.addNotification(null, E('p', _('Failed to reload FlowCone:') + ' ' + (resp.error || '')), 'error');
+						} else {
+							ui.addNotification(null, E('p', _('FlowCone service reloaded successfully.')), 'info');
+						}
 					}).catch(function (err) {
 						btn.disabled = false;
 						btn.innerText = _('Reload Service');
@@ -142,8 +172,8 @@ return view.extend({
 			_('WAN interface device to attach TCX programs to. Leave empty for automatic WAN detection.'));
 		o.multiple = false;
 		o.noaliases = true;
-		o.nobridges = true;
-		o.nocreate = true;
+		o.nobridges = false;
+		o.nocreate = false;
 
 		o = s.option(form.Flag, 'advanced', _('Advanced Settings'),
 			_('Show advanced port range, timeout, and firewall integration options. Advanced options will only be used as long as this box is checked.'));
@@ -154,6 +184,16 @@ return view.extend({
 		o.datatype = 'port';
 		o.placeholder = '1024';
 		o.default = '1024';
+		o.rmempty = false;
+		o.validate = function (section_id, value) {
+			var v = +value;
+			if (!Number.isInteger(v) || v < 1 || v > 65535)
+				return _('Port must be between 1 and 65535.');
+			var maxV = readSiblingPort(this, section_id, 'max_port');
+			if (!Number.isNaN(maxV) && v > maxV)
+				return _('Min Port cannot be greater than Max Port.');
+			return true;
+		};
 		o.retain = true;
 		o.depends('advanced', '1');
 
@@ -161,6 +201,16 @@ return view.extend({
 		o.datatype = 'port';
 		o.placeholder = '65535';
 		o.default = '65535';
+		o.rmempty = false;
+		o.validate = function (section_id, value) {
+			var v = +value;
+			if (!Number.isInteger(v) || v < 1 || v > 65535)
+				return _('Port must be between 1 and 65535.');
+			var minV = readSiblingPort(this, section_id, 'min_port');
+			if (!Number.isNaN(minV) && v < minV)
+				return _('Max Port cannot be less than Min Port.');
+			return true;
+		};
 		o.retain = true;
 		o.depends('advanced', '1');
 
@@ -168,6 +218,7 @@ return view.extend({
 		o.datatype = 'uinteger';
 		o.placeholder = '120';
 		o.default = '120';
+		o.rmempty = false;
 		o.validate = function (section_id, value) {
 			var v = +value;
 			if (!(v >= 120 && v <= 604800))
@@ -181,6 +232,7 @@ return view.extend({
 		o.datatype = 'uinteger';
 		o.placeholder = '5';
 		o.default = '5';
+		o.rmempty = false;
 		o.validate = function (section_id, value) {
 			var v = +value;
 			if (!(v >= 1 && v <= 3600))
@@ -200,6 +252,37 @@ return view.extend({
 		o = s.option(form.Value, 'bypass_mark', _('Bypass Fwmark'),
 			_('Optional fwmark for custom policy routing.'));
 		o.placeholder = '0x100/0xff00';
+		o.validate = function (section_id, value) {
+			if (value == null || value.trim() === '') return true;
+			var parts = value.trim().split('/');
+			if (parts.length > 2)
+				return _('Invalid fwmark syntax (expected VAL or VAL/MASK).');
+			var val = parseU32Mark(parts[0]);
+			if (val === null)
+				return _('Invalid fwmark value.');
+			if (parts.length === 2) {
+				var mask = parseU32Mark(parts[1]);
+				if (mask === null)
+					return _('Invalid fwmark mask.');
+				if (((val & ~mask) >>> 0) !== 0)
+					return _('Fwmark value has bits set outside the mask.');
+			}
+			return true;
+		};
+		o.retain = true;
+		o.depends('advanced', '1');
+
+		o = s.option(form.Value, 'mark', _('Inbound DNAT Mark'),
+			_('Non-zero fwmark applied to inbound translated UDP packets.'));
+		o.placeholder = '0x00800000';
+		o.default = '0x00800000';
+		o.validate = function (section_id, value) {
+			if (value == null || value.trim() === '') return true;
+			var val = parseU32Mark(value);
+			if (val === null || val === 0)
+				return _('Inbound DNAT mark must be a non-zero 32-bit integer (e.g. 0x00800000).');
+			return true;
+		};
 		o.retain = true;
 		o.depends('advanced', '1');
 

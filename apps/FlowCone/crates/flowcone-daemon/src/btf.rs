@@ -1,32 +1,37 @@
 use aya::{Btf, Endianness};
+use std::fs;
 use std::path::Path;
 
-pub fn find_btf(custom_path: Option<&str>) -> Option<Btf> {
-    if let Some(p) = custom_path
-        && let Ok(b) = Btf::parse_file(p, Endianness::default())
-    {
-        println!("flowcone: loaded custom BTF from {}", p);
-        return Some(b);
-    }
+const DETACHED_BTF_CANDIDATES: &[&str] = &[
+    "/sys/kernel/btf/vmlinux",
+    "/usr/lib/debug/boot/vmlinux",
+    "/boot/vmlinux",
+    "/lib/modules/vmlinux",
+];
 
-    if let Ok(b) = Btf::from_sys_fs() {
-        println!("flowcone: loaded kernel sysfs BTF");
-        return Some(b);
-    }
+/// Eagerly parses a user-supplied `--btf` file, returning an explicit error on failure.
+pub(crate) fn load_custom_btf(custom_path: Option<&str>) -> Result<Option<Btf>, String> {
+    let Some(p) = custom_path else {
+        return Ok(None);
+    };
+    let b = Btf::parse_file(p, Endianness::default())
+        .map_err(|e| format!("failed to parse BTF from '{}': {}", p, e))?;
+    println!("flowcone: loaded custom BTF from {}", p);
+    Ok(Some(b))
+}
 
-    let candidates = [
-        "/usr/lib/debug/boot/vmlinux",
-        "/boot/vmlinux",
-        "/lib/modules/vmlinux",
-    ];
-    for path in candidates {
+/// Lazily locates and parses kernel BTF only if the loaded eBPF object actually
+/// contains CO-RE relocations or typed ksyms.
+pub(crate) fn load_kernel_btf_with(
+    parse: &(dyn Fn(&[u8]) -> Result<Btf, aya::BtfError> + '_),
+) -> Result<Btf, aya::EbpfError> {
+    for path in DETACHED_BTF_CANDIDATES {
         if Path::new(path).exists()
-            && let Ok(b) = Btf::parse_file(path, Endianness::default())
+            && let Ok(bytes) = fs::read(path)
+            && let Ok(btf) = parse(&bytes)
         {
-            println!("flowcone: loaded detached BTF from {}", path);
-            return Some(b);
+            return Ok(btf);
         }
     }
-
-    None
+    Btf::from_sys_fs().map_err(aya::EbpfError::from)
 }

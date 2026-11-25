@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
 
 fn workspace_root() -> PathBuf {
@@ -11,15 +11,49 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn strip_dwarf_debug(src: &Path, dest: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    for (tool, args) in [
+        ("llvm-objcopy", vec!["--strip-debug"]),
+        ("llvm-strip", vec!["--strip-debug", "-o"]),
+    ] {
+        let ok = if tool == "llvm-objcopy" {
+            Command::new(tool)
+                .args(&args)
+                .arg(src)
+                .arg(dest)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        } else {
+            Command::new(tool)
+                .args(&args)
+                .arg(dest)
+                .arg(src)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        if ok {
+            return Ok(());
+        }
+    }
+    fs::copy(src, dest)?;
+    eprintln!("flowcone-xtask: warning: llvm-objcopy/llvm-strip unavailable, kept DWARF sections");
+    Ok(())
+}
+
 fn build_ebpf(release: bool) -> Result<(), Box<dyn std::error::Error>> {
     let root = workspace_root();
     let ebpf_dir = root.join("crates/flowcone-ebpf");
     let daemon_ebpf_dir = root.join("crates/flowcone-daemon/ebpf");
     let dest_bin = daemon_ebpf_dir.join("flowcone-ebpf.bin");
 
-    let bpf_linker_check = Command::new("bpf-linker").arg("--version").output();
-    if bpf_linker_check.is_err() {
-        eprintln!("error: 'bpf-linker' not found in PATH.");
+    let bpf_linker_ok = Command::new("bpf-linker")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !bpf_linker_ok {
+        eprintln!("error: 'bpf-linker' not found or failed in PATH.");
         eprintln!("Install it with: cargo install bpf-linker");
         exit(1);
     }
@@ -32,6 +66,7 @@ fn build_ebpf(release: bool) -> Result<(), Box<dyn std::error::Error>> {
     let mut args = vec![
         "+nightly",
         "build",
+        "--locked",
         "--target=bpfel-unknown-none",
         "-Z",
         "build-std=core",
@@ -50,8 +85,15 @@ fn build_ebpf(release: bool) -> Result<(), Box<dyn std::error::Error>> {
         exit(1);
     }
 
+    let target_dir = match env::var_os("CARGO_TARGET_DIR") {
+        Some(val) => {
+            let p = PathBuf::from(val);
+            if p.is_relative() { ebpf_dir.join(p) } else { p }
+        }
+        None => ebpf_dir.join("target"),
+    };
     let profile = if release { "release" } else { "debug" };
-    let artifact = ebpf_dir.join(format!("target/bpfel-unknown-none/{profile}/flowcone-ebpf"));
+    let artifact = target_dir.join(format!("bpfel-unknown-none/{profile}/flowcone-ebpf"));
 
     if !artifact.is_file() {
         eprintln!(
@@ -62,7 +104,7 @@ fn build_ebpf(release: bool) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     fs::create_dir_all(&daemon_ebpf_dir)?;
-    fs::copy(&artifact, &dest_bin)?;
+    strip_dwarf_debug(&artifact, &dest_bin)?;
 
     let metadata = fs::metadata(&dest_bin)?;
     println!(
@@ -82,7 +124,8 @@ fn print_help() {
           build-ebpf   Build flowcone-ebpf using nightly compiler and update embedded binary\n  \
           help         Print this help message\n\n\
         Options for build-ebpf:\n  \
-          --release    Build in release mode (default)"
+          --release    Build in release mode (default)\n  \
+          --debug      Build in debug mode"
     );
 }
 
@@ -94,10 +137,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("build-ebpf") => {
             let mut release = true;
             for arg in args {
-                if arg == "--debug" {
-                    release = false;
-                } else if arg == "--release" {
-                    release = true;
+                match arg.as_str() {
+                    "--debug" => release = false,
+                    "--release" => release = true,
+                    "-h" | "--help" => {
+                        print_help();
+                        return Ok(());
+                    }
+                    other => {
+                        eprintln!("error: unknown option '{}' for build-ebpf", other);
+                        print_help();
+                        exit(1);
+                    }
                 }
             }
             build_ebpf(release)?;
