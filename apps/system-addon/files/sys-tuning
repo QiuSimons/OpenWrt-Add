@@ -34,47 +34,47 @@ start() {
         sysctl -qw net.ipv4.conf.br-lan.proxy_arp=1
 
     # 物理网卡硬件卸载、GRO 与链路自协商
-    local uci_changed=0
-    local nic_path nic uci_name f speed
-    for nic_path in /sys/class/net/*; do
-        nic=$(basename "$nic_path")
-
-        [ -d "$nic_path/device" ] || continue
-        [ "$(cat "$nic_path/type" 2>/dev/null)" = "1" ] || continue
-
-        uci_name=$(echo "$nic" | sed 's/[^a-zA-Z0-9_]/_/g; s/^[0-9]/_&/')
-
-        if ! uci -q get "network.$uci_name" >/dev/null; then
-            uci set "network.$uci_name=device"
-            uci set "network.$uci_name.name=$nic"
-            uci_changed=1
-        fi
-
-        if [ "$(uci -q get "network.$uci_name.gro")" != "1" ]; then
-            uci set "network.$uci_name.gro=1"
-            uci_changed=1
-        fi
-
-        ethtool -K "$nic" rx-checksum on 2>/dev/null || true
-        ethtool -K "$nic" tx-checksum-ip-generic on 2>/dev/null || {
-            ethtool -K "$nic" tx-checksum-ipv4 on 2>/dev/null || true
-            ethtool -K "$nic" tx-checksum-ipv6 on 2>/dev/null || true
+    (
+        wait_carrier() {
+            _i=0
+            while [ "$(cat "$1" 2>/dev/null)" != "1" ]; do
+                [ "$_i" -ge "$2" ] && return 1
+                sleep 1
+                _i=$((_i + 1))
+            done
+            return 0
         }
-        for f in gro sg tso tx-scatter-gather; do
-            ethtool -K "$nic" "$f" on 2>/dev/null || true
+
+        nics=""
+        for nic_path in /sys/class/net/*; do
+            nic=$(basename "$nic_path")
+
+            [ -d "$nic_path/device" ] || continue
+            [ -e "$nic_path/phy80211" ] && continue
+            [ "$(cat "$nic_path/type" 2>/dev/null)" = "1" ] || continue
+            nics="$nics $nic"
+
+            ethtool -K "$nic" rx-checksum on 2>/dev/null || true
+            ethtool -K "$nic" tx-checksum-ip-generic on 2>/dev/null || {
+                ethtool -K "$nic" tx-checksum-ipv4 on 2>/dev/null || true
+                ethtool -K "$nic" tx-checksum-ipv6 on 2>/dev/null || true
+            }
+            for f in gro sg tso tx-scatter-gather; do
+                ethtool -K "$nic" "$f" on 2>/dev/null || true
+            done
         done
 
-        # 链路降速重协商
-        speed=$(cat "$nic_path/speed" 2>/dev/null)
-        if [ "$speed" -gt 0 ] 2>/dev/null && [ "$speed" -lt 1000 ] 2>/dev/null; then
-            ethtool -r "$nic" 2>/dev/null || true
-        fi
-    done
-
-    if [ "$uci_changed" -eq 1 ]; then
-        uci commit network
-        ubus call network reload
-    fi
+        for nic in $nics; do
+            (
+                wait_carrier "/sys/class/net/$nic/carrier" 30 || exit 0
+                speed=$(cat "/sys/class/net/$nic/speed" 2>/dev/null)
+                # 链路降速重协商
+                if [ "$speed" -gt 0 ] 2>/dev/null && [ "$speed" -lt 1000 ] 2>/dev/null; then
+                    ethtool -r "$nic" 2>/dev/null || true
+                fi
+            ) &
+        done
+    ) </dev/null >/dev/null 2>&1 &
 
     # 规范化 DMI 型号
     if [ ! -s /tmp/sysinfo/model ] || grep -qiE "Default string|To be filled|System manufacturer|Type2" /tmp/sysinfo/model 2>/dev/null; then
