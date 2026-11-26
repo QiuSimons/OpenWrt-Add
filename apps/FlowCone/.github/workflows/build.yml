@@ -191,6 +191,9 @@ jobs:
 
       - name: Prepare renamed artifacts
         shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+          SDK: ${{ matrix.sdk }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -200,41 +203,27 @@ jobs:
             ext="${base##*.}"
             name="${base%.*}"
 
-            # Filter for FlowCone packages only
-            if [[ "$base" != *flowcone* && "$base" != nat6* ]]; then
-              continue
-            fi
+            # FlowCone packages only.
+            [[ "$base" == *flowcone* || "$base" == nat6* ]] || continue
 
-            is_noarch=false
-            if [[ "$name" == *"_all"* ]] || [[ "$name" == *"-noarch"* ]] || [[ "$name" == luci-* ]] || [[ "$name" == nat6* ]]; then
-              is_noarch=true
-            fi
+            # Architecture-independent packages ship once, from the x86_64 job.
+            noarch=0
+            [[ "$name" == *"_all"* || "$name" == *"-noarch"* || "$name" == luci-* || "$name" == nat6* ]] && noarch=1 || true
+            [[ $noarch == 1 && "$ARCH" != x86_64 ]] && continue || true
 
-            # Upload architecture-independent packages only once per SDK to prevent merge collisions.
-            if $is_noarch && [ "${{ matrix.arch }}" != "x86_64" ]; then
-              continue
-            fi
+            # Append the arch only when the package name does not already carry it.
+            suffix=""
+            [[ $noarch == 1 || "$name" == *"$ARCH"* ]] || suffix="-$ARCH"
 
-            if [[ "$name" == *"${{ matrix.arch }}"* ]] || $is_noarch; then
-              new_name="${name}-openwrt-${{ matrix.sdk }}.${ext}"
-            else
-              new_name="${name}-${{ matrix.arch }}-openwrt-${{ matrix.sdk }}.${ext}"
-            fi
-
-            # GitHub Releases normalizes `~` in asset names to `.`, which breaks
-            # overwrite matching on retries (`already_exists` race).
-            new_name="${new_name//~/.}"
-
+            # GitHub rewrites `~` to `.` in asset names, so sanitize locally too. The
+            # pattern needs \~ : a bare ~ does not match and the line becomes a no-op.
+            new_name="${name}${suffix}-openwrt-${SDK}.${ext}"
+            new_name="${new_name//\~/.}"
             cp "$f" "dist/${new_name}"
           done
 
           files=(dist/*)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "::error::No package files were copied to dist"
-            exit 1
-          fi
-
-          ls -lah dist
+          [ ${#files[@]} -gt 0 ] || { echo "::error::No package files were copied to dist"; exit 1; }
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -259,27 +248,18 @@ jobs:
           path: release-dist
           merge-multiple: true
 
-      - name: Remove colliding release assets before upload
+      # Every run re-publishes the complete set, so drop whatever is there instead of
+      # trying to match names: GitHub rewrites `~` to `.` on upload, which makes any
+      # name comparison miss and the upload fail with "already_exists".
+      - name: Clear existing release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
-          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            exit 0
-          fi
-          existing_assets=$(gh release view "$RELEASE_TAG" --json assets -q '.assets[].name')
-          for f in release-dist/*; do
-            [ -e "$f" ] || continue
-            base=$(basename "$f")
-            # Also match legacy `~` names before GitHub normalized them to `.`.
-            alt=${base//\./\~}
-            while IFS= read -r asset; do
-              [ -n "$asset" ] || continue
-              if [ "$asset" = "$base" ] || [ "$asset" = "$alt" ] || [ "${asset//\~/.}" = "$base" ]; then
-                echo "Deleting existing asset $asset before re-upload..."
-                gh release delete-asset "$RELEASE_TAG" "$asset" --yes || true
-              fi
-            done <<< "$existing_assets"
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || exit 0
+          for asset in $(gh release view "$RELEASE_TAG" --json assets -q '.assets[].name'); do
+            echo "Deleting $asset"
+            gh release delete-asset "$RELEASE_TAG" "$asset" --yes
           done
 
       - name: Create or update GitHub release
