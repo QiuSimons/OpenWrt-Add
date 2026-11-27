@@ -36,8 +36,8 @@ clean_except "$OVERLAY_DIR" 'upper|\.fs_state'
 clean_except "$OVERLAY_DIR/upper" 'etc|usr'
 clean_except "$OVERLAY_DIR/upper/usr" 'share'
 clean_except "$OVERLAY_DIR/upper/usr/share" 'unblockneteasemusic|passwall'
-clean_except "$OVERLAY_DIR/upper/etc" 'config|honk|nikki|zerotier|dae|daed|daed-next|smartdns|ssrplus|bench\.log|shadow|openclash|fucked|autotimeset'
-clean_except "$OVERLAY_DIR/upper/etc/config" 'ap_modem|honk|nikki|homeproxy|dae|daed|daed-next|arpbind|autoreboot|ddns|firewall|jd-dailybonus|network|oled|openclash|passwall|serverchan|shadowsocksr|sqm|unblockneteasemusic|weburl|zerotier|vssr|zero|dhcp|mosdns|appfilter|fstab|watchcat'
+clean_except "$OVERLAY_DIR/upper/etc" 'config|daeuniverse|nikki|zerotier|dae|daed|daed-next|smartdns|ssrplus|bench\.log|shadow|openclash|fucked|autotimeset'
+clean_except "$OVERLAY_DIR/upper/etc/config" 'ap_modem|daeuniverse|nikki|homeproxy|arpbind|ddns|firewall|network|sqm|zerotier|dhcp|mosdns|fstab|watchcat'
 
 echo "Overlay 已清理完毕，5 秒后重启..."
 sleep 5 && touch /etc/banner && reboot
