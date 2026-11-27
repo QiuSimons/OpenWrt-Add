@@ -1802,6 +1802,9 @@ function checkReportSource(src) {
 	/* a path below /sys/class/net is that directory, one checked interface name and a fixed file */
 	assert.ok(src.includes('\nfunction sysfs(dev, file) {\n'), 'sysfs()');
 	assert.deepEqual([ ...src.matchAll(/\bsysfs\(([^)]*)\)/g) ].map(m => m[1]), [ 'dev, file', 'p, \'speed\'', 'p, \'statistics/rx_bytes\'', 'p, \'statistics/tx_bytes\'' ]);
+	/* and a port's wire is asked for a port's checked name alone */
+	assert.ok(src.includes('\nfunction wire(p) {\n'), 'wire()');
+	assert.deepEqual([ ...src.matchAll(/\bwire\(([^)]*)\)/g) ].map(m => m[1]), [ 'p', 'p', 'p' ]);
 }
 
 test('add-on: the report reads, prints and changes nothing', () => {

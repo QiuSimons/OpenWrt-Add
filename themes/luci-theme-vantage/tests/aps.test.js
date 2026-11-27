@@ -930,22 +930,23 @@ test('report: at most 32 VLAN interfaces are asked, none whose BSSID two network
 test('report: a host on another VLAN of the uplink\'s device is not its wired host', { skip: NO_UCODE }, () => {
 	const vlan = (below, n) => ({ address: MAC(n) + '\n', uevent: 'DEVTYPE=vlan\nINTERFACE=x\nIFINDEX=9\n', ['lower_' + below]: '' });
 	const devs = { eth0: MAC(5), 'eth0.1': vlan('eth0', 5), 'eth0.3': vlan('eth0', 6), vlan5: vlan('eth0', 7), 'eth0.3.7': vlan('eth0.3', 8),
-		'eth1.3': vlan('eth1', 9), 'eth2.3': { address: MAC(10) + '\n', uevent: 'INTERFACE=eth2.3\n', lower_eth0: '' } };
+		'eth1.3': vlan('eth1', 9), 'eth2.3': { address: MAC(10) + '\n', uevent: 'INTERFACE=eth2.3\n', lower_eth0: '' },
+		'two.3': Object.assign(vlan('eth0', 12), { lower_eth1: '' }) };
 	/* each port in a bridge of its own, as each network's is */
 	const on = (n, port, bridge) => ({ mac: MAC(n), port, bridge: bridge || 'br-' + port });
 	const hosts = up => [ on(64, up), on(65, up === 'eth0' ? 'eth0.1' : 'eth0'), on(66, 'eth0.3'), on(67, 'vlan5'), on(68, 'eth0.3.7'),
-		on(69, 'eth1.3'), on(70, 'eth2.3'), on(71, 'lan2') ];
+		on(69, 'eth1.3'), on(70, 'eth2.3'), on(71, 'lan2'), on(72, 'two.3') ];
 	const arp = [ [ '192.0.2.1', '0x1', '0x2', MAC(64), '*', 'br-lan' ] ];
 	/* the gateway on a VLAN of the wire, or on the device itself: either way the rest of that wire is upstream. A VLAN
-	   of another device is not, nor a device that only has the name of one */
+	   of another device is not, nor a device that only has the name of one, nor one with two devices below it */
 	for (const up of [ 'eth0.1', 'eth0', 'vlan5', 'eth0.3.7' ]) {
 		const out = reportRun({ ubus: Object.assign({}, REPORT_UBUS, { 'luci.vantage wired': { hosts: hosts(up) } }), arp, devs }).out;
-		assert.deepEqual(out.wired, [ { mac: MAC(69), port: 'eth1.3' }, { mac: MAC(70), port: 'eth2.3' }, { mac: MAC(71), port: 'lan2' } ], up);
-		assert.deepEqual(Object.keys(out.ports).sort(), [ 'eth1.3', 'eth2.3', 'lan2' ], up);
+		assert.deepEqual(out.wired, [ { mac: MAC(69), port: 'eth1.3' }, { mac: MAC(70), port: 'eth2.3' }, { mac: MAC(71), port: 'lan2' }, { mac: MAC(72), port: 'two.3' } ], up);
+		assert.deepEqual(Object.keys(out.ports).sort(), [ 'eth1.3', 'eth2.3', 'lan2', 'two.3' ], up);
 	}
 	/* the gateway elsewhere: that wire is no uplink, and its VLANs' hosts are this device's */
 	const out = reportRun({ ubus: Object.assign({}, REPORT_UBUS, { 'luci.vantage wired': { hosts: hosts('lan2') } }), arp, devs }).out;
-	assert.deepEqual(out.wired.map(h => h.port), [ 'eth0', 'eth0.3', 'vlan5', 'eth0.3.7', 'eth1.3', 'eth2.3' ]);
+	assert.deepEqual(out.wired.map(h => h.port), [ 'eth0', 'eth0.3', 'vlan5', 'eth0.3.7', 'eth1.3', 'eth2.3', 'two.3' ]);
 	/* two VLANs of the device in the bridge that hears the gateway (a switch's WAN port joined to its LAN): two wires
 	   there, and the other one's host is this device's; in a bridge that does not hear it, still the uplink's wire. A
 	   host with no bridge named goes by the wire */

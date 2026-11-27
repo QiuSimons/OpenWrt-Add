@@ -1934,6 +1934,11 @@ test('build: a mesh interface\'s stations are peers, no clients', () => {
 		assoc: { 'phy0-mesh0': [ { mac: '00:00:5E:00:53:41', signal: -60 }, { mac: '00:00:5E:00:53:43', signal: -61 } ], 'phy0-ap0': [ { mac: '00:00:5E:00:53:42', signal: -50 } ] } });
 	assert.deepEqual(m.clients.map(c => [ c.ifname, c.peer ]).sort(), [ [ 'phy0-ap0', false ], [ 'phy0-mesh0', true ], [ 'phy0-mesh0', true ] ]);
 	assert.deepEqual([ m.radios[0].clients, m.ssids.map(s => [ s.mode, s.clients ]) ], [ 1, [ [ 'mesh', 2 ], [ 'ap', 1 ] ] ]);
+	/* an older peer slows the radio as an older client does: in the radio's count of older devices, as on its row */
+	const old = model.build({ wifi: { radio0: { up: true, config: { band: '5g', htmode: 'HE80' }, interfaces: [ { ifname: 'phy0-mesh0', config: { mesh_id: 'bh', mode: 'mesh' } } ] } },
+		iwinfo: { 'phy0-mesh0': { htmode: 'HE80' } },
+		assoc: { 'phy0-mesh0': [ { mac: '00:00:5E:00:53:41', signal: -60, rx: { rate: 13000, mhz: 20, ht: true, mcs: 8 }, tx: { rate: 13000, mhz: 20, ht: true, mcs: 8 } } ] } });
+	assert.deepEqual([ old.clients[0].peer, old.clients[0].legacyOnRadio, old.radios[0].clients, old.radios[0].legacy ], [ true, true, 0, 1 ]);
 });
 
 test('build: a gateway heard only over this device\'s own client, mesh or WDS link makes it the uplink; over an access point interface it does not', () => {

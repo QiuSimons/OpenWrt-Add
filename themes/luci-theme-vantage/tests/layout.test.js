@@ -320,11 +320,20 @@ test('pack: a short tile beside a tall one leaves room for the next tile', () =>
 	assert.deepEqual([ p.rects.chart.c, p.rects.chart.top ], [ 0, 374 ]);
 });
 
-test('pack: small gaps snap, large ones only for the chart', () => {
-	const near = layout.pack([ { id: 'talk', c: 0, w: 1, h: 100 }, { id: 'ssids', c: 1, w: 1, h: 130 }, { id: 'sys', c: 0, w: 2, h: 50 } ], 2, 10).rects;
-	assert.equal(near.talk.h, 130);
-	const far = layout.pack([ { id: 'talk', c: 0, w: 1, h: 100 }, { id: 'ssids', c: 1, w: 1, h: 400 }, { id: 'sys', c: 0, w: 2, h: 50 } ], 2, 10).rects;
-	assert.equal(far.talk.h, 100);
+test('pack: a tile stretches down to the tile that spans its column', () => {
+	/* #173: a short tile above a tile across both columns left a hole */
+	const pair = h => [ { id: 'talk', c: 0, w: 1, h: 100 }, { id: 'ssids', c: 1, w: 1, h: h } ];
+	const under = layout.pack(pair(400).concat({ id: 'sys', c: 0, w: 2, h: 50 }), 2, 10);
+	assert.deepEqual([ under.rects.talk.h, under.rects.ssids.h, under.rects.sys.top ], [ 400, 400, 410 ]);
+	assert.equal(under.height, 460);
+	/* at the page's end a short column just ends: only a small gap snaps */
+	assert.equal(layout.pack(pair(130), 2, 10).rects.talk.h, 130);
+	assert.equal(layout.pack(pair(400), 2, 10).rects.talk.h, 100);
+	assert.equal(layout.pack([ { id: 'chart', c: 0, w: 1, h: 100 }, { id: 'ssids', c: 1, w: 1, h: 400 } ], 2, 10).rects.chart.h, 400, 'the chart fills any gap');
+	/* a tile only partly under the next one keeps its height: growing
+	   would push the tile that follows in its other column down the page */
+	const part = layout.pack([ { id: 'talk', c: 0, w: 2, h: 100 }, { id: 'sys', c: 2, w: 1, h: 800 }, { id: 'ssids', c: 1, w: 2, h: 50 }, { id: 'wg', c: 0, w: 1, h: 700 } ], 4, 10);
+	assert.deepEqual([ part.rects.talk.h, part.rects.wg.top, part.height ], [ 100, 110, 860 ]);
 	/* Clients across the whole width under the chart and System (the wired default before Top talkers) */
 	const wired = layout.pack([ { id: 'hero', c: 0, w: 4, h: 360 }, { id: 'chart', c: 0, w: 3, h: 330 }, { id: 'sys', c: 3, w: 1, h: 520 }, { id: 'clients', c: 0, w: 4, h: 300 } ], 4, 14);
 	assert.equal(wired.rects.chart.h, 520, 'the chart fills the row beside System');

@@ -2308,7 +2308,7 @@ test('paired access points: their stations in no warning, picture or head count,
 test('a mesh peer: a tag on its row, out of the device\'s client count, and its interface counts peers', () => withFakeDom(() => {
 	const self = Object.assign(Object.create(dview), { st: { staRates: {}, devRates: {}, clientHist: {}, gone: [] }, ui: {}, el: {}, quiet: {}, canWrite: false });
 	const m = self.m = load('vantage.model').build({ wifi: { radio0: { up: true, config: { band: '5g' }, interfaces: [
-		{ ifname: 'phy0-mesh0', config: { mesh_id: 'bh', mode: 'mesh', network: [ 'lan' ] } }, { ifname: 'phy0-ap0', config: { ssid: 'Home', mode: 'ap', network: [ 'lan' ] } } ] } },
+		{ ifname: 'phy0-mesh0', config: { mesh_id: 'bh', mode: 'mesh', network: [ 'lan' ] }, iwinfo: { ssid: 'bh' } }, { ifname: 'phy0-ap0', config: { ssid: 'Home', mode: 'ap', network: [ 'lan' ] } } ] } },
 		assoc: { 'phy0-mesh0': [ { mac: '00:00:5E:00:53:41', signal: -60 }, { mac: '00:00:5E:00:53:43', signal: -61 } ], 'phy0-ap0': [ { mac: '00:00:5E:00:53:42', signal: -50 } ] } });
 	const tree = list => { const n = new FNode('x'); append(n, list); return n; };
 	const tags = c => tree(self.clientCells(c, 0)).find('vt-pill').map(p => [ p.textContent, p.getAttribute('title') ]).filter(p => /peer/i.test(p[0]));
@@ -2322,6 +2322,18 @@ test('a mesh peer: a tag on its row, out of the device\'s client count, and its 
 	global.document.documentElement = { setAttribute() {} };
 	self.paintHead();
 	assert.match(self.el.subline.textContent, /1 client$/, 'the access point interface\'s one');
+	/* the path as updateHero writes it: the mesh's node counts peers, and says so on hover */
+	assert.deepEqual(hero(m).el.path.find('vt-node-ssid').map(n => [ n.find('vt-tn').map(x => x.textContent).join(''), n.getAttribute('title').split('\n')[0] ]),
+		[ [ '2 peers', 'Show the peers of bh' ], [ '1 client', 'Show the clients of Home' ] ]);
+	/* the radio's own lists hold its clients, as its count does: its details, and the bands along the Wi-Fi card */
+	Object.assign(self.st, { radioRates: {}, radioInsights: {}, hist: { net: {} } });
+	assert.deepEqual(tree(self.drawerRadio('radio0').body).find('vt-dlist-name').map(n => n.textContent), [ m.clients.filter(c => !c.peer)[0].name ]);
+	m.clients.forEach(c => { if (c.peer) c.band = '2g'; });
+	assert.deepEqual(self.bandPicture()[0].children.map(n => n.getAttribute('class')), [ 'vt-chip-band vt-band-5g' ]);
+	/* search says what the path says; a name that is a mesh here and a network there counts clients */
+	const nets = [ [ 'bh', '5g', 2, 'mesh' ], [ 'Home', '5g', 1, 'ap' ], [ 'Both', '5g', 1, 'mesh' ], [ 'Both', '2g', 1, 'ap' ] ].map(n => ({ ssid: n[0], band: n[1], clients: n[2], mode: n[3] }));
+	assert.deepEqual(says(searching({ ssids: nets }).searchEntries('').filter(e => e.kind === 'ssid')),
+		[ [ 'ssid', 'bh', '5 GHz · 2 peers' ], [ 'ssid', 'Both', '2.4 GHz · 5 GHz · 2 clients' ], [ 'ssid', 'Home', '5 GHz · 1 client' ] ]);
 }));
 
 test('paired access points: the list and the drawers show the address as text and link to no other host', t => withFakeDom(() => {

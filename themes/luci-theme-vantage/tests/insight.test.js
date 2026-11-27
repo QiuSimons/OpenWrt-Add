@@ -245,6 +245,9 @@ test('topTalkers: ranked by live total, share of the sum, zero traffic left out'
 	assert.equal(t[0].share, 0.75);
 	assert.equal(insight.topTalkers(clients, rates, 1).length, 1);
 	assert.deepEqual(insight.topTalkers([], {}), []);
+	/* a mesh peer carries its node's traffic, not its own (#167): not ranked, and not in the sum */
+	const peer = insight.topTalkers(clients.concat({ mac: 'p', name: 'P', peer: true }), Object.assign({ p: { rx: 0, tx: 90e6 } }, rates), 5);
+	assert.deepEqual(peer.map(x => [ x.mac, x.share ]), [ [ 'b', 0.75 ], [ 'a', 0.25 ] ]);
 });
 
 /* #129: a wired host with a port to itself has the port's rate. A port's
@@ -324,6 +327,20 @@ test('fmt.N_: English plural when the page language has one form and no translat
 });
 
 /* #110: a station set quiet (far away on purpose) is no warning */
+/* #167: a mesh peer is no client. The lines that count clients leave it out; a weak one warns as any weak link does */
+test('health: a mesh peer is out of Signal\'s client counts, and a weak one still warns', () => {
+	const m = baseModel(), node = signal => ({ mac: 'peer', name: 'Node', signal, peer: true });
+	const fine = byId(insight.health({ ...m, clients: m.clients.concat(node(-70)) }, {}), 'signal');
+	assert.deepEqual([ fine.level, fine.value, fine.reason ], [ 'ok', '−60 dBm', 'Weakest of 2 clients' ]);
+	assert.match(fine.detail, /^2 measured clients/);
+	assert.deepEqual([ 'level', 'value' ].map(k => byId(insight.health({ ...m, clients: [ node(-70) ] }, {}), 'signal')[k]), [ 'info', 'No clients' ], 'peers alone');
+	for (const clients of [ [ node(-80) ], m.clients.concat(node(-80)) ]) {
+		const w = byId(insight.health({ ...m, clients }, {}), 'signal');
+		assert.deepEqual([ w.level, w.value, w.client ], [ 'warn', '1 weak', 'peer' ]);
+	}
+	assert.equal(byId(insight.health({ ...m, clients: [ node(-80) ] }, { quiet: { peer: true } }), 'signal').value, 'No clients', 'set quiet, as a client is');
+});
+
 test('health: a quiet station\'s weak signal is left out of the warning and of the weakest', () => {
 	const m = baseModel();
 	m.clients.push({ mac: 'far', name: 'Garden camera', signal: -84 }, { mac: 'near', name: 'Phone', signal: -58 });
