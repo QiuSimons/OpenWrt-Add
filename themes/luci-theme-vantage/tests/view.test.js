@@ -2304,6 +2304,26 @@ test('paired access points: their stations in no warning, picture or head count,
 	assert.match(self.el.subline.textContent, /2 clients$/, 'this device\'s two, not the access point\'s');
 }));
 
+/* #167: a mesh's other nodes are listed with the Wi-Fi clients, said to be peers, and are not counted as clients */
+test('a mesh peer: a tag on its row, out of the device\'s client count, and its interface counts peers', () => withFakeDom(() => {
+	const self = Object.assign(Object.create(dview), { st: { staRates: {}, devRates: {}, clientHist: {}, gone: [] }, ui: {}, el: {}, quiet: {}, canWrite: false });
+	const m = self.m = load('vantage.model').build({ wifi: { radio0: { up: true, config: { band: '5g' }, interfaces: [
+		{ ifname: 'phy0-mesh0', config: { mesh_id: 'bh', mode: 'mesh', network: [ 'lan' ] } }, { ifname: 'phy0-ap0', config: { ssid: 'Home', mode: 'ap', network: [ 'lan' ] } } ] } },
+		assoc: { 'phy0-mesh0': [ { mac: '00:00:5E:00:53:41', signal: -60 }, { mac: '00:00:5E:00:53:43', signal: -61 } ], 'phy0-ap0': [ { mac: '00:00:5E:00:53:42', signal: -50 } ] } });
+	const tree = list => { const n = new FNode('x'); append(n, list); return n; };
+	const tags = c => tree(self.clientCells(c, 0)).find('vt-pill').map(p => [ p.textContent, p.getAttribute('title') ]).filter(p => /peer/i.test(p[0]));
+	assert.deepEqual(tags(m.clients.filter(c => c.peer)[0]), [ [ 'Mesh peer', 'Another node of this mesh, not a client' ] ]);
+	assert.deepEqual(tags(m.clients.filter(c => !c.peer)[0]), []);
+	assert.deepEqual(m.ssids.map(s => self.ssidCount(s)), [ '2 peers', '1 client' ]);
+	assert.deepEqual([ { mode: 'mesh', clients: 1 }, { mode: 'ap', clients: 2 }, { mode: 'ap', clients: 0 } ].map(s => self.ssidCount(s)), [ '1 peer', '2 clients', '0 clients' ]);
+	self.st = { summary: { level: 'ok', headline: 'x' } };
+	self.el = { orb: {}, headline: new FNode('div'), subline: new FNode('div') };
+	self.board = {};
+	global.document.documentElement = { setAttribute() {} };
+	self.paintHead();
+	assert.match(self.el.subline.textContent, /1 client$/, 'the access point interface\'s one');
+}));
+
 test('paired access points: the list and the drawers show the address as text and link to no other host', t => withFakeDom(() => {
 	const savedL = global.L;
 	global.L = { url: (...p) => '/cgi-bin/luci/' + p.join('/') };

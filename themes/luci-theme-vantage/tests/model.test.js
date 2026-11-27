@@ -1430,18 +1430,28 @@ test('paired access points: the wire is the port or another VLAN of its device; 
 	assert.deepEqual(m.wiredHosts.filter(h => h.mac === HALL_MAC)[0].own, { id: AP1, name: 'ap-hall', macs: [ '02:00:5E:10:00:03' ] });
 	assert.ok(m.wiredHosts.every(h => h.mac === HALL_MAC || !h.own) && before.wiredHosts.every(h => !h.own));
 	/* A second access point on the same wire. Its own MAC is no one else's to claim; nor is an address that it reports
-	   too, as its own, its station or its wired host: a contested claim takes nothing */
+	   too, as its own or its station: a contested claim takes nothing */
 	const DEN_MAC = '02:00:5e:10:00:09', den = (rep) => ap(AP2, 'ap-den', report(Object.assign({ mac: DEN_MAC, wired: [], stations: [] }, rep)));
-	const both = (hallMacs, denRep) => model.build(router({ aps: [ ap(AP1, 'ap-hall', report({ wired: [], stations: [], macs: hallMacs })), den(denRep) ] }, {
+	const two = (hallRep, denRep, fdb) => model.build(router({ aps: [ ap(AP1, 'ap-hall', report(Object.assign({ wired: [], stations: [] }, hallRep))), den(denRep) ] }, {
 		devs: Object.assign({}, router(null).devs, { 'br-iot': { devtype: 'bridge', 'bridge-members': [ 'eth0.3' ] }, 'br-lan': { devtype: 'bridge', 'bridge-members': [ 'eth0.1', 'lan2', 'phy0-ap0' ] },
 			eth0: { devtype: 'ethernet', carrier: true }, 'eth0.1': vlan, 'eth0.3': vlan }),
 		fdb: [ { mac: HALL_MAC, port: 'eth0.1', bridge: 'br-lan', seen: 1 }, { mac: DEN_MAC, port: 'eth0.1', bridge: 'br-lan', seen: 1 },
-			{ mac: IOT_BR, port: 'eth0.3', bridge: 'br-iot', seen: 1 }, { mac: OTHER, port: 'eth0.3', bridge: 'br-iot', seen: 1 } ]
-	})).wiredHosts.map(h => h.mac);
+			{ mac: IOT_BR, port: 'eth0.3', bridge: 'br-iot', seen: 1 }, { mac: OTHER, port: 'eth0.3', bridge: 'br-iot', seen: 1 } ].concat(fdb || [])
+	}));
+	const both = (hallMacs, denRep) => two({ macs: hallMacs }, denRep).wiredHosts.map(h => h.mac);
 	assert.deepEqual(both([ IOT_BR, OTHER ], {}), [ HALL_MAC, DEN_MAC ], 'the control: uncontested, both are its own');
 	assert.deepEqual(both([ DEN_MAC, IOT_BR ], {}), [ HALL_MAC, DEN_MAC, OTHER ], 'another access point\'s MAC stays (and what it did not claim)');
 	assert.deepEqual(both([ IOT_BR, OTHER ], { macs: [ OTHER ] }), [ HALL_MAC, DEN_MAC, OTHER ], 'two call it their own: it stays');
-	assert.deepEqual(both([ IOT_BR, OTHER ], { wired: [ { mac: OTHER, port: 'lan2', speed: 100, rx: null, tx: null } ] }), [ HALL_MAC, DEN_MAC, OTHER ], 'the other\'s wired host stays');
+	/* #167 as 1.2.1 left it: each access point hears the other's bridge on the wire and lists it among its wired hosts,
+	   which contested both claims, so both bridges stayed, each "behind" the other one. A wired host's claim contests none */
+	assert.deepEqual(both([ IOT_BR, OTHER ], { wired: [ { mac: OTHER, port: 'lan2', speed: 100, rx: null, tx: null } ] }), [ HALL_MAC, DEN_MAC ], 'the other\'s wired host is its own all the same');
+	const DEN_BR = '02:00:5e:10:00:0a', seenOn = (mac) => [ { mac, port: 'eth0.3', speed: 1000, rx: null, tx: null } ];
+	const cross = two({ macs: [ HALL_MAC, IOT_BR ], wired: seenOn(DEN_BR).concat(seenOn(OTHER)) }, { macs: [ DEN_MAC, DEN_BR ], wired: seenOn(IOT_BR) },
+		[ { mac: DEN_BR, port: 'eth0.3', bridge: 'br-iot', seen: 1 } ]);
+	assert.deepEqual(cross.wiredHosts.map(h => [ h.mac, h.own ? h.own.macs : null, h.behind ? h.behind.name : null ]),
+		[ [ HALL_MAC, [ '02:00:5E:10:00:03' ], null ], [ DEN_MAC, [ '02:00:5E:10:00:0A' ], null ], [ OTHER, null, 'ap-hall' ] ],
+		'each bridge is on its own access point\'s entry; a host one of them lists keeps its note');
+	assert.ok(cross.offline.every(c => c.mac !== IOT_BR && c.mac !== DEN_BR));
 	assert.deepEqual(both([ IOT_BR, OTHER ], { stations: [ { mac: IOT_BR, ifname: 'phy1-ap0', signal: -60 } ] }), [ HALL_MAC, DEN_MAC ], 'the other\'s station is that station, as before');
 	/* Pre-release review of 1.2.1. A name given to one of those addresses while it was listed as a device: it is there,
 	   on the access point's entry, and not among the named devices that are not connected */
@@ -1914,6 +1924,16 @@ test('build: an access point not reporting (waiting, offline, error) keeps its b
 		assert.deepEqual([ a.state, a.nodes, a.clients, a.wired ], [ extra.state, [], 0, 0 ]);
 		assert.ok(!m.clients.concat(m.wiredHosts).some(c => c.ap || c.behind), extra.state);
 	}
+});
+
+/* #167: the far end of a mesh interface is another node of the mesh. It is listed with the stations, as a peer, and
+   is no client of the radio; its interface still says how many it has */
+test('build: a mesh interface\'s stations are peers, no clients', () => {
+	const m = model.build({ wifi: { radio0: { up: true, config: { band: '5g' }, interfaces: [
+		{ ifname: 'phy0-mesh0', config: { mesh_id: 'bh', mode: 'mesh', network: [ 'lan' ] } }, { ifname: 'phy0-ap0', config: { ssid: 'Home', mode: 'ap', network: [ 'lan' ] } } ] } },
+		assoc: { 'phy0-mesh0': [ { mac: '00:00:5E:00:53:41', signal: -60 }, { mac: '00:00:5E:00:53:43', signal: -61 } ], 'phy0-ap0': [ { mac: '00:00:5E:00:53:42', signal: -50 } ] } });
+	assert.deepEqual(m.clients.map(c => [ c.ifname, c.peer ]).sort(), [ [ 'phy0-ap0', false ], [ 'phy0-mesh0', true ], [ 'phy0-mesh0', true ] ]);
+	assert.deepEqual([ m.radios[0].clients, m.ssids.map(s => [ s.mode, s.clients ]) ], [ 1, [ [ 'mesh', 2 ], [ 'ap', 1 ] ] ]);
 });
 
 test('build: a gateway heard only over this device\'s own client, mesh or WDS link makes it the uplink; over an access point interface it does not', () => {

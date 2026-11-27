@@ -1743,6 +1743,8 @@ const REPORT_PINS = [
 		'const MAX_AUTH = 262144;          // bytes of authorized_keys read, as luci.vantage.pair reads it',
 		'let v = trim(readfile(NET + \'/\' + dev + \'/\' + file, 64) ?? \'\');',
 		'return access(NET + \'/\' + dev + \'/phy80211\') || access(NET + \'/\' + dev + \'/wireless\');',
+		'if (index(split(readfile(NET + \'/\' + p + \'/uevent\', 256) ?? \'\', \'\\n\'), \'DEVTYPE=vlan\') < 0)',
+		'let low = filter(lsdir(NET + \'/\' + p) ?? [], (n) => index(n, \'lower_\') == 0);',
 		'for (let line in split(readfile(ARP, MAX_ARP) ?? \'\', \'\\n\')) {',
 		'let who = getenv(\'SSH_PUBKEYINFO\');',
 		'if (getenv(\'SSH_ORIGINAL_COMMAND\') != null || (type(who) == \'string\' && index(who, vaps.COMMENT) == 0)) {',
@@ -1818,6 +1820,7 @@ test('add-on: the report reads, prints and changes nothing', () => {
 		'a call by computed member': add('ubus[\'call\'](\'file\', \'exec\');'),
 		'another file': reportSrc.replace('readfile(HOSTNAME, 256)', 'readfile(\'/etc/shadow\', 256)'),
 		'a path out of sysfs': add('print(readfile(NET + \'/../../../etc/shadow\'));'),
+		'a VLAN\'s device read from another place': reportSrc.replace('readfile(NET + \'/\' + p + \'/uevent\', 256)', 'readfile(\'/tmp/\' + p, 256)'),
 		'a file opened for writing': reportSrc.replace('open(SELF, \'r\')', 'open(SELF, \'w\')'),
 		'another file opened': add('let f = open(\'/etc/shadow\', \'r\');'),
 		'a read under another name': add('let rd = readfile; print(rd(\'/etc/shadow\'));')

@@ -895,7 +895,10 @@ text around it so it looks the same size.
   the interface in their details. Their traffic is added to the
   network's and the radio's from the stations' own counters, since
   such an interface's counters are netifd's to give only where it made
-  the interface.
+  the interface. The stations of a mesh interface are the mesh's other
+  nodes (#167): listed with the Wi-Fi clients under a "Mesh peer" tag,
+  not counted among the device's or the radio's clients, and counted as
+  peers on the mesh's own node in the network path.
   `survey({device})` returns the channel survey of one Wi-Fi interface,
   for the noise floor: `{ mhz, noise }` for each channel the driver gives
   a noise value (dBm, a signed byte), at most 256, from one read-only
@@ -1223,7 +1226,16 @@ dashboard package itself stays read-only.
   rates, byte counts, time connected; iwinfo, as the dashboard reads its
   own), those on the interface of a network's VLAN under that network
   (#164: the one with the interface's BSSID); and the wired hosts behind its ports other than the ones towards
-  its gateway or the router (none when those are not found), with the
+  its gateway or the router (none when those are not found) and the
+  other VLANs of such a port's device (#167: the same wire, where each
+  VLAN is a device of its own, `eth0.3` beside `eth0.1`; it knows the
+  gateway in its own network only, and the kernel says which device a
+  VLAN is on, whatever the names; not in a bridge that hears the gateway
+  itself, where two VLANs of one device are two wires, as a switch's WAN
+  port joined to its LAN. Known limit: a swconfig switch's ports all
+  arrive through one device, so a host plugged into such an access point
+  is heard on the uplink's port or wire like the rest of its VLAN, and is
+  not listed as its wired host), with the
   ports' speed and byte counts: the kernel's, and on a DSA switch its
   chip's own beside them (#156), as the access point's own
   `luci.vantage.ports` reads them; the report asks it, as it asks
@@ -1261,10 +1273,11 @@ dashboard package itself stays read-only.
   left out of the wired hosts and named on the access point's own entry
   there (a tag with their number in its row, the addresses in its
   details), so that none is taken unseen. Not the MAC of a paired access
-  point, and not an address another of them reports too, as its own,
-  its station or its wired host: a contested claim takes nothing. So
-  the bridges of an access point plugged into another paired one, which
-  that one lists as its wired hosts, stay hosts. Where the access point has it alone on that port (its
+  point, and not an address another of them reports too, as its own or
+  its station: a contested claim takes nothing. Another's wired host it
+  may be (since 1.2.2): an access point hears the others' addresses on
+  its ports as it hears any host's, so the bridges of an access point
+  plugged into another paired one are that access point's too. Where the access point has it alone on that port (its
   report counts one wired host there), the port's traffic the access
   point reports is the host's in the Clients list (Live, its sort) and
   in its details, said to be counted by the access point on its port;
