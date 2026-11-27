@@ -4,16 +4,24 @@ name: CI
 # with the pinned OpenWrt SDK; releases published from v* tags only when the
 # CI build matches the hashes committed in .release-manifests/<tag>.sha256.
 #
-# Packages are built for OpenWrt 25.12 (apk) and 24.10 (ipk). Tag builds
-# sign the repository indexes with the project keys: packages.adb with the
-# VANTAGE_SIGN_KEY secret, Packages.sig with VANTAGE_USIGN_KEY. The
+# Packages are built for OpenWrt 25.12 (apk) and 24.10 (ipk). A tag's
+# repository indexes are signed with the project keys: packages.adb with
+# the VANTAGE_SIGN_KEY secret, Packages.sig with VANTAGE_USIGN_KEY. The
 # repositories published on GitHub Pages let users install and upgrade
 # without --allow-untrusted (apk) or with opkg's signature check on.
 #
 # Every action is pinned to a full commit SHA. The signing keys are secrets
 # of the release-signing environment, which only v* tags may use and whose
-# runs the maintainer approves; they reach only the tag build's signing
-# step. Write tokens go only to the release and Pages jobs.
+# runs the maintainer approves. Only the job "Sign the package index" is
+# in that environment, on a machine of its own: the build job, which
+# fetches the feeds and compiles, has no secret. The signing job takes the
+# packages as built, compares them with the committed manifest again, and
+# hands the key to one SDK container without network, on its standard
+# input; that container signs and checks the index against the public keys
+# in keys/. Nothing the build produced is run there. Every other run goes
+# through the same job with a key it makes and throws away ("Try the
+# signing job"), so a release is never that job's first run. Write tokens
+# go only to the release and Pages jobs.
 #
 # The site's page, screenshots and video change between releases too: a
 # manual run on main with "site" ticked publishes them again, around the
@@ -114,9 +122,6 @@ jobs:
     needs: checks
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    # a tag push builds in the release-signing environment (approved per
-    # run, v* tags only); everything else builds unsigned outside it
-    environment: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) && 'release-signing' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -143,36 +148,10 @@ jobs:
           node-version: '24'
 
       - name: Build with the pinned SDK (verifies every package)
-        if: ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) }}
+        # a tag's packages are built like any other commit's, without a key
         run: |
           podman --version
           dev/build/sdk-build.sh "$SDK_RELEASE" HEAD
-
-      - name: Build and sign with the pinned SDK (tags only)
-        # a pushed tag only: a manual run on a tag ref never sees the keys
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-        env:
-          SIGN_KEY: ${{ matrix.fmt == 'apk' && secrets.VANTAGE_SIGN_KEY || secrets.VANTAGE_USIGN_KEY }}
-        run: |
-          set -euo pipefail
-          test -n "$SIGN_KEY" || { echo "::error::the signing key secret for $FMT is not set"; exit 1; }
-          key="$RUNNER_TEMP/signing/key"
-          ( umask 077; mkdir -p "${key%/*}"; printf '%s\n' "$SIGN_KEY" > "$key" )
-          trap 'rm -f -- "$key"' EXIT
-          VANTAGE_SIGN_KEY="$key" dev/build/sdk-build.sh "$SDK_RELEASE" HEAD
-          # the secret must match the public key users are told to trust
-          out="dist/$SDK_RELEASE" ok=
-          if [ "$FMT" = apk ]; then
-            pub=keys/vantage-signing.pem
-            want=$(sha256sum < "$pub" | cut -d' ' -f1)
-            grep -qx "signing_public_key_sha256=$want" "$out/BUILDINFO" && ok=1
-          else
-            pub=keys/vantage-24.10.usign.pub usign="dist/.tools/$SDK_RELEASE/usign"
-            want=$("$usign" -F -p "$pub")
-            grep -qx "signing_key_fingerprint=$want" "$out/BUILDINFO" &&
-              "$usign" -V -m "$out/Packages" -p "$pub" && ok=1
-          fi
-          [ -n "$ok" ] || { echo "::error::signing key does not match $pub"; exit 1; }
 
       - name: Check against the committed release manifest
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
@@ -196,6 +175,140 @@ jobs:
             dist/${{ env.SDK_RELEASE }}/*.ipk
             dist/${{ env.SDK_RELEASE }}/SHA256SUMS
             dist/${{ env.SDK_RELEASE }}/BUILDINFO
+          if-no-files-found: error
+
+  # A release's index is signed here, on a machine that built nothing: it
+  # has the checkout and the packages as the build job uploaded them, and
+  # runs no program from that build. A pushed tag only: a manual run on a
+  # tag ref never sees the keys.
+  sign:
+    # named by OpenWrt line, as the build jobs are
+    name: Sign the package index (OpenWrt ${{ matrix.line }})
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # the only job in the release-signing environment (approved per run, v*
+    # tags only): the approval comes after the packages are built
+    environment: release-signing
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: 25.12.6
+            line: '25.12'
+            fmt: apk
+          - sdk: 24.10.8
+            line: '24.10'
+            fmt: ipk
+    env:
+      SDK_RELEASE: ${{ matrix.sdk }}
+      FMT: ${{ matrix.fmt }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the packages as built
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vantage-${{ env.SDK_RELEASE }}
+          path: dist/${{ env.SDK_RELEASE }}
+
+      - name: Check against the committed release manifest
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          manifest=".release-manifests/${TAG}.sha256"
+          test -f "$manifest" || { echo "::error::missing $manifest"; exit 1; }
+          # one manifest for both: this build's lines are the ones for its format
+          ! grep -vE '\.(apk|ipk)$' "$manifest" || { echo "::error::unexpected lines in $manifest"; exit 1; }
+          diff <(grep -E "\.$FMT\$" "$manifest" | sort) <(sort "dist/$SDK_RELEASE/SHA256SUMS") || {
+            echo "::error::CI build does not match $manifest"; exit 1; }
+
+      - name: Sign the package index
+        env:
+          SIGN_KEY: ${{ matrix.fmt == 'apk' && secrets.VANTAGE_SIGN_KEY || secrets.VANTAGE_USIGN_KEY }}
+        run: |
+          set -euo pipefail
+          # out of the environment before anything is started, then to the
+          # signing container's standard input: no file, no argument
+          key=$SIGN_KEY
+          unset SIGN_KEY
+          test -n "$key" || { echo "::error::the signing key secret for $FMT is not set"; exit 1; }
+          printf '%s\n' "$key" | VANTAGE_SIGN_KEY=- dev/build/sdk-build.sh --sign "$SDK_RELEASE"
+
+      - name: Upload the signed packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signed-${{ env.SDK_RELEASE }}
+          path: |
+            dist/${{ env.SDK_RELEASE }}/*.apk
+            dist/${{ env.SDK_RELEASE }}/*.ipk
+            dist/${{ env.SDK_RELEASE }}/SHA256SUMS
+            dist/${{ env.SDK_RELEASE }}/BUILDINFO
+            dist/${{ env.SDK_RELEASE }}/packages.adb
+            dist/${{ env.SDK_RELEASE }}/Packages
+            dist/${{ env.SDK_RELEASE }}/Packages.gz
+            dist/${{ env.SDK_RELEASE }}/Packages.sig
+          if-no-files-found: error
+
+  # The signing job on every run that is not a pushed tag, step for step,
+  # with a key made in the SDK image and thrown away, and no manifest (a
+  # commit that is no release has none). A release must not be the first
+  # run of that job: this one goes through the download, the container
+  # without network, the checks in it and the upload on every pull request.
+  # What it uploads is no release signature.
+  rehearsal:
+    name: Try the signing job with a throwaway key (OpenWrt ${{ matrix.line }})
+    needs: build
+    if: ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: 25.12.6
+            line: '25.12'
+            fmt: apk
+          - sdk: 24.10.8
+            line: '24.10'
+            fmt: ipk
+    env:
+      SDK_RELEASE: ${{ matrix.sdk }}
+      FMT: ${{ matrix.fmt }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the packages as built
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vantage-${{ env.SDK_RELEASE }}
+          path: dist/${{ env.SDK_RELEASE }}
+
+      - name: Sign the package index
+        run: |
+          set -euo pipefail
+          key=$(dev/build/sdk-build.sh --throwaway-key "$SDK_RELEASE" "$RUNNER_TEMP/throwaway.pub")
+          printf '%s\n' "$key" | VANTAGE_SIGN_KEY=- VANTAGE_SIGN_PUB="$RUNNER_TEMP/throwaway.pub" dev/build/sdk-build.sh --sign "$SDK_RELEASE"
+
+      - name: Upload the signed packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rehearsal-${{ env.SDK_RELEASE }}
+          retention-days: 1
+          path: |
+            dist/${{ env.SDK_RELEASE }}/*.apk
+            dist/${{ env.SDK_RELEASE }}/*.ipk
+            dist/${{ env.SDK_RELEASE }}/SHA256SUMS
+            dist/${{ env.SDK_RELEASE }}/BUILDINFO
             dist/${{ env.SDK_RELEASE }}/packages.adb
             dist/${{ env.SDK_RELEASE }}/Packages
             dist/${{ env.SDK_RELEASE }}/Packages.gz
@@ -204,7 +317,7 @@ jobs:
 
   release:
     name: Publish release
-    needs: build
+    needs: sign
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -213,7 +326,7 @@ jobs:
       - name: Download packages
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: vantage-*
+          pattern: signed-*
           path: release
 
       - name: Create or complete the release
@@ -223,7 +336,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          a="release/vantage-$SDK_APK" i="release/vantage-$SDK_IPK"
+          a="release/signed-$SDK_APK" i="release/signed-$SDK_IPK"
           ( cd "$a" && sha256sum -c SHA256SUMS )
           ( cd "$i" && sha256sum -c SHA256SUMS )
           # 25.12 keeps the asset names it always had; 24.10's sums and
@@ -235,11 +348,39 @@ jobs:
           cp "$i"/BUILDINFO assets/BUILDINFO-24.10
           cd assets
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            # never replace assets of an existing release
+            # a retry. An asset the release already has is never replaced
+            # and never taken by its name: it must be this build's file,
+            # by SHA-256, or the job fails before anything is uploaded
+            have=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name')
+            mkdir ../existing
             for f in *; do
-              gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep -qx "$f" \
-                || gh release upload "$TAG" "$f" --repo "$REPO"
+              grep -qxF -- "$f" <<< "$have" || continue
+              gh release download "$TAG" --repo "$REPO" --pattern "$f" --dir ../existing
+              built=$(sha256sum < "$f")
+              there=$(sha256sum < "../existing/$f")
+              [ "$built" = "$there" ] || {
+                echo "::error::release asset $f is not this build's file (sha256 ${there%% *}, built ${built%% *})"; exit 1; }
             done
+            for f in *; do
+              grep -qxF -- "$f" <<< "$have" || gh release upload "$TAG" "$f" --repo "$REPO"
+            done
+            # a create that was cut off after its draft was made leaves the
+            # release unpublished, and Pages would get ahead of it: publish
+            # it, as this build's release only. It holds exactly this
+            # build's files (a draft may have others from before; a public
+            # release's other assets are not this step's business), and
+            # its tag is on the repository at this run's commit: publishing
+            # a draft whose tag is gone would make the tag anew
+            draft=$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft)
+            if [ "$draft" = true ]; then
+              holds=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | sort)
+              [ "$holds" = "$(ls | sort)" ] || {
+                echo "::error::the draft release does not hold exactly this build's files; it stays a draft"; exit 1; }
+              at=$(gh api "repos/$REPO/commits/refs/tags/$TAG" --jq .sha) || at=
+              [ "$at" = "$GITHUB_SHA" ] || {
+                echo "::error::tag $TAG is not at this run's commit on the repository (${at:-no such tag}); the release stays a draft"; exit 1; }
+              gh release edit "$TAG" --repo "$REPO" --draft=false
+            fi
           else
             gh release create "$TAG" --repo "$REPO" --verify-tag --title "Vantage ${TAG#v}" \
               --notes "Packages for OpenWrt ${SDK_APK} (apk) and ${SDK_IPK} (ipk), built by CI from ${GITHUB_SHA}. What changed: https://github.com/${REPO}/blob/${TAG}/CHANGELOG.md. See SHA256SUMS, SHA256SUMS-24.10, the BUILDINFO files and docs/INSTALL.md." \
@@ -266,13 +407,13 @@ jobs:
       - name: Download packages
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: vantage-*
+          pattern: signed-*
           path: release
 
       - name: Assemble the site
         run: |
           set -euo pipefail
-          a="release/vantage-$SDK_APK" i="release/vantage-$SDK_IPK"
+          a="release/signed-$SDK_APK" i="release/signed-$SDK_IPK"
           ( cd "$a" && sha256sum -c SHA256SUMS )
           ( cd "$i" && sha256sum -c SHA256SUMS )
           mkdir -p "site/${SDK_APK%.*}" "site/${SDK_IPK%.*}"

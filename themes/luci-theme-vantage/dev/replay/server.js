@@ -88,7 +88,7 @@ const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
 const { Engine } = require('./ut');
-const { Store, safe } = require('./store');
+const { Store, safe, staticUnder } = require('./store');
 const { Fixtures } = require('./fixtures');
 const i18n = require('../i18n/catalog');
 const policy = require('./policy');
@@ -182,7 +182,8 @@ for (const d of opts.fixtures || []) {
 	if (!st || !st.isDirectory()) { console.error(`--fixtures ${d}: not a directory`); process.exit(2); }
 }
 const fixtures = new Fixtures(opts.fixtures);
-const store = new Store(path.resolve(opts.mirror), { synthetic: opts.synthetic, demo: !!opts.demo, fixtures });
+const mirrorDir = path.resolve(opts.mirror);
+const store = new Store(mirrorDir, { synthetic: opts.synthetic, demo: !!opts.demo, fixtures });
 
 /* --------------------------------------------------------------- device */
 
@@ -624,7 +625,8 @@ function recorded404(file, size) {
 }
 
 /* /luci-static lookup: theme dir, theme package htdocs, mirror, rootfs www;
-   null: not found, false: recorded as a 404 */
+   null: not found, false: recorded as a 404. The file's real path, inside
+   its root's, and a recording's root inside the recording (staticUnder) */
 function staticFile(rel) {
 	const roots = [];
 	if (themeDir) {
@@ -632,11 +634,11 @@ function staticFile(rel) {
 		roots.push([ path.dirname(themeDir), rel ]);
 	}
 	for (const d of appDirs) roots.push([ path.join(d, 'htdocs/luci-static'), rel ]);
-	for (const d of store.staticDirs) roots.push([ path.join(d, 'luci-static'), rel, true ]);
+	for (const d of store.staticDirs) roots.push([ path.join(d, 'luci-static'), rel, mirrorDir ]);
 	roots.push([ path.join(rootfs, 'www/luci-static'), rel ]);
 	for (const [ root, r, mirrored ] of roots) {
-		const file = path.join(root, r);
-		if (!file.startsWith(root + path.sep)) continue;
+		const file = staticUnder(root, r, mirrored);
+		if (!file) continue;
 		let st;
 		try { st = fs.statSync(file); } catch (e) { continue; }
 		if (!st.isFile()) continue;
@@ -855,7 +857,7 @@ async function handle(req, res) {
 			if (!missing.has(p) && missing.size < 4096) { missing.add(p); console.error(`[replay] static ${file === false ? '404 (as on the device)' : 'not found'}: ${safe(p)}`); }
 			return send(res, 404, 'text/plain', 'Not found');
 		}
-		head(res, 200, { 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+		head(res, 200, { 'Content-Type': MIME[path.extname(p).toLowerCase()] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
 		return fs.createReadStream(file).pipe(res);
 	}
 	if (/^\/ubus(\/|$)/.test(p) || p.startsWith(SCRIPT + '/admin/ubus')) return handleUbus(req, res);
@@ -929,6 +931,8 @@ server.listen(port, '127.0.0.1', () => {
 	console.error(`[replay] ${store.exact.size} recorded calls, ${store.series.size} time series (${store.interval} ms), ${store.exec.size} exec outputs`);
 	if (store.demo) console.error(`[replay] DEMO mode: recording pseudonymised (${store.demo.macs.size} MACs, ${store.demo.v4nets.size + store.demo.v4other.size} IPv4 networks/addresses, ${store.demo.v6nets.size} IPv6 prefixes, ${store.demo.names.size} names)`);
 	console.error(`[replay] synthetic data ${store.synthetic ? 'ON (realtime stats, conntrack list, wifi scan; --no-synthetic to disable)' : 'OFF'}`);
+	if (store.staticDirs.length || [ ...store.http.keys() ].some(u => u.startsWith(SCRIPT + '/admin/translations/')))
+		console.error("[replay] the recording's static files and translations run as script in the browser, in this origin: use a recording you trust, as you would code");
 	if (store.plugins.size) console.error(`[replay] plugins: ${[ ...store.plugins.keys() ].join(', ')}`);
 	if (fixtures.dirs.length) console.error(`[replay] fixtures: ${fixtures.dirs.join(', ')} (${fixtures.pluginFiles().length} plugin files, ${fixtures.configs().length} uci configs, ${fixtures.exec.size} exec outputs)`);
 	if (preview) console.error(`[replay] language ${preview.code} (${preview.lc}): catalogues from ${preview.dirs.join(', ')} over the recorded one`);

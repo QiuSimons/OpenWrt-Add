@@ -122,7 +122,18 @@ everywhere: theme dir `vantage`, media URL `/luci-static/vantage`, uci
   `data-vt-look-save` says whether this login may save: `yes`, `relogin`
   (rpcd would grant the group at a new login, and no reload of rpcd has
   given it to this one yet; the install's reload reaches open logins) or
-  `no`. Saves queue and only the latest pick is written. A
+  `no` (a login's `write` list read as rpcd reads it: a list only, and
+  an entry starting with `!` that matches the group refuses it; with
+  several login sections for one username, `relogin` only when each of
+  them would grant). Saves
+  queue and only the latest pick is written. A save (revert, set,
+  commit, on staging the login's tabs share) is one tab's at a time:
+  under the Web Lock `vantage.look.save` where the browser has one (a
+  page served over HTTPS), else under a lock of that name kept in
+  `localStorage` (a tab writes its token, reads it back after 50 ms and
+  saves only if the key is still its own; a lock 5 s old is taken, a
+  save waits at most 5 s, and storage that keeps nothing is done
+  without, so the lock never stops a save; it is not strict). A
   pick made without the group stays in that browser (`localStorage`,
   `vantage.<name>.own`) and wins there, but not for a login that may save
   (those keys are dropped); Appearance says when picks stay in the
@@ -168,7 +179,8 @@ everywhere: theme dir `vantage`, media URL `/luci-static/vantage`, uci
   so the pages and tabs of one browser ask once a day, and a check that
   fails counts as that day's, says nothing and leaves what was known. A
   list its host says is larger than 256 KiB is not read, and no more
-  than that of one is looked at; where the browser's storage cannot keep
+  than that of one is read: the body is taken as a stream and called
+  off there (without a stream, as text, cut there); where the browser's storage cannot keep
   the try, the daily check asks nothing (every page would ask again). A
   manual check made with the option on counts and is kept the same way.
   While the list's version is newer than the running one, the gear
@@ -239,7 +251,11 @@ everywhere: theme dir `vantage`, media URL `/luci-static/vantage`, uci
 - **Forms**: one control height for inputs, selects, dropdowns, buttons
   and tabs, chosen by pointer type, not screen width (36 px with a mouse,
   44 px on touch, 16 px text in touch fields); a 180 px label column and
-  fields up to 360 px (a select grows to fit a long choice). Field help,
+  fields up to 360 px (a select grows to fit a long choice). A select's
+  list is drawn by the page where the browser can (Chromium 135 and
+  later), with the dropdown's look; that includes the selects LuCI sizes
+  itself (Wireless "Operating frequency"), which keep a minimum width,
+  since such a field takes the width of its chosen label. Field help,
   and page and section intros, show their first line and an (i) button
   unfolds the rest, so the start of a warning is always visible; text
   that fits one line gets no button. A page or card heading that only
@@ -250,7 +266,12 @@ everywhere: theme dir `vantage`, media URL `/luci-static/vantage`, uci
   and (where missing) a description `id` for `aria-controls`.
 - **Stock pages** without form chrome get the same cards: Status →
   Firewall (nftables) shows each chain as a card with its rules edge to
-  edge and matches as wrapping text; the System and Kernel Log filters
+  edge and matches as wrapping text (its Flow reads the ruleset once and
+  has LuCI's own view draw each rule from that read, `renderRule` of
+  `view.status.nftables`, so a step's conditions and what it does come
+  from one snapshot; LuCI's table on the page is from LuCI's own read
+  and is not used, and where LuCI's view cannot draw a rule the step
+  shows no conditions); the System and Kernel Log filters
   are wrapping rows, and the log (a read-only viewer) keeps its own text
   size on touch and wraps on phones. Phone cards use one inset for every
   cell, hide empty cells, and give LuCI's wide columns (descriptions,
@@ -324,7 +345,18 @@ text around it so it looks the same size.
 - **Overview**: device card (model, firmware, uptime, CPU, memory, temp
   if available), uplink card (the main line's interface, address, rate),
   radios card (band, channel, width, tx power, utilisation, client count),
-  clients card (count by band, weakest signals), health score. The
+  clients card (count by band, weakest signals), health score. A poll
+  counts as answered only when `system info` answered with an object
+  that has a numeric `uptime`; otherwise nothing is taken in, the last readings stay, and the pill
+  reads "Reconnecting…" with their age (the other calls keep their
+  defaults). A first poll the device did not answer shows an empty page
+  and keeps nothing: the saved history is neither pruned nor rewritten,
+  and the first answered poll sets who counts as new. A Wi-Fi network's rating reads the ciphers off the end of
+  its `encryption`, after `+` or `/`, as netifd does (`luci.vantage
+  wireless` passes its leading run of letters, digits and `+ / _ -`, 40
+  characters at most): `tkip`, `tkip+aes` or `tkip+ccmp` makes an
+  otherwise normal protocol weak, and networks are grouped by name,
+  protocol label and rating. The
   Clients tile lists Wi-Fi stations or wired hosts, switched in its head
   where a device has both, and folds its quick filters (bands, active,
   weak signal, new; per port for wired hosts) into a menu at the end of
@@ -364,7 +396,13 @@ text around it so it looks the same size.
   path adds a Wired branch, a node per port with the port's traffic, for
   hosts downstream of the device (not those on the uplink's port), with
   or without Wi-Fi.
-- **Inspectors** (drawers, deep-linkable):
+- **Inspectors** (drawers, deep-linkable; modal: while one is open,
+  Tab and Shift+Tab wrap between its first and last control and come
+  back to it from the page behind, another dialog on top keeps its own
+  keys, and closing returns focus to the opener, or, when a poll has
+  replaced it, to the control for the same client in the same tile if
+  there is one; each rename editor has
+  its own identity, so a save that finishes late closes only its own):
   client (MAC, host hint, IP, radio/SSID, signal history for the session,
   rates, inactive time), radio (channel, width, noise when real, clients),
   a line to the internet (link, proto, addresses, counters, rates) and
@@ -372,7 +410,14 @@ text around it so it looks the same size.
   interfaces (its own networks, a VPN) have no inspector.
 - **Client names**: every client gets a human label, resolved in order:
   user alias (rename in the inspector, stored in `/etc/config/vantage`),
-  reverse DNS (`network.rrdns`, optional grant), DHCP host name from host
+  reverse DNS (`network.rrdns`, optional grant; an answer is kept with
+  the MAC that held the address when it was asked and names only that
+  client, is asked again after 10 minutes and at once for a new holder,
+  and one that arrives after the address changed hands is dropped; the
+  last name shows only while that call is out, and a failed call, like
+  an answer without a name, clears it; when the lookup reports no object
+  or no grant, reverse DNS goes off for the page and every kept answer
+  is dropped), DHCP host name from host
   hints, mDNS (`umdns`, when running; unauthenticated, so only below DNS
   and DHCP and only when uncontested: an address claimed by two names, or
   a name that would land on two stations, is not used), WPS device name,
@@ -696,13 +741,26 @@ text around it so it looks the same size.
   refuses, a switched-off zone and the rules naming it, a port forward
   from `*`) listed as not in effect, zone policies falling back to the
   `defaults` section and then to DROP. A zone faces the internet when it
-  masquerades (`masq` or `masq6`), holds the uplink (an interface with the
-  IPv4 default route and a public address, from `network.interface dump`,
-  by network, device or the interface's own zone; public means outside
-  the IANA special-purpose blocks that are not globally reachable:
+  masquerades (`masq` or `masq6`), holds an uplink (from
+  `network.interface dump`, by network, device or the interface's own
+  zone: an interface that is up with the IPv4 default route and a public
+  address, or with the IPv6 default route and a global address or a
+  delegated prefix; public means outside the IANA special-purpose blocks
+  that are not globally reachable, global means global unicast space:
   routers with public addresses run without NAT; an access point's
-  default route runs over a private address and does not count), or, by
+  default route runs over a private address and does not count, and
+  IPv6 makes no uplink on a device whose IPv4 default route runs over a
+  private or link-local address: the router before it is the one that
+  faces the internet), or, by
   OpenWrt's naming, is called wan/wan6 or holds the wan/wan6 network. An
+  internet-facing zone counts as one for both address families,
+  whichever family its uplink has: a rule, port forward or forwarding of
+  the other family from it (an IPv4-only rule on a zone that holds only
+  an IPv6 tunnel) is listed and warned about although nothing comes in
+  that way (a known limit: the cautious side). A forwarding or an
+  accepting rule from the internet into a zone that faces the internet
+  only through an IPv6 uplink still warns, since such a zone may hold
+  the lan as well. An
   uplink in no zone, the networks of a switched-off internet zone and the
   family an internet zone leaves out meet the `defaults` policies, and
   are shown as such. It lists what is open on the router (accepting
@@ -736,8 +794,13 @@ text around it so it looks the same size.
   interface dump, may take traffic on an internet zone's device (the
   first in config order wins; device names compare as patterns, a zone
   that names no device takes every one it does not exclude, and a named
-  device counts even when the dump does not list it), and rules or port
-  forwards from the internet that use a set the config does not define
+  device counts even when the dump does not list it), an IPv6 default
+  route that is no uplink (no global address or prefix on its interface,
+  or a device behind another router) whose IPv6 no internet-facing zone
+  takes or leaves to the default policies (where IPv6 comes in is then
+  not known; an access point that still has a wan zone in its config and
+  IPv6 on its bridge is one), and rules or port forwards from the
+  internet that use a set the config does not define
   and enable (its definition may come from a service the overview cannot
   see; a service that defines a set under the same name as the config
   goes unnoticed, since fw4 uses the first definition). For those
@@ -777,7 +840,10 @@ text around it so it looks the same size.
   radio up, down, pending or reconfigured; its channel, frequency, BSSID
   or SSID in hostapd's status); the noise floor comes every poll from
   `luci.vantage survey` (1.5-2.5 ms a radio), its entry for the radio's
-  channel (0 for none), falling back to `iwinfo info`'s. Not from
+  channel (0 for none), falling back to `iwinfo info`'s (both model
+  builds, the poll's and a rebuild's, take their input from one
+  function, which includes the survey: until 1.2.2 neither passed it
+  on). Not from
   `iwinfo survey`, which 1.0.19 used: rpcd calls a function libiwinfo
   has only for its nl80211 backend, so on any other (MediaTek's mtwifi
   in the mt798x builds) it kills rpcd (#124), and no group grants it. The
@@ -920,7 +986,8 @@ text around it so it looks the same size.
   any other device gets no channels without the kernel being asked.
   `set_alias({mac, name, icon})`
   re-applies the view's rules on the device (unicast MAC, name of at most
-  48 code points without control, bidi or invisible characters, icon from
+  48 code points without control, bidi or invisible characters, refused
+  over 1152 bytes before it is decoded, icon from
   the fixed list), keeps one section per MAC, refuses a new name past 512,
   and writes and commits config `vantage` only. `set_quiet({mac, quiet})`
   (#110) keeps one `quiet` section per unicast MAC while `quiet` is true
@@ -944,8 +1011,10 @@ text around it so it looks the same size.
   starts), kills it after its own timeout (30 s as OpenWrt sets it) and
   answers others meanwhile. Its one method, `counters`, takes nothing:
   the call's arguments are not read. One call reads at a time: it first
-  locks its own file, opened for reading, without waiting, and where
-  another holds the lock it answers `busy` at once and starts nothing
+  locks an empty file of its own (0600) in `/var/run/vantage-ports`, a
+  directory it makes 0700 and takes only as root's alone, without
+  waiting, and where another holds the lock, or it cannot have the lock
+  at all, it answers `busy` at once and starts nothing
   (rpcd and uhttpd start as many calls as come, and each `ethtool -S`
   holds the kernel's rtnl lock while it reads the chip). The shell and
   `ethtool` it starts hold the lock too, so after rpcd kills a call
@@ -1192,7 +1261,11 @@ dashboard package itself stays read-only.
   address is then not asked at all: while the named network exists and
   that address is on none of its subnets, whoever holds the address
   today (another network's device, a host beyond the WAN) gets no
-  connection, and the search starts at once. When no interface
+  connection, and the search starts at once. The same holds for the
+  address it answered at after a move and for one found a moment ago:
+  every address is checked against the named network, as it is now,
+  before each connection, and a found address that has left the network
+  is not tried again in that search. When no interface
   has that name any more (the network was renamed or removed), or it
   is down, nothing is searched, and never the network the pairing
   address would be on in its place: the access point is read where it
@@ -1254,8 +1327,17 @@ dashboard package itself stays read-only.
   chip's own beside them (#156), as the access point's own
   `luci.vantage.ports` reads them; the report asks it, as it asks
   `luci.vantage wired`, and runs nothing itself. Nothing from configuration, no keys; it
-  takes no input and changes nothing, and runs one at a time (a lock on
-  its own file, so many sessions of one key cannot pile up). The router checks every field
+  takes no input and changes nothing but its lock, and runs one at a
+  time (an empty file, 0600, in `/var/run/vantage-report`, which it
+  makes 0700 and takes only as root's alone, so many sessions of one key
+  cannot pile up; without the lock there is no report). Before it reads
+  anything it asks procd for Dropbear's running instances and prints
+  nothing while one of them takes root and runs a command of its own, or
+  while they cannot be read: the router then shows that access point as
+  not reporting, and the access point's own pairing page says why. The
+  16-SSID cap applies after an interface is classified, so the VLAN
+  interfaces of the networks listed keep their own budget of 32, and it
+  asks iwinfo about at most 48 interfaces a report. The router checks every field
   again (types, ranges, MAC form, UTF-8 without control characters; at
   most 16 SSIDs, 256 stations, 128 wired hosts and 32 ports an access
   point, 1024 stations in a reply) and turns byte counts into rates: a
@@ -1362,7 +1444,8 @@ dashboard package itself stays read-only.
   with this command, a Dropbear older than 2022.82). A login without a
   key line's command (the administrator's shell) is not judged.
   Removing the add-on leaves the key lines, which can then only run a
-  command that is gone: revoke routers first.
+  command that is gone (on a listener with a command of its own they
+  still run that one): revoke routers first.
 - **Requirements and limits.** Dropbear on the access point, running and
   reachable from the router, built with key options (OpenWrt's default;
   the add-on looks for Dropbear's option parser and refuses to pair
@@ -1370,7 +1453,26 @@ dashboard package itself stays read-only.
   an Ed25519 host key of its own and settings that let root in by key
   with the key's own command (no `RootLogin` off, `ForceCommand` or
   `keyfile` list in the first section that is on, whose first port the
-  reply names); `dbclient` on the router. The report needs a Dropbear
+  reply names; and no `ForceCommand` on any section that is on and takes
+  root, nor a running listener with a command of its own: every running
+  instance of any procd service whose program is a dropbear (the last
+  part of its path), with its options read as Dropbear 2025.89 reads
+  them (several letters in one word, a value in the same word or the
+  next, never read as options): a `c` without a `w` is one, and so is an
+  instance or a command line that cannot be read (an option OpenWrt's
+  start script begins to pass must be added to the two tables: a test
+  holds them to that script). Every listener reads the same
+  `authorized_keys`, and Dropbear runs a listener's command in place of
+  a key line's. `status` says `forced` when routers are let in beside
+  such a listener, and the page then tells the administrator to remove
+  the command or revoke the routers, without its sentence that a router
+  fetches the report and nothing else); `dbclient` on the router.
+  `add_ap` answers `{ id, collector }` and `remove_ap`
+  `{ ok, collector }`, `collector` false when the service did not take
+  its two commands or procd does not run it as asked (without `dbclient`
+  the init script starts nothing; after `stop`, procd is asked again up
+  to ten times, 100 ms apart); the same pairing again stores nothing and
+  runs them again. The report needs a Dropbear
   that sets `SSH_PUBKEYINFO` (2022.82 and later; OpenWrt 24.10 and
   25.12 have it): an older one gets no report at all. On OpenWrt 24.10's Dropbear the
   key's `no-port-forwarding` is also what keeps it from forwarding to a
@@ -1400,7 +1502,8 @@ measured on few devices so far.
 - **What is counted.** The plugin reads `/proc/net/nf_conntrack` line by
   line, with both directions' bytes of each entry: split once at its
   spaces and taken apart by a table of where each protocol's fields are
-  (five builtin calls a line, against about thirty before 1.2.0), a line
+  (five builtin calls a line for an entry in no conntrack zone, against
+  about thirty before 1.2.0), a line
   that does not fit the table searched as before. A host is the MAC the
   router's IPv4 or IPv6 neighbour table gives an address: the one that
   opened the connection, and the one it was opened to (a port forward,
@@ -1409,8 +1512,10 @@ measured on few devices so far.
   itself count; the router's own connections to the internet do not
   (its address is in no neighbour table). The counters, by MAC, only
   grow: each read adds what each entry carried since the read before.
-  An entry is known again by its protocol and original addresses and
-  ports, whatever its timeout and state; a new one counts whole; one
+  An entry is known again by its protocol, original addresses and
+  ports and its conntrack zone (the same ones may be tracked once in
+  each zone), by one key whichever way the line is read, whatever its
+  timeout and state; a new one counts whole; one
   whose counters went down (another reader reset them) counts from 0.
   An address the neighbour table does not give a host yet is followed
   all the same, so it does not count whole once it does. A host nothing
@@ -1421,6 +1526,9 @@ measured on few devices so far.
   hosts of one network: it never reaches connection tracking, so this
   is traffic through the router, never all of a host's. Hosts behind
   another router (their addresses are in no neighbour table here). An
+  address the neighbour tables give two MACs on different interfaces
+  (two networks with one subnet): a connection's entry does not say
+  which interface it came by. An
   IPv6 address the neighbour table does not hold when a read runs (an
   expired privacy address). What a connection carried after the last
   read before it ended, and one that began and ended between two reads.
@@ -1458,7 +1566,9 @@ measured on few devices so far.
   bytes, read at ] }, totals: { mac: [ rx, tx, counted at ] } }`, `at`
   when the read that wrote it began; about 100 bytes an entry, 1.5 MiB
   at 16,384 entries), `answer.json` (the last answer) and a lock file,
-  0600 too. Both files are written 0600 beside the one they replace,
+  0600 too. `v` is 3 since 1.2.2 (the keys hold the zone); a state of
+  another version is not used and the counting starts over. Both files
+  are written 0600 beside the one they replace, checked to be all there,
   then put in its place, so a call rpcd kills leaves the last whole one;
   a write that fails leaves nothing beside it, and the answer is written
   only after the state it comes from (without it the call gets `{}`, and
@@ -1674,8 +1784,9 @@ measured on few devices so far.
   -S` and the name of one of the device's own DSA ports, which the plugin
   finds in `/sys/class/net` and holds to letters, digits, `_` and `-`
   (never first), at most 32 ports, none after its first second and 32
-  KiB of each run read, one call at a time (a lock on its own file,
-  opened for reading); nothing the caller sends reaches the command,
+  KiB of each run read, one call at a time (a lock on an empty file of
+  its own in `/var/run/vantage-ports`, the one thing it writes); nothing
+  the caller sends reaches the command,
   and without a DSA port or `ethtool` nothing is started. Its read group
   grants the call and no other group of a Vantage package names it;
   `luci.vantage` starts nothing. `test_acl_policy.js` pins all of it.
@@ -1705,7 +1816,12 @@ measured on few devices so far.
 - Built-package verification (`security-tests/verify_built_apk.js`, run by
   `dev/build/sdk-build.sh` before anything reaches `dist/`) and a
   reproducible release manifest (`dist/<release>/BUILDINFO`: commit, SDK
-  image digest, SDK tarball hash, entrypoint hash, feed commits).
+  image digest, SDK tarball hash, entrypoint hash, feed commits). The
+  packages are built and verified without a signing key. The key reaches
+  one place: an SDK container without network (`sdk-build.sh --sign`),
+  in a CI job on a machine of its own, on its standard input. It indexes
+  exactly the verified files and checks the signed index against the
+  committed public key before handing it out.
 
 ## 7. Development workflow
 

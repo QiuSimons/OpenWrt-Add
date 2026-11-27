@@ -173,6 +173,9 @@ const NAMES = [
 	[ '\u{1F4FA}'.repeat(49), false ],
 	[ ' '.repeat(40) + 'y'.repeat(48) + ' '.repeat(40), true, 'y'.repeat(48) ],
 	[ ' '.repeat(300) + 'y' + ' '.repeat(100), false ],
+	/* the raw cap in its largest form: 384 units that take three bytes each */
+	[ '\u3000'.repeat(336) + '\u4e2d'.repeat(48), true, '\u4e2d'.repeat(48) ],
+	[ '\u3000'.repeat(337) + '\u4e2d'.repeat(48), false ],
 	[ 'Café über 中文', true, 'Café über 中文' ],
 	[ '<img src=x onerror=alert(1)>', true, '<img src=x onerror=alert(1)>' ],
 	[ '\u{1F468}\u200d\u{1F4BB} desk', true, '\u{1F468}\u200d\u{1F4BB} desk' ],
@@ -905,6 +908,21 @@ test('stand-in: thermal reads the zones of a fixtures file system, none without 
 	assert.deepEqual(load('vantage.model').temps(ZONES_OUT).map(t => t.name), [ 'tsens_tz_sensor11', 'cpu-thermal', 'thermal_zone1' ]);
 });
 
+/* 'wpa2/tkip+aes': the older separator before the ciphers, which netifd still reads */
+test('ucode plugin: an encryption with a slash before its ciphers is passed on whole, and nothing beyond the mode string', { skip: NO_UCODE }, () => {
+	const ifc = (ifname, encryption) => ({ section: ifname, ifname, config: { mode: 'ap', ssid: 'Home', encryption } });
+	const status = { radio0: { up: true, config: { band: '5g', channel: '36' }, interfaces: [
+		ifc('wl0', 'wpa2/tkip+aes'), ifc('wl1', 'psk2/tkip'), ifc('wl2', 'psk2/tkip key=SECRET-11'), ifc('wl3', 'psk2/tkip\\x'), ifc('wl4', 'psk2/' + 'tkip+'.repeat(20)) ] } };
+	const r = runUcode([ { method: 'wireless', ubus: { 'network.wireless status': status } } ])[0].reply;
+	const enc = r.radio0.interfaces.map(i => i.config.encryption);
+	assert.deepEqual(enc.slice(0, 4), [ 'wpa2/tkip+aes', 'psk2/tkip', 'psk2/tkip', 'psk2/tkip' ], 'the slash and the ciphers; a space, a key or a backslash ends it');
+	assert.equal(enc[4].length, 40, 'and 40 characters at most');
+	assert.doesNotMatch(JSON.stringify(r), /SECRET/);
+	/* what the browser makes of them */
+	const wifi = load('vantage.wifi');
+	assert.deepEqual(enc.slice(0, 2).map(e => wifi.security(e).tone), [ 'weak', 'weak' ]);
+});
+
 test('ucode plugin: thermal reads the same file system alike', { skip: NO_UCODE }, () => {
 	const { dir, sys } = fakeThermal();
 	const src = fs.readFileSync(PLUGIN, 'utf8');
@@ -925,6 +943,26 @@ test('ucode plugin: same results as the stand-in for every case', { skip: NO_UCO
 	assert.equal(u.length, ALL.length);
 	for (let i = 0; i < ALL.length; i++)
 		assert.deepEqual(norm(u[i]), norm(s[i]), `case ${i}: ${JSON.stringify(ALL[i]).slice(0, 160)}`);
+});
+
+test('ucode plugin: a name over 1152 bytes is refused before it is decoded', { skip: NO_UCODE }, () => {
+	/* decode() takes an array for every character: a copy whose decode()
+	   stops on more bytes than 384 units can take shows it is never
+	   handed them */
+	const src = fs.readFileSync(PLUGIN, 'utf8'), at = 'function decode(s) {\n';
+	assert.ok(src.includes(at), 'insertion point');
+	const copy = src.replace(at, at + "\tif (length(s) > 1152)\n\t\tdie('decode: ' + length(s) + ' bytes');\n");
+	const most = '\u3000'.repeat(336) + '\u4e2d'.repeat(48);
+	assert.equal(Buffer.byteLength(most), 1152);
+	const cases = [ most, most + 'x', '\u4e2d'.repeat(385), '\u{1F4FA}'.repeat(289), 'x'.repeat(100000) ].map(name => ({ method: 'set_alias', args: { mac: MAC, name } }));
+	const r = spawnUcode(cases, copy);
+	assert.equal(r.status, 0, r.stderr);
+	const out = JSON.parse(r.stdout);
+	assert.deepEqual(out[0].reply, { ok: true, op: 'add', mac: MAC }, 'the largest input that can pass still does');
+	assert.equal(out[0].sections[0].name, '\u4e2d'.repeat(48));
+	assert.deepEqual(out.slice(1).map(x => x.reply), Array(4).fill({ ok: false, error: 'name-too-long' }));
+	/* and the stand-in says the same */
+	assert.deepEqual(runShim(cases).map(x => x.reply), out.map(x => x.reply));
 });
 
 test('ucode plugin: the test doubles stop a copy that writes wireless, reads another config, calls another object or writes over netlink', { skip: NO_UCODE }, () => {

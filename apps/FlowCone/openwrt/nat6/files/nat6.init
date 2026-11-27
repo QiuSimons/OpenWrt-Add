@@ -68,9 +68,7 @@ interface() {
 	default_dev=$(ip -6 route show default 2>/dev/null | awk '/^default/{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
 	if [ -n "$default_dev" ] && ip -6 addr show dev "$default_dev" scope global 2>/dev/null | grep -q "inet6"; then
 		device="$default_dev"
-		if [ -z "$gateway" ]; then
-			gateway=$(ip -6 route show default dev "$device" 2>/dev/null | awk '/via/{for (i = 1; i <= NF; i++) if ($i == "via") { print $(i + 1); exit }}')
-		fi
+		gateway=$(ip -6 route show default dev "$device" 2>/dev/null | awk '/via/{for (i = 1; i <= NF; i++) if ($i == "via") { print $(i + 1); exit }}')
 	fi
 }
 
@@ -144,8 +142,8 @@ start() {
 	nft add chain ip6 nat prerouting '{ type nat hook prerouting priority 0; }' 2>/dev/null
 	nft add chain ip6 nat postrouting '{ type nat hook postrouting priority 100; }' 2>/dev/null
 	if [ "$fc_v6" = "1" ]; then
-		# FlowCone owns UDP fullcone/NAT66; let nat6 cover TCP/ICMP only.
-		nft add rule ip6 nat postrouting oifname "$device" meta l4proto != udp masquerade comment "flowcone-nat6-partial" 2>/dev/null
+		# FlowCone owns ULA UDP fullcone/NAT66; keep nat6 for ULA TCP/ICMP only.
+		nft add rule ip6 nat postrouting oifname "$device" ip6 saddr fc00::/7 meta l4proto != udp masquerade comment "flowcone-nat6-partial" 2>/dev/null
 	else
 		nft add rule ip6 nat postrouting oifname "$device" masquerade 2>/dev/null
 	fi

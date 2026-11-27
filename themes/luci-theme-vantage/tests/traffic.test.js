@@ -24,7 +24,11 @@ const mkTmp = require('./tmpdir');
    state it did not write, and give no answer without the state it comes
    from; and hand out nothing but MACs and byte counts. The lean parse
    must give what the slower one gives, on every kind of line, and leave
-   lines it does not fit to it.
+   lines it does not fit to it. An entry is known by its conntrack zone
+   too (the same addresses and ports in two zones are two entries), by
+   one key whichever parse reads it; an address two interfaces give
+   different MACs is counted for nobody; and a file that did not reach
+   the disk whole never takes the place of the one before it.
 
    Each call runs the plugin as rpcd would, a ucode process with the
    arguments rpcd passes, under a host ucode binary ($UCODE, else `ucode`
@@ -104,7 +108,7 @@ function setup(source, uid) {
 /* the plugin run as rpcd runs it: argv, what it printed, what the stubs saw */
 function exec(dir, argv, o) {
 	o = o || {};
-	fs.writeFileSync(path.join(dir, 'stub.json'), JSON.stringify({ neigh: o.neigh || {}, power: o.power == null ? null : o.power }));
+	fs.writeFileSync(path.join(dir, 'stub.json'), JSON.stringify({ neigh: o.neigh || {}, power: o.power == null ? null : o.power, short: o.short || null }));
 	const r = spawnSync(UCODE, [ '-L', STUBS, '-D', 'STUB=' + path.join(dir, 'stub.json'), '-D', 'NOW=' + (o.now || 0), '-D', 'STEP=' + (o.step || 0),
 		'-D', 'INPUT=' + path.join(dir, 'input.json'), path.join(dir, 'plugin.uc') ].concat(argv), { encoding: 'utf8', maxBuffer: 64 << 20, input: '{ "ubus_rpc_session": "x" }' });
 	const seen = r.stderr.trim().split('\n').pop();
@@ -142,7 +146,11 @@ const parses = lines => {
 };
 
 /* one line as the kernel prints it ("%-8s %u %-8s %u %ld "; no timeout
-   when the entry is offloaded), accounting on */
+   when the entry is offloaded), accounting on. Its conntrack zone: of
+   both directions after the mark (zid; "zone=0" for an entry in none,
+   nothing on a kernel without zones: zid false), then the entry's age
+   with timestamps on (delta); of one direction among that direction's
+   fields (zone, rzone), and then none after the mark */
 const NUM = { tcp: 6, udp: 17, icmp: 1, icmpv6: 58, sctp: 132, dccp: 33, udplite: 136, gre: 47, unknown: 47 };
 function line(o) {
 	const name = o.proto || 'tcp';
@@ -151,10 +159,11 @@ function line(o) {
 	const ports = o.ports != null ? o.ports : o.sport != null ? ` sport=${o.sport} dport=${o.dport}` : '';
 	const back = o.back != null ? o.back : o.sport != null ? ` sport=${o.dport} dport=${o.sport}` : '';
 	const orig = `src=${o.src} dst=${o.dst}${ports}${o.zone || ''}` + (o.acct === false ? '' : ` packets=1 bytes=${o.ob}`);
-	const reply = `src=${o.rsrc} dst=${o.rdst}${back}` + (o.acct === false ? '' : ` packets=1 bytes=${o.rb}`);
+	const reply = `src=${o.rsrc} dst=${o.rdst}${back}${o.rzone || ''}` + (o.acct === false ? '' : ` packets=1 bytes=${o.rb}`);
 	/* the kernel prints [HW_OFFLOAD] or [OFFLOAD] in place of [ASSURED] */
 	const flag = o.hw ? '[HW_OFFLOAD] ' : o.offload ? '[OFFLOAD] ' : o.assured === false ? '' : '[ASSURED] ';
-	return `${head}${orig}${o.unreplied ? ' [UNREPLIED]' : ''} ${reply} ${flag}mark=0 zone=0 use=2`;
+	const tail = (o.zone || o.rzone || o.zid === false ? '' : `zone=${o.zid || 0} `) + (o.delta != null ? `delta-time=${o.delta} ` : '');
+	return `${head}${orig}${o.unreplied ? ' [UNREPLIED]' : ''} ${reply} ${flag}mark=0 ${tail}use=2`;
 }
 const at = (o, x) => Object.assign({}, o, x);
 
@@ -197,11 +206,15 @@ function table(n, m, k, first) {
 	}
 	return out;
 }
+/* the two IPv4 networks hold 508 hosts: table() gives a further one an
+   address of the second again, which the kernel lists once, for the host
+   that has it (two MACs for one address would be nobody's); the further
+   one is known by IPv6 alone */
 function neighOf(m) {
 	const v4 = [], v6 = [];
 	for (let h = 0; h < m; h++) {
 		const mac = '02:00:5e:00:' + (h >> 8).toString(16).padStart(2, '0') + ':' + (h & 255).toString(16).padStart(2, '0');
-		v4.push(n4((h < 254 ? '192.0.2.' : '198.51.100.') + (h % 254 + 1), mac));
+		if (h < 508) v4.push(n4((h < 254 ? '192.0.2.' : '198.51.100.') + (h % 254 + 1), mac));
 		v6.push(n6('2001:db8::' + (h + 1).toString(16), mac));
 	}
 	return { 2: v4, 10: v6 };
@@ -231,19 +244,32 @@ const KINDS = {
 	'gre (its tracker: two fields of state, keys)': line({ proto: 'gre', state: 'timeout=30, stream_timeout=180', src: '192.0.2.10', dst: '203.0.113.5', ports: ' srckey=0x0 dstkey=0x0', back: ' srckey=0x0 dstkey=0x0', rsrc: '203.0.113.5', rdst: '203.0.113.200', ob: 7, rb: 8 }),
 	'a protocol without a tracker': line({ proto: 'unknown', num: 4, src: '192.0.2.10', dst: '203.0.113.5', rsrc: '203.0.113.5', rdst: '203.0.113.200', ob: 7, rb: 8 }),
 	'large counters': line(at(OUT, { ob: 900719925474099, rb: 123456789012 })),
+	'tcp in a zone': line(at(OUT, { ob: 1, rb: 2, zid: 5 })),
+	'tcp in a zone, later, offloaded': line(at(OUT, { ob: 9, rb: 8, zid: 5, offload: true })),
+	'tcp in a zone, unreplied': line(at(OUT, { ob: 3, rb: 0, zid: 5, unreplied: true, state: 'SYN_SENT', assured: false })),
+	'tcp in another zone': line(at(OUT, { ob: 1, rb: 2, zid: 6 })),
+	'tcp in a zone, with its age': line(at(OUT, { ob: 1, rb: 2, zid: 5, delta: 12 })),
+	'tcp in no zone, with its age': line(at(OUT, { ob: 1, rb: 2, delta: 12 })),
+	'tcp on a kernel without zones': line(at(OUT, { ob: 1, rb: 2, zid: false })),
+	'udp in a zone': line(at(OWN, { ob: 70, rb: 90, zid: 5, assured: false })),
 	/* these the lean parse must leave to the slower one */
 	'no counters (accounting off)': line(at(OUT, { acct: false })),
 	'no counters, unreplied': line(at(NEW, { acct: false, unreplied: true, state: 'SYN_SENT', assured: false })),
 	'no counters, no ports': line({ proto: 'unknown', num: 4, src: '192.0.2.10', dst: '203.0.113.5', rsrc: '203.0.113.5', rdst: '203.0.113.200', acct: false }),
 	'a zone of the original direction': line(at(OUT, { ob: 1, rb: 2, zone: ' zone-orig=1' })),
+	'another zone of the original direction': line(at(OUT, { ob: 1, rb: 2, zone: ' zone-orig=2' })),
+	'a zone of the reply direction': line(at(OUT, { ob: 1, rb: 2, rzone: ' zone-reply=1' })),
 	'a protocol of another name': line(at(OUT, { proto: 'mptcp', num: 6, ob: 1, rb: 2 })),
+	'a protocol of another name, in a zone': line(at(OUT, { proto: 'mptcp', num: 6, ob: 1, rb: 2, zid: 5 })),
 	'counters that are no counts': 'ipv4     2 tcp      6 1 src=192.0.2.1 dst=192.0.2.2 bytes=-5 src=192.0.2.2 bytes=99999999999999999999',
 	'not a line': 'ipv4     2 tcp      6 7438 ESTABLISHED'
 };
-const LEFT = [ 'no counters (accounting off)', 'no counters, unreplied', 'no counters, no ports', 'a zone of the original direction', 'a protocol of another name',
-	'counters that are no counts', 'not a line' ];
-/* the lean parse's check (feed's memo): both src fields at their places */
-const fits = e => !!e && /^src=/.test(e[1]) && /^src=/.test(e[3]);
+const LEFT = [ 'no counters (accounting off)', 'no counters, unreplied', 'no counters, no ports', 'a zone of the original direction', 'another zone of the original direction',
+	'a zone of the reply direction', 'a protocol of another name', 'a protocol of another name, in a zone', 'counters that are no counts', 'not a line' ];
+/* the lean parse's check (feed's): both src fields at their places, and a
+   count after each (a zone of the reply direction moves the second) */
+const counted = v => typeof v === 'number' && v >= 0;
+const fits = e => !!e && /^src=/.test(e[1]) && /^src=/.test(e[3]) && counted(e[2]) && counted(e[4]);
 
 test('traffic plugin: the lean parse gives what the slower one gives, on every kind of line, and leaves it the others', { skip: NO_UCODE }, () => {
 	const names = Object.keys(KINDS), out = parses(names.map(n => KINDS[n]));
@@ -253,6 +279,7 @@ test('traffic plugin: the lean parse gives what the slower one gives, on every k
 		assert.ok(fits(e), name + ': fits ' + JSON.stringify(e));
 		assert.ok(s && s.acct, name);
 		assert.deepEqual([ e[1], e[2], e[3], e[4], e[5] === '[HW_OFFLOAD]' ? 2 : e[5] === '[OFFLOAD]' ? 1 : 0 ], [ 'src=' + s.osrc, s.obytes, 'src=' + s.rsrc, s.rbytes, s.hw ? 2 : s.off ? 1 : 0 ], name);
+		assert.equal(e[0], s.key, name + ': one key, whichever parse reads the line');
 	});
 	const key = name => out[names.indexOf(name)][0][0];
 	assert.equal(key('tcp'), key('tcp, later timeout and state'), 'one key while the timeout and the state move');
@@ -264,6 +291,21 @@ test('traffic plugin: the lean parse gives what the slower one gives, on every k
 	assert.notEqual(key('udp (no state)'), key('udplite'), 'protocols by their numbers');
 	/* the slower parse on what the lean one leaves */
 	const s = name => out[names.indexOf(name)][1];
+	/* the zone is part of the key: the kernel keeps the same addresses and
+	   ports once in each */
+	assert.equal(key('tcp in a zone'), key('tcp') + 'zone=5');
+	assert.equal(key('tcp in a zone'), key('tcp in a zone, later, offloaded'), 'one key while it moves, in a zone too');
+	assert.equal(key('tcp in a zone'), key('tcp in a zone, unreplied'), 'whether [ASSURED] stands before the mark or not');
+	assert.equal(key('tcp in a zone'), key('tcp in a zone, with its age'));
+	assert.notEqual(key('tcp in a zone'), key('tcp in another zone'));
+	assert.equal(key('udp in a zone'), key('udp (no state)') + 'zone=5');
+	assert.equal(key('tcp in no zone, with its age'), key('tcp'), 'zone=0 is no zone, wherever it stands');
+	assert.equal(key('tcp on a kernel without zones'), key('tcp'));
+	assert.equal(s('a protocol of another name, in a zone').key, s('a protocol of another name').key + 'zone=5', 'the slower parse spells it the same');
+	assert.equal(s('a protocol of another name').key, key('tcp'), 'and the rest of the key');
+	assert.match(s('a zone of the original direction').key, /dport=443zone-orig=1$/, 'a zone of the original direction: among its fields');
+	assert.notEqual(s('a zone of the original direction').key, s('another zone of the original direction').key);
+	assert.equal(s('a zone of the reply direction').key, key('tcp'), 'a zone of the reply alone leaves the original direction in zone 0');
 	assert.equal(s('no counters (accounting off)').acct, false);
 	assert.equal(s('no counters, unreplied').acct, false);
 	assert.deepEqual([ s('a zone of the original direction').obytes, s('a zone of the original direction').rbytes ], [ 1, 2 ]);
@@ -345,6 +387,49 @@ test('traffic plugin: lines the lean parse leaves are counted as before', { skip
 	const [ a, b ] = calls([ call([ z(100, 500), line(at(NEW, { ob: 1, rb: 2 })) ], 0), call([ z(150, 900), line(at(NEW, { ob: 1, rb: 2 })) ], 5000) ]);
 	assert.deepEqual(a.reply.hosts, [ { mac: M1, rx: 100, tx: 500 }, { mac: M2, rx: 1, tx: 2 } ]);
 	assert.deepEqual(b.reply.hosts, [ { mac: M1, rx: 150, tx: 900 }, { mac: M2, rx: 1, tx: 2 } ]);
+});
+
+test('traffic plugin: the same addresses and ports in two conntrack zones are two entries; a table that did not change adds nothing', { skip: NO_UCODE }, () => {
+	/* two networks with one subnet, each tracked in a zone of its own: the
+	   host of each talks to the same server from the same port. One key
+	   for both made every read count each from the other's numbers */
+	const a = (ob, rb) => line(at(OUT, { ob, rb, zid: 1 })), b = (ob, rb) => line(at(OUT, { ob, rb, zid: 2 }));
+	/* the slower parse's lines: zones of both directions and of the original one */
+	const c = (ob, rb, zid) => line(at(NEW, { proto: 'mptcp', num: 6, ob, rb, zid }));
+	const d = (ob, rb, n) => line(at(FWD, { ob, rb, zone: ' zone-orig=' + n }));
+	const t = [ a(100, 300), b(200, 400), c(10, 30, 1), c(20, 40, 2), d(1000, 3000, 1), d(2000, 4000, 2) ];
+	const [ r1, r2, r3, r4 ] = calls([ call(t, 0), call(t, 5000),
+		/* the kernel lists the table in another order */
+		call(t.slice().reverse(), 10000),
+		/* one of each pair grows */
+		call([ a(150, 360), b(200, 400), c(10, 30, 1), c(21, 42, 2), d(1001, 3002, 1), d(2000, 4000, 2) ], 15000) ]);
+	const want = [ { mac: M1, rx: 300, tx: 700 }, { mac: M2, rx: 30 + 7000, tx: 70 + 3000 } ];
+	assert.deepEqual(r1.reply.hosts, want, 'each entry whole, once');
+	assert.deepEqual(r2.reply.hosts, want, 'read again: nothing added');
+	assert.deepEqual(r3.reply.hosts, want, 'nor in another order');
+	assert.deepEqual([ r1.reply.zeroed, r2.reply.zeroed, r3.reply.zeroed, r4.reply.zeroed ], [ 0, 0, 0, 0 ], 'and no counter read as reset');
+	assert.deepEqual(r4.reply.hosts, [ { mac: M1, rx: 350, tx: 760 }, { mac: M2, rx: 7030 + 1 + 2, tx: 3070 + 2 + 1 } ], 'what each carried since');
+});
+
+test('traffic plugin: an address two interfaces give different MACs is counted for nobody, and followed', { skip: NO_UCODE }, () => {
+	const on = (n, dev) => at(n, { dev });
+	const t = (ob, rb) => [ line(at(OUT, { ob, rb })), line(at(SIX, { ob, rb })) ];
+	const two = { 2: [ n4('192.0.2.10', M1), on(n4('192.0.2.10', M2), 'br-guest'), n4('192.0.2.20', M3) ],
+		10: [ n6('2001:db8::10', M1), on(n6('2001:db8:0::10', M2), 'br-guest') ] };
+	const swapped = { 2: [ two[2][1], two[2][0] ], 10: [ two[10][1], two[10][0] ] };
+	/* the first MAC listed a third time does not win it back */
+	const thrice = { 2: two[2].concat(on(n4('192.0.2.10', M1), 'br-iot')), 10: two[10].concat(on(n6('2001:db8::10', M1), 'br-iot')) };
+	for (const [ name, neigh ] of [ [ 'two MACs', two ], [ 'the other order', swapped ], [ 'the first one again', thrice ] ]) {
+		const [ r ] = calls([ call(t(1000, 5000), 0, { neigh }) ]);
+		assert.deepEqual(r.reply.hosts, [], name + ': neither host is given the other\'s traffic');
+	}
+	/* one MAC on two interfaces is one host */
+	const same = { 2: [ n4('192.0.2.10', M1), on(n4('192.0.2.10', M1), 'br-guest') ], 10: [ n6('2001:db8::10', M1), on(n6('2001:db8::10', M1), 'br-guest') ] };
+	const [ one ] = calls([ call(t(1000, 5000), 0, { neigh: same }) ]);
+	assert.deepEqual(one.reply.hosts, [ { mac: M1, rx: 2000, tx: 10000 } ]);
+	/* once one interface alone holds the address: what passed since, not all of it */
+	const [ , later ] = calls([ call(t(1000, 5000), 0, { neigh: two }), call(t(1100, 5500), 5000) ]);
+	assert.deepEqual(later.reply.hosts, [ { mac: M1, rx: 200, tx: 1000 } ]);
 });
 
 test('traffic plugin: accounting off, no table, offloaded entries', { skip: NO_UCODE }, () => {
@@ -528,11 +613,11 @@ test('traffic plugin: its state in a directory of its own, 0700, its files 0600,
 	for (const f of [ 'answer.json', 'lock', 'state.json' ]) assert.equal(fs.statSync(path.join(state, f)).mode & 0o777, 0o600, f);
 	const st = JSON.parse(fs.readFileSync(path.join(state, 'state.json'), 'utf8'));
 	assert.deepEqual(Object.keys(st).sort(), [ 'at', 'flows', 'totals', 'v' ]);
-	assert.deepEqual([ st.at, st.totals ], [ 0, { [M1]: [ 1, 2, 0 ] } ]);
+	assert.deepEqual([ st.v, st.at, st.totals ], [ 3, 0, { [M1]: [ 1, 2, 0 ] } ]);
 	/* a state it wrote, up to MAX_STATE bytes, is counted on from; one that is
 	   not its own, or larger: counted afresh, never trusted */
 	const { MAX_STATE, MAX_KEY, MAX_HOSTS } = limits();
-	const of1 = (flows, totals, x) => JSON.stringify(Object.assign({ v: 2, at: 0, flows: flows || {}, totals: totals || { [M1]: [ 1000000, 1000000, 5000 ] } }, x || {}));
+	const of1 = (flows, totals, x) => JSON.stringify(Object.assign({ v: 3, at: 0, flows: flows || {}, totals: totals || { [M1]: [ 1000000, 1000000, 5000 ] } }, x || {}));
 	const pad = (text, n) => text.slice(0, -1) + ' '.repeat(n - text.length) + '}';
 	const hosts = {};
 	for (let h = 0; h <= MAX_HOSTS; h++) hosts['02:00:5e:00:' + (h >> 8).toString(16).padStart(2, '0') + ':' + (h & 255).toString(16).padStart(2, '0')] = [ 1, 1, 5000 ];
@@ -543,6 +628,10 @@ test('traffic plugin: its state in a directory of its own, 0700, its files 0600,
 		[ pad(of1(), MAX_STATE), 1000005 ],
 		[ pad(of1(), MAX_STATE + 1), 5 ],
 		[ of1(null, null, { v: 1 }), 5 ],
+		/* 1.2.1's, left in /var/run by an upgrade: its keys hold no zone, so
+		   an entry in one would count whole once more beside them */
+		[ of1(null, null, { v: 2 }), 5 ],
+		[ of1({ '6src=192.0.2.10dst=203.0.113.5sport=40000dport=443': [ 4, 4, 0 ] }, null, { v: 2 }), 5 ],
 		[ 'not json', 5 ],
 		[ '[]', 5 ],
 		/* entries it would not write: a read would stop at the first (not an
@@ -642,6 +731,35 @@ test('traffic plugin: no answer without the state it comes from, and nothing lef
 	assert.deepEqual([ next.reply.at, of(next, M1) ], [ 15000, { mac: M1, rx: 9, tx: 9 } ]);
 });
 
+test('traffic plugin: a file that did not reach the disk whole does not take the place of the one before it', { skip: NO_UCODE }, () => {
+	/* a full /tmp: writefile() counts what it handed over, and the last of
+	   it fails to reach the file when that is closed. Here: 20 bytes of the
+	   file named in the call, and the whole count */
+	const WRITE = 'writefile(tmp, text) == length(text)';
+	const src = fs.readFileSync(PLUGIN, 'utf8');
+	assert.ok(src.includes(WRITE), 'the write in put()');
+	const dir = setup(src.replace(WRITE, '(global.STUB.short == name ? (writefile(tmp, substr(text, 0, 20)), length(text)) : writefile(tmp, text)) == length(text)')), state = path.join(dir, 'state');
+	const read = f => fs.readFileSync(path.join(state, f), 'utf8');
+	/* two entries of one host; the second ends before the last read */
+	const t = (ob, rb) => line(at(OUT, { ob, rb })), gone = line(at(LAN, { ob: 300, rb: 400 }));
+	const [ first ] = calls([ call([ t(1000, 5000), gone ], 0) ], dir);
+	assert.deepEqual(of(first, M1), { mac: M1, rx: 1300, tx: 5400 });
+	const kept = read('state.json');
+	/* the state: no answer, and the state before it stays */
+	const [ none ] = calls([ call([ t(1500, 6000), gone ], 5000, { short: 'state.json' }) ], dir);
+	assert.deepEqual(none.reply, {}, 'no answer without its state');
+	assert.equal(read('state.json'), kept, 'the state before it, untouched');
+	assert.deepEqual(fs.readdirSync(state).sort(), [ 'answer.json', 'lock', 'state.json' ], 'no .new left');
+	/* the answer: given, and the file keeps the last one that was whole */
+	const [ given ] = calls([ call([ t(1500, 6000), gone ], 10000, { short: 'answer.json' }) ], dir);
+	assert.deepEqual(of(given, M1), { mac: M1, rx: 1800, tx: 6400 });
+	assert.equal(JSON.parse(read('answer.json')).at, 0, 'the last answer written whole');
+	assert.deepEqual(fs.readdirSync(state).sort(), [ 'answer.json', 'lock', 'state.json' ]);
+	/* counted on from the state: the entry that ended is not lost with a restart */
+	const [ next ] = calls([ call([ t(2000, 7000) ], 15000) ], dir);
+	assert.deepEqual(of(next, M1), { mac: M1, rx: 2300, tx: 7400 });
+});
+
 test('traffic plugin: a module that cannot load ends the call with no answer and no state, in its own process', { skip: NO_UCODE }, () => {
 	const dir = setup(), stubs = mkTmp('vantage-trafficmods-');
 	fs.copyFileSync(path.join(STUBS, 'uci.uc'), path.join(stubs, 'uci.uc'));
@@ -680,7 +798,7 @@ test('traffic benchmark: its counting and state code is the plugin\'s, byte for 
 		assert.ok(m, name);
 		return m[0];
 	};
-	for (const name of [ 'now_ms', 'count', 'kv', 'parse', 'parse_slow', 'norm', 'add', 'feed', 'put', 'entry_ok', 'load_state', 'save_state' ]) assert.equal(block(bench, name), block(plugin, name), name);
+	for (const name of [ 'now_ms', 'count', 'kv', 'zone', 'parse', 'parse_slow', 'norm', 'add', 'feed', 'put', 'entry_ok', 'load_state', 'save_state' ]) assert.equal(block(bench, name), block(plugin, name), name);
 	for (const c of [ 'MAX_ENTRIES', 'MAX_HOSTS', 'MAX_KEY', 'MAX_STATE', 'STOP_MS', 'CHECK_EVERY', 'KEEP_MS', 'KEEP_BYTES', 'PROTO', 'RE_MAC' ])
 		assert.equal(new RegExp('^const ' + c + ' = [^\\n]*(\\n\\t[^\\n]*)*', 'm').exec(bench)[0], new RegExp('^const ' + c + ' = [^\\n]*(\\n\\t[^\\n]*)*', 'm').exec(plugin)[0], c);
 	assert.doesNotMatch(bench, /^import .*'(rtnl|uci|ubus)'/m, 'only what a stock OpenWrt has: ucode and its fs module');

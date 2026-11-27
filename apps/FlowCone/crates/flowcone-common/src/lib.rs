@@ -17,6 +17,11 @@ pub const RESERVED_PORT_BIT: u16 = 1;
 pub const DEFAULT_SHORT_LIVED_TIMEOUT_SEC: u32 = 5;
 
 #[inline(always)]
+pub const fn monotonic_ns_to_sec(ns: u64) -> u32 {
+    (ns / 1_000_000_000) as u32
+}
+
+#[inline(always)]
 pub fn reserved_state_is_reserved(state: u16) -> bool {
     (state & RESERVED_PORT_BIT) != 0
 }

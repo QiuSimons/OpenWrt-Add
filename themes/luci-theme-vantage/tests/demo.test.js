@@ -213,6 +213,37 @@ test('demo: canary mirror - free text, log names, MAC fragments, EUI-64, DUIDs, 
 	assert.match(text, /!fw4: Allow-Ping/);
 });
 
+test('demo: a recorded RPC error keeps its code only, asked exactly or by its method alone', () => {
+	const { Store } = require('../dev/replay/store');
+	const { ERROR_TEXT } = require('../dev/replay/demo');
+	const dir = mkTmp('vantage-demo-error-');
+	const run = path.join(dir, 'browser-2026-01-01T00-00-00-000Z');
+	fs.mkdirSync(run);
+	const HOST = 'rossi-attic-ap', CLIENT = mac(0xa4, 0x5e, 0x60, 0x11, 0x22, 0x33);
+	const rows = [
+		{ at: 1, object: 'luci.sample', method: 'status', args: {}, error: { code: -32002, message: `no answer from ${HOST} at ${LAN(77)}`,
+			data: { host: HOST, mac: CLIENT, path: `/etc/${HOST}.conf` } } },
+		{ at: 2, object: 'luci.sample', method: 'peers', args: {}, error: 'timeout talking to ' + HOST },
+		{ at: 3, object: 'luci.sample', method: 'up', args: {}, result: [ 0, { up: true } ] }
+	];
+	fs.writeFileSync(path.join(run, 'rpc.jsonl'), rows.map(r => JSON.stringify(r)).join('\n') + '\n');
+
+	const store = new Store(dir, { synthetic: false, demo: true, plugins: false });
+	const quiet = console.error;
+	console.error = () => {};
+	let got;
+	/* each asked as recorded, then with other arguments (the reply of the same method) */
+	try { got = [ 'status', 'peers' ].map(m => [ store.call('luci.sample', m, {}), store.call('luci.sample', m, { n: 1 }) ]); }
+	finally { console.error = quiet; }
+	const only = code => ({ error: { code, message: ERROR_TEXT } });
+	assert.deepEqual(got, [ [ only(-32002), only(-32002) ], [ only(-32000), only(-32000) ] ]);
+	const text = crawl(store).toLowerCase();
+	assert.deepEqual([ HOST, 'rossi', CLIENT, LAN(77) ].filter(c => text.includes(c)), []);
+	assert.deepEqual(store.call('luci.sample', 'up', {}), { result: [ 0, { up: true } ] });
+	/* without --demo the recording answers as recorded */
+	assert.equal(new Store(dir, { synthetic: false, plugins: false }).call('luci.sample', 'status', {}).error.data.host, HOST);
+});
+
 test('demo: every recorded call, served in demo mode, carries no real identifiers', { skip: !hasMirror && `no mirror at ${MIRROR}` }, () => {
 	const { Store } = require('../dev/replay/store');
 	const ids = checker.mirrorIdentifiers(MIRROR);

@@ -108,9 +108,11 @@
  *   of one of the device's own DSA ports, which it finds in
  *   /sys/class/net (DEVTYPE=dsa) and holds to RE_PORT (popen hands the
  *   line to /bin/sh: letters, digits, _ and -, never first, are plain
- *   words to it and a device to ethtool); one read at a time: it locks
- *   its own file, opened for reading, before it reads or starts anything,
- *   and answers busy where the lock is held; its one method, counters,
+ *   words to it and a device to ethtool); one read at a time: before it
+ *   reads or starts anything it locks an empty file of its own (0600) in
+ *   /var/run/vantage-ports, a directory it makes 0700 and takes only as
+ *   root's alone, and answers busy where the lock is held or cannot be
+ *   had; that file is all it writes; its one method, counters,
  *   takes nothing; it reads MAX_PORTS ports, none after BUDGET_MS, and
  *   MAX_OUT bytes of each run at most; the read group grants it, no
  *   other group of any Vantage package mentions it, and the dashboard
@@ -134,26 +136,46 @@
  *   alone cannot make the router log in to its access points;
  * - the pairing plugin (luci.vantage-pair) registers exactly those
  *   methods; it runs dropbearkey to make the router's key and the
- *   collector's init script with fixed words, writes /etc/vantage/aps.json
+ *   collector's init script with fixed words (and says beside a pairing
+ *   whether the script took them and procd then runs the service as
+ *   asked, waiting for a stopping one a second at most: its one sleep),
+ *   writes /etc/vantage/aps.json
  *   and, through a temporary file and a rename, authorized_keys, adding
  *   only the line vantage.aps auth_line makes (the report command, no
- *   pty, no forwarding);
+ *   pty, no forwarding), and only where no dropbear listener that takes
+ *   root runs a command of its own (any section that is on, any dropbear
+ *   procd runs under any of its services, its options read as dropbear
+ *   reads them, one whose command cannot be read among them): dropbear
+ *   would run that for the key in the report's place; an address a caller
+ *   gives for a pairing is stored only as vantage.aps addr takes it;
  *   it reads only its own files, dropbear's binary, host key and config,
- *   the hostname and 8 random bytes, and asks ubus for dropbear's state,
- *   the LAN address and, when it pairs an access point, this router's
- *   interfaces (the network that access point is on, kept by name) only;
- * - the report (the forced command) writes nothing, runs nothing, reads
- *   only sysfs, the neighbour table, the hostname and authorized_keys
- *   (for the line it was let in by), takes SSH_CLIENT and SSH_PUBKEYINFO
- *   and nothing else from its environment, and makes read calls only;
+ *   the hostname and 8 random bytes, and asks ubus for procd's services
+ *   (dropbear's state), the collector's service, the LAN address and, when it pairs an access
+ *   point, this router's interfaces (the network that access point is on,
+ *   kept by name) only;
+ * - the report (the forced command) runs nothing and writes nothing but
+ *   its lock (an empty file, 0600, in /var/run/vantage-report, a directory
+ *   it makes 0700 and takes only as root's alone; without the lock, no
+ *   report), asks procd once for its services before any other call and
+ *   gives no report beside a dropbear, of any service, that takes root
+ *   and runs a command of its own or cannot be read, asks iwinfo about 48 interfaces
+ *   at most, reads only sysfs, the neighbour table, the hostname and
+ *   authorized_keys (for the line it was let in by), takes SSH_CLIENT and
+ *   SSH_PUBKEYINFO and nothing else from its environment, and makes read
+ *   calls only;
  * - the collector runs dbclient alone, with the host key pinned
  *   (StrictHostKeyChecking=yes), batch mode and no passwords, the access
  *   point's address and port as arguments, never through a shell word;
  *   it writes only the known_hosts it hands dbclient, removes only what
  *   it made under its run directory, asks ubus for this router's
- *   interfaces only, and publishes vantage.collector report only;
+ *   interfaces only, connects for a pairing that names its network only
+ *   to an address on that network as it is now (the one it answered at
+ *   last and one it found a moment ago too), and publishes
+ *   vantage.collector report only;
  * - the shared checks (vantage.aps) import nothing; the key line is made
- *   and known again there, in one form.
+ *   and known again there, in one form, and so is what makes a dropbear
+ *   listener one that runs a command of its own (its options as dropbear
+ *   2025.89 reads them: which take a value, which none).
  *
  * luci-app-vantage-traffic, the opt-in, experimental per-device traffic
  * (#110; VANTAGE_TRAFFIC_PKG: another copy of it):
@@ -1084,11 +1106,14 @@ test('the firewall overview: behind LuCI\'s firewall group, uci get on firewall 
    of its own per call. The rules below hold it to that one program, at
    that one path, with that one option and a port name of the device's
    own: every line of code that mentions a file, the program, a name or a
-   cap is listed (checkPins), the three functions that take the lock,
-   find the ports and run the program are pinned whole, and so are its
-   top-level statements and every name it binds. One read at a
-   time: the plugin locks its own file, opened for reading, before it
-   reads or starts anything, and answers busy where another holds it. */
+   cap is listed (checkPins), the four functions that check the lock's
+   directory, take the lock, find the ports and run the program are pinned
+   whole, and so are its top-level statements and every name it binds. One
+   read at a time: before it reads or starts anything the plugin locks an
+   empty file of its own (0600) in a directory it makes 0700 and takes only
+   as root's alone, and answers busy where another holds the lock or it
+   cannot have it; that file is all it writes. (Not its own file: any
+   account that may read that could hold a lock on it.) */
 const THEME_PKG = path.resolve(process.env.VANTAGE_THEME_PKG || path.join(__dirname, '..', 'luci-theme-vantage'));
 const PORTS_OBJECT = 'luci.vantage.ports';
 const PORTS_CALL = PORTS_OBJECT + ' counters';
@@ -1096,7 +1121,7 @@ const PORTS_REL = 'root/usr/libexec/rpcd/luci.vantage.ports';
 const portsPlugin = fs.readFileSync(path.join(PKG, PORTS_REL), 'utf8');
 /* a port's name: to /bin/sh (popen) a plain word, to ethtool a device and never an option */
 const PORTS_RE_PORT = 'const RE_PORT = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,14}$/;';
-const PORTS_PATHS = { NET: '/sys/class/net', ETHTOOL: '/usr/sbin/ethtool', SELF: '/usr/libexec/rpcd/luci.vantage.ports' };
+const PORTS_PATHS = { NET: '/sys/class/net', ETHTOOL: '/usr/sbin/ethtool', DIR: '/var/run/vantage-ports' };
 const PORTS_CAPS = { MAX_PORTS: 32, BUDGET_MS: 1000, MAX_OUT: 32768, MAX_UEVENT: 512 };
 /* the ports: a name of /sys/class/net that RE_PORT takes and whose uevent says DEVTYPE=dsa, MAX_PORTS at most */
 const PORTS_FIND = "function dsa_ports() {\n\tlet found = [], more = false;\n\n\tfor (let n in sort(lsdir(NET) ?? [])) {\n\t\tif (!match(n, RE_PORT))\n\t\t\tcontinue;\n\n" +
@@ -1105,15 +1130,18 @@ const PORTS_FIND = "function dsa_ports() {\n\tlet found = [], more = false;\n\n\
 /* the one program: ETHTOOL -S <port>, MAX_OUT bytes of its output read, its exit code checked */
 const PORTS_RUN = "function read_port(name) {\n\tlet p = popen(ETHTOOL + ' -S ' + name, 'r');\n\n\tif (!p)\n\t\treturn { error: 'failed' };\n\n" +
 	"\tlet text = p.read(MAX_OUT + 1);\n\n\tif (p.close() !== 0 || type(text) != 'string' || length(text) > MAX_OUT)\n\t\treturn { error: 'failed' };\n\n\treturn parse(text);\n}";
-/* the lock, taken without waiting before anything is read or started; held elsewhere: busy, and nothing started */
-const PORTS_COUNT = "function counters() {\n\tlet t0 = now_ms(), self_file = open(SELF, 'r');\n\n\tif (!self_file || self_file.lock('xn') !== true)\n" +
+/* the lock's directory: as the plugin makes it (0700), a directory and no link, root's, closed to group and others */
+const PORTS_DIR = "function dir_ok() {\n\tlet st = lstat(DIR);\n\n\tif (!st) {\n\t\tmkdir(DIR, 0700);\n\t\tst = lstat(DIR);\n\t}\n\n" +
+	"\treturn st?.type == 'directory' && st.uid === 0 && !(st.mode & 0077);\n}";
+/* the lock, taken without waiting before anything is read or started; held elsewhere or not to be had: busy, and nothing started */
+const PORTS_COUNT = "function counters() {\n\tlet t0 = now_ms(), lock = dir_ok() ? open(DIR + '/lock', 'a', 0600) : null;\n\n\tif (!lock || lock.lock('xn') !== true)\n" +
 	"\t\treturn { v: 1, state: 'busy', took: now_ms() - t0, more: false, ports: {} };\n\n\tlet ports = {}, d = dsa_ports();\n\n\tif (!length(d.found))\n" +
 	"\t\treturn { v: 1, state: 'none', took: now_ms() - t0, more: false, ports };\n\n\tif (!access(ETHTOOL, 'x'))\n" +
 	"\t\treturn { v: 1, state: 'no-ethtool', took: now_ms() - t0, more: d.more, ports };\n\n\tfor (let name in d.found) {\n\t\tlet at = now_ms();\n\n" +
 	"\t\tports[name] = (at - t0 < BUDGET_MS) ? { ...read_port(name), at } : { error: 'time', at };\n\t}\n\n\treturn { v: 1, state: 'ok', took: now_ms() - t0, more: d.more, ports };\n}";
 const PORTS_PINS = [
 	[ '\\b(?:popen|access|lsdir|readfile|ETHTOOL|NET)\\b', [
-		'import { access, lsdir, open, popen, readfile } from \'fs\';',
+		'import { access, lsdir, lstat, mkdir, open, popen, readfile } from \'fs\';',
 		'const NET = \'/sys/class/net\';',
 		'const ETHTOOL = \'/usr/sbin/ethtool\';',
 		'for (let n in sort(lsdir(NET) ?? [])) {',
@@ -1139,12 +1167,18 @@ const PORTS_PINS = [
 		'ports[name] = (at - t0 < BUDGET_MS) ? { ...read_port(name), at } : { error: \'time\', at };',
 		'return { v: 1, state: \'ok\', took: now_ms() - t0, more: d.more, ports };'
 	] ],
-	/* the one file opened, its own, for reading, and locked without waiting */
-	[ '\\b(?:open|lock|SELF|self_file)\\b', [
-		'import { access, lsdir, open, popen, readfile } from \'fs\';',
-		'const SELF = \'/usr/libexec/rpcd/luci.vantage.ports\';',
-		'let t0 = now_ms(), self_file = open(SELF, \'r\');',
-		'if (!self_file || self_file.lock(\'xn\') !== true)'
+	/* the one file opened and the one directory made: its lock, root's alone, locked without waiting */
+	[ '\\b(?:open|lock|lstat|mkdir|DIR|dir_ok|st)\\b', [
+		'import { access, lsdir, lstat, mkdir, open, popen, readfile } from \'fs\';',
+		'const DIR = \'/var/run/vantage-ports\';',
+		'function dir_ok() {',
+		'let st = lstat(DIR);',
+		'if (!st) {',
+		'mkdir(DIR, 0700);',
+		'st = lstat(DIR);',
+		'return st?.type == \'directory\' && st.uid === 0 && !(st.mode & 0077);',
+		'let t0 = now_ms(), lock = dir_ok() ? open(DIR + \'/lock\', \'a\', 0600) : null;',
+		'if (!lock || lock.lock(\'xn\') !== true)'
 	] ],
 	/* the caps, each used where it bounds */
 	[ '\\b(?:MAX_PORTS|BUDGET_MS|MAX_OUT|MAX_UEVENT)\\b', [
@@ -1181,22 +1215,22 @@ const PORTS_PINS = [
 	] ]
 ];
 /* Every name the plugin binds and every function it defines. At the
-   top: its imports, its constants, its five functions and rpcd's two
+   top: its imports, its constants, its six functions and rpcd's two
    calls; inside the functions: their parameters and locals. No other
    function (none inside another, no arrow function), no try/catch, no
    name assigned that is not one of these. So a builtin the pinned
    functions call (match, split, readfile, ...) cannot be replaced or
    shadowed, and no function of the plugin can be defined a second time */
 const PORTS_TOP = [
-	'#!/usr/bin/ucode -S', '\'use strict\';', 'import { access, lsdir, open, popen, readfile } from \'fs\';',
-	'const NET', 'const ETHTOOL', 'const SELF', 'const MAX_PORTS', 'const BUDGET_MS', 'const MAX_OUT', 'const MAX_UEVENT', 'const RE_PORT', 'const RE_LINE', 'const COUNTERS',
-	'function now_ms()', 'function dsa_ports()', 'function parse(text)', 'function read_port(name)', 'function counters()',
+	'#!/usr/bin/ucode -S', '\'use strict\';', 'import { access, lsdir, lstat, mkdir, open, popen, readfile } from \'fs\';',
+	'const NET', 'const ETHTOOL', 'const DIR', 'const MAX_PORTS', 'const BUDGET_MS', 'const MAX_OUT', 'const MAX_UEVENT', 'const RE_PORT', 'const RE_LINE', 'const COUNTERS',
+	'function now_ms()', 'function dsa_ports()', 'function parse(text)', 'function read_port(name)', 'function dir_ok()', 'function counters()',
 	'if (ARGV[0] == \'list\')', 'else if (ARGV[0] == \'call\' && ARGV[1] == \'counters\')'
 ];
 const PORTS_NAMES = [
-	'BUDGET_MS', 'COUNTERS', 'ETHTOOL', 'MAX_OUT', 'MAX_PORTS', 'MAX_UEVENT', 'NET', 'RE_LINE', 'RE_PORT', 'SELF',
-	'at', 'c', 'counters', 'd', 'dsa', 'dsa_ports', 'found', 'i', 'l', 'lines', 'm', 'more', 'n', 'name', 'now_ms', 'p', 'parse',
-	'ports', 'read_port', 'seen', 'self_file', 't', 't0', 'text'
+	'BUDGET_MS', 'COUNTERS', 'DIR', 'ETHTOOL', 'MAX_OUT', 'MAX_PORTS', 'MAX_UEVENT', 'NET', 'RE_LINE', 'RE_PORT',
+	'at', 'c', 'counters', 'd', 'dir_ok', 'dsa', 'dsa_ports', 'found', 'i', 'l', 'lines', 'lock', 'm', 'more', 'n', 'name', 'now_ms', 'p', 'parse',
+	'ports', 'read_port', 'seen', 'st', 't', 't0', 'text'
 ];
 /* the top-level statements of `code` (comment lines out), a constant or a function by its head */
 function portsTop(code) {
@@ -1218,9 +1252,9 @@ function checkPortsSource(src) {
 	assert.ok(src.startsWith('#!/usr/bin/ucode -S\n'), 'strict ucode');
 	assert.match(src, /^'use strict';$/m);
 	const code = codeOf(src, 'the switch counters plugin');
-	assert.deepEqual(linesWith(code, 'import'), [ 'import { access, lsdir, open, popen, readfile } from \'fs\';' ]);
-	/* no other way to a program, a file, the environment or standard input (open: its own file, pinned below) */
-	const word = /\b(system|exec|execv|execvp|uloop|fork|spawn|require|loadfile|loadstring|include|render|writefile|unlink|rename|mkdir|chmod|symlink|connect|cursor|global|getenv|stdin|sleep|signal)\b/.exec(code);
+	assert.deepEqual(linesWith(code, 'import'), [ 'import { access, lsdir, lstat, mkdir, open, popen, readfile } from \'fs\';' ]);
+	/* no other way to a program, a file, the environment or standard input (open and mkdir: its lock file and that file's directory, pinned below) */
+	const word = /\b(system|exec|execv|execvp|uloop|fork|spawn|require|loadfile|loadstring|include|render|writefile|unlink|rename|rmdir|chmod|symlink|connect|cursor|global|getenv|stdin|sleep|signal)\b/.exec(code);
 	assert.equal(word, null, word && `"${word[1]}" is banned in the switch counters plugin`);
 	assert.doesNotMatch(code, /(^|[^.\w])call\s*\(/m, 'the call() builtin is banned in the switch counters plugin');
 	for (const [ name, v ] of Object.entries(PORTS_PATHS)) {
@@ -1232,14 +1266,14 @@ function checkPortsSource(src) {
 		assert.match(src, new RegExp('\\nconst ' + name + ' = ' + v + ';'), name + ' = ' + v);
 		assert.equal([ ...code.matchAll(new RegExp('\\b' + name + '\\s*(?:[-+*/%&|^]|<<|>>)?=(?!=)', 'g')) ].length, 1, name + ' is defined once and never assigned');
 	}
-	for (const [ what, fn ] of [ [ 'dsa_ports', PORTS_FIND ], [ 'read_port', PORTS_RUN ], [ 'counters', PORTS_COUNT ] ]) {
+	for (const [ what, fn ] of [ [ 'dsa_ports', PORTS_FIND ], [ 'read_port', PORTS_RUN ], [ 'dir_ok', PORTS_DIR ], [ 'counters', PORTS_COUNT ] ]) {
 		const found = new RegExp('^function ' + what + '\\(.*\\) \\{\\n[\\s\\S]*?\\n\\}$', 'm').exec(src);
 		assert.equal(found && found[0], fn, what + '(), exactly');
 	}
 	checkPins(src, 'the switch counters plugin', PORTS_PINS);
 	assert.deepEqual(portsTop(code), PORTS_TOP, 'the top-level statements, exactly');
 	assert.deepEqual(portsNames(code), PORTS_NAMES, 'every name the plugin binds, exactly');
-	assert.equal((code.match(/\bfunction\b/g) || []).length, 5, 'five functions, at the top');
+	assert.equal((code.match(/\bfunction\b/g) || []).length, 6, 'six functions, at the top');
 	assert.doesNotMatch(code, /=>|\btry\b|\bcatch\b/, 'no arrow function, no try/catch');
 }
 
@@ -1269,12 +1303,12 @@ test('switch counters: the plugin rules catch each breach', () => {
 		'a second popen': add('let q = popen(\'reboot\', \'r\');'),
 		'popen under another name': add('let run = popen; run(\'reboot\');'),
 		'system': add('system([ ETHTOOL, \'-S\', \'lan1\' ]);'),
-		'uloop': swap('import { access, lsdir, open, popen, readfile } from \'fs\';', 'import { access, lsdir, open, popen, readfile } from \'fs\';\nimport * as uloop from \'uloop\';'),
+		'uloop': swap('import { access, lsdir, lstat, mkdir, open, popen, readfile } from \'fs\';', 'import { access, lsdir, lstat, mkdir, open, popen, readfile } from \'fs\';\nimport * as uloop from \'uloop\';'),
 		'the call builtin': add('call(print, null, null, \'x\');'),
 		'a builtin by name': add('global[\'sys\' + \'tem\'](\'reboot\');'),
 		'a name from the caller': swap('else if (ARGV[0] == \'call\' && ARGV[1] == \'counters\')', 'else if (ARGV[0] == \'call\' && ARGV[1] == \'port\')\n\tprint(sprintf(\'%J\', read_port(ARGV[2])), \'\\n\');\nelse if (ARGV[0] == \'call\' && ARGV[1] == \'counters\')'),
 		'a method that takes an argument': swap('print(\'{ "counters": {} }\\n\');', 'print(\'{ "counters": { "port": "string" } }\\n\');'),
-		'standard input read': swap('import { access, lsdir, open, popen, readfile } from \'fs\';', 'import { access, lsdir, open, popen, readfile, stdin } from \'fs\';'),
+		'standard input read': swap('import { access, lsdir, lstat, mkdir, open, popen, readfile } from \'fs\';', 'import { access, lsdir, lstat, mkdir, open, popen, readfile, stdin } from \'fs\';'),
 		'the environment read': add('let n2 = getenv(\'PORT\');'),
 		'a name not checked': swap('\t\tif (!match(n, RE_PORT))\n\t\t\tcontinue;\n', ''),
 		'a wider pattern': swap(PORTS_RE_PORT, 'const RE_PORT = /^[A-Za-z0-9_.;-]{1,15}$/;'),
@@ -1292,22 +1326,28 @@ test('switch counters: the plugin rules catch each breach', () => {
 		'the exit code ignored': swap('if (p.close() !== 0 || type(text)', 'if (p.close() === null || type(text)'),
 		'a larger output cap': swap('const MAX_OUT = 32768;', 'const MAX_OUT = 16777216;'),
 		'the uevent read unbounded': swap('readfile(NET + \'/\' + n + \'/uevent\', MAX_UEVENT)', 'readfile(NET + \'/\' + n + \'/uevent\')'),
-		'a file written': swap('import { access, lsdir, open, popen, readfile } from \'fs\';', 'import { access, lsdir, open, popen, readfile, writefile } from \'fs\';'),
+		'a file written': swap('import { access, lsdir, lstat, mkdir, open, popen, readfile } from \'fs\';', 'import { access, lsdir, lstat, mkdir, open, popen, readfile, writefile } from \'fs\';'),
 		'code in a template literal': add('let t = \`\${reboot()}\`;'),
-		/* the lock: on its own file, for reading, without waiting, before anything */
-		'no lock': swap('\tif (!self_file || self_file.lock(\'xn\') !== true)\n\t\treturn { v: 1, state: \'busy\', took: now_ms() - t0, more: false, ports: {} };\n\n', ''),
-		'a lock that waits': swap('self_file.lock(\'xn\')', 'self_file.lock(\'x\')'),
-		'a shared lock': swap('self_file.lock(\'xn\')', 'self_file.lock(\'sn\')'),
-		'the file opened for writing': swap('open(SELF, \'r\')', 'open(SELF, \'r+\')'),
-		'the file opened to append': swap('open(SELF, \'r\')', 'open(SELF, \'a\')'),
-		'another file locked': swap('open(SELF, \'r\')', 'open(\'/tmp/vantage.lock\', \'w\')'),
-		'SELF elsewhere': swap('const SELF = \'/usr/libexec/rpcd/luci.vantage.ports\';', 'const SELF = \'/tmp/vantage.lock\';'),
+		/* the lock: an empty file of its own, root's alone, in a directory that is; taken without waiting, before anything */
+		'no lock': swap('\tif (!lock || lock.lock(\'xn\') !== true)\n\t\treturn { v: 1, state: \'busy\', took: now_ms() - t0, more: false, ports: {} };\n\n', ''),
+		'a lock that waits': swap('lock.lock(\'xn\')', 'lock.lock(\'x\')'),
+		'a shared lock': swap('lock.lock(\'xn\')', 'lock.lock(\'sn\')'),
+		'the lock file emptied on opening': swap('open(DIR + \'/lock\', \'a\', 0600)', 'open(DIR + \'/lock\', \'w\', 0600)'),
+		'a lock file others may read, and so lock': swap('open(DIR + \'/lock\', \'a\', 0600)', 'open(DIR + \'/lock\', \'a\')'),
+		'the lock on its own file again': swap('open(DIR + \'/lock\', \'a\', 0600)', 'open(\'/usr/libexec/rpcd/luci.vantage.ports\', \'r\')'),
+		'another file locked': swap('open(DIR + \'/lock\', \'a\', 0600)', 'open(\'/tmp/vantage.lock\', \'w\')'),
+		'the lock where any account may make it': swap('const DIR = \'/var/run/vantage-ports\';', 'const DIR = \'/tmp/vantage-ports\';'),
+		'a directory of anyone\'s taken': swap('return st?.type == \'directory\' && st.uid === 0 && !(st.mode & 0077);', 'return st?.type == \'directory\';'),
+		'a directory others may enter taken': swap(' && !(st.mode & 0077);', ';'),
+		'a link in the directory\'s place followed': swap('\tlet st = lstat(DIR);\n', '\tlet st = lstat(DIR + \'/.\');\n'),
+		'the lock taken without its directory checked': swap('lock = dir_ok() ? open(DIR + \'/lock\', \'a\', 0600) : null;', 'lock = open(DIR + \'/lock\', \'a\', 0600);'),
+		'a directory made elsewhere': add('mkdir(\'/etc/vantage-ports\', 0700);'),
 		'a second file opened': add('let f2 = open(\'/etc/shadow\', \'r\');'),
-		'busy where the lock is not held': swap('if (!self_file || self_file.lock(\'xn\') !== true)', 'if (!self_file && self_file.lock(\'xn\') !== true)'),
-		'the ports read before the lock': swap('\tlet t0 = now_ms(), self_file = open(SELF, \'r\');\n', '\tlet d0 = dsa_ports();\n\tlet t0 = now_ms(), self_file = open(SELF, \'r\');\n'),
+		'busy where the lock is not held': swap('if (!lock || lock.lock(\'xn\') !== true)', 'if (!lock && lock.lock(\'xn\') !== true)'),
+		'the ports read before the lock': swap('\tlet t0 = now_ms(), lock = dir_ok() ? open(DIR + \'/lock\', \'a\', 0600) : null;\n', '\tlet d0 = dsa_ports();\n\tlet t0 = now_ms(), lock = dir_ok() ? open(DIR + \'/lock\', \'a\', 0600) : null;\n'),
 		'a program started while busy': swap('\t\treturn { v: 1, state: \'busy\', took: now_ms() - t0, more: false, ports: {} };', '\t\treturn { v: 1, state: \'busy\', took: now_ms() - t0, more: false, ports: { lan1: read_port(\'lan1\') } };'),
-		'the lock let go': add('self_file.lock(\'u\');'),
-		'the lock closed early': add('self_file.close();'),
+		'the lock let go': add('lock.lock(\'u\');'),
+		'the lock closed early': add('lock.close();'),
 		/* the names: no builtin replaced or shadowed, no function defined twice */
 		'a later definition of a builtin': portsPlugin + '\nfunction match(s, re) {\n\treturn [ s ];\n}\n',
 		'a second parse': portsPlugin + '\nfunction parse(text) {\n\treturn { rx_bytes: 1, tx_bytes: 1 };\n}\n',
@@ -1529,12 +1569,22 @@ const PAIR_PINS = [
 	/* the network kept with a pairing: netifd's word for where the address is, never the caller's */
 	[ '\\b(?:net|entry)\\b', [
 		'const NET = \'/sys/class/net\';',
-		'let entry = { id, name: a.name, key: a.key, addr: vaps.addr(args.addr) ?? a.addr, port: a.port, mac: a.mac };',
+		'let entry = { id, name: a.name, key: a.key, addr, port: a.port, mac: a.mac };',
 		'let net = vaps.net_of(entry.addr, connect(null, 3)?.call(\'network.interface\', \'dump\')?.interface);',
 		'if (net)',
 		'entry.net = net;',
 		'push(list, entry);',
 		'aps: map(list ?? [], (e) => ({ id: e.id, name: e.name, addr: e.addr, port: e.port, ...(e.net ? { net: e.net } : {}) })),'
+	] ],
+	/* the address a pairing is stored at: the reply's own, or the caller's once vantage.aps addr has taken it; the same
+	   value decides whether a pairing is the one already stored */
+	[ '(?<![.\\w])addr\\b', [
+		'let addr = vaps.addr(args.addr) ?? a.addr;',
+		'return (e.name === a.name && e.addr === addr && e.port === a.port && e.mac === a.mac)',
+		'let entry = { id, name: a.name, key: a.key, addr, port: a.port, mac: a.mac };',
+		'return (a && m) ? { addr: a, mac: m[0] } : null;',
+		'aps: map(list ?? [], (e) => ({ id: e.id, name: e.name, addr: e.addr, port: e.port, ...(e.net ? { net: e.net } : {}) })),',
+		'args: { code: \'code\', addr: \'addr\' },'
 	] ],
 	/* what each method takes from its caller */
 	[ '\\bargs:', [
@@ -1570,23 +1620,80 @@ const PAIR_PINS = [
 		'return (k && l) ? vaps.ap_code(k, l.addr, dropbear_conf().port, l.mac, hostname(\'access-point\')) : null;',
 		'let k = access(DBCLIENT, \'x\') ? public_key(KEY) : null, ssh = ssh_state(), auth = read_auth(), list = load_aps();'
 	] ],
+	/* the programs: dropbearkey once, and the collector's init script with its four fixed words (collector(), pinned whole) */
 	[ '\\bsystem\\b', [
 		'system([ DROPBEARKEY, \'-t\', \'ed25519\', \'-f\', KEY ], 30000);',
-		'system([ COLLECTOR, \'enable\' ], 10000);',
-		'system([ COLLECTOR, \'start\' ], 10000);',
-		'system([ COLLECTOR, \'stop\' ], 10000);',
-		'system([ COLLECTOR, \'disable\' ], 10000);'
+		'let a = on ? system([ COLLECTOR, \'enable\' ], 10000) : system([ COLLECTOR, \'stop\' ], 10000);',
+		'let b = on ? system([ COLLECTOR, \'start\' ], 10000) : system([ COLLECTOR, \'disable\' ], 10000);'
+	] ],
+	/* the collector's service: set as the saved list wants it, and its result told beside the pairing, never in its place */
+	[ '\\b(?:collector|gone|off)\\b', [
+		'const COLLECTOR = \'/etc/init.d/vantage-collector\';',
+		'const OFF = [ \'0\', \'off\', \'false\', \'no\', \'disabled\' ];   // uci\'s ways to say no',
+		'let inst = connect(null, 3)?.call(\'service\', \'list\', { name: \'vantage-collector\' })?.[\'vantage-collector\']?.instances;',
+		'function collector(on) {',
+		'? { id: e.id, collector: collector(true) } : { error: \'duplicate\' };',
+		'return { id, collector: collector(true) };',
+		'let left = filter(list, (e) => e.id !== args.id), gone = length(left) == length(list);',
+		'if (!gone && !save_aps(left))',
+		'let off = length(left) > 0 || collector(false);',
+		'if (gone)',
+		'return off ? { error: \'unknown\' } : { error: \'unknown\', collector: false };',
+		'return { ok: true, collector: off };'
+	] ],
+	/* procd's word on whether the service runs, after the init script's (collector_runs() and collector(), pinned whole):
+	   asked of that one service, and waited for after stop only, STOP_TRIES times STOP_WAIT_MS at most */
+	[ '\\b(?:sleep|STOP_TRIES|STOP_WAIT_MS|collector_runs|runs|inst)\\b', [
+		'const STOP_TRIES = 10;            // after stop: looks at whether procd still runs the service,',
+		'const STOP_WAIT_MS = 100;         // this far apart',
+		'function collector_runs() {',
+		'let inst = connect(null, 3)?.call(\'service\', \'list\', { name: \'vantage-collector\' })?.[\'vantage-collector\']?.instances;',
+		'for (let n, i in ((type(inst) == \'object\') ? inst : {}))',
+		'let runs = collector_runs();',
+		'for (let i = 0; !on && runs && i < STOP_TRIES; i++) {',
+		'sleep(STOP_WAIT_MS);',
+		'runs = collector_runs();',
+		'return a === 0 && b === 0 && runs === on;'
+	] ],
+	/* no router's key beside a listener that runs a command of its own for root: every section that is on (forced(),
+	   pinned whole) and every dropbear procd runs, under any of its services (vantage.aps forced_listener, pinned
+	   there; services(): all of service list), asked before a key is written and told with the routers let in */
+	[ '\\b(?:forced|instances|services|svc|ForceCommand|RootLogin|plain|dropbear_conf|command|running)\\b', [
+		'let inst = connect(null, 3)?.call(\'service\', \'list\', { name: \'vantage-collector\' })?.[\'vantage-collector\']?.instances;',
+		'if (type(i) == \'object\' && i.running === true)',
+		'options_seen = { sig, ok: type(b) == \'string\' && index(b, \'no-port-forwarding\') >= 0 && index(b, \'command="\') >= 0 };',
+		'function dropbear_conf() {',
+		'plain: index(OFF, s.RootLogin) < 0 && s.ForceCommand == null && s.keyfile == null',
+		'return found ?? { port: 22, plain: true };',
+		'function services(ubus) {',
+		'let svc = ubus?.call(\'service\', \'list\');',
+		'return (type(svc) == \'object\') ? svc : {};',
+		'function forced(svc) {',
+		'if (index(OFF, s.enable) < 0 && index(OFF, s.RootLogin) < 0 && s.ForceCommand != null)',
+		'return yes || vaps.forced_listener(svc);',
+		'let ubus = connect(null, 3), svc = services(ubus), running = false;',
+		'if (!dropbear_conf().plain || forced(svc))',
+		'for (let n, i in ((type(svc.dropbear?.instances) == \'object\') ? svc.dropbear.instances : {}))',
+		'if (type(i) == \'object\' && i.running === true)',
+		'running = true;',
+		'if (!running)',
+		'return \'not-running\';',
+		'return (k && l) ? vaps.ap_code(k, l.addr, dropbear_conf().port, l.mac, hostname(\'access-point\')) : null;',
+		'forced: ssh == \'unsupported\' && length(routers) > 0 && forced(services(connect(null, 3))) }'
 	] ],
 	[ '\\b(?:connect|call|ubus)\\b', [
 		'import { connect } from \'ubus\';',
+		'let inst = connect(null, 3)?.call(\'service\', \'list\', { name: \'vantage-collector\' })?.[\'vantage-collector\']?.instances;',
 		'let net = vaps.net_of(entry.addr, connect(null, 3)?.call(\'network.interface\', \'dump\')?.interface);',
+		'function services(ubus) {',
+		'let svc = ubus?.call(\'service\', \'list\');',
 		'function lan(ubus) {',
 		'let st = (ubus ?? connect(null, 3))?.call(\'network.interface.lan\', \'status\');',
-		'let ubus = connect(null, 3);',
-		'let svc = ubus?.call(\'service\', \'list\', { name: \'dropbear\' })?.dropbear?.instances, running = false;',
+		'let ubus = connect(null, 3), svc = services(ubus), running = false;',
 		'return lan(ubus) ? \'ok\' : \'no-address\';',
 		'function reply(ubus) {',
 		'let k = public_key(HOST_KEY), l = lan(ubus);',
+		'forced: ssh == \'unsupported\' && length(routers) > 0 && forced(services(connect(null, 3))) }',
 		'call: function() {',
 		'call: function() {',
 		'call: function(req) {',
@@ -1599,6 +1706,9 @@ const PAIR_PINS = [
 		'const OFF = [ \'0\', \'off\', \'false\', \'no\', \'disabled\' ];   // uci\'s ways to say no',
 		'let uci = cursor(), found = null;',
 		'if (uci.load(\'dropbear\'))',
+		'uci.foreach(\'dropbear\', \'dropbear\', (s) => {',
+		'let uci = cursor(), yes = false;',
+		'if (uci.load(\'dropbear\'))',
 		'uci.foreach(\'dropbear\', \'dropbear\', (s) => {'
 	] ],
 	[ '\\b(?:save_aps|write_auth|read_auth|public_key)\\b', [
@@ -1608,7 +1718,7 @@ const PAIR_PINS = [
 		'if (a.key === public_key(HOST_KEY))',
 		'if (!public_key(KEY))',
 		'if (!save_aps(list))',
-		'if (!save_aps(left))',
+		'if (!gone && !save_aps(left))',
 		'function read_auth() {',
 		'if (!public_key(HOST_KEY))',
 		'if (!read_auth())',
@@ -1644,7 +1754,7 @@ const PAIR_PINS = [
 		'push(left, auth.lines[i]);',
 		'let k = access(DBCLIENT, \'x\') ? public_key(KEY) : null, ssh = ssh_state(), auth = read_auth(), list = load_aps();',
 		'let routers = map(auth?.ours ?? [], (o) => ({ name: o.name, key: o.key }));',
-		'ap: { ssh, routers, unread: !auth, reply: (ssh == \'ok\' && length(routers)) ? reply() : null }'
+		'ap: { ssh, routers, unread: !auth, reply: (ssh == \'ok\' && length(routers)) ? reply() : null,'
 	] ],
 	[ '\\b(?:KEY_OPTIONS|COMMENT|auth_line|parse_auth_line)\\b', [
 		'let o = vaps.parse_auth_line(lines[i]);',
@@ -1662,9 +1772,20 @@ const PAIR_PINS = [
 	] ],
 	[ '\\[\\s*[\'"]', [
 		'const OFF = [ \'0\', \'off\', \'false\', \'no\', \'disabled\' ];   // uci\'s ways to say no',
+		'let inst = connect(null, 3)?.call(\'service\', \'list\', { name: \'vantage-collector\' })?.[\'vantage-collector\']?.instances;',
 		'let a = (type(st?.[\'ipv4-address\']) == \'array\' && type(st[\'ipv4-address\'][0]) == \'object\') ? vaps.addr(st[\'ipv4-address\'][0].address) : null;'
 	] ]
 ];
+/* The two functions the plugin's promises to an administrator rest on, whole. The listener check: a router's key is
+   written only where no dropbear listener that takes root runs a command of its own, since dropbear runs that in
+   place of the key line's report. The collector's service: its four words, and a result that is theirs. */
+const PAIR_FORCED = "function forced(svc) {\n\tlet uci = cursor(), yes = false;\n\n\tif (uci.load('dropbear'))\n\t\tuci.foreach('dropbear', 'dropbear', (s) => {\n" +
+	"\t\t\tif (index(OFF, s.enable) < 0 && index(OFF, s.RootLogin) < 0 && s.ForceCommand != null)\n\t\t\t\tyes = true;\n\t\t});\n\n\treturn yes || vaps.forced_listener(svc);\n}";
+const PAIR_RUNS = "function collector_runs() {\n\tlet inst = connect(null, 3)?.call('service', 'list', { name: 'vantage-collector' })?.['vantage-collector']?.instances;\n\n" +
+	"\tfor (let n, i in ((type(inst) == 'object') ? inst : {}))\n\t\tif (type(i) == 'object' && i.running === true)\n\t\t\treturn true;\n\n\treturn false;\n}";
+const PAIR_COLLECTOR = "function collector(on) {\n\tlet a = on ? system([ COLLECTOR, 'enable' ], 10000) : system([ COLLECTOR, 'stop' ], 10000);\n" +
+	"\tlet b = on ? system([ COLLECTOR, 'start' ], 10000) : system([ COLLECTOR, 'disable' ], 10000);\n\tlet runs = collector_runs();\n\n" +
+	"\tfor (let i = 0; !on && runs && i < STOP_TRIES; i++) {\n\t\tsleep(STOP_WAIT_MS);\n\t\truns = collector_runs();\n\t}\n\n\treturn a === 0 && b === 0 && runs === on;\n}";
 function checkPairSource(src) {
 	assert.deepEqual(linesWith(src, 'import'), [
 		'import { access, chmod, lstat, mkdir, readfile, rename, stat, writefile } from \'fs\';',
@@ -1672,14 +1793,20 @@ function checkPairSource(src) {
 		'import { cursor } from \'uci\';',
 		'import * as vaps from \'vantage.aps\';'
 	]);
-	const word = /\b(popen|exec|require|loadfile|loadstring|include|render|unlink|global|getenv|open|symlink|rmdir|signal|sleep|exit)\b/.exec(codeOf(src, 'the pairing plugin'));
+	/* sleep: the one wait for a stopping collector, pinned to its line and to collector() whole */
+	const word = /\b(popen|exec|require|loadfile|loadstring|include|render|unlink|global|getenv|open|symlink|rmdir|signal|exit)\b/.exec(codeOf(src, 'the pairing plugin'));
 	assert.equal(word, null, word && `"${word[1]}" is banned in the pairing plugin`);
+	assert.equal((codeOf(src, 'the pairing plugin').match(/\bsleep\b/g) || []).length, 1, 'one sleep, in collector()');
 	/* the paths: each defined once, literally, never shadowed or assigned */
 	for (const [ name, v ] of Object.entries(PAIR_PATHS)) {
 		assert.ok(src.includes('\nconst ' + name + ' = \'' + v + '\';\n'), name + ' = ' + v);
 		assert.equal([ ...src.matchAll(new RegExp('\\b' + name + '\\s*=(?!=)', 'g')) ].length, 1, name + ' is defined once and never assigned');
 	}
 	checkPins(src, 'the pairing plugin', PAIR_PINS);
+	for (const [ what, fn ] of [ [ 'forced', PAIR_FORCED ], [ 'collector_runs', PAIR_RUNS ], [ 'collector', PAIR_COLLECTOR ] ]) {
+		const found = new RegExp('^function ' + what + '\\(.*\\) \\{\\n[\\s\\S]*?\\n\\}$', 'm').exec(src);
+		assert.equal(found && found[0], fn, what + '(), exactly');
+	}
 }
 
 test('add-on: the pairing plugin registers the granted methods and runs, writes and reads only what it lists', () => {
@@ -1723,9 +1850,31 @@ test('add-on: the pairing plugin rules catch each breach', () => {
 		'its own reply paired': pairPlugin.replace('\tif (a.key === public_key(HOST_KEY))\n\t\treturn { error: \'self\' };\n', ''),
 		'a ubus call by computed member': add('let u = connect(null, 3); u[\'call\'](\'file\', \'exec\', {});'),
 		'uci write': add('uci.set(\'dropbear\', \'x\', \'PasswordAuth\', \'on\');'),
-		'another ubus method': pairPlugin.replace('\tlet ubus = connect(null, 3);\n', '\tlet ubus = connect(null, 3);\n\tubus.publish(\'x\', {});\n'),
+		'another ubus method': pairPlugin.replace('\tlet ubus = connect(null, 3), svc = services(ubus), running = false;\n', '\tlet ubus = connect(null, 3), svc = services(ubus), running = false;\n\tubus.publish(\'x\', {});\n'),
 		'second module': pairPlugin.replace('import * as vaps from \'vantage.aps\';', 'import * as vaps from \'vantage.aps\';\nimport * as x from \'rtnl\';'),
-		'code in a template literal': add('let t = \`\${reboot()}\`;')
+		'code in a template literal': add('let t = \`\${reboot()}\`;'),
+		/* a listener's own command: looked for on every section and every running instance, before a key is written */
+		'only the first listener looked at': pairPlugin.replace('if (!dropbear_conf().plain || forced(svc))', 'if (!dropbear_conf().plain)'),
+		'a section that takes root passed over': pairPlugin.replace('index(OFF, s.RootLogin) < 0 && s.ForceCommand != null)', 'index(OFF, s.RootLogin) >= 0 && s.ForceCommand != null)'),
+		'a section that is off counted, one that is on not': pairPlugin.replace('if (index(OFF, s.enable) < 0 && index(OFF, s.RootLogin) < 0', 'if (index(OFF, s.enable) >= 0 && index(OFF, s.RootLogin) < 0'),
+		'what procd runs not looked at': pairPlugin.replace('return yes || vaps.forced_listener(svc);', 'return yes;'),
+		'OpenWrt\'s own dropbear service asked about alone': pairPlugin.replace('let svc = ubus?.call(\'service\', \'list\');', 'let svc = ubus?.call(\'service\', \'list\', { name: \'dropbear\' });'),
+		'the routers\' keys not told of': pairPlugin.replace('forced: ssh == \'unsupported\' && length(routers) > 0 && forced(services(connect(null, 3))) }', 'forced: false }'),
+		/* the collector's service: the result is the init script's, and a failure is told */
+		'a service result made up': pairPlugin.replace('return a === 0 && b === 0 && runs === on;', 'return true;'),
+		'procd not asked whether the service runs': pairPlugin.replace('return a === 0 && b === 0 && runs === on;', 'return a === 0 && b === 0;'),
+		'a service that does not run taken for running': pairPlugin.replace('\t\t\treturn true;\n\n\treturn false;\n}\n\n// The collector\'s service as', '\t\t\treturn true;\n\n\treturn true;\n}\n\n// The collector\'s service as'),
+		'another service asked about': pairPlugin.replace('{ name: \'vantage-collector\' })?.[\'vantage-collector\']?.instances;', '{ name: \'dropbear\' })?.[\'dropbear\']?.instances;'),
+		'rpcd held for a minute': pairPlugin.replace('const STOP_TRIES = 10;', 'const STOP_TRIES = 600;'),
+		'a longer wait each time': pairPlugin.replace('const STOP_WAIT_MS = 100;', 'const STOP_WAIT_MS = 60000;'),
+		'a wait after start too': pairPlugin.replace('for (let i = 0; !on && runs && i < STOP_TRIES; i++) {', 'for (let i = 0; runs && i < STOP_TRIES; i++) {'),
+		'a sleep elsewhere': add('sleep(60000);'),
+		/* the address a pairing is stored at */
+		'an address from the caller taken unchecked': pairPlugin.replace('let addr = vaps.addr(args.addr) ?? a.addr;', 'let addr = args.addr ?? a.addr;'),
+		'the caller\'s address stored beside the checked one': pairPlugin.replace('let entry = { id, name: a.name, key: a.key, addr, port: a.port, mac: a.mac };', 'let entry = { id, name: a.name, key: a.key, addr: args.addr ?? addr, port: a.port, mac: a.mac };'),
+		'a fifth word for the init script': pairPlugin.replace('system([ COLLECTOR, \'start\' ], 10000)', 'system([ COLLECTOR, \'restart\' ], 10000)'),
+		'a failed start not told': pairPlugin.replace('return { id, collector: collector(true) };', 'collector(true);\n\n\treturn { id, collector: true };'),
+		'the last one removed without the list being saved': pairPlugin.replace('\tif (!gone && !save_aps(left))\n\t\treturn { error: \'failed\' };\n', '')
 	};
 	for (const [ name, src ] of Object.entries(MUTANTS)) {
 		assert.notEqual(src, pairPlugin, name + ': the mutation applies');
@@ -1733,12 +1882,13 @@ test('add-on: the pairing plugin rules catch each breach', () => {
 	}
 });
 
-/* files and the lock; ubus; environment, exits, output; computed members */
+/* files and the lock (the one thing it writes: an empty file, 0600, in a directory it makes 0700 and takes only as
+   root's alone, without which there is no report); ubus; environment, exits, output; computed members */
 const REPORT_PINS = [
-	[ '\\b(?:access|lsdir|open|readfile|lock|self_file|SELF|AUTH|MAX_AUTH|vaps|who|held)\\b', [
-		'import { access, lsdir, open, readfile } from \'fs\';',
+	[ '\\b(?:access|lsdir|lstat|mkdir|open|readfile|lock|locked|st|DIR|AUTH|MAX_AUTH|vaps|who|held)\\b', [
+		'import { access, lsdir, lstat, mkdir, open, readfile } from \'fs\';',
 		'import * as vaps from \'vantage.aps\';',
-		'const SELF = \'/usr/libexec/vantage/report\';',
+		'const DIR = \'/var/run/vantage-report\';',
 		'const AUTH = \'/etc/dropbear/authorized_keys\';',
 		'const MAX_AUTH = 262144;          // bytes of authorized_keys read, as luci.vantage.pair reads it',
 		'let v = trim(readfile(NET + \'/\' + dev + \'/\' + file, 64) ?? \'\');',
@@ -1753,8 +1903,16 @@ const REPORT_PINS = [
 		'if (type(who) == \'string\' && vaps.parse_auth_line(line)?.comment === who)',
 		'held = true;',
 		'if (!held)',
-		'let self_file = open(SELF, \'r\'), locked = !self_file;',
-		'locked = (self_file.lock(\'xn\') === true);',
+		'let st = lstat(DIR);',
+		'if (!st) {',
+		'mkdir(DIR, 0700);',
+		'st = lstat(DIR);',
+		'let lock = (st?.type == \'directory\' && st.uid === 0 && !(st.mode & 0077)) ? open(DIR + \'/lock\', \'a\', 0600) : null, locked = false;',
+		'for (let i = 0; lock && !locked && i < 4; i++) {',
+		'locked = (lock.lock(\'xn\') === true);',
+		'if (!locked)',
+		'if (!locked)',
+		'if (type(services?.dropbear?.instances) != \'object\' || vaps.forced_listener(services))',
 		'for (let d in (lsdir(NET) ?? [])) {',
 		'let m = netdev(d) ? norm_mac(trim(readfile(NET + \'/\' + d + \'/address\', 64) ?? \'\')) : null;',
 		'let self = lan ? norm_mac(trim(readfile(NET + \'/\' + lan + \'/address\', 64) ?? \'\')) : null;',
@@ -1764,6 +1922,8 @@ const REPORT_PINS = [
 		'import { connect } from \'ubus\';',
 		'let ubus = connect(null, 3);',
 		'if (!ubus)',
+		/* asked first, once, for all of procd's services: no report beside a listener that takes root and runs a command of its own */
+		'let services = ubus.call(\'service\', \'list\');',
 		'let board = ubus.call(\'system\', \'board\'), info = ubus.call(\'system\', \'info\');',
 		'let devs = ubus.call(\'iwinfo\', \'devices\')?.devices;',
 		'let i = ubus.call(\'iwinfo\', \'info\', { device: dev });',
@@ -1780,8 +1940,21 @@ const REPORT_PINS = [
 		'sleep(250);',
 		'exit(1);',
 		'exit(1);',
+		'exit(1);',
 		'let client = split(getenv(\'SSH_CLIENT\') ?? \'\', \' \')[0];',
 		'print(sprintf(\'%J\', {'
+	] ],
+	/* the listeners: every dropbear procd runs, whatever its service, read before anything of the device and judged by
+	   vantage.aps; and OpenWrt's own dropbear service has instances to read */
+	[ '\\b(?:services|forced_listener)\\b', [
+		'let services = ubus.call(\'service\', \'list\');',
+		'if (type(services?.dropbear?.instances) != \'object\' || vaps.forced_listener(services))'
+	] ],
+	/* one iwinfo call an interface, and no more of them a report than it could list networks and VLAN interfaces */
+	[ '\\bclassified\\b', [
+		'let ssids = [], stations = [], radios = {}, vlans = [], asked = [], listed = {}, classified = 0;',
+		'if (classified >= MAX_SSIDS + MAX_VLANS)',
+		'classified++;'
 	] ],
 	[ '\\[\\s*[\'"]', [
 
@@ -1789,16 +1962,22 @@ const REPORT_PINS = [
 ];
 function checkReportSource(src) {
 	assert.ok(src.startsWith('#!/usr/bin/ucode -S\n'), 'strict ucode');
-	assert.deepEqual(linesWith(src, 'import'), [ 'import { connect } from \'ubus\';', 'import { access, lsdir, open, readfile } from \'fs\';', 'import * as vaps from \'vantage.aps\';' ]);
-	const word = /\b(popen|exec|require|loadfile|loadstring|include|render|writefile|unlink|rename|chmod|mkdir|global|stdin|ARGV)\b/.exec(codeOf(src, 'the report'));
+	assert.deepEqual(linesWith(src, 'import'), [ 'import { connect } from \'ubus\';', 'import { access, lsdir, lstat, mkdir, open, readfile } from \'fs\';', 'import * as vaps from \'vantage.aps\';' ]);
+	/* mkdir and open: the lock's directory and file alone, pinned below */
+	const word = /\b(popen|exec|require|loadfile|loadstring|include|render|writefile|unlink|rename|chmod|symlink|rmdir|global|stdin|ARGV)\b/.exec(codeOf(src, 'the report'));
 	assert.equal(word, null, word && `"${word[1]}" is banned in the report`);
 	/* 'system' only as the ubus object's name */
 	assert.doesNotMatch(codeOf(src, 'the report'), /(?<!')\bsystem\b(?!')/, '"system" only as the ubus object \'system\'');
-	for (const [ name, v ] of Object.entries({ SELF: '/usr/libexec/vantage/report', AUTH: '/etc/dropbear/authorized_keys', NET: '/sys/class/net', ARP: '/proc/net/arp', HOSTNAME: '/proc/sys/kernel/hostname' })) {
+	for (const [ name, v ] of Object.entries({ DIR: '/var/run/vantage-report', AUTH: '/etc/dropbear/authorized_keys', NET: '/sys/class/net', ARP: '/proc/net/arp', HOSTNAME: '/proc/sys/kernel/hostname' })) {
 		assert.ok(src.includes('\nconst ' + name + ' = \'' + v + '\';\n'), name);
 		assert.equal([ ...src.matchAll(new RegExp('\\b' + name + '\\s*=(?!=)', 'g')) ].length, 1, name + ' is defined once and never assigned');
 	}
 	checkPins(src, 'the report', REPORT_PINS);
+	/* the listeners are asked about before any other call, and the answer ends the run before anything is read */
+	assert.ok(src.includes('\nif (!ubus)\n\texit(1);\n'), 'no ubus, no report');
+	assert.ok(src.includes('\nlet services = ubus.call(\'service\', \'list\');\n\nif (type(services?.dropbear?.instances) != \'object\' || vaps.forced_listener(services))\n\texit(1);\n\nlet board = '), 'the listeners first, then the device');
+	assert.equal(src.indexOf('ubus.call('), src.indexOf('ubus.call(\'service\', \'list\');'), 'its first call');
+	assert.equal([ ...src.matchAll(/\bcall\('service'/g) ].length, 1, 'procd asked once a report');
 	/* a path below /sys/class/net is that directory, one checked interface name and a fixed file */
 	assert.ok(src.includes('\nfunction sysfs(dev, file) {\n'), 'sysfs()');
 	assert.deepEqual([ ...src.matchAll(/\bsysfs\(([^)]*)\)/g) ].map(m => m[1]), [ 'dev, file', 'p, \'speed\'', 'p, \'statistics/rx_bytes\'', 'p, \'statistics/tx_bytes\'' ]);
@@ -1807,13 +1986,13 @@ function checkReportSource(src) {
 	assert.deepEqual([ ...src.matchAll(/\bwire\(([^)]*)\)/g) ].map(m => m[1]), [ 'p', 'p', 'p' ]);
 }
 
-test('add-on: the report reads, prints and changes nothing', () => {
+test('add-on: the report reads and prints, and changes nothing but its own lock file', () => {
 	checkReportSource(reportSrc);
 	const at = 'let ubus = connect(null, 3);\n';
 	assert.ok(reportSrc.includes(at), 'insertion point');
 	const add = code => reportSrc.replace(at, at + code + '\n');
 	const MUTANTS = {
-		'a write': reportSrc.replace('import { access, lsdir, open, readfile } from \'fs\';', 'import { access, lsdir, open, readfile, writefile } from \'fs\';'),
+		'a write': reportSrc.replace('import { access, lsdir, lstat, mkdir, open, readfile } from \'fs\';', 'import { access, lsdir, lstat, mkdir, open, readfile, writefile } from \'fs\';'),
 		'the command asked for': reportSrc.replace('getenv(\'SSH_CLIENT\')', 'getenv(\'SSH_ORIGINAL_COMMAND\')'),
 		'a revoked router still answered': reportSrc.replace('\tif (!held)\n\t\texit(1);\n', ''),
 		'any line of the add-on\'s counts': reportSrc.replace('if (type(who) == \'string\' && vaps.parse_auth_line(line)?.comment === who)', 'if (vaps.parse_auth_line(line))'),
@@ -1824,7 +2003,26 @@ test('add-on: the report reads, prints and changes nothing', () => {
 		'another file': reportSrc.replace('readfile(HOSTNAME, 256)', 'readfile(\'/etc/shadow\', 256)'),
 		'a path out of sysfs': add('print(readfile(NET + \'/../../../etc/shadow\'));'),
 		'a VLAN\'s device read from another place': reportSrc.replace('readfile(NET + \'/\' + p + \'/uevent\', 256)', 'readfile(\'/tmp/\' + p, 256)'),
-		'a file opened for writing': reportSrc.replace('open(SELF, \'r\')', 'open(SELF, \'w\')'),
+		/* the lock: an empty file of its own, root's alone, in a directory that is; without it no report */
+		'the lock file emptied on opening': reportSrc.replace('open(DIR + \'/lock\', \'a\', 0600)', 'open(DIR + \'/lock\', \'w\', 0600)'),
+		'a lock file others may read, and so lock': reportSrc.replace('open(DIR + \'/lock\', \'a\', 0600)', 'open(DIR + \'/lock\', \'a\')'),
+		'the lock where any account may make it': reportSrc.replace('const DIR = \'/var/run/vantage-report\';', 'const DIR = \'/tmp/vantage-report\';'),
+		'the lock on its own file again': reportSrc.replace('open(DIR + \'/lock\', \'a\', 0600)', 'open(\'/usr/libexec/vantage/report\', \'r\')'),
+		'a directory of anyone\'s taken': reportSrc.replace('(st?.type == \'directory\' && st.uid === 0 && !(st.mode & 0077))', '(st?.type == \'directory\')'),
+		'a directory others may enter taken': reportSrc.replace(' && !(st.mode & 0077))', ')'),
+		'a link in the directory\'s place followed': reportSrc.replace('\nlet st = lstat(DIR);\n', '\nlet st = lstat(DIR + \'/.\');\n'),
+		'a report without the lock': reportSrc.replace(': null, locked = false;', ': null, locked = !lock;'),
+		/* the listeners: a report only where a router's key runs it on every one of them */
+		'a report beside a listener with a command of its own': reportSrc.replace('if (type(services?.dropbear?.instances) != \'object\' || vaps.forced_listener(services))\n\texit(1);\n', ''),
+		'listeners that cannot be read taken for plain': reportSrc.replace('if (type(services?.dropbear?.instances) != \'object\' || vaps.forced_listener(services))', 'if (vaps.forced_listener(services))'),
+		'the listeners judged, and the report given all the same': reportSrc.replace('|| vaps.forced_listener(services))\n\texit(1);', '|| vaps.forced_listener(services))\n\tservices = null;'),
+		'OpenWrt\'s own dropbear service asked about alone': reportSrc.replace('let services = ubus.call(\'service\', \'list\');', 'let services = ubus.call(\'service\', \'list\', { name: \'dropbear\' });'),
+		'procd asked a second time': reportSrc.replace('\nlet board = ubus.call(', '\nlet again = ubus.call(\'service\', \'list\', { name: \'dropbear\' });\nlet board = ubus.call('),
+		'the device read before the listeners': reportSrc.replace('\nlet board = ubus.call(\'system\', \'board\'), info = ubus.call(\'system\', \'info\');\n', '\n').replace('\nlet services = ', '\nlet board = ubus.call(\'system\', \'board\'), info = ubus.call(\'system\', \'info\');\nlet services = '),
+		'no bound on the interfaces asked about': reportSrc.replace('\tif (classified >= MAX_SSIDS + MAX_VLANS)\n\t\tcontinue;\n\n', ''),
+		'an interface asked about and not counted': reportSrc.replace('\tclassified++;\n\n', ''),
+		'a lock that waits': reportSrc.replace('lock.lock(\'xn\')', 'lock.lock(\'x\')'),
+		'a directory made elsewhere': add('mkdir(\'/etc/vantage-report\', 0700);'),
 		'another file opened': add('let f = open(\'/etc/shadow\', \'r\');'),
 		'a read under another name': add('let rd = readfile; print(rd(\'/etc/shadow\'));')
 	};
@@ -1898,10 +2096,10 @@ const COLLECTOR_PINS = [
 		'let ifaces = ubus.call(\'network.interface\', \'dump\')?.interface;',
 		'let net = a.net ? vaps.network_named(a.net, ifaces) : vaps.network_of(a.addr, ifaces);',
 		'let to = net ? vaps.next_addr(a.mac, s.addr, s.tried, readfile(ARP, MAX_TABLE), leases(), net) : null;',
-		'if (!s.trying && a.net && s.addr === a.addr) {',
+		'if (a.net) {',
 		'let ifaces = ubus.call(\'network.interface\', \'dump\')?.interface;',
 		'let net = vaps.network_named(a.net, ifaces);',
-		'if (net && vaps.net_of(a.addr, ifaces) !== a.net) {',
+		'if (net && vaps.net_of(to, ifaces) !== a.net) {',
 		'to = vaps.next_addr(a.mac, s.addr, s.tried, readfile(ARP, MAX_TABLE), leases(), net);'
 	] ],
 	/* what a caller can hand it: the session rpcd adds, named and never read */
@@ -1941,10 +2139,12 @@ const COLLECTOR_PINS = [
 		'if (to) {',
 		's.trying = to;',
 		'let s = st[a.id], home = RUN + \'/\' + a.id, to = s.trying ?? s.addr;',
-		'if (!s.trying && a.net && s.addr === a.addr) {',
-		'if (net && vaps.net_of(a.addr, ifaces) !== a.net) {',
+		'if (net && vaps.net_of(to, ifaces) !== a.net) {',
+		'if (s.trying)',
+		's.tried[s.trying] = true;',
 		'to = vaps.next_addr(a.mac, s.addr, s.tried, readfile(ARP, MAX_TABLE), leases(), net);',
 		'if (!to) {',
+		's.trying = null;',
 		's.trying = to;',
 		'mkdir(home, 0700);',
 		'mkdir(home + \'/.ssh\', 0700);',
@@ -2017,8 +2217,12 @@ test('add-on: the collector pins the host key and runs nothing but dbclient', ()
 		'the search on every network': collectorSrc.replace('let to = net ? vaps.next_addr(', 'let to = true ? vaps.next_addr('),
 		'a named network passed over for the address\'s': collectorSrc.replace('let net = a.net ? vaps.network_named(a.net, ifaces) : vaps.network_of(a.addr, ifaces);', 'let net = vaps.network_of(a.addr, ifaces);'),
 		'the address\'s network where the named one is gone': collectorSrc.replace('let net = a.net ? vaps.network_named(a.net, ifaces) : vaps.network_of(a.addr, ifaces);', 'let net = (a.net ? vaps.network_named(a.net, ifaces) : null) ?? vaps.network_of(a.addr, ifaces);'),
-		'the old address asked after a renumbering': collectorSrc.replace('if (net && vaps.net_of(a.addr, ifaces) !== a.net) {', 'if (net && false) {'),
-		'the old address asked whatever network it is on': collectorSrc.replace('if (!s.trying && a.net && s.addr === a.addr) {', 'if (!s.trying && a.net && s.addr !== a.addr) {'),
+		'the old address asked after a renumbering': collectorSrc.replace('if (net && vaps.net_of(to, ifaces) !== a.net) {', 'if (net && false) {'),
+		/* where it answered last, and an address queued a moment ago, are checked as the pairing's own is: before every connection */
+		'an address it moved to asked whatever network it is on by now': collectorSrc.replace('\tif (a.net) {\n', '\tif (a.net && s.addr === a.addr) {\n'),
+		'a queued address asked whatever network it is on by now': collectorSrc.replace('\tif (a.net) {\n', '\tif (a.net && !s.trying) {\n'),
+		'the pairing\'s address checked in place of the one that is asked': collectorSrc.replace('vaps.net_of(to, ifaces) !== a.net', 'vaps.net_of(a.addr, ifaces) !== a.net'),
+		'a queued address that left the network tried again': collectorSrc.replace('\t\t\tif (s.trying)\n\t\t\t\ts.tried[s.trying] = true;\n\n', ''),
 		'looked for at once on the address\'s network': collectorSrc.replace('let net = vaps.network_named(a.net, ifaces);\n\n\t\tif (net && vaps.net_of(', 'let net = vaps.network_of(a.addr, ifaces);\n\n\t\tif (net && vaps.net_of('),
 		'the network changed after it was chosen': collectorSrc.replace('let to = net ? vaps.next_addr(', 'net = vaps.network_of(a.addr, ifaces) ?? net;\n\t\tlet to = net ? vaps.next_addr('),
 		'interfaces from another ubus object': collectorSrc.replace('let ifaces = ubus.call(\'network.interface\', \'dump\')?.interface;', 'let ifaces = ubus.call(\'luci-rpc\', \'getNetworkDevices\')?.interface;'),
@@ -2039,7 +2243,7 @@ const MODULE_PINS = [
 	[ '\\b(?:own_file|st)\\b', [
 		'function own_file(st, uid) {',
 		'return type(st) == \'object\' && st.type == \'file\' && (st.uid === 0 || (type(uid) == \'int\' && st.uid === uid));',
-		'export { MAX_APS, MAX_ROUTERS, MAX_CODE, COMMENT, key, name, name_of, id, addr, mac, net, port, router_code, ap_code, parse_router, parse_ap, auth_line, parse_auth_line, aps, network_of, net_of, network_named, find_addrs, next_addr, own_file, fetch_error, state, moved, band, parseable, normalize, view };'
+		'export { MAX_APS, MAX_ROUTERS, MAX_CODE, COMMENT, key, name, name_of, id, addr, mac, net, port, router_code, ap_code, parse_router, parse_ap, auth_line, parse_auth_line, forced_listener, aps, network_of, net_of, network_named, find_addrs, next_addr, own_file, fetch_error, state, moved, band, parseable, normalize, view };'
 	] ],
 	[ '\\b(?:KEY_OPTIONS|COMMENT|RE_TAIL|ED25519|key_id|auth_line|parse_auth_line)\\b', [
 		'const ED25519 = \'ssh-ed25519\';',
@@ -2058,15 +2262,36 @@ const MODULE_PINS = [
 		'if (length(f) != 4 || f[0] != KEY_OPTIONS || f[1] != ED25519 || !key(f[2]) || substr(f[3], 0, length(COMMENT)) != COMMENT)',
 		'let rest = split(substr(f[3], length(COMMENT)), \'+\');',
 		'return (length(rest) == 2 && name(rest[0]) && rest[1] === key_id(f[2])) ? { key: f[2], name: rest[0], comment: f[3] } : null;',
-		'export { MAX_APS, MAX_ROUTERS, MAX_CODE, COMMENT, key, name, name_of, id, addr, mac, net, port, router_code, ap_code, parse_router, parse_ap, auth_line, parse_auth_line, aps, network_of, net_of, network_named, find_addrs, next_addr, own_file, fetch_error, state, moved, band, parseable, normalize, view };'
+		'export { MAX_APS, MAX_ROUTERS, MAX_CODE, COMMENT, key, name, name_of, id, addr, mac, net, port, router_code, ap_code, parse_router, parse_ap, auth_line, parse_auth_line, forced_listener, aps, network_of, net_of, network_named, find_addrs, next_addr, own_file, fetch_error, state, moved, band, parseable, normalize, view };'
 	] ]
 ];
+/* which dropbear listener runs a command of its own for root: the plugin (before it writes a key) and the report (before it
+   answers) both ask this, whole. Every running instance of any procd service whose program is a dropbear; its options
+   read as dropbear reads them (several letters in a word, a value in the same word or the next, never read as options);
+   an instance or a line that cannot be read is one. */
+const MODULE_VALUE = "const DROPBEAR_VALUE = 'bcdrDpPlGWKITA2';", MODULE_FLAG = "const DROPBEAR_FLAG = 'aBeEFghijkmRstuvVwz';";
+const MODULE_OWN = "function own_command(argv) {\n\tlet own = false, root = true;\n\n\tfor (let i = 1; i < length(argv); i++) {\n\t\tlet word = argv[i];\n\n" +
+	"\t\tif (type(word) != 'string' || length(word) < 2 || substr(word, 0, 1) != '-')\n\t\t\treturn true;\n\n\t\tfor (let j = 1; j < length(word); j++) {\n\t\t\tlet o = substr(word, j, 1);\n\n" +
+	"\t\t\tif (index(DROPBEAR_VALUE, o) >= 0) {\n\t\t\t\tif (o == 'c')\n\t\t\t\t\town = true;\n\n\t\t\t\tif (j == length(word) - 1 && ++i >= length(argv))\n\t\t\t\t\treturn true;\n\n\t\t\t\tbreak;\n\t\t\t}\n\n" +
+	"\t\t\tif (index(DROPBEAR_FLAG, o) < 0)\n\t\t\t\treturn true;\n\n\t\t\tif (o == 'w')\n\t\t\t\troot = false;\n\t\t}\n\t}\n\n\treturn own && root;\n}";
+const MODULE_FORCED = "function forced_listener(services) {\n\tfor (let name, s in ((type(services) == 'object') ? services : {}))\n" +
+	"\t\tfor (let n, i in ((type(s) == 'object' && type(s.instances) == 'object') ? s.instances : {})) {\n\t\t\tif (type(i) != 'object' || i.running !== true)\n\t\t\t\tcontinue;\n\n" +
+	"\t\t\tlet argv = i.command, prog = (type(argv) == 'array' && type(argv[0]) == 'string') ? split(argv[0], '/') : null;\n\n" +
+	"\t\t\tif (!prog || (prog[-1] == 'dropbear' && own_command(argv)))\n\t\t\t\treturn true;\n\t\t}\n\n\treturn false;\n}";
 function checkModuleSource(src) {
 	const code = codeOf(src, 'the shared checks');
 	assert.deepEqual(linesWith(code, 'import'), []);
 	const word = /\b(system|popen|exec|readfile|writefile|open|require|loadfile|loadstring|include|render|global|getenv|call|sleep|exit)\b/.exec(code);
 	assert.equal(word, null, word && `"${word[1]}" is banned in the shared checks`);
 	checkPins(src, 'the shared checks', MODULE_PINS);
+	for (const [ what, fn ] of [ [ 'own_command', MODULE_OWN ], [ 'forced_listener', MODULE_FORCED ] ]) {
+		const found = new RegExp('^function ' + what + '\\(.*\\) \\{\\n[\\s\\S]*?\\n\\}$', 'm').exec(src);
+		assert.equal(found && found[0], fn, what + '(), exactly');
+	}
+	/* dropbear's options (2025.89): which take a value, which none; each letter once */
+	for (const line of [ MODULE_VALUE, MODULE_FLAG ]) assert.ok(src.includes('\n' + line + '\n'), line);
+	assert.equal([ ...code.matchAll(/\bDROPBEAR_(?:VALUE|FLAG)\b/g) ].length, 4, 'the two tables: defined, and read in own_command() only');
+	assert.equal(new Set('bcdrDpPlGWKITA2' + 'aBeEFghijkmRstuvVwz').size, 34, 'no letter in both tables');
 }
 
 test('add-on: the shared checks import nothing and call nothing outside themselves', () => {
@@ -2082,7 +2307,21 @@ test('add-on: the shared checks import nothing and call nothing outside themselv
 		'a line known by its comment alone': apsModule.replace('if (length(f) != 4 || f[0] != KEY_OPTIONS || ', 'if (length(f) != 4 || '),
 		'any key under the comment': apsModule.replace('&& rest[1] === key_id(f[2])) ?', ') ?'),
 		'any account\'s file read': apsModule.replace('(st.uid === 0 || (type(uid) == \'int\' && st.uid === uid))', 'true'),
-		'another key type': apsModule.replace('const ED25519 = \'ssh-ed25519\';', 'const ED25519 = \'ssh-rsa\';')
+		'another key type': apsModule.replace('const ED25519 = \'ssh-ed25519\';', 'const ED25519 = \'ssh-rsa\';'),
+		/* a listener's own command */
+		'a command that cannot be read taken for a plain listener': apsModule.replace('if (!prog || (prog[-1] == \'dropbear\' && own_command(argv)))', 'if (prog && prog[-1] == \'dropbear\' && own_command(argv))'),
+		'a listener\'s own command passed': apsModule.replace('\treturn own && root;\n', '\treturn false;\n'),
+		'only the first instance looked at': apsModule.replace('\t\t\tif (!prog || (prog[-1] == \'dropbear\' && own_command(argv)))\n\t\t\t\treturn true;\n', '\t\t\treturn !prog || (prog[-1] == \'dropbear\' && own_command(argv));\n'),
+		'only the service called dropbear looked at': apsModule.replace('for (let name, s in ((type(services) == \'object\') ? services : {}))', 'for (let name, s in ((type(services) == \'object\') ? { dropbear: services.dropbear } : {}))'),
+		'a dropbear known by its whole path only': apsModule.replace('prog[-1] == \'dropbear\'', 'i.command[0] == \'/usr/sbin/dropbear\''),
+		'a stopped instance counted, a running one not': apsModule.replace('i.running !== true)', 'i.running === true)'),
+		'options matched as whole words': apsModule.replace('\t\t\tif (index(DROPBEAR_VALUE, o) >= 0) {\n\t\t\t\tif (o == \'c\')', '\t\t\tif (index(DROPBEAR_VALUE, o) >= 0) {\n\t\t\t\tif (word == \'-c\')'),
+		'a value read as options': apsModule.replace('\t\t\t\tif (j == length(word) - 1 && ++i >= length(argv))\n\t\t\t\t\treturn true;\n\n\t\t\t\tbreak;\n', '\t\t\t\tbreak;\n'),
+		'a letter dropbear does not have taken for none': apsModule.replace('\t\t\tif (index(DROPBEAR_FLAG, o) < 0)\n\t\t\t\treturn true;\n\n', ''),
+		'a word that is no option passed over': apsModule.replace('\t\tif (type(word) != \'string\' || length(word) < 2 || substr(word, 0, 1) != \'-\')\n\t\t\treturn true;\n', '\t\tif (type(word) != \'string\' || length(word) < 2 || substr(word, 0, 1) != \'-\')\n\t\t\tcontinue;\n'),
+		'-w taken for an option with a value': apsModule.replace('const DROPBEAR_VALUE = \'bcdrDpPlGWKITA2\';', 'const DROPBEAR_VALUE = \'bcdrDpPlGWKITA2w\';'),
+		'-c taken for an option without one': apsModule.replace('const DROPBEAR_VALUE = \'bcdrDpPlGWKITA2\';', 'const DROPBEAR_VALUE = \'bdrDpPlGWKITA2\';').replace('const DROPBEAR_FLAG = \'aBeEFghijkmRstuvVwz\';', 'const DROPBEAR_FLAG = \'aBceEFghijkmRstuvVwz\';'),
+		'any letter taken for an option': apsModule.replace('const DROPBEAR_FLAG = \'aBeEFghijkmRstuvVwz\';', 'const DROPBEAR_FLAG = \'aBeEFghijkmRstuvVwzoxyq\';')
 	})) {
 		assert.notEqual(src, apsModule, name + ': the mutation applies');
 		assert.throws(() => checkModuleSource(src), assert.AssertionError, name);
@@ -2193,7 +2432,7 @@ const TRAFFIC_PINS = [
 		'let st = lstat(DIR);',
 		'mkdir(DIR, 0700);',
 		'st = lstat(DIR);',
-		'if (writefile(tmp, text) == length(text) && chmod(tmp, 0600) && rename(tmp, file) === true)',
+		'if (writefile(tmp, text) == length(text) && lstat(tmp)?.size === length(text) && chmod(tmp, 0600) && rename(tmp, file) === true)',
 		'unlink(tmp);',
 		'let text = readfile(DIR + \'/state.json\', MAX_STATE + 1), st = null;',
 		'let text = readfile(DIR + \'/answer.json\', MAX_ANSWER), a = null;',
@@ -2223,9 +2462,9 @@ const TRAFFIC_PINS = [
 	[ '\\b(?:put|tmp)\\b', [
 		'function put(name, text) {',
 		'let tmp = DIR + \'/\' + name + \'.new\', file = DIR + \'/\' + name;',
-		'if (writefile(tmp, text) == length(text) && chmod(tmp, 0600) && rename(tmp, file) === true)',
+		'if (writefile(tmp, text) == length(text) && lstat(tmp)?.size === length(text) && chmod(tmp, 0600) && rename(tmp, file) === true)',
 		'unlink(tmp);',
-		'return put(\'state.json\', sprintf(\'%J\', { v: 2, at: now, flows, totals }));',
+		'return put(\'state.json\', sprintf(\'%J\', { v: 3, at: now, flows, totals }));',
 		'put(\'answer.json\', text);'
 	] ],
 	/* one read at a time; the lock file 0600 */
@@ -2304,7 +2543,8 @@ test('traffic: the plugin rules catch each breach', () => {
 		'another account\'s directory taken': swap('return st?.type == \'directory\' && st.uid === 0 && !(st.mode & 0077);', 'return st?.type == \'directory\' && !(st.mode & 0077);'),
 		'files others may read': swap('chmod(tmp, 0600)', 'chmod(tmp, 0644)'),
 		'a lock file others may read': swap('open(DIR + \'/lock\', \'a\', 0600)', 'open(DIR + \'/lock\', \'a\')'),
-		'a file written in place': swap('if (writefile(tmp, text) == length(text) && chmod(tmp, 0600) && rename(tmp, file) === true)', 'if (writefile(file, text) == length(text) && chmod(file, 0600))'),
+		'a file written in place': swap('if (writefile(tmp, text) == length(text) && lstat(tmp)?.size === length(text) && chmod(tmp, 0600) && rename(tmp, file) === true)', 'if (writefile(file, text) == length(text) && chmod(file, 0600))'),
+		'a file put in place without its size checked': swap(' && lstat(tmp)?.size === length(text)', ''),
 		'another file removed': add('unlink(DIR + \'/../vantage\');'),
 		'the file removed, not what is beside it': swap('unlink(tmp);', 'unlink(file);'),
 		'a third file': swap('put(\'answer.json\', text);', 'put(\'answer.json\', text);\n\tput(\'flows.json\', sprintf(\'%J\', flows));'),

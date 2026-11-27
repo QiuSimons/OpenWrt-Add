@@ -15,12 +15,14 @@ const UI = {};
 /* LuCI's poll: tests pause it */
 const POLL = { on: true, active() { return this.on; } };
 
-function loadView(dom) {
+function loadView(dom, rpc) {
 	const src = fs.readFileSync(path.join(RES, 'view/vantage/overview.js'), 'utf8');
 	const stubs = {
 		view: { extend: p => p },
-		/* replies come from REPLIES['object method'](...args) when set */
-		rpc: { declare: o => function(...args) { const f = REPLIES[o.object + ' ' + o.method]; return f ? f(...args) : Promise.resolve(null); } },
+		/* replies come from REPLIES['object method'](...args) when set,
+		   else from REPLIES['*'] (a device that answers nothing); or
+		   an rpc module of the test's */
+		rpc: rpc || { declare: o => function(...args) { const f = REPLIES[o.object + ' ' + o.method] || REPLIES['*']; return f ? f(...args) : Promise.resolve(null); } },
 		poll: POLL, ui: UI, dom: dom || {}
 	};
 	const params = [], values = [];
@@ -301,7 +303,8 @@ test('names beyond a poll: reverse DNS and the vendor table for wired hosts too'
 		self.resolveMore({ clients: [], wiredHosts: [ { mac: '00:00:5e:00:53:40', ips: [ '192.0.2.40' ], nameSource: 'mac' } ] });
 		await new Promise(r => setTimeout(r, 0));
 		assert.deepEqual(asked, [ '192.0.2.40' ], 'a wired host\'s address is looked up');
-		assert.equal(self.st.rdns['192.0.2.40'], 'nas.home.arpa');
+		assert.deepEqual(self.st.rdns['192.0.2.40'].name, 'nas.home.arpa');
+		assert.equal(self.st.rdns['192.0.2.40'].mac, '00:00:5e:00:53:40', 'kept with the host it was asked for');
 		assert.equal(ouiLoads, 1, 'a wired host known only by its MAC loads the vendor table');
 		assert.ok(rerendered >= 1);
 	}
@@ -430,6 +433,347 @@ test('Low-power router: Wi-Fi state, temperatures, wired hosts, iwinfo and clien
 		global.L = saved.L; Date.now = saved.now;
 		if (saved.document === undefined) delete global.document; else global.document = saved.document;
 		for (const k of Object.keys(REPLIES)) if (/^(luci\.vantage (wireless|thermal|wired|survey)|iwinfo (info|survey)|hostapd\.|system info)/.test(k)) delete REPLIES[k];
+	}
+});
+
+/* an address handed to another client: its reverse DNS answer was the last holder's */
+test('reverse DNS: an answer is its holder\'s for 10 minutes; an address that changed hands is asked again and a late answer dropped', async () => {
+	const self = Object.create(view);
+	const saved = { L: global.L, now: Date.now };
+	let t = 1.8e12, rerendered = 0;
+	Date.now = () => t;
+	global.L = { require: () => new Promise(() => {}), resolveDefault: (p, d) => Promise.resolve(p).catch(() => d) };
+	const asked = [], answers = [];
+	REPLIES['network.rrdns lookup'] = addrs => { asked.push(addrs.slice()); return new Promise(r => answers.push(r)); };
+	const PRINTER = '00:00:5e:00:53:41', LAPTOP = '00:00:5e:00:53:42', IP = '192.0.2.44';
+	const snap = mac => ({ clients: [ { mac, ips: [ IP ], nameSource: 'dhcp' } ], wiredHosts: [] });
+	const answer = async v => { answers.shift()(v); await new Promise(r => setTimeout(r, 0)); };
+	try {
+		self.st = { rdns: Object.create(null), mdnsOff: true, mdnsAt: 0 };
+		self.rerender = () => { rerendered++; };
+		self.resolveMore(snap(PRINTER));
+		assert.deepEqual(asked, [ [ IP ] ]);
+		/* the laptop gets the address while the lookup is out */
+		self.resolveMore(snap(LAPTOP));
+		assert.equal(asked.length, 1, 'one lookup at a time');
+		await answer({ [IP]: 'printer.lan' });
+		assert.equal(self.st.rdns[IP], undefined, 'the late answer was for the last holder: dropped');
+		assert.equal(rerendered, 0);
+		self.resolveMore(snap(LAPTOP));
+		assert.deepEqual(asked[1], [ IP ], 'and the address is asked for its new holder');
+		await answer({ [IP]: 'laptop.lan' });
+		assert.deepEqual([ self.st.rdns[IP].name, self.st.rdns[IP].mac, rerendered ], [ 'laptop.lan', LAPTOP, 1 ]);
+		/* good for 10 minutes; asked again then, and shown while that call is out */
+		const names = load('vantage.names');
+		const shown = () => { const r = names.resolve({ mac: LAPTOP, ips: [ IP ], rdns: self.st.rdns, hint: { name: 'laptop-dhcp' } }); return [ r.source, r.name ]; };
+		t += 9 * 60e3; self.resolveMore(snap(LAPTOP));
+		assert.equal(asked.length, 2);
+		t += 2 * 60e3; self.resolveMore(snap(LAPTOP));
+		assert.equal(asked.length, 3, 'after 10 minutes');
+		assert.deepEqual(shown(), [ 'dns', 'laptop' ], 'its name stays while it is asked');
+		/* the call fails: the old name is not kept alive by it, the DHCP name shows,
+		   and the address is asked again after 10 minutes, not at every poll */
+		await answer(Promise.reject(new Error('XHR request timed out')));
+		assert.deepEqual([ self.st.rdns[IP].name, self.st.rdnsOff, rerendered ], [ '', undefined, 2 ]);
+		assert.deepEqual(shown(), [ 'dhcp', 'laptop-dhcp' ]);
+		for (let i = 0; i < 9; i++) { t += 60e3; self.resolveMore(snap(LAPTOP)); }
+		assert.equal(asked.length, 3, 'no lookup on the polls in between');
+		t += 60e3; self.resolveMore(snap(LAPTOP));
+		assert.equal(asked.length, 4);
+		await answer({ [IP]: 'laptop.lan', '192.0.2.99': 'never-asked.lan' });
+		assert.deepEqual([ shown(), rerendered ], [ [ 'dns', 'laptop' ], 3 ], 'with a fresh answer reverse DNS names it again, before DHCP');
+		assert.equal(self.st.rdns['192.0.2.99'], undefined, 'only addresses that were asked');
+		/* gone as well when the device answers and has no name for it any more */
+		t += 10 * 60e3; self.resolveMore(snap(LAPTOP));
+		await answer({});
+		assert.deepEqual([ asked.length, shown(), rerendered ], [ 5, [ 'dhcp', 'laptop-dhcp' ], 4 ]);
+		/* another holder with an answer kept: asked at once; "no name" does not last for the session either */
+		t += 60e3; self.resolveMore(snap(PRINTER));
+		assert.equal(asked.length, 6);
+		assert.deepEqual([ self.st.rdns[IP].name, self.st.rdns[IP].mac ], [ '', PRINTER ]);
+		await answer({});
+		t += 60e3; self.resolveMore(snap(PRINTER));
+		assert.equal(asked.length, 6);
+		t += 10 * 60e3; self.resolveMore(snap(PRINTER));
+		assert.equal(asked.length, 7);
+		await answer({ [IP]: 'printer.lan' });
+		assert.equal(self.st.rdns[IP].name, 'printer.lan');
+	} finally { global.L = saved.L; Date.now = saved.now; delete REPLIES['network.rrdns lookup']; }
+});
+
+/* a dashboard on a device that stops answering (a reboot, a cable): every
+   call fails, and LuCI's resolveDefault gives each its default */
+test('a poll the device does not answer: the last snapshot stays with its age, the pill reconnects, and the next answer is live again', async () => {
+	const saved = { L: global.L, document: global.document, window: global.window, now: Date.now };
+	let t = 1.8e12, uptime = 20, reached = true, paints = 0;
+	Date.now = () => t;
+	const root = { attrs: {}, getAttribute: () => null, setAttribute(k, v) { this.attrs[k] = v; } };
+	global.document = { hidden: false, documentElement: root };
+	global.L = { env: { media: '/luci-static/bootstrap' }, require: () => new Promise(() => {}), resolveDefault: (p, d) => Promise.resolve(p).catch(() => d) };
+	global.window = { sessionStorage: { getItem: () => null, setItem() {} }, localStorage: { getItem: () => null, setItem() {} } };
+	const calls = {
+		'*': () => reached ? Promise.resolve(null) : Promise.reject(new Error('XHR request failed')),
+		'system info': () => reached ? Promise.resolve({ uptime, localtime: t / 1000 }) : Promise.reject(new Error('XHR request failed'))
+	};
+	Object.assign(REPLIES, calls);
+	try {
+		const self = Object.create(view);
+		self.initState({ board: {}, canWrite: false, canRdns: false, mdns: null });
+		self.paint = () => { paints++; };
+		self.el = { live: { className: '', hidden: false, setAttribute(k, v) { this[k] = v; } }, liveText: { textContent: '' } };
+		const poll = async ms => { t += ms; await self.refresh(); return [ self.el.live.className, self.el.liveText.textContent, self.m && self.m.device.uptime, paints ]; };
+		assert.deepEqual(await poll(5000), [ '', '', 20, 1 ], 'a good poll: taken in and painted (paint, stubbed here, paints the pill)');
+		const good = self.st.lastOk;
+		assert.equal(good, t);
+		/* every call fails */
+		reached = false; uptime = 0;
+		assert.deepEqual(await poll(5000), [ 'vt-livepill vt-live-err', 'Reconnecting… · 5 s ago', 20, 1 ], 'nothing is painted over the last snapshot');
+		assert.equal(self.st.lastOk, good, 'not "Live": the last answer is as old as it is');
+		assert.ok(self.st.lastErr instanceof Error);
+		assert.equal(root.attrs['data-vt-live'], 'err');
+		assert.deepEqual(await poll(60e3), [ 'vt-livepill vt-live-err', 'Reconnecting… · 1 min ago', 20, 1 ]);
+		/* ubus' error code in the status' place is no answer either, nor is
+		   an object without the uptime every answer carries */
+		reached = true;
+		for (const none of [ 6, {}, { localtime: t / 1000 }, { uptime: '20' }, { uptime: NaN }, [ 20 ], null ]) {
+			calls['system info'] = REPLIES['system info'] = () => Promise.resolve(none);
+			assert.deepEqual([ (await poll(5000))[0], self.m.device.uptime, self.st.lastOk ], [ 'vt-livepill vt-live-err', 20, good ], JSON.stringify(none));
+		}
+		/* back: the device restarted meanwhile */
+		REPLIES['system info'] = () => Promise.resolve({ uptime: 3, localtime: t / 1000 });
+		assert.deepEqual((await poll(5000)).slice(2), [ 3, 2 ]);
+		assert.deepEqual([ self.st.lastOk, self.st.lastErr ], [ t, null ]);
+		self.paintLive();
+		assert.deepEqual([ self.el.live.className, self.el.liveText.textContent ], [ 'vt-livepill vt-live-ok', 'Live · just now' ]);
+
+		/* a page opened on a device that does not answer its first poll is not live either */
+		reached = false;
+		REPLIES['system info'] = calls['*'];
+		const cold = Object.create(view);
+		const raw = await cold.fetch();
+		assert.deepEqual([ raw.lost, raw.info ], [ true, {} ]);
+		const src = fs.readFileSync(path.join(RES, 'view/vantage/overview.js'), 'utf8');
+		assert.ok(src.includes("if (data.raw && data.raw.lost) this.st.lastErr = new Error('no answer');\n\t\telse this.st.lastOk = Date.now();"), 'render() does not stamp it as answered');
+	} finally {
+		global.L = saved.L; global.window = saved.window; Date.now = saved.now;
+		if (saved.document === undefined) delete global.document; else global.document = saved.document;
+		for (const k of Object.keys(calls)) delete REPLIES[k];
+	}
+});
+
+/* what the last page saved must outlast a page opened while the device is away */
+test('a page opened on a device that does not answer keeps the saved history and who is new; the first answer is the first poll', async () => {
+	const saved = { L: global.L, window: global.window, now: Date.now };
+	let t = 1.8e12, reached = false, writes = 0;
+	Date.now = () => t;
+	const STA = '00:00:5e:00:53:01';
+	/* this login's history, as the last page left it: a station's, the memory's, a line's last sample older than the chart shows */
+	const kept = JSON.stringify({ sid: '', net: { 'up:wan': [ [ t - 6 * 60e3, 1000, 2000 ] ] }, cpu: [], mem: [ [ t - 10e3, 40 ] ],
+		clients: { [STA]: [ [ t - 20e3, 50, 100, 200 ], [ t - 10e3, 52, 110, 210 ] ] } });
+	const box = { v: kept };
+	global.L = { env: {}, require: () => new Promise(() => {}), resolveDefault: (p, d) => Promise.resolve(p).catch(() => d) };
+	global.window = { sessionStorage: { getItem: () => box.v, setItem(k, v) { writes++; box.v = v; } }, localStorage: { getItem: () => null, setItem() {} } };
+	const answers = {
+		'luci.vantage wireless': () => Promise.resolve({ radio0: { up: true, config: { band: '5g' }, interfaces: [ { ifname: 'wl0', section: 'wl0', config: { mode: 'ap', ssid: 'S' } } ] } }),
+		'system info': () => Promise.resolve({ uptime: 20, localtime: t / 1000 }),
+		'iwinfo info': () => Promise.resolve({ channel: 36, bssid: '00:00:5E:00:53:A0' }),
+		'iwinfo assoclist': () => Promise.resolve([ { mac: '00:00:5E:00:53:01', signal: -50, rx: { bytes: 1, rate: 866700 }, tx: { bytes: 1, rate: 866700 } } ]),
+		'hostapd.wl0 get_clients': () => Promise.resolve({ clients: {} }),
+		'hostapd.wl0 get_status': () => Promise.resolve({ bssid: '00:00:5e:00:53:a0', ssid: 'S', channel: 36, freq: 5180 })
+	};
+	const calls = { '*': () => reached ? Promise.resolve(null) : Promise.reject(new Error('XHR request failed')) };
+	for (const k of Object.keys(answers)) calls[k] = (...a) => reached ? answers[k](...a) : Promise.reject(new Error('XHR request failed'));
+	Object.assign(REPLIES, calls);
+	try {
+		const self = Object.create(view);
+		self.initState({ board: {}, canWrite: false, canRdns: false, mdns: null });
+		assert.equal(self.st.clientHist[STA].length, 2, 'read back when the page opens');
+		/* render() takes in the first poll's replies, whatever they are */
+		const first = await self.fetch();
+		assert.equal(first.lost, true);
+		self.ingest(first);
+		assert.deepEqual([ self.m.clients.length, self.m.device.uptime ], [ 0, null ], 'an empty page to show');
+		assert.deepEqual([ writes, box.v === kept ], [ 0, true ], 'nothing written over what was saved');
+		assert.deepEqual([ self.st.clientHist[STA].length, self.st.hist.net['up:wan'].length, self.st.hist.mem.length ], [ 2, 1, 1 ], 'nor dropped from what was read');
+		assert.equal(self.st.presence, null, 'and nobody counted as there or not');
+		/* the device answers: this poll is the first one */
+		reached = true; t += 5000;
+		self.ingest(await self.fetch());
+		const c = self.m.clients[0];
+		assert.deepEqual([ c.mac, c.isNew ], [ STA, false ], 'a station there at the first answer is not new');
+		assert.equal(self.st.clientHist[STA].length, 3, 'its saved history goes on');
+		assert.equal(writes, 1);
+		assert.deepEqual(JSON.parse(box.v).clients[STA].map(p => p[0]), [ t - 25e3, t - 15e3 ], 'and is saved again (this poll\'s sample has no rate yet)');
+		assert.equal(self.st.hist.net['up:wan'], undefined, 'an answered poll without that line drops its old history, as before');
+		/* a station that arrives later is new */
+		t += 5000;
+		answers['iwinfo assoclist'] = () => Promise.resolve([ { mac: STA, signal: -50, rx: { bytes: 2 }, tx: { bytes: 2 } }, { mac: '00:00:5e:00:53:02', signal: -60, rx: { bytes: 1 }, tx: { bytes: 1 } } ]);
+		self.ingest(await self.fetch());
+		assert.deepEqual(self.m.clients.map(x => [ x.mac, x.isNew ]), [ [ STA, false ], [ '00:00:5e:00:53:02', true ] ]);
+	} finally {
+		global.L = saved.L; global.window = saved.window; Date.now = saved.now;
+		for (const k of Object.keys(calls)) delete REPLIES[k];
+	}
+});
+
+/* rpcd-mod-rrdns removed, or the grant taken away, while names are kept */
+test('reverse DNS switched off mid-way: every kept answer is dropped, also those of earlier batches', async () => {
+	const self = Object.create(view);
+	const saved = { L: global.L, now: Date.now };
+	let t = 1.8e12, rerendered = 0, gone = false;
+	Date.now = () => t;
+	global.L = { require: () => new Promise(() => {}), resolveDefault: (p, d) => Promise.resolve(p).catch(() => d) };
+	const asked = [];
+	REPLIES['network.rrdns lookup'] = addrs => {
+		asked.push(addrs.length);
+		if (gone) return Promise.reject(new Error('RPC call to network.rrdns/lookup failed with ubus code 4: Object not found'));
+		return Promise.resolve(Object.fromEntries(addrs.map(a => [ a, 'host-' + a.split('.')[3] + '.lan' ])));
+	};
+	const hex = n => n.toString(16).padStart(2, '0');
+	/* more addresses than one lookup takes (64) */
+	const m = { clients: Array.from({ length: 70 }, (x, i) => ({ mac: '00:00:5e:00:53:' + hex(i + 1), ips: [ '192.0.2.' + (i + 1) ], nameSource: 'dhcp' })), wiredHosts: [] };
+	const flush = () => new Promise(r => setTimeout(r, 0));
+	const names = load('vantage.names');
+	const shown = i => { const r = names.resolve({ mac: m.clients[i].mac, ips: m.clients[i].ips, rdns: self.st.rdns, hint: { name: 'dhcp-' + (i + 1) } }); return [ r.source, r.name ]; };
+	try {
+		self.st = { rdns: Object.create(null), mdnsOff: true, mdnsAt: 0 };
+		self.rerender = () => { rerendered++; };
+		self.resolveMore(m); await flush();
+		assert.deepEqual([ asked, Object.keys(self.st.rdns).length, shown(0), rerendered ], [ [ 64 ], 64, [ 'dns', 'host-1' ], 1 ]);
+		/* the next poll asks for the rest, and the device has no such object any more */
+		gone = true; t += 5000;
+		self.resolveMore(m); await flush();
+		assert.deepEqual(asked, [ 64, 6 ]);
+		assert.equal(self.st.rdnsOff, true);
+		assert.equal(Object.keys(self.st.rdns).length, 0, 'the first batch\'s names are not kept for ever');
+		assert.deepEqual([ shown(0), shown(69), rerendered ], [ [ 'dhcp', 'dhcp-1' ], [ 'dhcp', 'dhcp-70' ], 2 ], 'the DHCP names show');
+		t += 11 * 60e3; self.resolveMore(m); await flush();
+		assert.deepEqual([ asked.length, Object.keys(self.st.rdns).length, rerendered ], [ 2, 0, 2 ], 'and nothing is asked or kept afterwards');
+	} finally { global.L = saved.L; Date.now = saved.now; delete REPLIES['network.rrdns lookup']; }
+});
+
+/* Which failure of the lookup means "no object or no grant". The frames
+   are what uhttpd sends back for a call: { result: [ status, data ] } or
+   { error: { code, message } }; a function that throws is the request
+   failing. Decoded twice: by the few lines of LuCI's rpc.js a declaration
+   goes through, written out here, and by rpc.js itself from the rootfs
+   dump (skipped without it), which must give the same. */
+function frameRpc(frames) {
+	const fail = (o, what) => Promise.reject(new Error('RPC call to ' + o.object + '/' + o.method + ' failed with ' + what));
+	return { declare: o => function() {
+		let f;
+		try { f = frames[o.object + ' ' + o.method](); } catch (e) { return Promise.reject(e); }
+		if (f.error) return fail(o, 'error ' + f.error.code + ': ' + f.error.message);
+		if (o.reject && f.result[0] !== 0) return fail(o, 'ubus code ' + f.result[0] + ': ?');
+		let ret = f.result.length > 1 ? f.result[1] : f.result[0];
+		const want = o.expect ? Object.values(o.expect)[0] : undefined;
+		if (o.expect && (ret == null || Object.prototype.toString.call(ret) !== Object.prototype.toString.call(want))) ret = want;
+		return Promise.resolve(ret);
+	} };
+}
+const RPC_JS = path.join(path.resolve(process.env.VANTAGE_ROOTFS || path.join(__dirname, '../../vantage-rootfs')), 'www/luci-static/resources/rpc.js');
+const NO_RPC = fs.existsSync(RPC_JS) ? false : 'no rpc.js in the rootfs dump (set VANTAGE_ROOTFS)';
+function luciRpc(frames) {
+	const request = { post: (url, msg) => {
+		let f;
+		try { f = frames[msg.params[1] + ' ' + msg.params[2]](); } catch (e) { return Promise.reject(e); }
+		return Promise.resolve({ ok: true, status: 200, json: () => Object.assign({ jsonrpc: '2.0', id: msg.id }, f) });
+	} };
+	return new Function('baseclass', 'request', fs.readFileSync(RPC_JS, 'utf8'))({ extend: p => p }, request);
+}
+
+async function rdnsFailures(makeRpc) {
+	const saved = { L: global.L, now: Date.now };
+	let t = 1.8e12;
+	Date.now = () => t;
+	/* the parts of LuCI's L rpc.js uses, and the view's */
+	global.L = { env: {}, url: (...p) => '/' + p.join('/'), isObject: v => v != null && typeof v === 'object' && !Array.isArray(v),
+		bind: (fn, self, ...args) => fn.bind(self, ...args), raise: (type, fmt, ...args) => { const e = new Error(fmt.format(...args)); e.name = type; throw e; },
+		require: () => new Promise(() => {}), resolveDefault: (p, d) => Promise.resolve(p).catch(() => d) };
+	const frames = {}, flush = () => new Promise(r => setTimeout(r, 0));
+	const A = { mac: '00:00:5e:00:53:41', ips: [ '192.0.2.41' ], nameSource: 'dhcp' }, B = { mac: '00:00:5e:00:53:42', ips: [ '192.0.2.42' ], nameSource: 'dhcp' };
+	const jsonrpc = (code, message) => () => ({ error: { code, message } });
+	try {
+		const rview = loadView(null, makeRpc(frames));
+		/* one client has a fresh name; the lookup for a second one fails */
+		const run = async failure => {
+			const self = Object.create(rview), asked = [];
+			let rerendered = 0;
+			self.st = { rdns: Object.create(null), mdnsOff: true, mdnsAt: 0 };
+			self.rerender = () => { rerendered++; };
+			frames['network.rrdns lookup'] = () => { asked.push('ok'); return { result: [ 0, { '192.0.2.41': 'a.lan', '192.0.2.42': 'b.lan' } ] }; };
+			self.resolveMore({ clients: [ A ], wiredHosts: [] }); await flush();
+			assert.deepEqual([ self.st.rdns['192.0.2.41'].name, rerendered ], [ 'a.lan', 1 ], 'an ordinary answer, as without the flag');
+			t += 60e3;
+			frames['network.rrdns lookup'] = () => { asked.push('failed'); return failure(); };
+			self.resolveMore({ clients: [ A, B ], wiredHosts: [] }); await flush();
+			const after = { off: self.st.rdnsOff === true, kept: Object.keys(self.st.rdns).sort().map(ip => ip + '=' + self.st.rdns[ip].name), rerendered };
+			/* is it asked again: at the next poll, and once the answers are 10 minutes old */
+			frames['network.rrdns lookup'] = () => { asked.push('again'); return { result: [ 0, {} ] }; };
+			t += 60e3; self.resolveMore({ clients: [ A, B ], wiredHosts: [] }); await flush();
+			const soon = asked.length;
+			t += 10 * 60e3; self.resolveMore({ clients: [ A, B ], wiredHosts: [] }); await flush();
+			return Object.assign(after, { asked: asked.join(' '), soon });
+		};
+		const OFF = { off: true, kept: [], rerendered: 2, asked: 'ok failed', soon: 2 };
+		const SKIPPED = { off: false, kept: [ '192.0.2.41=a.lan', '192.0.2.42=' ], rerendered: 1, asked: 'ok failed again', soon: 2 };
+		/* no object, no grant: off for the page, and no answer kept */
+		assert.deepEqual(await run(() => ({ result: [ 4 ] })), OFF, 'ubus: not found');
+		assert.deepEqual(await run(() => ({ result: [ 6 ] })), OFF, 'ubus: permission denied');
+		assert.deepEqual(await run(jsonrpc(-32000, 'Object not found')), OFF, 'uhttpd: no such object');
+		assert.deepEqual(await run(jsonrpc(-32002, 'Access denied')), OFF, 'uhttpd: access denied');
+		/* anything else skips that batch: its name is cleared and asked again after 10 minutes,
+		   the other client's fresh name stays, lookups stay on */
+		assert.deepEqual(await run(jsonrpc(-32003, 'Timeout')), SKIPPED, 'uhttpd: the call timed out');
+		assert.deepEqual(await run(jsonrpc(-32001, 'Session not found')), SKIPPED, 'uhttpd: no session');
+		for (const status of [ 1, 2, 3, 5, 7, 9, 10 ])
+			assert.deepEqual(await run(() => ({ result: [ status ] })), SKIPPED, 'ubus status ' + status + ' (7: timeout)');
+		assert.deepEqual(await run(() => { throw new Error('XHR request timed out'); }), SKIPPED, 'the request itself');
+	} finally { global.L = saved.L; Date.now = saved.now; }
+}
+
+test('reverse DNS: only "not found" and "permission denied" switch lookups off; a timeout or a network error skips that batch', () => rdnsFailures(frameRpc));
+test('reverse DNS: the same through LuCI\'s own rpc.js', { skip: NO_RPC }, () => rdnsFailures(luciRpc));
+
+/* the noise floor of the radio's channel, asked every poll (luci.vantage survey) */
+test('the channel survey reaches the model: a radio\'s noise is the survey\'s, at the poll and when the page is rebuilt', async () => {
+	const saved = { L: global.L, window: global.window, now: Date.now };
+	let t = 1.8e12, floor = -89;
+	Date.now = () => t;
+	global.L = { env: {}, require: () => new Promise(() => {}), resolveDefault: (p, d) => Promise.resolve(p).then(v => v == null ? d : v, () => d) };
+	global.window = { sessionStorage: { getItem: () => null, setItem() {} }, localStorage: { getItem: () => null, setItem() {} } };
+	const calls = {
+		'luci.vantage wireless': () => Promise.resolve({ radio0: { up: true, config: { band: '2g' }, interfaces: [ { ifname: 'wl0', section: 'wl0', config: { mode: 'ap', ssid: 'S' } } ] } }),
+		'system info': () => Promise.resolve({ localtime: t / 1000 }),
+		/* iwinfo's own reading, older and another value */
+		'iwinfo info': () => Promise.resolve({ channel: 6, frequency: 2437, noise: -95, bssid: '00:00:5E:00:53:A0' }),
+		'iwinfo assoclist': () => Promise.resolve([]),
+		'luci.vantage survey': () => Promise.resolve([ { mhz: 2412, noise: -70 }, { mhz: 2437, noise: floor } ]),
+		'hostapd.wl0 get_clients': () => Promise.resolve({ clients: {} }),
+		'hostapd.wl0 get_status': () => Promise.resolve({ bssid: '00:00:5e:00:53:a0', ssid: 'S', channel: 6, freq: 2437 })
+	};
+	Object.assign(REPLIES, calls);
+	try {
+		const self = Object.create(view);
+		self.initState({ board: {}, canWrite: false, canRdns: false, mdns: null });
+		self.paint = () => {};
+		const raw = await self.fetch();
+		assert.deepEqual(raw.survey.wl0[1], { mhz: 2437, noise: -89 });
+		assert.equal(self.modelInput(raw).survey, raw.survey, 'one input for both builds, the survey in it');
+		self.ingest(raw);
+		assert.equal(self.m.radios[0].noise, -89, 'the poll: the survey\'s, not iwinfo\'s -95');
+		self.rerender();
+		assert.equal(self.m.radios[0].noise, -89, 'and a rebuild (a name changed) keeps it');
+		t += 5000; floor = -92;
+		self.ingest(await self.fetch());
+		assert.equal(self.m.radios[0].noise, -92, 'every poll');
+		/* both builds through the one input */
+		const src = fs.readFileSync(path.join(RES, 'view/vantage/overview.js'), 'utf8');
+		assert.equal(src.split('model.build(this.modelInput(raw))').length - 1, 2);
+		assert.equal(src.split('model.build(').length - 1, 2, 'and no build beside them');
+	} finally {
+		global.L = saved.L; global.window = saved.window; Date.now = saved.now;
+		for (const k of Object.keys(calls)) delete REPLIES[k];
 	}
 });
 
@@ -1942,6 +2286,15 @@ class FNode {
 	/* every element below, this one first */
 	all() { return [ this ].concat(...this.children.map(c => c.all())); }
 	find(cls) { return this.all().filter(n => (n.attrs.class || '').split(' ').includes(cls)); }
+	/* a list of tag, tag[attr] and [attr] */
+	querySelectorAll(sel) {
+		const any = sel.split(',').map(x => /^\s*(\w+)?(?:\[([\w-]+)\])?\s*$/.exec(x));
+		return this.all().slice(1).filter(n => any.some(m => m && (!m[1] || m[1] === n.tag) && (!m[2] || m[2] in n.attrs)));
+	}
+	contains(n) { return this.all().includes(n); }
+	focus() { global.document.activeElement = this; }
+	get disabled() { return this.off === true || 'disabled' in this.attrs; }
+	set disabled(v) { this.off = !!v; if (!v) delete this.attrs.disabled; }
 	html() {
 		const a = Object.keys(this.attrs).sort().map(k => ' ' + k + '=' + JSON.stringify(this.attrs[k])).join('');
 		return '<' + this.tag + a + '>' + (this.text != null ? JSON.stringify(this.text) : '') + this.childNodes.map(n => typeof n === 'string' ? JSON.stringify(n) : n.html()).join('') + '</' + this.tag + '>';
@@ -1964,6 +2317,158 @@ function withFakeDom(fn) {
 	try { return fn(); }
 	finally { Object.assign(global, saved); }
 }
+
+test('Wireless networks: WPA2 that lets TKIP in has the lock and says why; the same network without it is a row of its own', () => withFakeDom(() => {
+	const model = load('vantage.model');
+	const ifc = (ifname, encryption) => ({ ifname, section: ifname, config: { mode: 'ap', ssid: 'Home', encryption } });
+	const self = Object.create(dview);
+	self.m = model.build({ wifi: { radio0: { up: true, config: { band: '2g' }, interfaces: [ ifc('wl0', 'psk2+tkip+ccmp') ] },
+		radio1: { up: true, config: { band: '5g' }, interfaces: [ ifc('wl1', 'psk2+ccmp') ] } } });
+	self.st = { ssidRates: {} };
+	self.el = { ssids: new FNode('div') };
+	self.paintSsids();
+	const rows = () => self.el.ssids.children.map(r => { const sec = r.find('vt-sec')[0]; return [ sec.attrs.class, sec.attrs.title, sec.textContent, sec.children.length ]; });
+	assert.deepEqual(rows(), [ [ 'vt-sec vt-t-warn', 'WPA2-Personal (TKIP allowed)', 'WPA2', 1 ], [ 'vt-sec', 'WPA2-Personal', 'WPA2', 0 ] ], 'amber with the lock icon, and none on the other');
+	/* the older spelling, a slash before the ciphers, as luci.vantage wireless passes it on */
+	self.m = model.build({ wifi: { radio0: { up: true, config: { band: '2g' }, interfaces: [ ifc('wl0', 'wpa2/tkip+aes') ] },
+		radio1: { up: true, config: { band: '5g' }, interfaces: [ ifc('wl1', 'psk2/tkip') ] }, radio2: { up: true, config: { band: '6g' }, interfaces: [ ifc('wl2', 'psk2/ccmp') ] } } });
+	self.el = { ssids: new FNode('div') };
+	self.paintSsids();
+	assert.deepEqual(rows(), [ [ 'vt-sec vt-t-warn', 'WPA2-Enterprise (TKIP allowed)', 'WPA2-Ent', 1 ], [ 'vt-sec vt-t-warn', 'WPA2-Personal (TKIP allowed)', 'WPA2', 1 ], [ 'vt-sec', 'WPA2-Personal', 'WPA2', 0 ] ]);
+}));
+
+/* the drawer says aria-modal: the keyboard must not reach the page behind it */
+test('details drawer: Tab and Shift+Tab go round its controls, come back from the page behind, and closing returns the focus', () => withFakeDom(() => {
+	const self = Object.create(dview);
+	self.el = {};
+	const layer = self.buildDrawer(), behind = E('button', {}), root = E('div', {}, [ behind, layer ]);
+	self.el.root = root;
+	self.ui = { drawer: { kind: 'client', id: '00:00:5e:00:53:21' }, editing: null };
+	self.paintDrawer = () => {}; self.paintClients = () => {};
+	global.document.body = { classList: { contains: () => false } };
+	global.window.setTimeout = fn => fn();
+	global.window.requestAnimationFrame = fn => fn();
+	const close = self.el.drawerClose;
+	const a = E('button', {}), b = E('input', {}), off = E('button', { disabled: 'disabled' }), skipped = E('a', { href: '#x', tabindex: '-1' }), c = E('a', { href: '#y' });
+	fdom.content(self.el.drawerBody, [ E('p', {}, [ a ]), b, off, skipped, E('span', {}, [ 'text' ]), c ]);
+	const tab = (shift, from, more) => {
+		global.document.activeElement = from;
+		const ev = Object.assign({ key: 'Tab', shiftKey: shift, target: from, stopped: false, preventDefault() { this.stopped = true; } }, more);
+		self.handleKey(ev);
+		return [ ev.stopped, global.document.activeElement ];
+	};
+	assert.deepEqual(tab(false, c), [ true, close ], 'Tab from the last control: the first');
+	assert.deepEqual(tab(true, close), [ true, c ], 'Shift+Tab from the Close button: the last, not the page behind');
+	assert.deepEqual([ tab(false, a), tab(true, b), tab(false, close), tab(true, c) ], [ [ false, a ], [ false, b ], [ false, close ], [ false, c ] ], 'in between the browser steps');
+	assert.deepEqual([ tab(false, behind), tab(true, behind) ], [ [ true, close ], [ true, c ] ], 'from a control of the page behind: back into the drawer');
+	assert.deepEqual(tab(false, null), [ true, close ], 'and from nowhere (the control that had the focus was repainted)');
+	/* a poll repaints the body: the controls as they are now */
+	const d = E('button', {});
+	fdom.content(self.el.drawerBody, [ d ]);
+	assert.deepEqual([ tab(false, d), tab(true, close) ], [ [ true, close ], [ true, d ] ]);
+	fdom.content(self.el.drawerBody, []);
+	assert.deepEqual(tab(false, close), [ true, close ], 'the Close button alone');
+	/* another dialog over the drawer (the theme's command palette, LuCI's modal) keeps its own Tab; so do the browser's shortcuts */
+	const inDialog = { closest: sel => sel === '[role="dialog"]' ? {} : null };
+	assert.deepEqual(tab(false, inDialog), [ false, inDialog ]);
+	global.document.body = { classList: { contains: cl => cl === 'modal-overlay-active' } };
+	assert.deepEqual(tab(false, behind), [ false, behind ]);
+	global.document.body = { classList: { contains: () => false } };
+	assert.deepEqual(tab(false, behind, { ctrlKey: true }), [ false, behind ]);
+	/* closing gives the focus back to what opened it, and Tab is the page's again */
+	const opener = { isConnected: true, focus() { global.document.activeElement = this; } };
+	self.ui.drawer = null;
+	self.el.drawer.hidden = true;
+	global.document.activeElement = opener;
+	self.openDrawer('client', '00:00:5e:00:53:21');
+	assert.equal(global.document.activeElement, close, 'opened: on its Close button');
+	self.closeDrawer();
+	assert.equal(global.document.activeElement, opener);
+	assert.deepEqual(tab(false, behind), [ false, behind ]);
+
+	/* Top talkers builds its rows anew at every poll: the row that opened the drawer is
+	   gone by the time it closes, and the one that stands for the same client now gets the focus */
+	const A = '00:00:5e:00:53:a1', B = '00:00:5e:00:53:a2';
+	const talker = (mac, name) => ({ mac, name, wired: false, total: 4000, share: 0.5, down: 3000, up: 1000 });
+	self.m = { clients: [ { mac: A, name: 'phone', icon: 'phone' }, { mac: B, name: 'laptop', icon: 'laptop' } ], wiredHosts: [] };
+	self.el.talkers = new FNode('div');
+	self.tiles = { clients: E('section', {}, [ E('tr', { 'data-mac': B, 'tabindex': '0' }) ]), talk: E('section', {}, [ self.el.talkers ]) };
+	const rowOf = mac => self.el.talkers.children.filter(r => r.getAttribute('data-mac') === mac)[0];
+	const paintTalk = list => { self.st = { talkers: list }; self.paintTalkers(); };
+	const openFrom = (el, mac) => { self.el.drawer.hidden = true; global.document.activeElement = el; self.openDrawer('client', mac); };
+	paintTalk([ talker(A, 'phone'), talker(B, 'laptop') ]);
+	const first = rowOf(B);
+	assert.equal(first.tag, 'button', 'a row says whose it is');
+	openFrom(first, B);
+	paintTalk([ talker(B, 'laptop'), talker(A, 'phone') ]);
+	assert.notEqual(rowOf(B), first, 'the poll built another row');
+	self.closeDrawer();
+	assert.equal(global.document.activeElement, rowOf(B), 'the same client\'s row in the same tile, not the Clients tile\'s');
+	/* the client is no talker any more: nothing in that tile stands for it, and the focus is left where it is */
+	openFrom(rowOf(B), B);
+	paintTalk([ talker(A, 'phone') ]);
+	self.closeDrawer();
+	assert.equal(global.document.activeElement, close);
+	/* opened for something that is no client, from a control a poll replaced: as before */
+	openFrom(rowOf(A), 'radio0');
+	self.ui.drawer = { kind: 'radio', id: 'radio0' };
+	paintTalk([ talker(A, 'phone') ]);
+	self.closeDrawer();
+	assert.equal(global.document.activeElement, close);
+}));
+
+test('rename: Enter saves once, and a save that finishes late does not close an editor opened since', async () => {
+	const saved = { E: global.E, document: global.document, window: global.window };
+	const A = '00:00:5e:00:53:21', B = '00:00:5e:00:53:22';
+	const flush = () => new Promise(r => setTimeout(r, 0));
+	/* withFakeDom's globals, kept over the awaits */
+	withFakeDom(() => { Object.assign(saved, { fake: { E: global.E, document: global.document, window: global.window } }); });
+	Object.assign(global, saved.fake);
+	try {
+		const self = Object.create(dview);
+		self.aliases = Object.create(null);
+		self.ui = { drawer: { kind: 'client', id: A }, editing: null };
+		const saves = [], done = [];
+		let rerenders = 0;
+		self.saveAlias = (mac, name) => { saves.push([ mac, name ]); return new Promise(r => done.push(r)); };
+		self.rerender = () => { rerenders++; };
+		self.paintDrawer = () => {};
+		const edit = (mac, name) => {
+			const slot = self.el.renameSlot = new FNode('div');
+			self.startRename({ mac, alias: '' });
+			const input = slot.find('vt-rename-input')[0];
+			input.value = name;
+			return { is: self.ui.editing, enter: () => input.on.keydown({ key: 'Enter', preventDefault() {} }), save: slot.find('vt-btn-primary')[0], err: slot.find('vt-form-err')[0] };
+		};
+		self.el = {};
+		const first = edit(A, 'Printer');
+		first.enter(); first.enter(); first.save.on.click();
+		assert.deepEqual(saves, [ [ A, 'Printer' ] ], 'Enter twice and a click: one save, the button says it is under way');
+		assert.equal(first.save.disabled, true);
+		/* the drawer moves on to another client, and its editor opens */
+		self.ui.editing = null;
+		const second = edit(B, 'Laptop');
+		assert.notEqual(second.is, first.is);
+		done.shift()(true); await flush();
+		assert.equal(self.ui.editing, second.is, 'the first save came back: the second editor stays open');
+		assert.equal(rerenders, 1, 'and the saved name is shown, for the client it was typed for');
+		second.enter();
+		assert.deepEqual(saves[1], [ B, 'Laptop' ]);
+		/* the same client's editor closed and opened again while its save is out */
+		self.ui.editing = null;
+		const again = edit(B, 'Laptop 2');
+		done.shift()(true); await flush();
+		assert.equal(self.ui.editing, again.is, 'an earlier editor of the same client does not close it either');
+		/* its own save closes it; a refused one leaves it open and lets Enter try again */
+		again.enter();
+		done.shift()(false); await flush();
+		assert.deepEqual([ self.ui.editing, again.save.disabled, again.err.hidden, saves.length ], [ again.is, false, false, 3 ]);
+		again.enter();
+		assert.equal(saves.length, 4);
+		done.shift()(true); await flush();
+		assert.deepEqual([ self.ui.editing, rerenders ], [ null, 3 ]);
+	} finally { Object.assign(global, { E: saved.E, document: saved.document, window: saved.window }); }
+});
 
 const AP_ID = '0123456789abcdef';
 /* a router with one Wi-Fi network, two stations, a host on lan2 and one

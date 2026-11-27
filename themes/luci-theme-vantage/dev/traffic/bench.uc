@@ -38,7 +38,7 @@ import { chmod, lstat, mkdir, open, readfile, rename, rmdir, stat, unlink, write
 
 const MAX_ENTRIES = 16384;        // entries read a time (nf_conntrack_max: 2048 up, by RAM)
 const MAX_HOSTS = 512;            // hosts counted, as luci.vantage wired lists
-const MAX_KEY = 160;              // characters of an entry's key: 115 at most by the layout table (IPv6 gre), about 140 by parse_slow
+const MAX_KEY = 160;              // characters of an entry's key: 115 at most by the layout table (IPv6 gre), 15 more with a zone
 const MAX_STATE = 2 * MAX_ENTRIES * (MAX_KEY + 74) + MAX_HOSTS * (17 + 74) + 128;
 const STOP_MS = 2000;             // the table is read no longer than this
 const CHECK_EVERY = 64;           // entries between looks at the clock
@@ -74,6 +74,11 @@ function kv(s, key) {
 	return (i < 0) ? s : substr(s, 0, i);
 }
 
+function zone(l) {
+	let z = count(kv(l, ' zone='));
+	return z ? 'zone=' + z : '';
+}
+
 function parse(l, e) {
 	let t = split(l, ' '), p = PROTO[t[6]];
 	if (!p)
@@ -88,6 +93,8 @@ function parse(l, e) {
 	e[3] = t[r];
 	e[4] = +substr(t[r + a], 6);
 	e[5] = t[r + a + 1];
+	if (t[r + a + 3] != 'zone=0' && t[r + a + 2] != 'zone=0')
+		e[0] += zone(l);
 	return true;
 }
 
@@ -107,7 +114,7 @@ function parse_slow(l) {
 	if (end < 0)
 		end = index(o, ' [');
 	return {
-		key: substr(head, 0, b + e) + ' ' + ((end < 0) ? o : substr(o, 0, end)),
+		key: substr(head, b, e) + 'src=' + join('', split((end < 0) ? o : substr(o, 0, end), ' ')) + zone(l),
 		osrc: substr(o, 0, sp),
 		obytes: count(ob),
 		rsrc: (rs > 0) ? substr(r, 0, rs) : null,
@@ -262,7 +269,7 @@ function feed(f, neigh, now, stop, st) {
 
 function put(name, text) {
 	let tmp = DIR + '/' + name + '.new', file = DIR + '/' + name;
-	if (writefile(tmp, text) == length(text) && chmod(tmp, 0600) && rename(tmp, file) === true)
+	if (writefile(tmp, text) == length(text) && lstat(tmp)?.size === length(text) && chmod(tmp, 0600) && rename(tmp, file) === true)
 		return true;
 	unlink(tmp);
 	return false;
@@ -279,7 +286,7 @@ function load_state() {
 	let text = readfile(DIR + '/state.json', MAX_STATE + 1), st = null;
 	if (type(text) == 'string' && length(text) <= MAX_STATE)
 		try { st = json(text); } catch (err) { st = null; }
-	let ok = type(st) == 'object' && st.v == 2 && type(st.flows) == 'object' && type(st.totals) == 'object' &&
+	let ok = type(st) == 'object' && st.v == 3 && type(st.flows) == 'object' && type(st.totals) == 'object' &&
 		(st.at == null || st.at === +st.at) && length(st.totals) <= MAX_HOSTS;
 	for (let k, v in (ok ? st.flows : {}))
 		if (length(k) > MAX_KEY || !entry_ok(v)) {
@@ -298,7 +305,7 @@ function load_state() {
 }
 
 function save_state(now) {
-	return put('state.json', sprintf('%J', { v: 2, at: now, flows, totals }));
+	return put('state.json', sprintf('%J', { v: 3, at: now, flows, totals }));
 }
 
 /* -------------------------------------------------------- the bench */

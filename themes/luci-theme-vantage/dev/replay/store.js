@@ -575,4 +575,21 @@ class Store {
 	}
 }
 
-module.exports = { Store, canon, argsKey, safe };
+/* <root>/<rel> for the static server: the file's real path when that lies
+   under the root's real path, else null. A link that points out of the
+   tree it sits in (a recording, a theme or a dump from someone else)
+   serves nothing; one that stays inside (bootstrap-dark -> bootstrap) does.
+   A root taken from a recording is named with the recording (`within`):
+   then the root's own real path has to lie in the recording's, or a
+   `static` that is a link would make its target the tree. */
+function staticUnder(root, rel, within) {
+	const file = path.join(root, rel);
+	if (!file.startsWith(root + path.sep)) return null;
+	try {
+		const base = fs.realpathSync(root), real = fs.realpathSync(file);
+		if (within != null && !base.startsWith(fs.realpathSync(within) + path.sep)) return null;
+		return real.startsWith(base + path.sep) ? real : null;
+	} catch (e) { return null; }
+}
+
+module.exports = { Store, canon, argsKey, safe, staticUnder };

@@ -28,9 +28,28 @@ a dump of a device you do not control, run the replay in a disposable
 container or as a separate unprivileged user, with the inputs mounted
 read-only, only the 127.0.0.1 port reachable, and no credentials in the
 environment. Recorded data, the rest of a fixture directory and HTTP
-requests only ever reach templates and pages as values; they are never
-compiled. `--app-dir` packages' JavaScript runs in the browser only; the
-replay reads their `menu.d` JSON and uci defaults as data.
+requests only ever reach templates as values; in the Node process they
+are never compiled. `--app-dir` packages' JavaScript runs in the browser
+only; the replay reads their `menu.d` JSON and uci defaults as data.
+
+In the browser a recording is **code** too. Its `static/` files (the
+device's LuCI JavaScript) and its recorded translation catalogue are
+served as script and run in the replay's origin, beside the theme's and
+the packages' own. Script there holds the page's login, so it can ask the
+replay for everything it answers and for every file the static server
+serves; nothing of it reaches a device. Take a recording from someone
+else the way you would take code from them: read its `static/`
+directories and the `translations` bodies in `http.jsonl` first, or run
+it in a browser profile and a container you can throw away. The replay
+says so in one line at startup when the recording has either.
+
+A static file is served only from inside the tree it was found in: its
+real path, links resolved, has to lie under that tree's real path. A link
+in an imported recording, theme or dump that points elsewhere on your
+disk serves nothing (404); one that stays inside, like the dump's
+`bootstrap-dark` -> `bootstrap`, works. A recording's `static/` tree has
+to lie inside the recording itself: one that is a link to another place
+is not served at all.
 
 ## Requests the replay refuses
 
@@ -452,6 +471,7 @@ mirror and consistent within a run:
 | client names only found in DHCP log lines (`DHCPACK`, `not giving name`) | generic names, like other clients |
 | bridge ids (`8000.<mac>`), bare 12 digits after `mac`/`bssid`, a known MAC's last three bytes after `_`/`-` (`ESP_xxxxxx`), EUI-64 identifiers (`a65e60fffe112233`, colon form), solicited-node groups | the matching demo MAC / identifier |
 | DUIDs in text (`DUID ...`, `duid=`, `client-id`) | `0004 00005e0053xx...` |
+| a recorded RPC error (its message and data are the device's own text) | the code is kept, the message is `Recorded error`, the data is dropped |
 | `Serial :` lines, `SerialNumber:`, `serial=`/`sn=` in text | zeros |
 | uci free text (default-deny): any string under an option not known to be technical (`description`, `notes`, firewall rule `name`, uhttpd `commonname`/`location`/`organization`, NTP servers outside `*.pool.ntp.org`/`*.openwrt.org`, ...) unless it looks technical itself | `<option>-<n>` or `host<n>.example.net`, also where the same text appears elsewhere (nft comments, logs); fw4's default rule names and the `luci` config are kept |
 

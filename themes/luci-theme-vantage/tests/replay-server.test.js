@@ -175,6 +175,67 @@ test('replay server: host, origin, session, headers, escaping, logs', { skip, ti
 	}
 });
 
+test('replay server: a static file is served from inside its tree only', { skip, timeout: 60000 }, async () => {
+	/* a package directory with one file of its own and a link to a file
+	   outside it, as an imported tree could hold */
+	const dir = require('./tmpdir')('vantage-static-app-'), res = path.join(dir, 'app/htdocs/luci-static/resources');
+	fs.mkdirSync(res, { recursive: true });
+	fs.writeFileSync(path.join(res, 'vt-inside.js'), '/* inside */');
+	fs.writeFileSync(path.join(dir, 'private.txt'), 'not for the browser');
+	fs.symlinkSync(path.join(dir, 'private.txt'), path.join(res, 'vt-leak.js'));
+	const port = await freePort();
+	const srv = spawn(process.execPath, [ path.join(ROOT, 'dev/replay/server.js'), '--mirror', MIRROR, '--rootfs', ROOTFS, '--port', String(port),
+		'--app-dir', path.join(dir, 'app'), '--demo' ], { stdio: [ 'ignore', 'ignore', 'pipe' ] });
+	let log = '';
+	srv.stderr.on('data', d => { log += d; });
+	try {
+		for (let i = 0; i < 200 && !log.includes('[replay] http://'); i++) await new Promise(r => setTimeout(r, 50));
+		assert.match(log, /\[replay\] http:\/\//, log);
+		const inside = await request(port, 'GET', '/luci-static/resources/vt-inside.js');
+		assert.deepEqual([ inside.status, inside.body, inside.headers['content-type'] ], [ 200, '/* inside */', 'application/javascript; charset=UTF-8' ]);
+		const leak = await request(port, 'GET', '/luci-static/resources/vt-leak.js');
+		assert.equal(leak.status, 404);
+		assert.doesNotMatch(leak.body, /not for the browser/);
+		/* a link that stays inside its tree still serves (the rootfs dump's bootstrap-dark -> bootstrap) */
+		if (fs.existsSync(path.join(ROOTFS, 'www/luci-static/bootstrap-dark/cascade.css')))
+			assert.equal((await request(port, 'GET', '/luci-static/bootstrap-dark/cascade.css')).status, 200);
+		/* a recording with static files of its own says once what they are */
+		if (fs.readdirSync(MIRROR).some(d => d.startsWith('browser-') && fs.existsSync(path.join(MIRROR, d, 'static'))))
+			assert.match(log, /\[replay\] the recording's static files and translations run as script in the browser/);
+	}
+	finally { srv.kill(); }
+});
+
+/* a recording of two runs, made here: one with its own static tree, one whose static/ is a link to a place outside the recording */
+test('replay server: a recording\'s static tree that is a link out of the recording is not served', { skip: !fs.existsSync(path.join(ROOTFS, 'usr/share/ucode/luci/template/view.ut')) && 'no rootfs dump', timeout: 60000 }, async () => {
+	const dir = require('./tmpdir')('vantage-static-rec-'), rec = path.join(dir, 'recording');
+	const runs = [ 'browser-2026-01-01T00-00-00-000Z', 'browser-2026-01-02T00-00-00-000Z' ].map(d => path.join(rec, d));
+	for (const r of runs) {
+		fs.mkdirSync(r, { recursive: true });
+		fs.writeFileSync(path.join(r, 'rpc.jsonl'), JSON.stringify({ at: 1, object: 'system', method: 'board', args: {}, result: [ 0, { hostname: 'ap', model: 'Demo' } ] }) + '\n');
+	}
+	fs.mkdirSync(path.join(runs[0], 'static/luci-static/resources'), { recursive: true });
+	fs.writeFileSync(path.join(runs[0], 'static/luci-static/resources/vt-own.js'), '/* own */');
+	fs.mkdirSync(path.join(dir, 'elsewhere/luci-static/resources'), { recursive: true });
+	fs.writeFileSync(path.join(dir, 'elsewhere/luci-static/resources/vt-out.js'), 'not the recording\'s');
+	fs.symlinkSync(path.join(dir, 'elsewhere'), path.join(runs[1], 'static'));
+	const port = await freePort();
+	const srv = spawn(process.execPath, [ path.join(ROOT, 'dev/replay/server.js'), '--mirror', rec, '--rootfs', ROOTFS, '--port', String(port) ], { stdio: [ 'ignore', 'ignore', 'pipe' ] });
+	let log = '';
+	srv.stderr.on('data', d => { log += d; });
+	try {
+		for (let i = 0; i < 200 && !log.includes('[replay] http://'); i++) await new Promise(r => setTimeout(r, 50));
+		assert.match(log, /\[replay\] http:\/\//, log);
+		const own = await request(port, 'GET', '/luci-static/resources/vt-own.js');
+		assert.deepEqual([ own.status, own.body ], [ 200, '/* own */' ]);
+		const out = await request(port, 'GET', '/luci-static/resources/vt-out.js');
+		assert.equal(out.status, 404);
+		assert.doesNotMatch(out.body, /not the recording/);
+		assert.match(log, /\[replay\] the recording's static files and translations run as script in the browser/);
+	}
+	finally { srv.kill(); }
+});
+
 /* --wg: LuCI's WireGuard status is there, for the session only, and its group held */
 test('replay server: --wg answers luci.wireguard getWgInstances with two tunnels', { skip, timeout: 60000 }, async () => {
 	const port = await freePort();

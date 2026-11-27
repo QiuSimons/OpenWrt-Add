@@ -217,8 +217,9 @@ and understood every change and can explain it.
   notes for AI tools.
 
 CI (`.github/workflows/ci.yml`) runs the tests and security checks on
-every push and pull request, then builds the packages with the pinned
-SDK.
+every pull request, on pushes to `main`, on `v*` tags and when started
+by hand; a push to any other branch starts it only through its pull
+request. It then builds the packages with the pinned SDK.
 
 ## Releases
 
@@ -234,9 +235,15 @@ SDK.
    `dist/24.10.8/SHA256SUMS` in one file, as
    `.release-manifests/v<version>.sha256`, push, then push the tag
    `v<version>` on that commit.
-4. CI rebuilds the tag, refuses to publish unless its hashes match the
-   committed manifest, and creates the GitHub release with the packages,
-   `SHA256SUMS` and `BUILDINFO`.
+4. CI rebuilds the tag without a key and stops unless its hashes match
+   the committed manifest. Then the job "Sign the package index" waits
+   for my approval: on a machine of its own it takes the packages as
+   built, compares them with the manifest again and signs the index in
+   an SDK container without network, which checks the signature against
+   the public keys in `keys/`. The GitHub release is created from what
+   that job uploads, with the packages, `SHA256SUMS` and `BUILDINFO`.
+   Every other CI run goes through the same job with a throwaway key
+   ("Try the signing job").
 5. The job "Publish signed package repositories" then publishes the
    package feeds on GitHub Pages; until it passes, the feeds still serve
    the previous release. A failed deploy is tried once more 30 seconds
@@ -244,8 +251,17 @@ SDK.
    fails, read the error, delete that run's `github-pages` artifact on
    the run's page (a re-run uploads another, and the deploy refuses two
    of the name), then use "Re-run failed jobs", not "Re-run all jobs"
-   (that builds again and needs the approval again). Leave the
-   `vantage-*` artifacts: the re-run publishes from them.
+   (that builds and signs again and needs the approval again). Leave the
+   `signed-*` artifacts: the re-run publishes from them. On a re-run
+   the release job keeps an asset the release already has only when it
+   is the same file by SHA-256. Only a re-run of the 25.12 signing job
+   changes an asset: `packages.adb` gets a new signature on every
+   signing, while the 24.10 job's index comes out the same each time. So
+   after "Re-run all jobs", or a re-run of the 25.12 signing job alone,
+   the release job stops at `packages.adb`: delete that asset from the
+   release by hand and re-run the release job. A release left as a draft
+   by an interrupted run is published by the release job's re-run, once
+   its assets are verified.
 
 Between releases, a change to the site's page, its screenshots or the
 video (`dev/build/repo-index.html`, `docs/screenshots/`) is published by

@@ -5,7 +5,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=flowcone
-PKG_VERSION:=0.2.0
+PKG_VERSION:=0.2.1
 PKG_RELEASE:=1
 
 # Detect local workspace root before download rules so local builds never trigger git fetch.
@@ -157,7 +157,7 @@ define Package/flowcone/postrm
 	rm -f /usr/share/nftables.d/chain-pre/srcnat/10-flowcone.nft
 	rm -f /usr/share/nftables.d/chain-pre/forward/10-flowcone.nft
 	rm -f /etc/nftables.d/flowcone.nft
-	rm -f /var/run/flowcone.dev
+	rm -f /var/run/flowcone.dev /var/run/flowcone.args
 	if command -v fw4 >/dev/null 2>&1; then
 		fw4 reload >/dev/null 2>&1 || true
 	fi

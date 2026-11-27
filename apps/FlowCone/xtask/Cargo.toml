@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "GPL-3.0-or-later"
 authors = ["QiuSimons <45143996+QiuSimons@users.noreply.github.com>"]

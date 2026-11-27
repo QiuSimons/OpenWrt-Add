@@ -134,7 +134,7 @@ const ALL = {
 	mac: MAC,
 	alias: { name: 'My Laptop', icon: 'laptop' },
 	ips: [ '192.0.2.44' ],
-	rdns: { '192.0.2.44': 'laptop-dns.lan' },
+	rdns: { '192.0.2.44': { name: 'laptop-dns.lan', mac: '00:00:5e:00:53:10' } },
 	mdns: { '192.0.2.44': 'laptop-mdns.local' },
 	hint: { name: 'laptop-dhcp' },
 	wps: 'Laptop WPS',
@@ -186,7 +186,19 @@ test('resolve: address is the secondary line, icon from alias or guessed', () =>
 	/* an invalid alias is ignored, not shown */
 	assert.equal(names.resolve({ mac: MAC, alias: { name: 'x\u202e' }, wps: 'Fallback' }).source, 'wps');
 	/* rdns entries for addresses the station does not have do not apply */
-	assert.equal(names.resolve({ mac: MAC, ips: [ '192.0.2.1' ], rdns: { '192.0.2.44': 'other' } }).source, 'mac');
+	assert.equal(names.resolve({ mac: MAC, ips: [ '192.0.2.1' ], rdns: { '192.0.2.44': { name: 'other', mac: '00:00:5e:00:53:10' } } }).source, 'mac');
+});
+
+test('resolve: a reverse DNS answer names the client it was asked for, not the address\'s next holder', () => {
+	/* the printer had 192.0.2.44; the laptop has it now, with its own DHCP name */
+	const rdns = { '192.0.2.44': { name: 'printer.lan', mac: '00:00:5e:00:53:99' } };
+	const laptop = names.resolve({ mac: MAC, ips: [ '192.0.2.44' ], rdns, hint: { name: 'laptop' } });
+	assert.deepEqual([ laptop.source, laptop.name ], [ 'dhcp', 'laptop' ]);
+	assert.equal(names.resolve({ mac: MAC, ips: [ '192.0.2.44' ], rdns }).source, 'mac', 'and no name at all without one of its own');
+	const printer = names.resolve({ mac: '00-00-5E-00-53-99', ips: [ '192.0.2.44' ], rdns });
+	assert.deepEqual([ printer.source, printer.name ], [ 'dns', 'printer' ], 'its holder keeps it, however its MAC is spelled');
+	/* an answer without a holder (a bare name) is nobody's */
+	assert.equal(names.resolve({ mac: MAC, ips: [ '192.0.2.44' ], rdns: { '192.0.2.44': 'printer.lan' } }).source, 'mac');
 });
 
 test('quietSet: quiet sections only, normalised MACs, at most QUIET_MAX', () => {

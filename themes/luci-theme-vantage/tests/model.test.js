@@ -882,6 +882,43 @@ test('groupSsids: same name and security across radios is one network', () => {
 	assert.equal(g[0].clients, 3);
 });
 
+/* 'psk2+tkip+ccmp': WPA2 that still takes TKIP clients */
+test('Wi-Fi security: a cipher list that lets TKIP in is weak whatever the protocol, and not grouped with the same network without it', () => {
+	const wifi = load('vantage.wifi');
+	const rate = enc => { const s = wifi.security(enc); return [ s.short, s.tone, s.long ]; };
+	for (const enc of [ 'psk2+tkip', 'psk2+tkip+ccmp', 'psk2+tkip+aes', 'psk2+ccmp+tkip', 'PSK2+TKIP+CCMP' ])
+		assert.deepEqual(rate(enc), [ 'WPA2', 'weak', 'WPA2-Personal (TKIP allowed)' ], enc);
+	assert.deepEqual(rate('wpa2+tkip+ccmp'), [ 'WPA2-Ent', 'weak', 'WPA2-Enterprise (TKIP allowed)' ]);
+	assert.deepEqual(rate('sae-mixed+tkip+ccmp'), [ 'WPA2/3', 'weak', 'WPA2/WPA3-Personal (TKIP allowed)' ]);
+	/* the other ciphers choose nothing weaker */
+	for (const enc of [ 'psk2', 'psk2+ccmp', 'psk2+aes', 'psk2+gcmp', 'psk2+ccmp256' ])
+		assert.deepEqual(rate(enc), [ 'WPA2', 'ok', 'WPA2-Personal' ], enc);
+	/* a protocol weak on its own reads as before, and an open one has no cipher */
+	assert.deepEqual(rate('psk-mixed+tkip+ccmp'), [ 'WPA/WPA2', 'weak', 'WPA/WPA2-Personal (TKIP allowed)' ]);
+	assert.deepEqual(rate('wpa-mixed+tkip'), [ 'WPA/WPA2-Ent', 'weak', 'WPA/WPA2-Enterprise' ]);
+	assert.deepEqual(rate('psk+tkip'), [ 'WPA', 'weak', 'WPA-Personal (legacy)' ]);
+	assert.deepEqual([ wifi.security('none+tkip').tone, wifi.security('+ccmp').short, wifi.security('tkip').tone ], [ 'open', 'Open', 'ok' ], 'only a cipher after a protocol');
+	/* the older spelling, a slash before the ciphers: netifd reads them off the string's end either way */
+	assert.deepEqual(rate('wpa2/tkip+aes'), [ 'WPA2-Ent', 'weak', 'WPA2-Enterprise (TKIP allowed)' ]);
+	assert.deepEqual(rate('psk2/tkip'), [ 'WPA2', 'weak', 'WPA2-Personal (TKIP allowed)' ]);
+	assert.deepEqual(rate('psk2/aes+tkip'), [ 'WPA2', 'weak', 'WPA2-Personal (TKIP allowed)' ]);
+	assert.deepEqual(rate('psk-mixed/tkip'), [ 'WPA/WPA2', 'weak', 'WPA/WPA2-Personal (TKIP allowed)' ]);
+	assert.deepEqual([ rate('psk2/ccmp'), rate('psk2/aes') ], [ [ 'WPA2', 'ok', 'WPA2-Personal' ], [ 'WPA2', 'ok', 'WPA2-Personal' ] ]);
+	/* TKIP named, but not where netifd reads the ciphers: CCMP-256 alone */
+	assert.deepEqual(rate('psk2+tkip+ccmp256'), [ 'WPA2', 'ok', 'WPA2-Personal' ]);
+	assert.deepEqual(rate('psk9+tkip'), [ 'PSK9', 'weak', 'psk9 (TKIP allowed)' ], 'a protocol this does not know');
+
+	/* one SSID, three configurations: through the model and into the tile's groups */
+	const ifc = (ifname, encryption) => ({ ifname, section: ifname, config: { mode: 'ap', ssid: 'Home', encryption } });
+	const radio = (band, i) => ({ up: true, config: { band }, interfaces: [ i ] });
+	const m = model.build({ wifi: { radio0: radio('2g', ifc('wl0', 'psk2+tkip+ccmp')), radio1: radio('5g', ifc('wl1', 'psk2+ccmp')), radio2: radio('6g', ifc('wl2', 'psk2/tkip')) } });
+	assert.deepEqual(m.ssids.map(x => [ x.ifname, x.security.short, x.security.tone ]), [ [ 'wl0', 'WPA2', 'weak' ], [ 'wl1', 'WPA2', 'ok' ], [ 'wl2', 'WPA2', 'weak' ] ]);
+	assert.deepEqual(model.groupSsids(m.ssids).map(g => [ g.ssid, g.security.tone, g.ids, g.bands ]),
+		[ [ 'Home', 'weak', [ 'wl0', 'wl2' ], [ '2g', '6g' ] ], [ 'Home', 'ok', [ 'wl1' ], [ '5g' ] ] ], 'the TKIP ones together, never under the stronger rating');
+	const ent = model.build({ wifi: { radio0: radio('5g', ifc('wl0', 'wpa2/tkip+aes')) } }).ssids[0].security;
+	assert.deepEqual([ ent.short, ent.tone ], [ 'WPA2-Ent', 'weak' ], 'and the slash form through the model');
+});
+
 test('sampleClock: same device sample is skipped, drift uses device spacing', () => {
 	const a = model.sampleClock(null, 10000, 500);
 	assert.deepEqual(a, { at: 10000, local: 500 });

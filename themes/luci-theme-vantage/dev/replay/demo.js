@@ -603,6 +603,9 @@ function macToEui(mac) {
 	return HEX2(parseInt(mac.slice(0, 2), 16) ^ 2) + mac.slice(2, 6) + 'fffe' + mac.slice(6, 12);
 }
 
+/* what a recorded RPC error says in demo mode */
+const ERROR_TEXT = 'Recorded error';
+
 /* Rewrite a loaded Store in place. `mirror` (optional) adds the identifier
    list of check_private_addresses.js. Returns the pseudonymiser. */
 function pseudonymiseStore(store, mirror, argsKey) {
@@ -637,7 +640,11 @@ function pseudonymiseStore(store, mirror, argsKey) {
 		try { args = JSON.parse(a); } catch (e) { return key; }
 		return `${o}\0${m}\0${argsKey(p.value(args, undefined, 'args'))}`;
 	};
-	const reply = (r, ctx) => r && r.result !== undefined ? { result: p.value(r.result, undefined, ctx) } : r;
+	/* a recorded error keeps its code only: its message and data are the
+	   device's own text (a path, a host name, an address), in no shape
+	   the mapping knows */
+	const failed = r => ({ error: { code: Number.isInteger(r.error && r.error.code) ? r.error.code : -32000, message: ERROR_TEXT } });
+	const reply = (r, ctx) => !r ? r : r.result !== undefined ? { result: p.value(r.result, undefined, ctx) } : failed(r);
 	const uciReply = (r, key) => {
 		if (!r || !Array.isArray(r.result)) return reply(r, ctxOf(key));
 		const [ , , a ] = key.split('\0');
@@ -667,4 +674,4 @@ function pseudonymiseStore(store, mirror, argsKey) {
 	return p;
 }
 
-module.exports = { Pseudonymiser, pseudonymiseStore, v6text, euiToMac, macToEui, AP_HOSTNAME, DEMO_COUNTRY, SSIDS, UCI_STRUCTURAL };
+module.exports = { Pseudonymiser, pseudonymiseStore, v6text, euiToMac, macToEui, AP_HOSTNAME, DEMO_COUNTRY, SSIDS, UCI_STRUCTURAL, ERROR_TEXT };

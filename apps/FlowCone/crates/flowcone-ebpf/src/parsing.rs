@@ -103,16 +103,17 @@ pub fn copy_ipv6(dst: &mut [u8; 16], src: &[u8; 16]) {
     }
 }
 
-/// Casts a slice of packet bytes to a mutable reference of type `T`.
+/// Casts packet bytes at `ptr` to a mutable reference of type `T`.
 ///
 /// # Safety
 ///
-/// The caller must ensure `ptr` is properly aligned for `T`, points to linear
-/// packet memory within `[data, data_end)`, does not alias any other `&mut`
-/// reference, and that `'a` does not outlive any subsequent `skb` helper that
-/// may linearize or resize the packet buffer.
+/// `T` must tolerate arbitrary byte alignment (`core::mem::align_of::<T>() == 1`,
+/// e.g. `#[repr(C, packed)]` or `[u8; N]`), `ptr` must lie within `[data, data_end)`,
+/// must not alias any other active `&mut` reference, and `'a` must not outlive
+/// any subsequent `skb` helper that linearizes or resizes the packet buffer.
 #[inline(always)]
 pub unsafe fn parse_header_ref_mut<'a, T>(ptr: usize, data_end: usize) -> Option<&'a mut T> {
+    const { assert!(core::mem::align_of::<T>() == 1) };
     let size = mem::size_of::<T>();
     if ptr > usize::MAX - size || ptr + size > data_end {
         return None;

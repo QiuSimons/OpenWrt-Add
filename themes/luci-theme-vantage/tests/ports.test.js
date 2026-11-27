@@ -55,7 +55,8 @@ const MT7530 = (rx, tx) => nic([ [ 'TxDrop', 0 ], [ 'TxCrcErr', 0 ], [ 'TxUnicas
    o.out: { port: what ethtool prints }; o.code: { port: its exit code };
    o.ethtool: false for none, 'plain' for a file that is not executable;
    o.sleep: { port: s ethtool waits before it prints, then notes the port in slept };
-   o.step: ms the copy's clock moves at each reading. The copy locks itself (SELF) */
+   o.step: ms the copy's clock moves at each reading. The copy's lock is in
+   run/ (DIR), which it makes; root's there is this process's account, or o.uid */
 function setup(o) {
 	o = o || {};
 	const dir = mkTmp('vantage-ports-');
@@ -83,9 +84,10 @@ function setup(o) {
 	for (const [ from, to ] of [
 		[ /^const NET = .*$/m, 'const NET = ' + JSON.stringify(net) + ';' ],
 		[ /^const ETHTOOL = .*$/m, 'const ETHTOOL = ' + JSON.stringify(bin) + ';' ],
-		[ /^const SELF = .*$/m, 'const SELF = ' + JSON.stringify(path.join(dir, 'plugin.uc')) + ';' ],
+		[ /^const DIR = .*$/m, 'const DIR = ' + JSON.stringify(path.join(dir, 'run')) + ';' ],
+		[ /st\.uid === 0/, 'st.uid === ' + (o.uid == null ? process.getuid() : o.uid) ],
 		[ CLOCK_FN, 'let ticks = 0;\nfunction now_ms() {\n\treturn ' + o.step + ' * ticks++;\n}' ]
-	].slice(0, o.step == null ? 3 : 4)) {
+	].slice(0, o.step == null ? 4 : 5)) {
 		const next = src.replace(from, () => to);
 		assert.notEqual(next, src, 'the test can change ' + from);
 		src = next;
@@ -252,10 +254,14 @@ test('plugin: after its time budget no port is read; the rest are said to be lef
 
 test('plugin: one read at a time: a call that finds the lock held answers busy at once and starts nothing', { skip: NO_UCODE }, async () => {
 	const o = { ports: { lan1: null, lan2: null }, out: { lan1: MT7530(1, 2), lan2: MT7530(3, 4) } };
-	const dir = setup(o), held = path.join(dir, 'held');
-	/* another process holds the lock on the plugin's file, as a call that is reading does */
-	const holder = require('child_process').spawn(UCODE, ucodeArgs().concat([ '-e', 'import { open, writefile } from "fs"; let f = open(' + JSON.stringify(path.join(dir, 'plugin.uc')) +
-		', "r"); f.lock("x"); writefile(' + JSON.stringify(held) + ', "1"); sleep(1500);' ]), { stdio: 'ignore' });
+	const dir = setup(o), held = path.join(dir, 'held'), run = path.join(dir, 'run');
+	/* the first call makes the directory and the lock file: root's alone */
+	assert.equal(JSON.parse(exec(dir, [ 'call', 'counters' ]).out).state, 'ok');
+	assert.deepEqual([ fs.statSync(run).mode & 0o777, fs.readdirSync(run), fs.statSync(path.join(run, 'lock')).mode & 0o777, fs.statSync(path.join(run, 'lock')).size ], [ 0o700, [ 'lock' ], 0o600, 0 ]);
+	fs.unlinkSync(path.join(dir, 'calls'));
+	/* another process holds the lock, as a call that is reading does */
+	const holder = require('child_process').spawn(UCODE, ucodeArgs().concat([ '-e', 'import { open, writefile } from "fs"; let f = open(' + JSON.stringify(path.join(run, 'lock')) +
+		', "a"); f.lock("x"); writefile(' + JSON.stringify(held) + ', "1"); sleep(1500);' ]), { stdio: 'ignore' });
 	await until('the lock is held', () => fs.existsSync(held));
 	const t = Date.now(), busy = exec(dir, [ 'call', 'counters' ]);
 	assert.ok(Date.now() - t < 1000, 'answered at once, not after the holder');
@@ -264,10 +270,46 @@ test('plugin: one read at a time: a call that finds the lock held answers busy a
 	await new Promise(r => holder.once('exit', r));
 	const ok = exec(dir, [ 'call', 'counters' ]);
 	assert.deepEqual([ JSON.parse(ok.out).state, ok.calls ], [ 'ok', [ '-S lan1', '-S lan2' ] ], 'free again once the holder is gone');
-	/* the plugin's file opened for reading: not written, not even touched */
+	/* nothing written but that empty file: the plugin's own is not touched */
 	const before = fs.statSync(path.join(dir, 'plugin.uc'));
 	exec(dir, [ 'call', 'counters' ]);
 	assert.deepEqual([ fs.statSync(path.join(dir, 'plugin.uc')).mtimeMs, fs.statSync(path.join(dir, 'plugin.uc')).size ], [ before.mtimeMs, before.size ]);
+	assert.deepEqual([ fs.readdirSync(run), fs.statSync(path.join(run, 'lock')).size ], [ [ 'lock' ], 0 ]);
+});
+
+/* The lock used to be on the plugin's own file, which any account may open for reading: one that held a lock on
+   it kept every call busy, and an upgrade put another file in its place while a call still read */
+test('plugin: a lock held on the plugin\'s own file stops no call; without a lock of its own to have, busy and nothing started', { skip: NO_UCODE }, async () => {
+	const o = { ports: { lan1: null }, out: { lan1: MT7530(1, 2) } };
+	const dir = setup(o), held = path.join(dir, 'held');
+	const holder = require('child_process').spawn(UCODE, ucodeArgs().concat([ '-e', 'import { open, writefile } from "fs"; let f = open(' + JSON.stringify(path.join(dir, 'plugin.uc')) +
+		', "r"); f.lock("x"); writefile(' + JSON.stringify(held) + ', "1"); sleep(30000);' ]), { stdio: 'ignore' });
+	await until('the plugin\'s file is locked', () => fs.existsSync(held));
+	const r = exec(dir, [ 'call', 'counters' ]);
+	const gone = new Promise(resolve => holder.once('exit', resolve));
+	holder.kill('SIGKILL');
+	await gone;
+	assert.deepEqual([ JSON.parse(r.out).state, r.calls ], [ 'ok', [ '-S lan1' ] ]);
+	/* the directory not as the plugin makes it: open to others, a link, a file, another account's (on a router: not root's) */
+	for (const [ make, uid ] of [
+		[ d => { fs.mkdirSync(d); fs.chmodSync(d, 0o755); } ],
+		[ d => { fs.mkdirSync(d + '-real', { mode: 0o700 }); fs.symlinkSync(d + '-real', d); } ],
+		[ d => fs.writeFileSync(d, 'a file') ],
+		[ d => fs.mkdirSync(d, { mode: 0o700 }), process.getuid() + 1 ]
+	]) {
+		const at = setup(Object.assign({ uid }, o)), run = path.join(at, 'run');
+		make(run);
+		const busy = exec(at, [ 'call', 'counters' ]);
+		assert.deepEqual([ without(JSON.parse(busy.out), 'took'), busy.calls ], [ { v: 1, state: 'busy', more: false, ports: {} }, [] ]);
+		if (fs.lstatSync(run).isDirectory()) assert.deepEqual(fs.readdirSync(run), [], 'no file made in it');
+		if (fs.existsSync(run + '-real')) assert.deepEqual(fs.readdirSync(run + '-real'), []);
+	}
+	/* the lock file there and not to be opened (a directory under its name): busy as well */
+	const blocked = setup(o);
+	fs.mkdirSync(path.join(blocked, 'run', 'lock'), { recursive: true, mode: 0o700 });
+	fs.chmodSync(path.join(blocked, 'run'), 0o700);
+	const b = exec(blocked, [ 'call', 'counters' ]);
+	assert.deepEqual([ JSON.parse(b.out).state, b.calls ], [ 'busy', [] ]);
 });
 
 test('plugin: the lock goes with a call rpcd kills, and stays while that call\'s ethtool still runs', { skip: NO_UCODE }, async () => {
@@ -286,8 +328,8 @@ test('plugin: the lock goes with a call rpcd kills, and stays while that call\'s
 	/* a call killed with nothing of its own left running frees the lock at once */
 	fs.unlinkSync(path.join(dir, 'sleep', 'lan1'));
 	const held = path.join(dir, 'held');
-	const holder = require('child_process').spawn(UCODE, ucodeArgs().concat([ '-e', 'import { open, writefile } from "fs"; let f = open(' + JSON.stringify(path.join(dir, 'plugin.uc')) +
-		', "r"); f.lock("xn"); writefile(' + JSON.stringify(held) + ', "1"); sleep(30000);' ]), { stdio: 'ignore' });
+	const holder = require('child_process').spawn(UCODE, ucodeArgs().concat([ '-e', 'import { open, writefile } from "fs"; let f = open(' + JSON.stringify(path.join(dir, 'run', 'lock')) +
+		', "a"); f.lock("xn"); writefile(' + JSON.stringify(held) + ', "1"); sleep(30000);' ]), { stdio: 'ignore' });
 	await until('the lock is held', () => fs.existsSync(held));
 	assert.equal(JSON.parse(exec(dir, [ 'call', 'counters' ]).out).state, 'busy');
 	const killed = new Promise(r => holder.once('exit', r));

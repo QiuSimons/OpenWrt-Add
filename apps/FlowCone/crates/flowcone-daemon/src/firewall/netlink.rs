@@ -4,6 +4,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use rustix::fd::{AsFd, OwnedFd};
 use rustix::io::Errno;
 use rustix::net::netlink::SocketAddrNetlink;
 use rustix::net::{
@@ -162,6 +163,11 @@ impl NetlinkBatch {
         batch
     }
 
+    pub(crate) fn reset(&mut self) {
+        self.buf.clear();
+        self.push_batch_begin();
+    }
+
     fn push_batch_begin(&mut self) {
         self.buf.extend_from_slice(&20u32.to_ne_bytes());
         self.buf
@@ -174,7 +180,7 @@ impl NetlinkBatch {
         self.buf.push(0);
         self.buf
             .extend_from_slice(&(NFNL_SUBSYS_NFTABLES as u16).to_be_bytes());
-        self.seq += 1;
+        self.seq = self.seq.wrapping_add(1).max(1);
     }
 
     fn push_nla(&mut self, nla_type: u16, data: &[u8]) {
@@ -187,9 +193,14 @@ impl NetlinkBatch {
     }
 
     fn push_nla_str(&mut self, nla_type: u16, s: &str) {
-        let mut bytes = s.as_bytes().to_vec();
-        bytes.push(0);
-        self.push_nla(nla_type, &bytes);
+        let raw = s.as_bytes();
+        let len = (4 + raw.len() + 1) as u16;
+        self.buf.extend_from_slice(&len.to_ne_bytes());
+        self.buf.extend_from_slice(&nla_type.to_ne_bytes());
+        self.buf.extend_from_slice(raw);
+        self.buf.push(0);
+        let pad = (4 - ((raw.len() + 1) % 4)) % 4;
+        self.buf.resize(self.buf.len() + pad, 0);
     }
 
     fn start_nested(&mut self, nla_type: u16) -> usize {
@@ -227,7 +238,7 @@ impl NetlinkBatch {
         self.buf[msg_start + 18] = 0;
         self.buf[msg_start + 19] = 0;
 
-        self.seq += 1;
+        self.seq = self.seq.wrapping_add(1).max(1);
     }
 
     pub(crate) fn add_set_elements(
@@ -285,10 +296,10 @@ impl NetlinkBatch {
         self.buf[msg_start + 18] = 0;
         self.buf[msg_start + 19] = 0;
 
-        self.seq += 1;
+        self.seq = self.seq.wrapping_add(1).max(1);
     }
 
-    pub(crate) fn finish(mut self) -> (Vec<u8>, u32) {
+    pub(crate) fn finish_in_place(&mut self) -> u32 {
         let ack_seq = self.seq;
         self.buf.extend_from_slice(&20u32.to_ne_bytes());
         self.buf
@@ -301,97 +312,153 @@ impl NetlinkBatch {
         self.buf.push(0);
         self.buf
             .extend_from_slice(&(NFNL_SUBSYS_NFTABLES as u16).to_be_bytes());
+        self.seq = self.seq.wrapping_add(1).max(1);
+        ack_seq
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish(mut self) -> (Vec<u8>, u32) {
+        let ack_seq = self.finish_in_place();
         (self.buf, ack_seq)
     }
 }
 
-/// Refresh liveness set timeouts via an in-process Netlink batch transaction.
-pub(crate) fn refresh_liveness_netlink(spec: &LivenessRefreshSpec<'_>) -> Result<(), &'static str> {
-    if !(spec.src_v4 || spec.fwd_v4 || spec.src_v6 || spec.fwd_v6) {
-        return Ok(());
-    }
-
-    let timeout_ms = super::fw4::LIVENESS_TIMEOUT_SEC * 1000;
-    let mut batch = NetlinkBatch::new();
-    let proto = spec.family_proto;
-
-    if spec.src_v4 {
-        batch.flush_set(proto, spec.table, super::fw4::SET_V4);
-        batch.add_set_elements(
-            proto,
-            spec.table,
-            super::fw4::SET_V4,
-            &STATIC_V4_RANGES,
-            timeout_ms,
-        );
-    }
-    if spec.fwd_v4 {
-        batch.flush_set(proto, spec.table, super::fw4::SET_FWD4);
-        batch.add_set_elements(
-            proto,
-            spec.table,
-            super::fw4::SET_FWD4,
-            &*STATIC_FWD4_RANGE,
-            timeout_ms,
-        );
-    }
-    if spec.src_v6 {
-        let v6_ranges: &[IpRange] = if spec.is_v6_masq {
-            &*STATIC_V6_MASQ_RANGES
-        } else {
-            &*STATIC_V6_ULA_RANGES
-        };
-        batch.flush_set(proto, spec.table, super::fw4::SET_V6);
-        batch.add_set_elements(proto, spec.table, super::fw4::SET_V6, v6_ranges, timeout_ms);
-    }
-    if spec.fwd_v6 {
-        batch.flush_set(proto, spec.table, super::fw4::SET_FWD6);
-        batch.add_set_elements(
-            proto,
-            spec.table,
-            super::fw4::SET_FWD6,
-            &*STATIC_FWD6_RANGE,
-            timeout_ms,
-        );
-    }
-
-    let (batch_bytes, ack_seq) = batch.finish();
-    send_liveness_batch(&batch_bytes, ack_seq)
+/// Reusable in-process Netfilter Netlink client avoiding per-tick socket and
+/// buffer allocations.
+pub(crate) struct NetlinkLivenessClient {
+    sock: Option<OwnedFd>,
+    batch: NetlinkBatch,
+    reply_buf: [u8; 2048],
 }
 
-fn send_liveness_batch(batch_bytes: &[u8], expected_seq: u32) -> Result<(), &'static str> {
-    let proto = Protocol::from_raw(
-        std::num::NonZeroU32::new(NETLINK_NETFILTER).ok_or("invalid netlink netfilter proto")?,
-    );
-    let sock = socket_with(
-        AddressFamily::NETLINK,
-        SocketType::RAW,
-        SocketFlags::CLOEXEC,
-        Some(proto),
-    )
-    .map_err(|_| "netlink socket error")?;
+impl NetlinkLivenessClient {
+    pub(crate) fn new() -> Self {
+        Self {
+            sock: None,
+            batch: NetlinkBatch::new(),
+            reply_buf: [0u8; 2048],
+        }
+    }
 
-    bind(&sock, &SocketAddrNetlink::new(0, 0)).map_err(|_| "netlink bind error")?;
+    fn ensure_socket(&mut self) -> Result<&OwnedFd, &'static str> {
+        if self.sock.is_none() {
+            let proto = Protocol::from_raw(
+                std::num::NonZeroU32::new(NETLINK_NETFILTER)
+                    .ok_or("invalid netlink netfilter proto")?,
+            );
+            let sock = socket_with(
+                AddressFamily::NETLINK,
+                SocketType::RAW,
+                SocketFlags::CLOEXEC,
+                Some(proto),
+            )
+            .map_err(|_| "netlink socket error")?;
 
-    sockopt::set_socket_timeout(
-        &sock,
-        sockopt::Timeout::Recv,
-        Some(Duration::from_millis(500)),
-    )
-    .map_err(|_| "netlink recv timeout error")?;
+            bind(&sock, &SocketAddrNetlink::new(0, 0)).map_err(|_| "netlink bind error")?;
+            sockopt::set_socket_timeout(
+                &sock,
+                sockopt::Timeout::Recv,
+                Some(Duration::from_millis(500)),
+            )
+            .map_err(|_| "netlink recv timeout error")?;
+            self.sock = Some(sock);
+        }
+        Ok(self.sock.as_ref().unwrap())
+    }
 
+    pub(crate) fn refresh(&mut self, spec: &LivenessRefreshSpec<'_>) -> Result<(), &'static str> {
+        if !(spec.src_v4 || spec.fwd_v4 || spec.src_v6 || spec.fwd_v6) {
+            return Ok(());
+        }
+
+        let timeout_ms = super::nft::LIVENESS_TIMEOUT_SEC * 1000;
+        self.batch.reset();
+        let proto = spec.family_proto;
+
+        if spec.src_v4 {
+            self.batch.flush_set(proto, spec.table, super::nft::SET_V4);
+            self.batch.add_set_elements(
+                proto,
+                spec.table,
+                super::nft::SET_V4,
+                &STATIC_V4_RANGES,
+                timeout_ms,
+            );
+        }
+        if spec.fwd_v4 {
+            self.batch
+                .flush_set(proto, spec.table, super::nft::SET_FWD4);
+            self.batch.add_set_elements(
+                proto,
+                spec.table,
+                super::nft::SET_FWD4,
+                &*STATIC_FWD4_RANGE,
+                timeout_ms,
+            );
+        }
+        if spec.src_v6 {
+            let v6_ranges: &[IpRange] = if spec.is_v6_masq {
+                &*STATIC_V6_MASQ_RANGES
+            } else {
+                &*STATIC_V6_ULA_RANGES
+            };
+            self.batch.flush_set(proto, spec.table, super::nft::SET_V6);
+            self.batch.add_set_elements(
+                proto,
+                spec.table,
+                super::nft::SET_V6,
+                v6_ranges,
+                timeout_ms,
+            );
+        }
+        if spec.fwd_v6 {
+            self.batch
+                .flush_set(proto, spec.table, super::nft::SET_FWD6);
+            self.batch.add_set_elements(
+                proto,
+                spec.table,
+                super::nft::SET_FWD6,
+                &*STATIC_FWD6_RANGE,
+                timeout_ms,
+            );
+        }
+
+        let ack_seq = self.batch.finish_in_place();
+        self.ensure_socket()?;
+        let sock_fd = self.sock.as_ref().unwrap();
+        let res = send_liveness_batch(sock_fd, &self.batch.buf, ack_seq, &mut self.reply_buf);
+        if res.is_err() {
+            // Drop socket after interrupted/timed-out/rejected batch so no stale
+            // reply frames leak into the next call.
+            self.sock = None;
+        }
+        res
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn refresh_liveness_netlink(spec: &LivenessRefreshSpec<'_>) -> Result<(), &'static str> {
+    let mut client = NetlinkLivenessClient::new();
+    client.refresh(spec)
+}
+
+fn send_liveness_batch(
+    sock: &OwnedFd,
+    batch_bytes: &[u8],
+    expected_seq: u32,
+    reply_buf: &mut [u8; 2048],
+) -> Result<(), &'static str> {
     loop {
-        match send(&sock, batch_bytes, SendFlags::empty()) {
+        match send(sock.as_fd(), batch_bytes, SendFlags::empty()) {
             Ok(_) => break,
             Err(Errno::INTR) => continue,
             Err(_) => return Err("netlink send error"),
         }
     }
 
-    let mut reply_buf = [0u8; 2048];
     loop {
         let n = loop {
-            match recv(&sock, &mut reply_buf, RecvFlags::empty()) {
+            match recv(sock.as_fd(), &mut reply_buf[..], RecvFlags::empty()) {
                 Ok((n, _)) => break n,
                 Err(Errno::INTR) => continue,
                 Err(_) => return Err("netlink recv error"),

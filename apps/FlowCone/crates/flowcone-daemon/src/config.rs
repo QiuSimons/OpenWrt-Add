@@ -231,7 +231,7 @@ pub(crate) fn print_help() {
     println!();
     println!("Options:");
     println!("  -i, --iface <IFACE>        WAN interface (default: wan)");
-    println!("  -b, --btf <PATH>           Path to vmlinux BTF (optional, if CO-RE is used)");
+    println!("  -b, --btf <PATH>           Path to vmlinux BTF (optional)");
     println!("      --enable-v4 <1|0>      Enable IPv4 Full-Cone NAT (default: 1)");
     println!("      --enable-v6 <1|0>      Enable IPv6 Full-Cone NAT (auto-adaptive, default: 0)");
     println!("      --min-port <PORT>      Port pool start (default: 1024)");

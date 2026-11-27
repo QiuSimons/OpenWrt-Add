@@ -5,7 +5,12 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Command;
 
-use super::nft::{nft_apply, nft_output, nft_table_exists, refresh_table_liveness};
+use super::netlink::NetlinkLivenessClient;
+use super::nft::{
+    SET_FWD4, SET_FWD6, SET_V4, SET_V6, generate_forward_rule_v4, generate_forward_rule_v6,
+    generate_srcnat_rule_v4, generate_srcnat_rule_v6, nft_apply, nft_output, nft_table_exists,
+    refresh_table_liveness, set_definitions,
+};
 
 pub(crate) const FW4_USER_PATH: &str = "/etc/firewall4.user";
 pub(crate) const FW4_NFTABLES_D_DIR: &str = "/usr/share/nftables.d";
@@ -19,13 +24,6 @@ pub(crate) const FW4_CHAIN_PRE_FORWARD_FILE: &str =
 pub(crate) const SET_DEFS_DIR: &str = "/etc/nftables.d";
 pub(crate) const SET_DEFS_FILE: &str = "/etc/nftables.d/flowcone.nft";
 
-pub(crate) const SET_V4: &str = "flowcone_v4";
-pub(crate) const SET_V6: &str = "flowcone_v6";
-pub(crate) const SET_FWD4: &str = "flowcone_fwd4";
-pub(crate) const SET_FWD6: &str = "flowcone_fwd6";
-
-pub(crate) const LIVENESS_TIMEOUT_SEC: u64 = 15;
-
 pub(crate) const FLOWCONE_TAG_START: &str = "# --- flowcone start ---";
 pub(crate) const FLOWCONE_TAG_END: &str = "# --- flowcone end ---";
 
@@ -38,7 +36,7 @@ pub(crate) fn check_hardware_offload_warning() {
         let text = String::from_utf8_lossy(&out.stdout);
         if text.contains("flags offload") {
             eprintln!(
-                "flowcone: WARNING: Hardware Flow Offloading (flags offload) is detected!\n\
+                "flowcone: warning: Hardware Flow Offloading (flags offload) is detected!\n\
                      Hardware offloading directs packets through the switch ASIC/PPE, bypassing CPU TC egress.\n\
                      This will cause private IP leakage and broken NAT.\n\
                      Please disable Hardware Offloading in OpenWrt ('uci set firewall.@defaults[0].flow_offloading_hw=0 && uci commit firewall && fw4 reload')."
@@ -269,7 +267,7 @@ pub(crate) fn parse_has_ipv6_masq(nft_output: &str, wan_iface: &str) -> bool {
             let is_base_postrouting = current_chain.eq_ignore_ascii_case("srcnat")
                 || current_chain.eq_ignore_ascii_case("postrouting");
             let fallback_fw4_wan = table_name == "fw4"
-                && (!fw4_has_srcnat_dispatcher || wan_iface == "wan")
+                && !fw4_has_srcnat_dispatcher
                 && (current_chain.eq_ignore_ascii_case("srcnat_wan")
                     || current_chain.eq_ignore_ascii_case("srcnat_wan6"));
             let is_wan_chain = wan_chains.iter().any(|(f, t, c)| {
@@ -370,33 +368,6 @@ pub(crate) fn clean_firewall4_user_file() {
     }
 }
 
-/// Nftables set definitions for inet fw4 table.
-pub(crate) fn set_definitions() -> String {
-    format!(
-        "set {} {{
-    type ipv4_addr
-    flags interval,timeout
-}}
-
-set {} {{
-    type ipv6_addr
-    flags interval,timeout
-}}
-
-set {} {{
-    type ipv4_addr
-    flags interval,timeout
-}}
-
-set {} {{
-    type ipv6_addr
-    flags interval,timeout
-}}
-",
-        SET_V4, SET_V6, SET_FWD4, SET_FWD6
-    )
-}
-
 pub(crate) fn write_fw4_set_definitions() -> bool {
     let _ = fs::create_dir_all(SET_DEFS_DIR);
     write_atomic_if_changed(SET_DEFS_FILE, &set_definitions())
@@ -429,65 +400,7 @@ pub(crate) fn ensure_fw4_sets() -> bool {
     nft_apply(&script).is_ok()
 }
 
-pub(crate) fn bypass_clause(mask: u32, val: u32) -> String {
-    if mask == 0 {
-        String::new()
-    } else {
-        format!(" meta mark & {:#x} != {:#x}", mask, val)
-    }
-}
-
-/// Extra destination/port guards matching eBPF `bypass_special_udp4()`.
-pub(crate) fn special_v4_clause() -> &'static str {
-    " udp sport != { 67, 68 } udp dport != { 67, 68 } ip daddr != 255.0.0.0/8 ip daddr != 224.0.0.0/4 ip daddr != 169.254.0.0/16"
-}
-
-/// Extra destination/port guards matching eBPF `bypass_special_udp6()`.
-pub(crate) fn special_v6_clause() -> &'static str {
-    " udp sport != { 546, 547 } udp dport != { 546, 547 } ip6 daddr != ff00::/8 ip6 daddr != fe80::/10"
-}
-
-pub(crate) fn generate_live_srcnat_rule_v4(
-    iface: &str,
-    bypass_mask: u32,
-    bypass_val: u32,
-) -> String {
-    format!(
-        "oifname \"{iface}\" meta nfproto ipv4 meta l4proto udp ip saddr @{}{}{} counter return comment \"flowcone\"",
-        SET_V4,
-        bypass_clause(bypass_mask, bypass_val),
-        special_v4_clause()
-    )
-}
-
-pub(crate) fn generate_live_srcnat_rule_v6(
-    iface: &str,
-    bypass_mask: u32,
-    bypass_val: u32,
-) -> String {
-    format!(
-        "oifname \"{iface}\" meta nfproto ipv6 meta l4proto udp ip6 saddr @{}{}{} counter return comment \"flowcone\"",
-        SET_V6,
-        bypass_clause(bypass_mask, bypass_val),
-        special_v6_clause()
-    )
-}
-
-pub(crate) fn generate_live_forward_rule_v4(iface: &str, mark: u32) -> String {
-    format!(
-        "iifname \"{iface}\" meta mark & {:#x} == {:#x} ct state new ip saddr @{} counter accept comment \"flowcone\"",
-        mark, mark, SET_FWD4
-    )
-}
-
-pub(crate) fn generate_live_forward_rule_v6(iface: &str, mark: u32) -> String {
-    format!(
-        "iifname \"{iface}\" meta mark & {:#x} == {:#x} ct state new ip6 saddr @{} counter accept comment \"flowcone\"",
-        mark, mark, SET_FWD6
-    )
-}
-
-pub(crate) fn build_fw4_insert_script_live(
+pub(crate) fn build_fw4_insert_script(
     iface: &str,
     enable_v4: bool,
     enable_v6: bool,
@@ -499,25 +412,25 @@ pub(crate) fn build_fw4_insert_script_live(
     if enable_v4 {
         script.push_str(&format!(
             "insert rule inet fw4 srcnat {}\n",
-            generate_live_srcnat_rule_v4(iface, bypass_mask, bypass_val)
+            generate_srcnat_rule_v4(iface, bypass_mask, bypass_val)
         ));
     }
     if enable_v6 {
         script.push_str(&format!(
             "insert rule inet fw4 srcnat {}\n",
-            generate_live_srcnat_rule_v6(iface, bypass_mask, bypass_val)
+            generate_srcnat_rule_v6(iface, bypass_mask, bypass_val)
         ));
     }
     if enable_v4 {
         script.push_str(&format!(
             "insert rule inet fw4 forward {}\n",
-            generate_live_forward_rule_v4(iface, mark)
+            generate_forward_rule_v4(iface, mark)
         ));
     }
     if enable_v6 {
         script.push_str(&format!(
             "insert rule inet fw4 forward {}\n",
-            generate_live_forward_rule_v6(iface, mark)
+            generate_forward_rule_v6(iface, mark)
         ));
     }
     script
@@ -531,7 +444,7 @@ fn remove_persisted(path: &str) -> bool {
     }
 }
 
-pub(crate) fn update_chain_pre_files_live(
+pub(crate) fn update_chain_pre_files(
     iface: &str,
     enable_v4: bool,
     enable_v6: bool,
@@ -544,10 +457,10 @@ pub(crate) fn update_chain_pre_files_live(
 
     let mut srcnat_lines = Vec::new();
     if enable_v4 {
-        srcnat_lines.push(generate_live_srcnat_rule_v4(iface, bypass_mask, bypass_val));
+        srcnat_lines.push(generate_srcnat_rule_v4(iface, bypass_mask, bypass_val));
     }
     if enable_v6 {
-        srcnat_lines.push(generate_live_srcnat_rule_v6(iface, bypass_mask, bypass_val));
+        srcnat_lines.push(generate_srcnat_rule_v6(iface, bypass_mask, bypass_val));
     }
     if !srcnat_lines.is_empty() {
         ok &= write_atomic_if_changed(FW4_CHAIN_PRE_SRCNAT_FILE, &(srcnat_lines.join("\n") + "\n"));
@@ -557,10 +470,10 @@ pub(crate) fn update_chain_pre_files_live(
 
     let mut fwd_lines = Vec::new();
     if enable_v4 {
-        fwd_lines.push(generate_live_forward_rule_v4(iface, mark));
+        fwd_lines.push(generate_forward_rule_v4(iface, mark));
     }
     if enable_v6 {
-        fwd_lines.push(generate_live_forward_rule_v6(iface, mark));
+        fwd_lines.push(generate_forward_rule_v6(iface, mark));
     }
     if !fwd_lines.is_empty() {
         ok &= write_atomic_if_changed(FW4_CHAIN_PRE_FORWARD_FILE, &(fwd_lines.join("\n") + "\n"));
@@ -570,79 +483,16 @@ pub(crate) fn update_chain_pre_files_live(
     ok
 }
 
-static V4_LIVENESS_ELEMENTS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    flowcone_common::INTERNAL_V4_PREFIXES
-        .iter()
-        .map(|p| format!("{} timeout {}s", p, LIVENESS_TIMEOUT_SEC))
-        .collect::<Vec<_>>()
-        .join(", ")
-});
-
-pub(crate) fn build_liveness_script(
-    family: &str,
-    table: &str,
-    src_v4: bool,
-    fwd_v4: bool,
-    src_v6: bool,
-    fwd_v6: bool,
-    is_v6_masq: bool,
-) -> String {
-    let mut script = String::new();
-    if src_v4 {
-        script.push_str(&format!("flush set {} {} {}\n", family, table, SET_V4));
-        script.push_str(&format!(
-            "add element {} {} {} {{ {} }}\n",
-            family,
-            table,
-            SET_V4,
-            V4_LIVENESS_ELEMENTS.as_str()
-        ));
-    }
-    if fwd_v4 {
-        script.push_str(&format!("flush set {} {} {}\n", family, table, SET_FWD4));
-        script.push_str(&format!(
-            "add element {} {} {} {{ 0.0.0.0/0 timeout {}s }}\n",
-            family, table, SET_FWD4, LIVENESS_TIMEOUT_SEC
-        ));
-    }
-    if src_v6 {
-        script.push_str(&format!("flush set {} {} {}\n", family, table, SET_V6));
-        script.push_str(&format!(
-            "add element {} {} {} {{ {} }}\n",
-            family,
-            table,
-            SET_V6,
-            v6_elements(is_v6_masq)
-        ));
-    }
-    if fwd_v6 {
-        script.push_str(&format!("flush set {} {} {}\n", family, table, SET_FWD6));
-        script.push_str(&format!(
-            "add element {} {} {} {{ ::/0 timeout {}s }}\n",
-            family, table, SET_FWD6, LIVENESS_TIMEOUT_SEC
-        ));
-    }
-    script
-}
-
-pub(crate) fn v6_elements(is_masq: bool) -> &'static str {
-    if is_masq {
-        // Include GUA (2000::/3) and ULA (fc00::/7).
-        "2000::/3 timeout 15s, fc00::/7 timeout 15s"
-    } else {
-        "fc00::/7 timeout 15s"
-    }
-}
-
 /// Refreshes element timeouts in `inet fw4` liveness sets.
 pub(crate) fn refresh_fw4_liveness(
+    nl: &mut NetlinkLivenessClient,
     enable_v4: bool,
     enable_v6: bool,
     is_v6_masq: bool,
     verbose: bool,
 ) -> bool {
     refresh_table_liveness(
-        "inet", "fw4", enable_v4, enable_v4, enable_v6, enable_v6, is_v6_masq, verbose,
+        nl, "inet", "fw4", enable_v4, enable_v4, enable_v6, enable_v6, is_v6_masq, verbose,
     )
 }
 
@@ -659,7 +509,6 @@ pub(crate) fn remove_fw4_sets() {
     let _ = nft_apply(&script);
 }
 
-/// Remove generated chain-pre include files.
 pub(crate) fn clean_chain_pre_files() {
     let _ = fs::remove_file(FW4_CHAIN_PRE_SRCNAT_FILE);
     let _ = fs::remove_file(FW4_CHAIN_PRE_FORWARD_FILE);
@@ -876,16 +725,16 @@ table inet nat {
 
     #[test]
     fn test_live_rules_use_sets_and_new_state() {
-        let r4 = generate_live_srcnat_rule_v4("eth1", 0, 0);
+        let r4 = generate_srcnat_rule_v4("eth1", 0, 0);
         assert!(r4.contains("ip saddr @flowcone_v4"));
         assert!(r4.contains("255.0.0.0/8"));
         assert!(!r4.contains("255.255.255.255"));
-        let r6_srcnat = generate_live_srcnat_rule_v6("eth1", 0, 0);
+        let r6_srcnat = generate_srcnat_rule_v6("eth1", 0, 0);
         assert!(r6_srcnat.contains("ip6 saddr @flowcone_v6"));
         assert!(r6_srcnat.contains("udp sport != { 546, 547 }"));
         assert!(r6_srcnat.contains("ip6 daddr != ff00::/8"));
         assert!(r6_srcnat.contains("ip6 daddr != fe80::/10"));
-        let r6 = generate_live_forward_rule_v6("eth1", 0x40000000);
+        let r6 = generate_forward_rule_v6("eth1", 0x40000000);
         assert!(r6.contains("ct state new"));
         assert!(r6.contains("ip6 saddr @flowcone_fwd6"));
         assert!(r6.contains("iifname \"eth1\""));

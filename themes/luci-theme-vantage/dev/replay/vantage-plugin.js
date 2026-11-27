@@ -115,7 +115,7 @@ function shortString(v, max) { return (typeof v === 'string' && Buffer.byteLengt
 function obj(v) { return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {}; }
 
 /* the encryption mode's leading run of mode characters, nothing after it */
-function encryption(v) { const m = typeof v === 'string' ? /^[A-Za-z0-9+_-]{1,40}/.exec(v) : null; return m ? m[0] : null; }
+function encryption(v) { const m = typeof v === 'string' ? /^[A-Za-z0-9+\/_-]{1,40}/.exec(v) : null; return m ? m[0] : null; }
 
 function reduceIface(i) {
 	const c = obj(i.config);

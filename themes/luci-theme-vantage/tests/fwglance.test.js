@@ -1377,3 +1377,213 @@ test('M1: both calls reject on a ubus error and have no `expect` default to fall
 		assert.doesNotMatch(d, /\bexpect\b/, d);
 	}
 });
+
+/* ------------------- review at 85b66db, finding 02: the IPv6 uplink
+
+   An interface with the IPv6 default route and a global address, or a
+   delegated prefix, is an uplink like the IPv4 one, and the zone that
+   holds it faces the internet. 2001:db8::/32 stands for global space
+   (first three bits 001); the address that must not be global is built
+   from parts. */
+const v6 = (name, dev, addresses, extra) => Object.assign({ interface: name, up: true, device: dev, l3_device: dev,
+	route: [ { target: '::', mask: 0, nexthop: 'fe80::1' } ],
+	'ipv6-address': addresses.map(address => ({ address, mask: 64 })) }, extra || {});
+const WAN_UP = Object.assign({}, WAN_DEV, { route: [ { target: '0.0.0.0', mask: 0 } ], 'ipv4-address': [ { address: PUBLIC, mask: 24 } ] });
+const TUNNEL = v6('he6', '6in4-he6', [ '2001:db8:6::2' ]);
+const ULA = [ 'fd00', '', '2' ].join(':');
+/* wan as OpenWrt has it, and a zone of its own for the IPv6 uplink */
+const tunnelZone = input => MASQ.concat([ [ 'zone', { name: 'tunnel', network: 'he6', input, output: 'ACCEPT', forward: 'REJECT' } ] ]);
+
+test('02: an IPv6 uplink in a zone of its own faces the internet; open input there is an error, not "Nothing is open"', async () => {
+	const dump = [ LAN_DEV, WAN_UP, TUNNEL ];
+	assert.deepEqual(fw.uplinks(dump), [ 'wan', 'he6' ]);
+	const open = cfg(tunnelZone('ACCEPT'));
+	const r = fw.analyse(open, dump);
+	assert.deepEqual(r.internet, [ 'wan', 'tunnel' ]);
+	assert.deepEqual(codes(r), [ 'input-accept:tunnel>' ]);
+	assert.equal(r.level, 'err');
+	const t = await page(open, dump);
+	assert.match(t, /1 thing needs attention\n+Internet-facing: wan, tunnel/);
+	assert.match(t, /tunnel accepts every connection/);
+	assert.doesNotMatch(t, /Nothing is open/);
+	/* closed, the all-clear is a true statement about both zones */
+	const shut = cfg(tunnelZone('REJECT'));
+	assert.equal(fw.analyse(shut, dump).level, 'ok');
+	assert.match(await page(shut, dump), /Nothing is open in your firewall rules\n+Internet-facing: wan, tunnel/);
+	/* in no zone it meets the default policies, like an IPv4 uplink */
+	const out = fw.analyse(cfg(acceptIn(MASQ)), dump);
+	assert.deepEqual(out.outside, [ { name: 'he6', family: null, zone: false } ]);
+	assert.deepEqual(codes(out), [ 'outside-input:he6' ]);
+	/* an uplink without an address of its own: the delegated prefix says it */
+	const pd = v6('he6', '6in4-he6', [ 'fe80::2' ], { 'ipv6-prefix': [ { address: '2001:db8:100::', mask: 56 } ] });
+	assert.deepEqual(fw.analyse(open, [ LAN_DEV, WAN_UP, pd ]).internet, [ 'wan', 'tunnel' ]);
+	/* behind a carrier's NAT the device is still the one that faces the
+	   internet: IPv6 on the IPv4 uplink's device counts, here with the
+	   zones split by family */
+	const cgnat = [ LAN_DEV, Object.assign({}, WAN_UP, { 'ipv4-address': [ { address: ip(100, 72, 0, 9), mask: 24 } ] }), v6('up6', 'eth1', [ '2001:db8:5::2' ]) ];
+	const split = fw.analyse(cfg(zoneOpts(MASQ, 'wan', { family: 'ipv4' }).concat([ [ 'zone', { name: 'six', network: 'up6', family: 'ipv6', input: 'ACCEPT' } ] ])), cgnat);
+	assert.deepEqual([ fw.uplinks(cgnat), split.internet, codes(split) ], [ [ 'up6' ], [ 'wan', 'six' ], [ 'input-accept:six>' ] ]);
+	/* down, or without the default route, it is none */
+	for (const not of [ Object.assign({}, TUNNEL, { up: false }), Object.assign({}, TUNNEL, { route: [ { target: '2001:db8:6::', mask: 64 } ] }) ]) {
+		assert.deepEqual(fw.uplinks([ WAN_UP, not ]), [ 'wan' ]);
+		assert.deepEqual(fw.analyse(open, [ LAN_DEV, WAN_UP, not ]).internet, [ 'wan' ]);
+	}
+});
+
+test('02: both families on one uplink device belong to the zone that takes the device', () => {
+	const wan6 = v6('wan6', 'eth1', [ '2001:db8:5::2' ]);
+	/* wan and wan6 on eth1, the zone names wan only: one device to fw4 */
+	const r = fw.analyse(cfg(MASQ), [ LAN_DEV, WAN_UP, wan6 ]);
+	assert.deepEqual([ r.internet, r.outside, r.complex, r.warnings, r.level ], [ [ 'wan' ], [], [], [], 'ok' ]);
+	/* one interface with both */
+	const dual = Object.assign({}, WAN_UP, { route: WAN_UP.route.concat(TUNNEL.route), 'ipv6-address': [ { address: '2001:db8:5::2', mask: 64 } ] });
+	assert.deepEqual(fw.uplinks([ dual ]), [ 'wan' ]);
+	assert.equal(fw.analyse(cfg(MASQ), [ LAN_DEV, dual ]).level, 'ok');
+	/* a zone of its own on the shared device may take the same traffic: no verdict, as before */
+	const shared = fw.analyse(cfg(tunnelZone('ACCEPT').map(([ t, o ]) => [ t, o.name === 'tunnel' ? Object.assign({}, o, { network: 'wan6' }) : o ])), [ LAN_DEV, WAN_UP, wan6 ]);
+	assert.equal(shared.level, 'unknown');
+	assert.deepEqual(shared.complex, [ { why: 'shared', name: 'wan', other: 'tunnel' } ]);
+});
+
+test('02: an access point\'s bridge is no IPv6 uplink; with a wan zone left in its config its IPv6 gets no verdict', async () => {
+	/* its IPv4 default route runs over a private address; IPv6 comes over the same bridge */
+	const lan = Object.assign(iface('lan', ip(192, 168, 1, 2), { uplink: true }), { device: 'br-lan', l3_device: 'br-lan' });
+	const ap = [ lan, v6('lan6', 'br-lan', [ '2001:db8:1::2' ], { 'ipv6-prefix': [ { address: '2001:db8:1:100::', mask: 60 } ] }) ];
+	assert.deepEqual(fw.uplinks(ap), []);
+	const conf = cfg([ [ 'defaults', { input: 'REJECT', output: 'ACCEPT', forward: 'REJECT' } ], [ 'zone', { name: 'lan', network: [ 'lan', 'lan6' ], input: 'ACCEPT' } ] ]);
+	const r = fw.analyse(conf, ap);
+	assert.deepEqual([ r.routed, r.level, r.complex ], [ false, 'unknown', [] ]);
+	assert.match(await page(conf, ap), /No internet-facing zone found/);
+	/* OpenWrt's stock zones left in the config: the wan zone holds nothing
+	   here, and IPv6 comes in through lan. No all-clear about that */
+	const stock = fw.analyse(cfg(STOCK), ap);
+	assert.deepEqual([ stock.internet, stock.complex, stock.level ], [ [ 'wan' ], [ { why: 'route6', name: 'lan6', other: null } ], 'unknown' ]);
+	const t = await page(cfg(STOCK), ap);
+	assert.match(t, /This setup is beyond what this overview checks\n+This page cannot tell where IPv6 on lan6 comes in from\. If another router sits in front of this device, as with an access point, that router's firewall decides what gets through\./);
+	assert.doesNotMatch(t, /Nothing is open/);
+	/* without IPv6 on the bridge it reads as it did */
+	assert.equal(fw.analyse(cfg(STOCK), [ lan ]).level, 'ok');
+});
+
+test('02: behind a modem-router, IPv6 on the uplink device in a zone of its own gets no verdict, not "Nothing is open"', async () => {
+	/* the IPv4 side is private (the box before it does the NAT) and in a
+	   closed wan zone; IPv6 is global, on the same device, in a zone that
+	   accepts input. The device is no uplink of this model's, and where
+	   its IPv6 comes from is not known */
+	const wan = Object.assign({}, WAN_UP, { 'ipv4-address': [ { address: ip(192, 168, 100, 2), mask: 24 } ] });
+	/* (an interface called wan6 would make its zone face the internet by name) */
+	const dump = [ LAN_DEV, wan, v6('up6', 'eth1', [ '2001:db8:5::2' ]) ];
+	assert.deepEqual(fw.uplinks(dump), []);
+	const split = cfg(zoneOpts(MASQ, 'wan', { family: 'ipv4' }).concat([ [ 'zone', { name: 'six', network: 'up6', family: 'ipv6', input: 'ACCEPT' } ] ]));
+	const r = fw.analyse(split, dump);
+	assert.deepEqual([ r.internet, r.outside, r.complex, r.level, r.warnings ], [ [ 'wan' ], [], [ { why: 'route6', name: 'up6', other: null } ], 'unknown', [] ]);
+	const t = await page(split, dump);
+	assert.match(t, /This setup is beyond what this overview checks\n+This page cannot tell where IPv6 on up6 comes in from\. If another router sits in front of this device, as with an access point, that router's firewall decides what gets through\./);
+	assert.doesNotMatch(t, /Nothing is open/);
+	/* zones not split by family may share the device: no verdict either, as before */
+	assert.equal(fw.analyse(cfg(MASQ.concat([ [ 'zone', { name: 'six', network: 'up6', input: 'ACCEPT' } ] ])), dump).level, 'unknown');
+	/* placed: the wan zone takes both families of the device */
+	const one = fw.analyse(cfg(MASQ), dump);
+	assert.deepEqual([ one.complex, one.level ], [ [], 'ok' ]);
+	/* placed: the wan zone is IPv4 only and no zone takes IPv6 there, so the default policies do */
+	const left = fw.analyse(cfg(acceptIn(zoneOpts(MASQ, 'wan', { family: 'ipv4' }))), dump);
+	assert.deepEqual([ left.outside, left.complex, codes(left) ], [ [ { name: 'wan', family: 6, zone: true } ], [], [ 'outside-input:wan' ] ]);
+});
+
+test('02: a zone that holds the IPv4 uplink is internet-facing for IPv6 rules too (a prefix routed to the lan)', async () => {
+	/* public IPv4 on the uplink, in a zone that faces the internet only by
+	   holding it; IPv6 on the same device with a link-local address alone,
+	   the global prefix routed to the lan. No IPv6 uplink is seen there,
+	   and IPv6 comes in all the same: a rule that lets it in must warn */
+	const isp = Object.assign(iface('isp', PUBLIC, { uplink: true }), { device: 'eth1', l3_device: 'eth1' });
+	const dump = [ Object.assign({}, LAN_DEV, { 'ipv6-address': [ { address: '2001:db8:1::1', mask: 64 } ] }), isp, v6('isp6', 'eth1', [ 'fe80::2' ]) ];
+	assert.deepEqual(fw.uplinks(dump), [ 'isp' ]);
+	for (const nets of [ [ 'isp', 'isp6' ], [ 'isp' ] ]) {
+		const conf = cfg([
+			[ 'defaults', { input: 'REJECT', output: 'ACCEPT', forward: 'REJECT' } ],
+			[ 'zone', { name: 'lan', network: 'lan', input: 'ACCEPT' } ],
+			[ 'zone', { name: 'outside', network: nets, input: 'REJECT' } ],
+			[ 'rule', { name: 'Admin over IPv6', src: 'outside', proto: 'tcp', dest_port: '443', family: 'ipv6', target: 'ACCEPT' } ]
+		]);
+		const r = fw.analyse(conf, dump);
+		assert.deepEqual([ r.internet, r.complex, r.open.map(i => i.name), codes(r), r.level ],
+			[ [ 'outside' ], [], [ 'Admin over IPv6' ], [ 'admin-open:Admin over IPv6' ], 'warn' ], String(nets));
+		const t = await page(conf, dump);
+		assert.match(t, /1 thing needs attention\n+Internet-facing: outside/);
+		assert.match(t, /Router admin open: Admin over IPv6/);
+		assert.doesNotMatch(t, /Nothing is open/);
+	}
+});
+
+test('02: what is sent on into a zone that holds an IPv6 uplink warns as it did before: the zone may hold the lan too', () => {
+	/* the tunnel put into the lan zone: the zone faces the internet now,
+	   and the internet let into it by the wan zone still reaches the lan */
+	const mixed = zoneOpts(MASQ, 'lan', { network: [ 'lan', 'he6' ] }).concat([
+		[ 'forwarding', { src: 'wan', dest: 'lan' } ],
+		[ 'rule', { name: 'All in', src: 'wan', dest: 'lan', proto: 'all', target: 'ACCEPT' } ] ]);
+	const r = fw.analyse(cfg(mixed), [ LAN_DEV, WAN_UP, TUNNEL ]);
+	assert.deepEqual(r.internet, [ 'wan', 'lan' ]);
+	assert.deepEqual(codes(r), [ 'forward-into:wan>lan', 'input-accept:lan>', 'rule-into:All in' ]);
+	/* into the zone of the IPv4 uplink, or one called wan, nothing is let into the network, as before */
+	const outer = fw.analyse(cfg(MASQ.concat([ [ 'zone', { name: 'outside', network: 'isp', input: 'REJECT' } ], [ 'forwarding', { src: 'wan', dest: 'outside' } ], [ 'forwarding', { src: 'outside', dest: 'wan' } ] ])),
+		[ LAN_DEV, WAN_UP, iface('isp', PUBLIC, { uplink: true }) ]);
+	assert.deepEqual([ outer.internet, codes(outer) ], [ [ 'wan', 'outside' ], [] ]);
+});
+
+test('02: an internet-facing zone is one for both families, whichever its uplink\'s (a known limit: a false warning)', async () => {
+	const zones = [
+		[ 'defaults', { input: 'REJECT', output: 'ACCEPT', forward: 'REJECT' } ],
+		[ 'zone', { name: 'lan', network: 'lan', input: 'ACCEPT' } ],
+		[ 'zone', { name: 'up', network: 'he6', input: 'REJECT' } ]
+	];
+	const ssh = (name, src, family) => [ 'rule', Object.assign({ name, src, proto: 'tcp', dest_port: '22', target: 'ACCEPT' }, family ? { family } : {}) ];
+	/* an IPv6-only tunnel: its zone faces the internet. An IPv4-only rule
+	   from it lets nothing in there, and is listed and warned about all
+	   the same: the model does not know which families arrive on a zone */
+	const dump = [ LAN_DEV, TUNNEL ];
+	const r = fw.analyse(cfg(zones.concat([ ssh('SSH4', 'up', 'ipv4'), ssh('SSH6', 'up', 'ipv6'), ssh('SSH', 'up'), ssh('Any4', '*', 'ipv4'),
+		[ 'forwarding', { src: 'up', dest: 'lan', family: 'ipv4' } ],
+		[ 'redirect', { name: 'Web', src: 'up', proto: 'tcp', src_dport: '8443', dest_ip: '192.0.2.10', dest_port: '443' } ] ])), dump);
+	assert.deepEqual(r.open.map(i => i.name), [ 'SSH4', 'SSH6', 'SSH', 'Any4' ]);
+	assert.deepEqual(r.forwards.map(i => i.name), [ 'Web' ]);
+	assert.deepEqual(codes(r), [ 'forward-into:up>lan', 'admin-open:SSH4', 'admin-open:SSH6', 'admin-open:SSH', 'admin-open:Any4' ]);
+	const t = await page(cfg(zones.concat([ ssh('SSH4', 'up', 'ipv4') ])), dump);
+	assert.match(t, /Router admin open: SSH4/);
+	assert.doesNotMatch(t, /Nothing is open/);
+	/* the same the other way: a zone that only holds the IPv4 uplink */
+	const v4 = fw.analyse(cfg(zones.concat([ ssh('SSH4', 'up', 'ipv4'), ssh('SSH6', 'up', 'ipv6') ])), [ LAN_DEV, Object.assign({}, WAN_UP, { interface: 'he6' }) ]);
+	assert.deepEqual([ v4.open.map(i => i.name), codes(v4) ], [ [ 'SSH4', 'SSH6' ], [ 'admin-open:SSH4', 'admin-open:SSH6' ] ]);
+	/* no zone says which families it faces */
+	assert.ok(r.zones.every(z => !('faces' in z)));
+});
+
+test('02: IPv6 only: a global uplink is recognised; a default route it cannot place gets no verdict, never "Nothing is open"', async () => {
+	const own = [
+		[ 'defaults', { input: 'REJECT', output: 'ACCEPT', forward: 'REJECT' } ],
+		[ 'zone', { name: 'lan', network: 'lan', input: 'ACCEPT' } ],
+		[ 'zone', { name: 'up', network: 'he6', input: 'ACCEPT' } ]
+	];
+	const r = fw.analyse(cfg(own), [ LAN_DEV, TUNNEL ]);
+	assert.deepEqual([ r.internet, codes(r), r.level ], [ [ 'up' ], [ 'input-accept:up>' ], 'err' ]);
+	/* a link-local or unique-local address and no prefix: nothing says the
+	   interface faces the internet, and no other zone does: as before */
+	for (const a of [ 'fe80::2', ULA ]) {
+		const bare = v6('he6', '6in4-he6', [ a ]);
+		assert.deepEqual(fw.uplinks([ bare ]), [], a);
+		const none = fw.analyse(cfg(own), [ LAN_DEV, bare ]);
+		assert.deepEqual([ none.routed, none.level, none.complex ], [ false, 'unknown', [] ], a);
+		assert.match(await page(cfg(own), [ LAN_DEV, bare ]), /No internet-facing zone found/, a);
+		/* beside a recognised IPv4 side the page would speak for IPv4 alone */
+		const open = cfg(tunnelZone('ACCEPT'));
+		const half = fw.analyse(open, [ LAN_DEV, WAN_UP, bare ]);
+		assert.deepEqual(half.complex, [ { why: 'route6', name: 'he6', other: null } ], a);
+		assert.deepEqual([ half.level, half.warnings, half.internet ], [ 'unknown', [], [ 'wan' ] ], a);
+		const t = await page(open, [ LAN_DEV, WAN_UP, bare ]);
+		assert.match(t, /This setup is beyond what this overview checks\n+This page cannot tell where IPv6 on he6 comes in from\. If another router sits in front of this device, as with an access point, that router's firewall decides what gets through\./, a);
+		assert.doesNotMatch(t, /Nothing is open|Open from the internet/, a);
+		assert.doesNotMatch(await page(cfg(tunnelZone('REJECT')), [ LAN_DEV, WAN_UP, bare ]), /Nothing is open/, a);
+		/* in the internet zone it is accounted for; without the dump nothing is known of it */
+		assert.equal(fw.analyse(cfg(zoneOpts(MASQ, 'wan', { network: [ 'wan', 'he6' ] })), [ LAN_DEV, WAN_UP, bare ]).level, 'ok', a);
+		assert.deepEqual(fw.analyse(open).complex, [], a);
+	}
+});

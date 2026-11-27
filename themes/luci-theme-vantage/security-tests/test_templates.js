@@ -443,8 +443,30 @@ test('Appearance saved for every browser: only values the theme knows reach the 
 	const root = [ { username: 'root', read: [ '*' ], write: [ '*' ] } ];
 	assert.equal(save({ acl: held, logins: root }), 'yes');
 	assert.equal(save({ acl: { 'access-group': { 'luci-base': [ 'read', 'write' ] } }, logins: root }), 'relogin', 'a login from before the group');
-	assert.equal(save({ acl: { 'access-group': {} }, logins: [ { username: 'root', write: 'luci-*' } ] }), 'relogin', 'one pattern, as rpcd matches it');
-	assert.equal(save({ acl: { 'access-group': {} }, logins: [ { username: 'root', write: [ 'luci-app-*' ] } ] }), 'no');
+	/* a login's write list as rpcd reads it (session.c): a pattern in a list grants, one option
+	   that is no list grants nothing, and an exclusion that matches refuses whatever else is listed */
+	const none = { 'access-group': {} }, login = write => [ { username: 'root', write } ];
+	assert.equal(save({ acl: none, logins: login([ 'luci-*' ]) }), 'relogin', 'one pattern, as rpcd matches it');
+	assert.equal(save({ acl: none, logins: login('luci-*') }), 'no', 'rpcd reads a list only');
+	assert.equal(save({ acl: none, logins: login([ 'luci-app-*' ]) }), 'no');
+	for (const no of [ '!luci-theme-vantage', '! luci-theme-vantage', '!\tluci-theme-*', '!*' ]) {
+		assert.equal(save({ acl: none, logins: login([ '*', no ]) }), 'no', 'excluded beside a wildcard grant: ' + JSON.stringify(no));
+		assert.equal(save({ acl: none, logins: login([ no, '*' ]) }), 'no', 'in either order: ' + JSON.stringify(no));
+	}
+	for (const other of [ '!luci-app-vantage', '!', '! ', '!luci-theme-vantage-x' ])
+		assert.equal(save({ acl: none, logins: login([ '*', other ]) }), 'relogin', 'an exclusion of something else: ' + JSON.stringify(other));
+	assert.equal(save({ acl: none, logins: login([ '!luci-theme-vantage' ]) }), 'no', 'an exclusion alone grants nothing');
+	assert.equal(save({ acl: held, logins: login([ '*', '!luci-theme-vantage' ]) }), 'yes', 'what the login holds now is rpcd\'s own word');
+	/* several sections for one name: rpcd takes the one whose password matched, which the page
+	   cannot know, so only when each of them would grant; another name's sections do not count */
+	const grant = { username: 'root', write: [ 'luci-theme-*' ] };
+	assert.equal(save({ acl: none, logins: [ grant, { username: 'root', write: [ '*' ] } ] }), 'relogin', 'each would grant');
+	for (const other of [ { username: 'root', write: [ '*', '!luci-theme-vantage' ] }, { username: 'root', write: [ 'luci-app-*' ] }, { username: 'root', write: 'luci-*' }, { username: 'root' } ]) {
+		assert.equal(save({ acl: none, logins: [ grant, other ] }), 'no', 'one of them would not: ' + JSON.stringify(other));
+		assert.equal(save({ acl: none, logins: [ other, grant ] }), 'no', 'in either order: ' + JSON.stringify(other));
+	}
+	assert.equal(save({ acl: none, logins: [ grant, { username: 'admin', write: [ 'luci-app-*' ] }, { username: [ 'root' ], write: [] } ] }), 'relogin', 'only sections of this name');
+	assert.equal(save({ acl: none, logins: [] }), 'no', 'no section at all');
 	assert.equal(save({ acl: { 'access-group': {} }, logins: [ { username: 'admin', write: [ '*' ] } ] }), 'no', 'another user\'s grant');
 	assert.equal(save({ acl: { 'access-group': { 'luci-theme-vantage': [ 'read' ] } }, logins: [] }), 'no');
 	assert.equal(save({ acl: held, logins: root, noSection: true }), 'no', 'no section to save into');

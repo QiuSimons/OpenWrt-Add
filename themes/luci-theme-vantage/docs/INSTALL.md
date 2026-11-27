@@ -417,23 +417,46 @@ openssl ec -in ~/.config/vantage-signing/vantage.key.pem -pubout -out vantage-si
 sha256sum vantage-signing.pub.pem
 ```
 
-Build with the key; the script passes it to the SDK on standard input
-(never on the command line or in a mount), and `dist/<release>/` then also
-holds `packages.adb`, the index signed with that key. `BUILDINFO` records
-the public key's SHA-256.
+Build with the key: the packages are built and verified without it,
+then the index is signed in a second SDK container that has no network.
+The key goes to it on standard input (never on the command line or in a
+mount) and nothing else reads it. That container deletes the key after
+signing and checks the index before handing it out: the signature
+verifies with the public key, and the index lists exactly the packages,
+each with its hash. The public key is the committed one
+(`keys/vantage-signing.pem`); for another key, name its public half in
+`VANTAGE_SIGN_PUB`. `dist/<release>/` then also holds `packages.adb`, the
+index signed with that key, and `BUILDINFO` records the public key's
+SHA-256. `dev/build/sdk-build.sh --sign <release>` signs a
+`dist/<release>/` an earlier build left, and only a complete one; with
+`VANTAGE_SIGN_KEY=-` it takes the key on standard input.
 
 ```sh
-VANTAGE_SIGN_KEY=~/.config/vantage-signing/vantage.key.pem dev/build/sdk-build.sh 25.12.6 <tag>
+VANTAGE_SIGN_KEY=~/.config/vantage-signing/vantage.key.pem VANTAGE_SIGN_PUB=vantage-signing.pub.pem \
+  dev/build/sdk-build.sh 25.12.6 <tag>
 ```
 
+`VANTAGE_SIGN_PUB` names the public key the signature has to verify with.
+Leave it out only when the key is the one whose public half is committed
+as `keys/vantage-signing.pem` (the project's own releases, or your fork
+once your key is committed there): without it the signer checks against
+that file and refuses any other key.
+
 For 23.05/24.10 (opkg) use a usign key (`usign -G -s key-build -p
-key-build.pub`); the index is then `Packages` with `Packages.sig`, and
-`BUILDINFO` records the key's fingerprint. The 24.10 repository is signed
-this way, with the key given under [OpenWrt 24.10](#openwrt-2410).
+key-build.pub`, then `VANTAGE_SIGN_KEY=key-build
+VANTAGE_SIGN_PUB=key-build.pub`); the index is then `Packages` with
+`Packages.sig`, and `BUILDINFO` records the key's fingerprint. For 24.10
+the default public key is `keys/vantage-24.10.usign.pub`; 23.05 has no
+committed key and always needs `VANTAGE_SIGN_PUB`. The 24.10 repository
+is signed this way, with the key given under
+[OpenWrt 24.10](#openwrt-2410).
 
 In CI, both private keys are secrets of the GitHub environment
 `release-signing`: only a pushed `v*` tag can use it, and I approve each
-such run before the build sees the keys.
+such run. Only the job that signs is in that environment, on a machine
+of its own that has the packages as built and runs nothing the build
+produced; the build job has no secret. The key goes from the secret to
+the signing container's standard input, without a file.
 
 On the router, once: with the public key copied to `/tmp/vantage/` (made as
 in [step 1](#1-copy-the-files-to-the-router)), install it only if its SHA-256
@@ -598,7 +621,8 @@ Nothing else changes. Neither package adds a service, cron job or init
 script, and neither touches network, wireless, firewall, DHCP or password
 settings. The dashboard only reads status. Its only writes are a name you
 give a device and its "Don't warn about its signal" mark, both stored in
-`/etc/config/vantage`.
+`/etc/config/vantage`, and an empty lock file in RAM
+(`/var/run/vantage-ports/lock`) where it reads a switch's counters.
 
 The dashboard's URL is `http://192.0.2.1/cgi-bin/luci/admin/dashboard`.
 
@@ -654,7 +678,15 @@ Its own translation is a package of its own:
 What pairing changes. On the access point, one line in
 `/etc/dropbear/authorized_keys`, for the router's own key and limited to a
 read-only report: that key cannot open a shell, run anything else or
-forward ports. On the router, its key and the paired access points in
+forward ports. That holds on every SSH listener that leaves a key its
+own command. Dropbear runs a listener's own command (`ForceCommand` in
+`/etc/config/dropbear`) in place of a key's, so the add-on lets no
+router in while any listener that takes root has one, and its page
+warns when one is added after routers were let in: remove the command
+or revoke the routers, then restart Dropbear (`service dropbear
+restart`) so that a session already open there ends too. The add-on
+looks at the Dropbear instances OpenWrt's service manager runs; one
+started some other way it cannot see. On the router, its key and the paired access points in
 `/etc/vantage/` (kept on sysupgrade), and a service, `vantage-collector`,
 that runs only while an access point is paired and logs in to the access
 points only while a dashboard or this page is open. Until you pair, the
@@ -700,7 +732,8 @@ Before removing the add-on:
 
 - **From an access point:** revoke its routers first. Otherwise their
   lines stay in `authorized_keys`; they can then only run a command that
-  is gone, but would work again if the add-on came back. Without the
+  is gone, but would work again if the add-on came back (and on an SSH
+  listener with a command of its own, they still run that command). Without the
   add-on, delete them under System → Administration → SSH-Keys (the lines
   ending in `vantage-router@<name>+<id>`).
 - **From a router:** revoke it on each access point, then delete its key

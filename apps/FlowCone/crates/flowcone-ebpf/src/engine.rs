@@ -21,7 +21,7 @@ const EEXIST_ERR: i32 = -17;
 
 #[inline(always)]
 pub fn now_sec() -> u32 {
-    (unsafe { bpf_ktime_get_coarse_ns() } / 1_000_000_000) as u32
+    flowcone_common::monotonic_ns_to_sec(unsafe { bpf_ktime_get_coarse_ns() })
 }
 
 #[inline(always)]
@@ -343,6 +343,8 @@ trait BindingOps: Copy {
     fn read_ip(val: *const Self) -> Self::Ip;
     fn write_ip(val: *mut Self, ip: &Self::Ip);
     fn port_meta_ptr(val: *mut Self) -> *mut u32;
+    fn last_seen_ptr(val: *mut Self) -> *mut u32;
+    fn reserved_meta_val(val: *const Self) -> u16;
 }
 
 impl BindingOps for BindingValue4 {
@@ -369,6 +371,14 @@ impl BindingOps for BindingValue4 {
     #[inline(always)]
     fn port_meta_ptr(val: *mut Self) -> *mut u32 {
         unsafe { (&mut (*val).port as *mut u16).cast::<u32>() }
+    }
+    #[inline(always)]
+    fn last_seen_ptr(val: *mut Self) -> *mut u32 {
+        unsafe { core::ptr::addr_of_mut!((*val).last_seen) }
+    }
+    #[inline(always)]
+    fn reserved_meta_val(val: *const Self) -> u16 {
+        unsafe { (*val).reserved_meta() }
     }
 }
 
@@ -401,6 +411,14 @@ impl BindingOps for BindingValue6 {
     #[inline(always)]
     fn port_meta_ptr(val: *mut Self) -> *mut u32 {
         unsafe { (&mut (*val).port as *mut u16).cast::<u32>() }
+    }
+    #[inline(always)]
+    fn last_seen_ptr(val: *mut Self) -> *mut u32 {
+        unsafe { core::ptr::addr_of_mut!((*val).last_seen) }
+    }
+    #[inline(always)]
+    fn reserved_meta_val(val: *const Self) -> u16 {
+        unsafe { (*val).reserved_meta() }
     }
 }
 
@@ -527,10 +545,10 @@ macro_rules! impl_alloc_port {
 
             let mut cand_port = 0u16;
             let mut step = 0u32;
-            while step < 4 {
-                let off = step & 1;
+            while step < 8 {
+                let off = step & 3;
                 let slot = (min_slot + ((start_off + off) % span)) & 0x1ff;
-                let parity_even = pref_even ^ (step >= 2);
+                let parity_even = pref_even ^ (step >= 4);
                 cand_port = $pick_slot(slot, parity_even, min, max);
                 if cand_port != 0 {
                     break;
@@ -545,7 +563,7 @@ macro_rules! impl_alloc_port {
                 }
                 // Rare race (newly-bound local socket or concurrent bit race):
                 // try one opposite-parity fallback slot.
-                let alt_slot = (min_slot + ((start_off + 1) % span)) & 0x1ff;
+                let alt_slot = (min_slot + ((start_off + 4) % span)) & 0x1ff;
                 let alt_port = $pick_slot(alt_slot, !pref_even, min, max);
                 if alt_port != 0 {
                     let claimed = $claim_name(alt_port, in_val);
@@ -557,8 +575,7 @@ macro_rules! impl_alloc_port {
 
             if let Some(p) = PORT_FLAGS.get_ptr_mut(0) {
                 unsafe {
-                    if *p == 0 {
-                        *p = 1;
+                    if atomic_cmpxchg_u32(p, 0, 1) == 0 {
                         $push_exhausted();
                     }
                 }
@@ -655,7 +672,7 @@ fn inspect_outbound_binding<K, V, IpEq>(
     is_short_lived: bool,
 ) -> OutboundInspect<V>
 where
-    V: BindingOps + BindingMeta,
+    V: BindingOps,
     IpEq: FnOnce(&V::Ip, &V::Ip) -> bool,
 {
     let Some(val) = ob_map.get_ptr_mut(ep_key) else {
@@ -693,33 +710,6 @@ where
         cur_port,
         ip_matches,
         res_state,
-    }
-}
-
-trait BindingMeta {
-    fn last_seen_ptr(val: *mut Self) -> *mut u32;
-    fn reserved_meta_val(val: *const Self) -> u16;
-}
-
-impl BindingMeta for BindingValue4 {
-    #[inline(always)]
-    fn last_seen_ptr(val: *mut Self) -> *mut u32 {
-        unsafe { core::ptr::addr_of_mut!((*val).last_seen) }
-    }
-    #[inline(always)]
-    fn reserved_meta_val(val: *const Self) -> u16 {
-        unsafe { (*val).reserved_meta() }
-    }
-}
-
-impl BindingMeta for BindingValue6 {
-    #[inline(always)]
-    fn last_seen_ptr(val: *mut Self) -> *mut u32 {
-        unsafe { core::ptr::addr_of_mut!((*val).last_seen) }
-    }
-    #[inline(always)]
-    fn reserved_meta_val(val: *const Self) -> u16 {
-        unsafe { (*val).reserved_meta() }
     }
 }
 
@@ -849,7 +839,7 @@ macro_rules! impl_get_or_create_mapping {
                         && (!ip_matches
                             || !flowcone_common::binding_matches_reserved(
                                 res_state,
-                                <$val_ty as BindingMeta>::reserved_meta_val(in_ptr),
+                                <$val_ty as BindingOps>::reserved_meta_val(in_ptr),
                             ))
                     {
                         let _ = $ib_map.remove(&cur_port);

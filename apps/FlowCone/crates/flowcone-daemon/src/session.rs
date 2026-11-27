@@ -1,3 +1,4 @@
+use crate::netlink::{AF_INET, AF_INET6, NLM_F_REQUEST, NLMSG_DONE, NLMSG_ERROR};
 use aya::maps::{Array, HashMap, IterableMap, MapData, RingBuf};
 use flowcone_common::{
     BindingValue4, BindingValue6, EndpointKey4, EndpointKey6, FragKey4, FragKey6, FragValue4,
@@ -119,21 +120,18 @@ type Expiry6 = Reverse<(u32, EndpointKey6, u16)>;
 const GC_QUEUE_DRAIN_MAX: usize = 32768;
 const GC_EXPIRY_MAX_PER_TICK: usize = 1024;
 
-const AF_INET: u8 = 2;
-const AF_INET6: u8 = 10;
 const NETLINK_INET_DIAG: u32 = 4;
 const SOCK_DIAG_BY_FAMILY: u16 = 20;
-const NLM_F_REQUEST: u16 = 0x0001;
 const NLM_F_DUMP: u16 = 0x0300;
 const NLMSG_HDRLEN: usize = 16;
-const NLMSG_ERROR: u16 = 2;
-const NLMSG_DONE: u16 = 3;
 
 /// Reusable `NETLINK_INET_DIAG` scanner with per-family fallback to
 /// `/proc/net/udp*`.
 pub struct LocalUdpScanner {
     sock: Option<OwnedFd>,
     buf: Vec<u8>,
+    ports4: Vec<u16>,
+    ports6: Vec<u16>,
     seq: u32,
     disabled_v4: bool,
     disabled_v6: bool,
@@ -150,6 +148,8 @@ impl LocalUdpScanner {
         Self {
             sock: None,
             buf: vec![0u8; 32768],
+            ports4: Vec::new(),
+            ports6: Vec::new(),
             seq: 0,
             disabled_v4: false,
             disabled_v6: false,
@@ -209,18 +209,21 @@ impl LocalUdpScanner {
         self.sock.as_ref()
     }
 
-    /// Queries listening and connected UDP ports via `NETLINK_INET_DIAG`.
-    pub fn scan_netlink_udp_ports(&mut self, family: u8) -> Option<Vec<u16>> {
+    /// Queries listening and connected UDP ports via `NETLINK_INET_DIAG` into `out`.
+    pub fn scan_netlink_udp_ports_into(&mut self, family: u8, out: &mut Vec<u16>) -> bool {
         use rustix::io::Errno;
         use rustix::net::{SendFlags, send};
 
+        out.clear();
         if self.is_disabled(family) {
-            return None;
+            return false;
         }
         let seq = self.seq.wrapping_add(1).max(1);
         self.seq = seq;
 
-        let sock = self.ensure_socket()?;
+        let Some(sock) = self.ensure_socket() else {
+            return false;
+        };
 
         // 72-byte netlink dump request: 16-byte nlmsghdr + 56-byte
         // inet_diag_req_v2.
@@ -239,21 +242,22 @@ impl LocalUdpScanner {
                 Err(Errno::INTR) => continue,
                 Err(_) => {
                     self.sock = None;
-                    return None;
+                    return false;
                 }
             }
         }
 
-        let mut ports = Vec::new();
         let mut done = false;
         'recv_loop: loop {
-            let sock = self.sock.as_ref()?;
+            let Some(sock) = self.sock.as_ref() else {
+                return false;
+            };
             let Ok(n) = crate::netlink::recv_netlink_msg(sock, &mut self.buf, RecvFlags::empty())
             else {
                 // Drop socket after interrupted/timed-out dump so stale frames
                 // cannot leak into the next call.
                 self.sock = None;
-                return None;
+                return false;
             };
             if n == 0 {
                 break;
@@ -288,10 +292,10 @@ impl LocalUdpScanner {
                                 ) {
                                     self.mark_disabled(family);
                                 }
-                                return None;
+                                return false;
                             }
                         } else {
-                            return None;
+                            return false;
                         }
                     } else if nlmsg_type == NLMSG_DONE {
                         done = true;
@@ -301,7 +305,7 @@ impl LocalUdpScanner {
                         if payload.len() >= 72 && (payload[1] == 1 || payload[1] == 7) {
                             let sport = u16::from_be_bytes([payload[4], payload[5]]);
                             if sport != 0 {
-                                ports.push(sport);
+                                out.push(sport);
                             }
                         }
                     }
@@ -310,29 +314,43 @@ impl LocalUdpScanner {
             }
         }
 
-        if done { Some(ports) } else { None }
+        done
+    }
+
+    #[cfg(test)]
+    pub fn scan_netlink_udp_ports(&mut self, family: u8) -> Option<Vec<u16>> {
+        let mut ports = Vec::new();
+        self.scan_netlink_udp_ports_into(family, &mut ports)
+            .then_some(ports)
     }
 
     /// Parses local UDP service ports from `NETLINK_INET_DIAG` with procfs
-    /// fallback.
-    pub fn scan_local_udp_ports(&mut self, family: u8, procfs_path: &str) -> Option<Vec<u16>> {
-        if let Some(mut ports) = self.scan_netlink_udp_ports(family) {
-            ports.sort_unstable();
-            ports.dedup();
-            return Some(ports);
+    /// fallback into `out`.
+    pub fn scan_local_udp_ports_into(
+        &mut self,
+        family: u8,
+        procfs_path: &str,
+        out: &mut Vec<u16>,
+    ) -> bool {
+        if self.scan_netlink_udp_ports_into(family, out) {
+            out.sort_unstable();
+            out.dedup();
+            return true;
         }
-        let text = std::fs::read_to_string(procfs_path).ok()?;
-        let mut ports = parse_proc_udp_ports(&text);
-        ports.sort_unstable();
-        ports.dedup();
-        Some(ports)
+        let Ok(text) = std::fs::read_to_string(procfs_path) else {
+            return false;
+        };
+        parse_proc_udp_ports_into(&text, out);
+        out.sort_unstable();
+        out.dedup();
+        true
     }
 }
 
 /// Extracts local UDP ports in listening (07) and connected (01) states from
 /// procfs.
-fn parse_proc_udp_ports(text: &str) -> Vec<u16> {
-    let mut out = Vec::new();
+fn parse_proc_udp_ports_into(text: &str, out: &mut Vec<u16>) {
+    out.clear();
     for line in text.lines().skip(1) {
         let mut it = line.split_whitespace();
         let _sl = it.next();
@@ -351,6 +369,12 @@ fn parse_proc_udp_ports(text: &str) -> Vec<u16> {
             out.push(port);
         }
     }
+}
+
+#[cfg(test)]
+fn parse_proc_udp_ports(text: &str) -> Vec<u16> {
+    let mut out = Vec::new();
+    parse_proc_udp_ports_into(text, &mut out);
     out
 }
 
@@ -543,11 +567,15 @@ fn sweep_family<V: ConeBinding>(
 ) -> usize {
     expired_buf.clear();
     for (key, val) in ob_map.iter().flatten() {
+        let port_host = u16::from_be(val.port_be());
+        // `port == 0` marks an in-flight stale replacement in eBPF.
+        if port_host == 0 {
+            continue;
+        }
         let item_timeout = item_timeout_for(&val, timeout);
         if now.saturating_sub(val.last_seen()) <= item_timeout {
             continue;
         }
-        let port_host = u16::from_be(val.port_be());
         let ib_last = match ib_map.get(&port_host, 0) {
             Ok(iv) if iv.matches_key(&key) => iv.last_seen(),
             _ => 0,
@@ -561,6 +589,9 @@ fn sweep_family<V: ConeBinding>(
     for &(key, port_host) in expired_buf.iter() {
         // Revalidate against datapath refresh.
         if let Ok(cur_val) = ob_map.get(&key, 0) {
+            if cur_val.port_be() == 0 {
+                continue;
+            }
             if u16::from_be(cur_val.port_be()) != port_host {
                 if let Ok(iv) = ib_map.get(&port_host, 0)
                     && iv.matches_key(&key)
@@ -626,7 +657,6 @@ fn sweep_family<V: ConeBinding>(
     swept
 }
 
-/// Collection of eBPF maps used by SessionManager.
 pub struct SessionMaps {
     pub config_map: Array<MapData, GlobalConfig>,
     pub active_map: Array<MapData, u32>,
@@ -855,17 +885,18 @@ impl SessionManager {
 
     /// Synchronizes reserved local UDP service ports using a reusable scanner.
     pub fn reserve_local_ports(&mut self, scanner: &mut LocalUdpScanner) {
-        let p4 = if self.pool_enable_v4 {
-            scanner.scan_local_udp_ports(AF_INET, "/proc/net/udp")
-        } else {
-            None
-        };
-        let p6 = if self.pool_enable_v6 {
-            scanner.scan_local_udp_ports(AF_INET6, "/proc/net/udp6")
-        } else {
-            None
-        };
-        self.apply_reserved_ports(p4.as_deref(), p6.as_deref());
+        let mut ports4 = std::mem::take(&mut scanner.ports4);
+        let mut ports6 = std::mem::take(&mut scanner.ports6);
+        let has_p4 = self.pool_enable_v4
+            && scanner.scan_local_udp_ports_into(AF_INET, "/proc/net/udp", &mut ports4);
+        let has_p6 = self.pool_enable_v6
+            && scanner.scan_local_udp_ports_into(AF_INET6, "/proc/net/udp6", &mut ports6);
+        self.apply_reserved_ports(
+            has_p4.then_some(ports4.as_slice()),
+            has_p6.then_some(ports6.as_slice()),
+        );
+        scanner.ports4 = ports4;
+        scanner.ports6 = ports6;
     }
 
     fn init_family_pool(pool: &mut FamilyPortPool<'_>) {
@@ -1092,7 +1123,7 @@ impl SessionManager {
         }
     }
 
-    fn rebuild_port_queues(&mut self) {
+    fn reconcile_port_bitmaps(&mut self) {
         if self.port_flags.get(&0, 0).unwrap_or(0) != 0 {
             let _ = self.port_flags.set(0, &0, 0);
             if self.pool_enable_v4 {
@@ -1219,7 +1250,7 @@ impl SessionManager {
             while self.events6.next().is_some() {}
         }
         if need_rebuild {
-            self.rebuild_port_queues();
+            self.reconcile_port_bitmaps();
         }
         drained
     }
@@ -1456,7 +1487,6 @@ impl SessionManager {
         }
     }
 
-    /// Performs periodic session expiry and event ring buffer draining.
     pub fn gc_tick(&mut self, now: u32, timeout: u32) -> (usize, usize, bool) {
         self.drain_events(now, timeout);
         let (mut swept4, mut swept6, has_backlog) = self.expiry_tick(now, timeout);
@@ -1468,42 +1498,44 @@ impl SessionManager {
             self.heap4.clear();
             self.heap6.clear();
             if self.pool_enable_v4 {
-                self.freed_ports.clear();
+                let mut freed = std::mem::take(&mut self.freed_ports);
+                freed.clear();
                 swept4 += sweep_family(
                     &mut self.ob_map4,
                     &mut self.ib_map4,
                     &mut self.expired_v4,
                     &mut self.orphan_ports,
-                    &mut self.freed_ports,
+                    &mut freed,
                     now,
                     timeout,
                 );
-                self.freed_ports.sort_unstable();
-                self.freed_ports.dedup();
-                for i in 0..self.freed_ports.len() {
-                    let p = self.freed_ports[i];
+                freed.sort_unstable();
+                freed.dedup();
+                for &p in &freed {
                     self.release_port4(p);
                 }
-                self.freed_ports.clear();
+                freed.clear();
+                self.freed_ports = freed;
             }
             if self.pool_enable_v6 {
-                self.freed_ports.clear();
+                let mut freed = std::mem::take(&mut self.freed_ports);
+                freed.clear();
                 swept6 += sweep_family(
                     &mut self.ob_map6,
                     &mut self.ib_map6,
                     &mut self.expired_v6,
                     &mut self.orphan_ports,
-                    &mut self.freed_ports,
+                    &mut freed,
                     now,
                     timeout,
                 );
-                self.freed_ports.sort_unstable();
-                self.freed_ports.dedup();
-                for i in 0..self.freed_ports.len() {
-                    let p = self.freed_ports[i];
+                freed.sort_unstable();
+                freed.dedup();
+                for &p in &freed {
                     self.release_port6(p);
                 }
-                self.freed_ports.clear();
+                freed.clear();
+                self.freed_ports = freed;
             }
             self.rebuild_heaps(timeout);
             // Catch events emitted concurrently while scanning tables during
@@ -1517,7 +1549,7 @@ impl SessionManager {
             }
         }
 
-        self.rebuild_port_queues();
+        self.reconcile_port_bitmaps();
         (swept4, swept6, has_backlog)
     }
 
@@ -1551,7 +1583,7 @@ mod port_parser_tests {
     use super::{ExpiryStep, LocalUdpScanner, expiry_step, parse_proc_udp_ports, reserved_delta};
 
     #[test]
-    fn reserved_delta_tracks_started_and_stopped_services() {
+    fn test_reserved_delta_tracks_started_and_stopped_services() {
         let previous = [53, 5353, 51820];
         let current = [53, 51820, 60000];
         let (added, removed) = reserved_delta(&previous, &current);
@@ -1560,7 +1592,7 @@ mod port_parser_tests {
     }
 
     #[test]
-    fn expiry_step_treats_zero_as_a_valid_timestamp() {
+    fn test_expiry_step_treats_zero_as_a_valid_timestamp() {
         let cases = [
             (10, 120, Some(0), ExpiryStep::Keep { deadline: 120 }),
             (0, 120, Some(0), ExpiryStep::Keep { deadline: 120 }),
@@ -1575,7 +1607,7 @@ mod port_parser_tests {
     }
 
     #[test]
-    fn parses_listening_and_connected() {
+    fn test_parses_listening_and_connected() {
         let text = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n 0: 00000000:1450 00000000:0000 07 00000000:00000000 00:00000000 00000000  0 0 1 1\n 1: 0100007F:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000  0 0 1 1\n 2: 0100007F:C000 0100007F:0035 01 00000000:00000000 00:00000000 00000000  0 0 1 1\n";
         let ports = parse_proc_udp_ports(text);
         assert!(ports.contains(&0x1450));

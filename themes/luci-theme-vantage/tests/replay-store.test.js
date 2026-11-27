@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { Store, safe } = require('../dev/replay/store');
+const { Store, safe, staticUnder } = require('../dev/replay/store');
 
 function mirror() {
 	const dir = mkTmp('vantage-store-test-');
@@ -57,6 +57,68 @@ test('store: uci overlay is prototype-safe and validates names like libuci', () 
 	assert.equal(s.uciReplace('__proto__', { x: {} }), false);
 	assert.equal(s.uciReplace('extra', { main: { '.type': 'x', '.name': 'main', a: '2' } }), true);
 	assert.deepEqual(s.call('uci', 'get', { config: 'extra', section: 'main', option: 'a' }), { result: [ 0, { value: '2' } ] });
+});
+
+test('static files: served from inside their root only, links followed to their real place', () => {
+	const dir = mkTmp('vantage-static-test-'), root = path.join(dir, 'tree'), out = path.join(dir, 'outside');
+	fs.mkdirSync(path.join(root, 'sub'), { recursive: true });
+	fs.mkdirSync(out);
+	fs.writeFileSync(path.join(root, 'a.js'), 'a');
+	fs.writeFileSync(path.join(root, 'sub', 'b.js'), 'b');
+	fs.writeFileSync(path.join(out, 'private.txt'), 'not for the browser');
+	fs.symlinkSync('sub', path.join(root, 'dark'));                              /* inside, as bootstrap-dark -> bootstrap */
+	fs.symlinkSync(path.join(out, 'private.txt'), path.join(root, 'leak.js'));   /* a file outside */
+	fs.symlinkSync(out, path.join(root, 'away'));                                /* a directory outside */
+	fs.symlinkSync('../outside/private.txt', path.join(root, 'sub', 'rel.js'));  /* the same by a relative link */
+	fs.symlinkSync(root, path.join(dir, 'alias'));                               /* the root itself behind a link */
+	const real = fs.realpathSync(root);
+
+	assert.equal(staticUnder(root, 'a.js'), path.join(real, 'a.js'));
+	assert.equal(staticUnder(root, 'dark/b.js'), path.join(real, 'sub', 'b.js'));
+	assert.equal(staticUnder(path.join(dir, 'alias'), 'sub/b.js'), path.join(real, 'sub', 'b.js'));
+	for (const rel of [ 'leak.js', 'away/private.txt', 'sub/rel.js', '../outside/private.txt', 'sub/../../outside/private.txt', 'missing.js', '' ])
+		assert.equal(staticUnder(root, rel), null, rel);
+	/* a sibling whose name starts like the root's is outside it */
+	fs.mkdirSync(root + '-other');
+	fs.writeFileSync(path.join(root + '-other', 'c.js'), 'c');
+	fs.symlinkSync(path.join(root + '-other', 'c.js'), path.join(root, 'near.js'));
+	assert.equal(staticUnder(root, 'near.js'), null);
+});
+
+test('static files: a recording\'s static tree that is a link out of the recording serves nothing', () => {
+	const dir = mkTmp('vantage-static-test-'), rec = path.join(dir, 'recording'), out = path.join(dir, 'elsewhere');
+	const own = path.join(rec, 'browser-a', 'static', 'luci-static');
+	fs.mkdirSync(own, { recursive: true });
+	fs.writeFileSync(path.join(own, 'a.js'), 'a');
+	fs.mkdirSync(path.join(out, 'luci-static'), { recursive: true });
+	fs.writeFileSync(path.join(out, 'luci-static', 'b.js'), 'not the recording\'s');
+	/* three ways a root leaves the recording: its static/, its luci-static/, its whole run */
+	fs.mkdirSync(path.join(rec, 'browser-b'));
+	fs.symlinkSync(out, path.join(rec, 'browser-b', 'static'));
+	fs.mkdirSync(path.join(rec, 'browser-c', 'static'), { recursive: true });
+	fs.symlinkSync(path.join(out, 'luci-static'), path.join(rec, 'browser-c', 'static', 'luci-static'));
+	fs.mkdirSync(path.join(out, 'run', 'static', 'luci-static'), { recursive: true });
+	fs.writeFileSync(path.join(out, 'run', 'static', 'luci-static', 'b.js'), 'b');
+	fs.symlinkSync(path.join(out, 'run'), path.join(rec, 'browser-d'));
+	const root = d => path.join(rec, d, 'static', 'luci-static');
+
+	assert.equal(staticUnder(root('browser-a'), 'a.js', rec), path.join(fs.realpathSync(own), 'a.js'));
+	for (const d of [ 'browser-b', 'browser-c', 'browser-d' ]) {
+		assert.equal(staticUnder(root(d), 'b.js', rec), null, d);
+		/* without the recording named, the link's target would be the tree: what the name is for */
+		assert.notEqual(staticUnder(root(d), 'b.js'), null, d);
+	}
+	/* the recording itself may be reached through a link, and a link inside it may point inside it */
+	fs.symlinkSync(rec, path.join(dir, 'alias'));
+	assert.equal(staticUnder(path.join(dir, 'alias', 'browser-a', 'static', 'luci-static'), 'a.js', path.join(dir, 'alias')), path.join(fs.realpathSync(own), 'a.js'));
+	fs.mkdirSync(path.join(rec, 'browser-e'));
+	fs.symlinkSync(path.join(rec, 'browser-a', 'static'), path.join(rec, 'browser-e', 'static'));
+	assert.equal(staticUnder(root('browser-e'), 'a.js', rec), path.join(fs.realpathSync(own), 'a.js'));
+	/* a root that is the recording's sibling by name is outside it */
+	fs.mkdirSync(path.join(rec + '-2', 'static', 'luci-static'), { recursive: true });
+	fs.writeFileSync(path.join(rec + '-2', 'static', 'luci-static', 'b.js'), 'b');
+	fs.symlinkSync(rec + '-2', path.join(rec, 'browser-f'));
+	assert.equal(staticUnder(root('browser-f'), 'b.js', rec), null);
 });
 
 test('store: plugins answer their objects and are listed', () => {

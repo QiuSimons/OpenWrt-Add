@@ -571,6 +571,178 @@ test('Appearance: the templates and the login page read the same keys, in the sa
 	assert.match(src, /lookWrite\(\{ \[name\]: value \}\)/);
 });
 
+/* Two tabs of one login share rpcd's staging: a save is revert, set,
+   commit, and one tab's revert between another's set and commit dropped
+   that tab's pick, which it still reported saved. One tab saves at a
+   time: under a Web Lock, or, where the browser has none (a page not
+   served over HTTPS), under a lock kept in its storage. */
+const lookTabs = () => {
+	const pick = name => { const at = src.indexOf('function ' + name + '('); return src.slice(at, src.indexOf('\n}\n', at) + 2); };
+	const code = [ /^const LOOK_LOCK = .*$/m, /^const LOOK_LOCK_TICK = .*$/m, /^const LOOK_LOCK_MS = .*$/m, /^function storageGet\(k\) \{.*\}$/m, /^function storageSet\(k, v\) \{.*\}$/m ]
+		.map(re => re.exec(src)[0]).concat(pick('lookTurn'), pick('lookWrite'), 'return lookWrite;').join('\n');
+	const tick = () => new Promise(r => setImmediate(r));
+	/* the browser, the same for its tabs: its storage, its clock and its timers. A call to the
+	   router answers within the moment; a timer waits until go() lets the clock reach it */
+	const t = { tick, now: 1700000000000, timers: [], store: {}, staged: {}, saved: {}, calls: [], refuse: 0, locks: null, delay: 0 };
+	/* a call's answer: within the moment, or t.delay ms later */
+	const answer = () => (t.delay ? new Promise(r => { t.timers.push({ at: t.now + t.delay, f: r }); }) : tick());
+	t.storage = {
+		getItem: k => (Object.prototype.hasOwnProperty.call(t.store, k) ? t.store[k] : null),
+		setItem: (k, v) => { t.store[k] = String(v); },
+		removeItem: k => { delete t.store[k]; }
+	};
+	t.lock = () => (t.store['vantage.look.save'] ? JSON.parse(t.store['vantage.look.save']) : null);
+	/* a tab: lookWrite as the theme has it, over the login's staging on the router */
+	t.tab = (name, env) => new Function('callLookRevert', 'callLookSet', 'callLookCommit', 'navigator', 'localStorage', 'setTimeout', 'Date', code)(
+		() => { t.calls.push(name + ' revert'); t.staged = {}; return answer(); },
+		(c, sec, values) => { t.calls.push(name + ' set'); Object.assign(t.staged, values); return answer(); },
+		() => {
+			t.calls.push(name + ' commit');
+			if (t.refuse-- > 0) return answer().then(() => { throw new Error('refused'); });
+			Object.assign(t.saved, t.staged); t.staged = {};
+			return answer();
+		},
+		t.locks ? { locks: t.locks } : {}, env && 'storage' in env ? env.storage : t.storage,
+		(f, ms) => { t.timers.push({ at: t.now + ms, f }); }, { now: () => t.now });
+	/* let it run until `done` holds: what is due at once, then the next timer, and so on */
+	t.go = async done => {
+		for (let i = 0; i < 2000; i++) {
+			for (let j = 0; j < 4; j++) { if (done()) return; await tick(); }
+			if (done()) return;
+			const next = t.timers.sort((x, y) => x.at - y.at).shift();
+			if (!next) continue;
+			t.now = Math.max(t.now, next.at);
+			next.f();
+		}
+		throw new Error('never done: ' + JSON.stringify(t.calls));
+	};
+	/* a save, and whether it has ended */
+	t.save = (tab, values) => { const o = { ended: false, error: null }; tab(values).then(() => { o.ended = true; }, e => { o.ended = true; o.error = e; }); return o; };
+	return t;
+};
+
+test('Appearance: two tabs saving at once both keep their pick, under a Web Lock', async () => {
+	const t = lookTabs(), held = {}, asked = [];
+	/* the browser's Web Locks: one holder of a name at a time */
+	t.locks = { request(n, f) { asked.push(n); const run = (held[n] || Promise.resolve()).then(() => f({ name: n })); held[n] = run.then(() => {}, () => {}); return run; } };
+	const a = t.tab('a'), b = t.tab('b');
+	const first = t.save(a, { theme: 'dark' });
+	await t.go(() => t.calls.length >= 2);      /* a has set its pick; its commit is still to come */
+	assert.deepEqual(t.calls, [ 'a revert', 'a set' ]);
+	const second = t.save(b, { units: 'bytes' });
+	await t.go(() => first.ended && second.ended);
+	assert.deepEqual(t.saved, { theme: 'dark', units: 'bytes' }, 'both picks are saved');
+	assert.deepEqual(t.calls, [ 'a revert', 'a set', 'a commit', 'b revert', 'b set', 'b commit' ], 'b waited for a');
+	assert.deepEqual(asked, [ 'vantage.look.save', 'vantage.look.save' ], 'one lock name for every save');
+	assert.deepEqual([ t.store, t.now ], [ {}, 1700000000000 ], 'nothing kept in storage, nothing waited for');
+	/* a refused commit is still taken back and reported, and the next save is not held up */
+	t.refuse = 1; t.calls = [];
+	const bad = t.save(a, { theme: 'light' }), next = t.save(b, { units: 'bits' });
+	await t.go(() => bad.ended && next.ended);
+	assert.match(String(bad.error), /refused/);
+	assert.deepEqual(t.calls, [ 'a revert', 'a set', 'a commit', 'a revert', 'b revert', 'b set', 'b commit' ]);
+	assert.deepEqual(t.saved, { theme: 'dark', units: 'bits' });
+	/* Appearance and Customize's Done are the only saves, and both go through it */
+	assert.equal(src.split('lookWrite(').length - 1, 3, 'defined once, called twice');
+});
+
+test('Appearance: two tabs saving at once both keep their pick without Web Locks: the lock kept in storage', async () => {
+	const t = lookTabs(), a = t.tab('a'), b = t.tab('b'), t0 = t.now;
+	const first = t.save(a, { theme: 'dark' });
+	await t.go(() => t.calls.length >= 2);      /* a has set its pick; its commit is still to come */
+	assert.deepEqual(t.calls, [ 'a revert', 'a set' ]);
+	const held = t.lock();
+	const second = t.save(b, { units: 'bytes' });
+	await t.go(() => first.ended && second.ended);
+	assert.deepEqual(t.saved, { theme: 'dark', units: 'bytes' }, 'both picks are saved');
+	assert.deepEqual(t.calls, [ 'a revert', 'a set', 'a commit', 'b revert', 'b set', 'b commit' ], 'b waited for a');
+	assert.deepEqual([ typeof held.token, held.at ], [ 'string', t0 ], 'a held the lock, from when it asked');
+	assert.deepEqual(t.store, {}, 'the lock is gone when the last save is');
+	assert.ok(t.now - t0 < 1000, 'a matter of ticks');
+	/* both ask in the same moment, and b has not yet seen a's lock when it writes its own (a tab
+	   sees another's write a little late): the later write stands, and a, finding the key no longer
+	   its own after its tick, waits its turn */
+	t.calls = [];
+	let seen = 0;
+	const late = { getItem: k => (seen++ ? t.storage.getItem(k) : null), setItem: t.storage.setItem, removeItem: t.storage.removeItem };
+	const x = t.save(a, { theme: 'light' }), y = t.save(t.tab('b', { storage: late }), { units: 'bits' });
+	await t.go(() => x.ended && y.ended);
+	assert.deepEqual(t.calls, [ 'b revert', 'b set', 'b commit', 'a revert', 'a set', 'a commit' ]);
+	assert.deepEqual([ t.saved, t.store ], [ { theme: 'light', units: 'bits' }, {} ]);
+	/* a refused commit is reported and gives the lock back */
+	t.refuse = 1;
+	const bad = t.save(a, { theme: 'dark' });
+	await t.go(() => bad.ended);
+	assert.match(String(bad.error), /refused/);
+	assert.deepEqual([ t.saved.theme, t.store ], [ 'light', {} ]);
+});
+
+test('Appearance: another tab\'s lock that lands right after this tab wrote its own is waited for, not saved past', async () => {
+	/* b's token lands between a's write and a's look at what it wrote. That look is for storage
+	   that keeps nothing; taken for the same, a saved at once without the lock, beside b */
+	const t = lookTabs();
+	t.delay = 30;                                /* the router takes a moment for each call */
+	let seen = 0, second = null;
+	/* b's view of the storage is a moment old when it asks: it sees no lock, and writes its own */
+	const late = { getItem: k => (seen++ ? t.storage.getItem(k) : null), setItem: t.storage.setItem, removeItem: t.storage.removeItem };
+	const b = t.tab('b', { storage: late });
+	/* and it asks within a's write of its lock */
+	const racing = { getItem: t.storage.getItem, removeItem: t.storage.removeItem,
+		setItem: (k, v) => { t.storage.setItem(k, v); if (!second) second = t.save(b, { units: 'bytes' }); } };
+	const first = t.save(t.tab('a', { storage: racing }), { theme: 'dark' });
+	assert.ok(second, 'b asked within a\'s write');
+	await t.go(() => first.ended && second.ended);
+	assert.deepEqual(t.saved, { theme: 'dark', units: 'bytes' }, 'both picks are saved');
+	assert.deepEqual(t.calls, [ 'b revert', 'b set', 'b commit', 'a revert', 'a set', 'a commit' ], 'a waited for b');
+	assert.deepEqual([ first.error, second.error, t.store ], [ null, null, {} ]);
+});
+
+test('Appearance: the lock kept in storage never stops a save: one left behind is taken, a wait ends, storage that keeps nothing is done without', async () => {
+	const KEY = 'vantage.look.save';
+	/* left by a tab closed mid-save, more than five seconds ago: taken at once */
+	let t = lookTabs(), t0 = t.now;
+	t.store[KEY] = JSON.stringify({ token: 'gone', at: t0 - 5000 });
+	let s = t.save(t.tab('a'), { theme: 'dark' });
+	await t.go(() => t.calls.length >= 1);
+	assert.notEqual(t.lock().token, 'gone', 'the save holds the lock itself');
+	await t.go(() => s.ended);
+	assert.deepEqual([ t.saved, t.store, t.now - t0 ], [ { theme: 'dark' }, {}, 50 ], 'after its one tick');
+	/* held by a tab that hangs: waited for until it is that old, then taken */
+	t = lookTabs(); t0 = t.now;
+	t.store[KEY] = JSON.stringify({ token: 'hung', at: t0 - 1000 });
+	s = t.save(t.tab('a'), { theme: 'dark' });
+	await t.go(() => s.ended);
+	assert.deepEqual([ t.saved, t.store ], [ { theme: 'dark' }, {} ]);
+	assert.ok(t.now - t0 >= 4000 && t.now - t0 <= 4100, 'waited ' + (t.now - t0) + ' ms');
+	/* tabs that keep taking it: the wait ends after five seconds and the save goes ahead, the other's lock left alone */
+	t = lookTabs(); t0 = t.now;
+	t.storage.getItem = k => (k === KEY ? JSON.stringify({ token: 'busy', at: t.now }) : null);
+	s = t.save(t.tab('a'), { theme: 'dark' });
+	await t.go(() => s.ended);
+	assert.deepEqual([ t.saved, s.error, t.now - t0 ], [ { theme: 'dark' }, null, 5000 ]);
+	/* a clock set back while it waits: no waiting on that */
+	t = lookTabs(); t0 = t.now;
+	t.store[KEY] = JSON.stringify({ token: 'held', at: t0 });
+	s = t.save(t.tab('a'), { theme: 'dark' });
+	await t.go(() => t.timers.length === 1);
+	t.now = t0 - 3600000; t.timers[0].at = t.now;
+	await t.go(() => s.ended);
+	assert.deepEqual(t.saved, { theme: 'dark' });
+	/* storage that throws, keeps nothing, or is not there: saved as before, at once */
+	const broken = [
+		{ getItem() { throw new Error('SecurityError'); }, setItem() { throw new Error('SecurityError'); }, removeItem() { throw new Error('SecurityError'); } },
+		{ getItem: () => null, setItem() { throw new Error('QuotaExceededError'); }, removeItem() {} },
+		{ getItem: () => null, setItem() {}, removeItem() {} },
+		undefined, null
+	];
+	for (const storage of broken) {
+		t = lookTabs();
+		s = t.save(t.tab('a', { storage }), { theme: 'dark' });
+		for (let i = 0; i < 8; i++) await t.tick();
+		assert.deepEqual([ s.ended, s.error, t.saved, t.calls, t.timers.length ], [ true, null, { theme: 'dark' }, [ 'a revert', 'a set', 'a commit' ], 0 ]);
+	}
+});
+
 test('Customize: the theme, the template and the dashboard keep the same chart styles and layout form', () => {
 	const { load } = require('./luci-stub');
 	const layout = load('vantage.layout'), series = load('vantage.series');
@@ -686,7 +858,7 @@ test('update check: reads the theme\'s version from the package list, compares, 
 function updateBrowser(store) {
 	require('./luci-stub');      /* String.prototype.format */
 	const DAY = 24 * 3600 * 1000;
-	const b = { store: store || {}, now: 1700000000000, asked: [], saved: [], list: null, size: null, read: 0, full: false, visible: true, auth: true, idle: true, DAY };
+	const b = { store: store || {}, now: 1700000000000, asked: [], saved: [], list: null, size: null, read: 0, stream: null, pulled: 0, cancelled: 0, full: false, visible: true, auth: true, idle: true, DAY };
 	const text = t => ({ nodeType: 3, data: String(t) });
 	const E = (tag, attrs, kids) => {
 		const el = {
@@ -714,12 +886,23 @@ function updateBrowser(store) {
 		removeItem: k => { delete b.store[k]; }
 	};
 	/* the list: a string answers 200 with it, a number is that HTTP status, null no answer at all;
-	   b.size: the length its host says it has (Content-Length), b.read: how often its text was taken */
+	   b.size: the length its host says it has (Content-Length), b.read: how often its text was taken.
+	   b.stream: the list as the pieces it arrives in, from a browser that hands them out one by one;
+	   b.pulled: how many were asked for (its end is one more), b.cancelled: the reading was called off */
 	const fetch = (url, opts) => {
 		b.asked.push({ url, opts });
-		if (b.list == null) return Promise.reject(new TypeError('Failed to fetch'));
+		if (b.list == null && !b.stream) return Promise.reject(new TypeError('Failed to fetch'));
 		const headers = { get: k => (String(k).toLowerCase() === 'content-length' && b.size != null ? String(b.size) : null) };
-		return Promise.resolve(typeof b.list === 'number' ? { ok: false, status: b.list, headers } : { ok: true, status: 200, headers, text: () => { b.read++; return Promise.resolve(b.list); } });
+		if (typeof b.list === 'number') return Promise.resolve({ ok: false, status: b.list, headers });
+		const res = { ok: true, status: 200, headers, text: () => { b.read++; return Promise.resolve(b.stream ? b.stream.join('') : b.list); } };
+		if (b.stream) {
+			let i = 0;
+			res.body = { getReader: () => ({
+				read: () => { b.pulled++; return Promise.resolve(i < b.stream.length ? { done: false, value: new Uint8Array(Buffer.from(b.stream[i++])) } : { done: true, value: undefined }); },
+				cancel: () => { b.cancelled++; i = b.stream.length; return Promise.resolve(); }
+			}) };
+		}
+		return Promise.resolve(res);
 	};
 	const rpc = { declare: spec => (...args) => { b.saved.push([ spec.object, spec.method ].concat(args)); return Promise.resolve({}); } };
 	b.settle = async () => { for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r)); };
@@ -735,8 +918,10 @@ function updateBrowser(store) {
 			addEventListener: (t, f) => { (heard[t] = heard[t] || []).push(f); }
 		};
 		const window = b.idle ? { requestIdleCallback: f => { idle.push(f); } } : {};
-		const proto = new Function('baseclass', 'ui', 'rpc', 'host', 'E', 'L', '_', 'document', 'window', 'localStorage', 'fetch', 'Date', 'setTimeout', 'clearTimeout', src)(
-			{ extend: x => x }, {}, rpc, {}, E, {}, t => t, document, window, localStorage, fetch, { now: () => b.now }, (f, ms) => { timers.push({ f, ms }); return timers.length; }, () => {});
+		/* its own Web Locks (one tab here), so a save waits on neither Node's nor a timer of this page */
+		const navigator = { locks: { request: (n, f) => Promise.resolve().then(() => f({ name: n })) } };
+		const proto = new Function('baseclass', 'ui', 'rpc', 'host', 'E', 'L', '_', 'document', 'window', 'localStorage', 'fetch', 'Date', 'setTimeout', 'clearTimeout', 'navigator', src)(
+			{ extend: x => x }, {}, rpc, {}, E, {}, t => t, document, window, localStorage, fetch, { now: () => b.now }, (f, ms) => { timers.push({ f, ms }); return timers.length; }, () => {}, navigator);
 		const root = E('html', { 'data-vt-look-save': save || 'no' });
 		const shell = Object.assign(Object.create(proto), { root });
 		/* what __init__ does for it (setupTheme's last line, then setupUpdate) */
@@ -973,6 +1158,30 @@ test('daily update check: a list larger than a list is, is not read; where the t
 	long.list = 'x'.repeat(LIMIT) + '\n\n' + long.packages(NEWER);
 	p = await long.page();
 	assert.deepEqual([ long.read, p.dot() ], [ 1, false ], 'the entry lies past what is looked at');
+	/* no length given, from a browser that hands the list out as it arrives (also what a compressed
+	   one looks like): read up to the limit and called off there, not taken whole */
+	const endless = updateBrowser({ 'vantage.update.auto': 'on' });
+	endless.stream = Array(64).fill('x'.repeat(65536)).concat('\n\n' + endless.packages(NEWER));
+	p = await endless.page();
+	assert.deepEqual([ endless.asked.length, endless.pulled, endless.cancelled, endless.read, p.dot() ], [ 1, LIMIT / 65536, 1, 0, false ],
+		'four pieces of 64 KiB, then no more');
+	assert.deepEqual(endless.last(), { at: endless.now, latest: null });
+	/* a list within the limit is read to its end, its entry found across two pieces */
+	const pieces = updateBrowser({ 'vantage.update.auto': 'on' });
+	const whole = pieces.packages(NEWER), cut = whole.indexOf('luci-theme-vantage') + 4;
+	pieces.stream = [ whole.slice(0, cut), whole.slice(cut) ];
+	p = await pieces.page();
+	assert.deepEqual([ pieces.pulled, pieces.cancelled, pieces.read, p.dot() ], [ 3, 0, 0, true ]);
+	/* the limit is in bytes, inside a piece too: an entry that starts within it and ends past it is not one */
+	const edge = updateBrowser({ 'vantage.update.auto': 'on' });
+	const entry = '\n\n' + edge.packages(NEWER);
+	edge.stream = [ 'x'.repeat(LIMIT - entry.indexOf('Version: ' + NEWER)) + entry, 'x'.repeat(65536) ];
+	p = await edge.page();
+	assert.deepEqual([ edge.pulled, edge.cancelled, p.dot() ], [ 1, 1, false ]);
+	const inside = updateBrowser({ 'vantage.update.auto': 'on' });
+	inside.stream = [ 'x'.repeat(LIMIT - entry.length) + entry, 'x'.repeat(65536) ];
+	p = await inside.page();
+	assert.deepEqual([ inside.pulled, inside.cancelled, p.dot() ], [ 1, 1, true ], 'all of it within the limit');
 	/* storage that takes no more: every page would find no try kept and ask again, so the daily check asks nothing */
 	const full = updateBrowser({ 'vantage.update.auto': 'on' });
 	full.full = true; full.list = full.packages(NEWER);

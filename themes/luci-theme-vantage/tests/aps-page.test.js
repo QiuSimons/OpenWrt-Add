@@ -447,6 +447,18 @@ test('aps: Add sends the normalised reply, the address only when changed, and sa
 	REPLIES['luci.vantage.pair add_ap'] = () => Promise.resolve({ error: 'invalid' });
 	await self.submitAdd();
 	assert.match(f.err.text, /^That is not an access point's reply/, 'no override: the reply is wrong');
+	/* saved, and the collector's service did not start: said, the form stays for a second try, the row shows behind it;
+	   the same call again, answered with the service running, closes it */
+	self.el.addFlow.hidden = false;
+	const before = self.refreshed;
+	REPLIES['luci.vantage.pair add_ap'] = (...a) => { calls.push(a); return Promise.resolve({ id: '0123456789abcdef', collector: false }); };
+	await self.submitAdd();
+	assert.equal(f.err.text, 'The access point is saved, but this device could not set up the service that reads it. Try again.');
+	assert.deepEqual([ f.err.hidden, self.el.addFlow.hidden, f.go.disabled, self.refreshed ], [ false, false, false, before + 1 ]);
+	REPLIES['luci.vantage.pair add_ap'] = (...a) => { calls.push(a); return Promise.resolve({ id: '0123456789abcdef', collector: true }); };
+	await self.submitAdd();
+	assert.deepEqual(calls.slice(-2), [ [ ap(K, '198.51.100.20', 2222, 'ap-garage'), undefined ], [ ap(K, '198.51.100.20', 2222, 'ap-garage'), undefined ] ], 'the same call again');
+	assert.deepEqual([ f.err.hidden, self.el.addFlow.hidden ], [ true, true ]);
 	REPLIES['luci.vantage.pair add_ap'] = () => Promise.reject(new Error('Permission denied'));
 	await self.submitAdd();
 	assert.equal(f.err.text, 'The request failed: Permission denied');
@@ -666,6 +678,23 @@ test('aps render: the routers that may read this device, the SSH warning, the re
 		assert.equal(off.el.againBox.hidden, true, ssh);
 		assert.equal(rows(off.el.routerRows).length, 1);
 	}
+	/* routers let in, and a listener that runs a command of its own: what their keys do there, in place of "pairing is off";
+	   they can still be revoked. Without a router let in there is nothing to say but that */
+	const forced = mount(statusOf(paired, { ap: { ssh: 'unsupported', forced: true, routers: [ { key: KEYS[0], name: 'gw-0' } ], reply: null } }), null);
+	assert.deepEqual(notes(tile(forced, 'ap')), [ 'A Dropbear listener on this device runs a command of its own for every login (ForceCommand in /etc/config/dropbear). ' +
+		'The routers below are still let in, and through that listener their keys run that command as root instead of the report. Remove the command, or revoke the routers.' ]);
+	assert.deepEqual([ forced.el.allowBtn.hidden, rows(forced.el.routerRows).map(r => r.act.text) ], [ true, [ 'Revoke' ] ]);
+	/* and the tile's own sentence, that a router let in fetches the report "and nothing else", is not said beside it */
+	const leadOf = t => tile(t, 'ap').all('vt-pair-lead')[0];
+	assert.match(leadOf(self).text, /and nothing else\.$/);
+	assert.deepEqual([ leadOf(self).hidden, leadOf(forced).hidden ], [ false, true ]);
+	/* it comes back with the warning gone (the command removed), and stays beside any other SSH warning */
+	forced.status = view.normStatus(statusOf(paired, { ap: { ssh: 'ok', routers: [ { key: KEYS[0], name: 'gw-0' } ], reply: null } }));
+	forced.paintRouters();
+	assert.deepEqual([ leadOf(forced).hidden, notes(tile(forced, 'ap')) ], [ false, [] ]);
+	assert.equal(leadOf(mount(statusOf(paired, { ap: { ssh: 'unsupported', routers: [ { key: KEYS[0], name: 'gw-0' } ], reply: null } }), null)).hidden, false);
+	assert.deepEqual(notes(tile(mount(statusOf(paired, { ap: { ssh: 'unsupported', forced: true, routers: [], reply: null } }), null), 'ap')), [ view.sshProblem('unsupported') ]);
+	assert.equal(view.forcedProblem({ forced: false, routers: [ { key: KEYS[0], name: 'gw-0' } ] }), null);
 	const lone = mount(statusOf([], { ap: { ssh: 'ok', routers: [], reply: null } }), null);
 	assert.match(lone.el.routerRows.text, /^No router can read this access point/);
 	assert.equal(lone.el.againBox.hidden, true);
@@ -837,6 +866,25 @@ test('aps render: confirming a removal or a revocation; the focus returns to whe
 	assert.equal(target.act.isConnected, false);
 	assert.equal(FOCUS[FOCUS.length - 1], self.el.addBtn, 'its row is gone');
 
+	/* the last one removed and the collector's service not stopped: said, and the dialog stays for a second try,
+	   which the device answers as gone already once it has stopped it */
+	const lastOne = rows(self.el.apRows)[0];
+	lastOne.act.click();
+	REPLIES['luci.vantage.pair remove_ap'] = () => Promise.resolve({ ok: true, collector: false });
+	buttons()[1].click();
+	await settle();
+	assert.ok(UI.modal, 'still open');
+	assert.equal(alertText().text, 'The access point is removed, but this device could not shut down the service that read it. Try again.');
+	assert.equal(buttons()[1].disabled, false);
+	REPLIES['luci.vantage.pair remove_ap'] = () => Promise.resolve({ error: 'unknown', collector: false });
+	buttons()[1].click();
+	await settle();
+	assert.ok(UI.modal, 'not stopped yet');
+	REPLIES['luci.vantage.pair remove_ap'] = () => Promise.resolve({ error: 'unknown' });
+	buttons()[1].click();
+	await settle();
+	assert.equal(UI.modal, null);
+
 	/* gone already (unknown): closes all the same; the status could not be
 	   read, so the row is still there and gets the focus back */
 	const still = rows(self.el.apRows)[0];
@@ -936,10 +984,12 @@ test('aps: the network an access point was paired on is said in its row, as text
 test('aps: status read defensively; a poll keeps the last status when it fails and drops the report', async () => {
 	assert.equal(view.normStatus(null), null);
 	assert.equal(view.normStatus([]), null);
-	assert.deepEqual(view.normStatus({}), { code: null, aps: [], ssh: null, routers: [], reply: null, apsUnread: false, keysUnread: false });
+	assert.deepEqual(view.normStatus({}), { code: null, aps: [], ssh: null, routers: [], reply: null, forced: false, apsUnread: false, keysUnread: false });
 	const s = view.normStatus({ router: { code: 'c', aps: [ { id: 'a', name: 'n', addr: '192.0.2.10' }, { name: 'no id' }, 3 ] },
 		ap: { ssh: 'ok', routers: [ { key: 'k', name: 'gw' }, { name: 'no key' } ], reply: 5 } });
-	assert.deepEqual(s, { code: 'c', aps: [ { id: 'a', name: 'n', addr: '192.0.2.10', port: 22 } ], ssh: 'ok', routers: [ { key: 'k', name: 'gw' } ], reply: null, apsUnread: false, keysUnread: false });
+	assert.deepEqual(s, { code: 'c', aps: [ { id: 'a', name: 'n', addr: '192.0.2.10', port: 22 } ], ssh: 'ok', routers: [ { key: 'k', name: 'gw' } ], reply: null, forced: false, apsUnread: false, keysUnread: false });
+	/* only true says a listener's own command is what the routers' keys run */
+	assert.deepEqual([ true, 1, 'yes', null ].map(f => view.normStatus({ ap: { forced: f } }).forced), [ true, false, false, false ]);
 	/* only true counts as unread; the state alone says it of the keys too */
 	assert.deepEqual([ 'apsUnread', 'keysUnread' ].map(k => view.normStatus({ router: { unread: true }, ap: { unread: true } })[k]), [ true, true ]);
 	assert.deepEqual([ 'apsUnread', 'keysUnread' ].map(k => view.normStatus({ router: { unread: 1 }, ap: { unread: 'yes' } })[k]), [ false, false ]);
@@ -1073,8 +1123,11 @@ test('pair stand-in: add_ap and remove_ap', () => {
 	assert.equal(s.aps.find(a => a.id === r.id).mac, MAC, 'kept with the pairing');
 	const up = data(s, 'add_ap', { code: ap(pair.fakeKey('host upper'), '192.0.2.21', 22, 'upper', '00:00:5E:00:53:0A') }).id;
 	assert.equal(s.aps.find(a => a.id === up).mac, '00:00:5e:00:53:0a');
-	assert.deepEqual(data(s, 'remove_ap', { id: up }), { ok: true });
+	assert.deepEqual(data(s, 'remove_ap', { id: up }), { ok: true, collector: true });
 	assert.deepEqual(data(s, 'add_ap', { code: ap(K, '192.0.2.99', 22, 'other-name') }), { error: 'duplicate' }, 'the same host key');
+	/* the same pairing again: its id again, and no second entry */
+	assert.deepEqual(data(s, 'add_ap', { code: ap(K, '2001:db8::10', 2222, 'ap-x') }), { id: r.id, collector: true });
+	assert.equal(s.aps.filter(a => a.key === K).length, 1);
 	/* the address: another valid one replaces the reply's, an empty one is none */
 	const k2 = pair.fakeKey('host two'), k3 = pair.fakeKey('host three');
 	for (const bad of [ 'fe80::1', '192.0.2.20:22', '::1', '0::1', ip(169, 254, 3, 4), '192.0.2.20\0' ])
@@ -1087,7 +1140,7 @@ test('pair stand-in: add_ap and remove_ap', () => {
 	/* 16 at most */
 	for (let i = list.length; i < pair.MAX_APS; i++) assert.ok(data(s, 'add_ap', { code: ap(pair.fakeKey('n' + i), '192.0.2.40', 22, 'n' + i) }).id);
 	assert.deepEqual(data(s, 'add_ap', { code: ap(pair.fakeKey('one more'), '192.0.2.40', 22, 'more') }), { error: 'full' });
-	assert.deepEqual(data(s, 'remove_ap', { id: two }), { ok: true });
+	assert.deepEqual(data(s, 'remove_ap', { id: two }), { ok: true, collector: true });
 	assert.deepEqual(data(s, 'remove_ap', { id: two }), { error: 'unknown' });
 	assert.deepEqual(data(s, 'remove_ap', { id: '__proto__' }), { error: 'unknown' });
 	assert.equal(data(s, 'status', {}).router.aps.length, pair.MAX_APS - 1);

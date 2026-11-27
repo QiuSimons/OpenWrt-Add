@@ -5,7 +5,7 @@
 
 version: 2
 updates:
-  # 自动更新 GitHub Actions 工作流中的 Action 版本
+  # Keep GitHub Actions versions up to date
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -15,7 +15,7 @@ updates:
       include: "scope"
     open-pull-requests-limit: 10
 
-  # 自动更新 Rust 工作区依赖 (flowcone-common 与 flowcone-daemon)
+  # Keep Rust workspace dependencies updated (flowcone-common and flowcone-daemon)
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
@@ -30,7 +30,7 @@ updates:
         patterns:
           - "*"
 
-  # 自动更新 eBPF 独立子工程依赖 (aya-ebpf 等)
+  # Keep standalone eBPF crate dependencies updated (aya-ebpf, etc.)
   - package-ecosystem: "cargo"
     directory: "/crates/flowcone-ebpf"
     schedule:

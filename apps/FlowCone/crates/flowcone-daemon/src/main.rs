@@ -37,11 +37,12 @@ const SIGHUP: i32 = 1;
 /// Interval for periodic TCX tail verification.
 const REATTACH_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Interval for periodic local UDP service port reservation scans.
 const RESERVE_SCAN_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Interval for liveness set timeout refreshes.
 const LIVENESS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Coalesces periodic 5s maintenance timers within a single wakeup window.
+const PERIODIC_COALESCE_SLACK: Duration = Duration::from_millis(500);
 
 /// Backoff before retrying transient firewall/attach failures.
 const RETRY_INTERVAL: Duration = Duration::from_secs(2);
@@ -60,7 +61,6 @@ static EBPF_BYTES: &[u8] =
 static RUNNING: AtomicBool = AtomicBool::new(true);
 static RESYNC_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-/// Installs async-signal-safe signal handlers.
 fn setup_signals(sig_write: OwnedFd, wake_write: OwnedFd) {
     let sig_write = Arc::new(sig_write);
     let wake_write = Arc::new(wake_write);
@@ -87,6 +87,10 @@ fn setup_signals(sig_write: OwnedFd, wake_write: OwnedFd) {
 fn get_monotonic_coarse_ns() -> u64 {
     let ts = rustix::time::clock_gettime(rustix::time::ClockId::MonotonicCoarse);
     (ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64)
+}
+
+fn get_monotonic_coarse_sec() -> u32 {
+    flowcone_common::monotonic_ns_to_sec(get_monotonic_coarse_ns())
 }
 
 pub fn resolve_effective_v6(enable_v6: bool, wan_ip6: [u8; 16], has_masq: bool) -> u32 {
@@ -167,7 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(CliAction::Run(c)) => c,
         Ok(CliAction::ExitOk) => return Ok(()),
         Err(e) => {
-            eprintln!("Error: {}", e);
+            eprintln!("flowcone: error: {}", e);
             std::process::exit(1);
         }
     };
@@ -178,16 +182,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.enable_v4, config.enable_v6, config.min_port, config.max_port, config.timeout_sec
     );
 
-    // Shutdown notification self-pipe.
     let (sig_read_end, sig_write_end) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)?;
-
-    // Worker wake self-pipe.
     let (wake_read_end, wake_write_end) = rustix::pipe::pipe_with(
         rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
     )?;
 
-    // React to netlink link/address events instead of polling.
-    let monitor = match netlink::EventMonitor::new() {
+    let mut monitor = match netlink::EventMonitor::new() {
         Ok(monitor) => Some(monitor),
         Err(e) => {
             eprintln!(
@@ -240,14 +240,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(n) = poll(wait_slice, Some(&wait_ts))
                 && n > 0
             {
-                if wait_slice[0].revents().contains(PollFlags::IN) {
-                    break;
-                }
-                if let Some(ref m) = monitor
+                let sig_ready = wait_slice[0].revents().contains(PollFlags::IN);
+                let mon_ready = monitor.is_some()
                     && wait_slice[1]
                         .revents()
-                        .intersects(PollFlags::IN | PollFlags::ERR)
-                {
+                        .intersects(PollFlags::IN | PollFlags::ERR);
+                if sig_ready {
+                    break;
+                }
+                if mon_ready && let Some(ref mut m) = monitor {
                     let _ = m.drain_relevant(0, &config.iface);
                 }
             }
@@ -259,7 +260,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !RUNNING.load(Ordering::Relaxed) {
         return Ok(());
     }
-    if let Some(ref m) = monitor {
+    if let Some(ref mut m) = monitor {
         let _ = m.drain_relevant(0, &config.iface);
     }
 
@@ -391,7 +392,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut retry_deadline: Option<Instant> = None;
 
     while RUNNING.load(Ordering::SeqCst) {
-        // Calculate poll timeout based on nearest timer.
         let now_instant = Instant::now();
         let time_to_gc = gc_interval.saturating_sub(last_gc_run.elapsed());
         let time_to_reserve = RESERVE_SCAN_INTERVAL.saturating_sub(last_reserve_scan.elapsed());
@@ -437,63 +437,76 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tv_nsec: next_wake.subsec_nanos() as i64,
         };
 
-        let (ev4_fd, ev6_fd) = session_mgr.event_fds();
-        let mon_borrowed = monitor
-            .as_ref()
-            .map(|m| m.as_fd())
-            .unwrap_or(sig_read_end.as_fd());
-        let mut poll_fds = [
-            PollFd::new(&sig_read_end, PollFlags::IN),
-            PollFd::new(&wake_read_end, PollFlags::IN),
-            PollFd::new(
-                &ev4_fd,
-                if config.enable_v4 {
-                    PollFlags::IN
-                } else {
-                    PollFlags::empty()
-                },
-            ),
-            PollFd::new(
-                &ev6_fd,
-                if config.enable_v6 {
-                    PollFlags::IN
-                } else {
-                    PollFlags::empty()
-                },
-            ),
-            PollFd::new(
-                &mon_borrowed,
-                if monitor.is_some() {
-                    PollFlags::IN | PollFlags::ERR
-                } else {
-                    PollFlags::empty()
-                },
-            ),
-        ];
-        let poll_slice = if monitor.is_some() {
-            &mut poll_fds[..5]
-        } else {
-            &mut poll_fds[..4]
-        };
+        let (sig_ready, wake_ready, ev4_ready, ev6_ready, mon_ready) = {
+            let (ev4_fd, ev6_fd) = session_mgr.event_fds();
+            let mon_borrowed = monitor
+                .as_ref()
+                .map(|m| m.as_fd())
+                .unwrap_or(sig_read_end.as_fd());
+            let mut poll_fds = [
+                PollFd::new(&sig_read_end, PollFlags::IN),
+                PollFd::new(&wake_read_end, PollFlags::IN),
+                PollFd::new(
+                    &ev4_fd,
+                    if config.enable_v4 {
+                        PollFlags::IN
+                    } else {
+                        PollFlags::empty()
+                    },
+                ),
+                PollFd::new(
+                    &ev6_fd,
+                    if config.enable_v6 {
+                        PollFlags::IN
+                    } else {
+                        PollFlags::empty()
+                    },
+                ),
+                PollFd::new(
+                    &mon_borrowed,
+                    if monitor.is_some() {
+                        PollFlags::IN | PollFlags::ERR
+                    } else {
+                        PollFlags::empty()
+                    },
+                ),
+            ];
+            let poll_slice = if monitor.is_some() {
+                &mut poll_fds[..5]
+            } else {
+                &mut poll_fds[..4]
+            };
 
-        match poll(poll_slice, Some(&ts)) {
-            Ok(_) => {}
-            Err(rustix::io::Errno::INTR) => {
-                if !RUNNING.load(Ordering::SeqCst) {
+            match poll(poll_slice, Some(&ts)) {
+                Ok(_) => {}
+                Err(rustix::io::Errno::INTR) => {
+                    if !RUNNING.load(Ordering::SeqCst) {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("flowcone: poll error: {:?}", e);
                     break;
                 }
             }
-            Err(e) => {
-                eprintln!("flowcone: poll error: {:?}", e);
-                break;
-            }
-        }
 
-        if poll_fds[0].revents().contains(PollFlags::IN) || !RUNNING.load(Ordering::SeqCst) {
+            (
+                poll_fds[0].revents().contains(PollFlags::IN),
+                poll_fds[1].revents().contains(PollFlags::IN),
+                poll_fds[2].revents().contains(PollFlags::IN),
+                poll_fds[3].revents().contains(PollFlags::IN),
+                monitor.is_some()
+                    && poll_fds[4]
+                        .revents()
+                        .intersects(PollFlags::IN | PollFlags::ERR),
+            )
+        };
+
+        if sig_ready || !RUNNING.load(Ordering::SeqCst) {
             break;
         }
 
-        if poll_fds[1].revents().contains(PollFlags::IN) {
+        if wake_ready {
             let mut buf = [0u8; 32];
             let mut eof = false;
             while let Ok(n) = rustix::io::read(&wake_read_end, &mut buf) {
@@ -509,19 +522,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             has_net_event = true;
         }
 
-        if let Some(ref m) = monitor
-            && poll_fds[4]
-                .revents()
-                .intersects(PollFlags::IN | PollFlags::ERR)
+        if mon_ready
+            && let Some(ref mut m) = monitor
             && m.drain_relevant(applied.ifindex, &config.iface)
         {
             has_net_event = true;
         }
 
-        let ev4_ready = poll_fds[2].revents().contains(PollFlags::IN);
-        let ev6_ready = poll_fds[3].revents().contains(PollFlags::IN);
         if ev4_ready || ev6_ready {
-            let now_sec = (get_monotonic_coarse_ns() / 1_000_000_000) as u32;
+            let now_sec = get_monotonic_coarse_sec();
             let was_idle = session_mgr.is_idle();
             let drained = session_mgr.drain_events(now_sec, config.timeout_sec as u32);
             if ((was_idle && !session_mgr.is_idle()) || drained > 0)
@@ -532,7 +541,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if last_gc_run.elapsed() >= gc_interval {
-            let now_sec = (get_monotonic_coarse_ns() / 1_000_000_000) as u32;
+            let now_sec = get_monotonic_coarse_sec();
             let (v4_swept, v6_swept, backlog) =
                 session_mgr.gc_tick(now_sec, config.timeout_sec as u32);
             if config.verbose && (v4_swept > 0 || v6_swept > 0) {
@@ -554,7 +563,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             last_gc_run = Instant::now();
         }
 
-        if last_reserve_scan.elapsed() >= RESERVE_SCAN_INTERVAL {
+        let liveness_active = config.manage_nft
+            && applied.liveness
+            && (applied.v4_enabled || applied.effective_v6 != 0);
+        let reserve_elapsed = last_reserve_scan.elapsed();
+        let liveness_elapsed = last_liveness_refresh.elapsed();
+        let reserve_due = reserve_elapsed >= RESERVE_SCAN_INTERVAL
+            || (liveness_active
+                && liveness_elapsed >= LIVENESS_REFRESH_INTERVAL
+                && reserve_elapsed + PERIODIC_COALESCE_SLACK >= RESERVE_SCAN_INTERVAL);
+        if reserve_due {
             session_mgr.reserve_local_ports(&mut udp_scanner);
             last_reserve_scan = Instant::now();
         }
@@ -716,6 +734,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            if force_new_attach {
+                rotated_on_probe = true;
+                match data_plane.attach(true, false) {
+                    Ok(()) => {
+                        applied.ifindex = cur_ifindex;
+                        if notable {
+                            println!(
+                                "flowcone: TCX programs re-attached to {} (ifindex {})",
+                                config.iface, cur_ifindex
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "flowcone: warning: re-attach on {} failed: {}; will retry",
+                            config.iface, e
+                        );
+                        session_mgr.disable_fail_open();
+                        if config.manage_nft {
+                            firewall_mgr.remove_rules(config.verbose);
+                        }
+                        applied.v4_enabled = false;
+                        applied.effective_v6 = 0;
+                        applied.liveness = false;
+                        retry_deadline = Some(Instant::now() + RETRY_INTERVAL);
+                        config_dirty = false;
+                    }
+                }
+            }
+
             if config_dirty {
                 let is_v6_masq =
                     if config.enable_v6 && resolved_ip6 != [0u8; 16] && applied.l2_known {
@@ -785,7 +833,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         timeout_sec: config.timeout_sec as u32,
                     };
                     let clear_frag = frag_epoch == 0;
-                    let had_flush = flush_v4 || flush_v6;
+                    let had_v4_flush = flush_v4;
+                    let had_v6_flush = flush_v6;
+                    let had_flush = had_v4_flush || had_v6_flush;
                     let set_ok = if had_flush {
                         let ok = session_mgr.set_config(g_cfg);
                         if ok {
@@ -829,7 +879,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 last_liveness_refresh = Instant::now();
                             }
                         } else {
-                            eprintln!("flowcone: firewall sync failed; will retry");
+                            eprintln!(
+                                "flowcone: firewall sync failed; rolling back un-synced families"
+                            );
+                            let keep_v4 = applied.v4_enabled && !had_v4_flush;
+                            let keep_v6 = if !had_v6_flush {
+                                applied.effective_v6
+                            } else {
+                                0
+                            };
+                            let mut rollback_cfg = g_cfg;
+                            rollback_cfg.enabled_v4 = if keep_v4 { 1 } else { 0 };
+                            rollback_cfg.enabled_v6 = keep_v6;
+                            let _ = session_mgr.set_config(rollback_cfg);
+                            applied.v4_enabled = keep_v4;
+                            applied.effective_v6 = keep_v6;
                             retry_deadline = Some(Instant::now() + RETRY_INTERVAL);
                         }
                     } else {
@@ -841,47 +905,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            if reattach {
+            if reattach && !force_new_attach {
                 rotated_on_probe = true;
-                let attached = if force_new_attach {
-                    match data_plane.attach(true, false) {
-                        Ok(()) => true,
-                        Err(e) => {
-                            eprintln!(
-                                "flowcone: warning: re-attach on {} failed: {}; will retry",
-                                config.iface, e
-                            );
-                            session_mgr.disable_fail_open();
-                            if config.manage_nft {
-                                firewall_mgr.remove_rules(config.verbose);
-                            }
-                            applied.v4_enabled = false;
-                            applied.effective_v6 = 0;
-                            applied.liveness = false;
-                            retry_deadline = Some(Instant::now() + RETRY_INTERVAL);
-                            false
-                        }
-                    }
-                } else {
-                    match data_plane.ensure_last(config.verbose) {
-                        Ok(()) => true,
-                        Err(e) => {
-                            eprintln!(
-                                "flowcone: TCX tail rotation failed: {}; old links retained",
-                                e
-                            );
-                            false
-                        }
+                let attached = match data_plane.ensure_last(config.verbose) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        eprintln!(
+                            "flowcone: TCX tail rotation failed: {}; old links retained",
+                            e
+                        );
+                        false
                     }
                 };
                 if attached {
                     applied.ifindex = cur_ifindex;
-                    if notable {
-                        println!(
-                            "flowcone: TCX programs re-attached to {} (ifindex {})",
-                            config.iface, cur_ifindex
-                        );
-                    } else if config.verbose {
+                    if config.verbose {
                         println!(
                             "flowcone: TCX tail verified on {} (ifindex {})",
                             config.iface, cur_ifindex
@@ -914,7 +952,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if config.manage_nft
             && applied.liveness
             && (applied.v4_enabled || applied.effective_v6 != 0)
-            && last_liveness_refresh.elapsed() >= LIVENESS_REFRESH_INTERVAL
+            && (last_liveness_refresh.elapsed() >= LIVENESS_REFRESH_INTERVAL
+                || (reserve_due
+                    && last_liveness_refresh.elapsed() + PERIODIC_COALESCE_SLACK
+                        >= LIVENESS_REFRESH_INTERVAL))
         {
             if !firewall_mgr.refresh_liveness(
                 applied.v4_enabled,

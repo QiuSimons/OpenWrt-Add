@@ -11,13 +11,15 @@
 
    Same methods, argument policy, checks and replies as the plugin:
      status         {} -> { router: { code, aps: [ { id, name, addr, port, net? } ] },
-                            ap: { ssh, routers: [ { name, key } ], reply } }
+                            ap: { ssh, routers: [ { name, key } ], reply, forced } }
      router_code    {} -> { code }  (this device's key, made on first use)
-     add_ap         { code, addr? } -> { id } | { error: invalid|self|no-key|duplicate|full }
+     add_ap         { code, addr? } -> { id, collector } | { error: invalid|self|no-key|duplicate|full }
                     (the entry keeps the reply's MAC too, not in status, and
                     the name of the network its address is on, when it is on
-                    one of this device's: net; self: this device's own reply)
-     remove_ap      { id } -> { ok: true } | { error: unknown }
+                    one of this device's: net; self: this device's own reply;
+                    collector: whether its service took the commands, here
+                    always; the same pairing again: its id again)
+     remove_ap      { id } -> { ok: true, collector } | { error: unknown }
      allow_router   { code } -> { reply } | { error: invalid|<ssh state>|duplicate|full }
      revoke_router  { key } -> { ok: true } | { error: unknown }
    rpcd refuses an argument outside the policy or of another type with
@@ -277,7 +279,8 @@ function status(s) {
 	const routers = unread(s) ? [] : s.routers.map(r => ({ name: r.name, key: r.key }));
 	return {
 		router: { code: routerCode(s), aps: s.aps.map(a => Object.assign({ id: a.id, name: a.name, addr: a.addr, port: a.port }, a.net ? { net: a.net } : {})), unread: false },
-		ap: { ssh: s.ssh, routers, unread: unread(s), reply: s.ssh === 'ok' && routers.length ? apReply(s) : null }
+		/* forced: routers let in beside a listener with a command of its own; the stand-in has no such listener */
+		ap: { ssh: s.ssh, routers, unread: unread(s), reply: s.ssh === 'ok' && routers.length ? apReply(s) : null, forced: false }
 	};
 }
 
@@ -288,19 +291,22 @@ function addAp(s, args) {
 	/* this device's own reply */
 	if (ap.key === s.hostKey) return { error: 'self' };
 	if (!s.routerKey) return { error: 'no-key' };
-	if (s.aps.some(a => a.key === ap.key)) return { error: 'duplicate' };
+	/* paired already; the same pairing again is answered with its id (the
+	   plugin sets the collector's service again; here it always runs) */
+	const at = addr(args.addr) || ap.addr, had = s.aps.find(a => a.key === ap.key);
+	if (had) return had.name === ap.name && had.addr === at && had.port === ap.port && had.mac === ap.mac ? { id: had.id, collector: true } : { error: 'duplicate' };
 	if (s.aps.length >= MAX_APS) return { error: 'full' };
 	let id;
 	do id = crypto.randomBytes(8).toString('hex'); while (s.aps.some(a => a.id === id));
-	s.aps.push(entry({ id, name: ap.name, addr: addr(args.addr) || ap.addr, port: ap.port, mac: ap.mac, key: ap.key }));
-	return { id };
+	s.aps.push(entry({ id, name: ap.name, addr: at, port: ap.port, mac: ap.mac, key: ap.key }));
+	return { id, collector: true };
 }
 
 function removeAp(s, args) {
 	const i = s.aps.findIndex(a => a.id === args.id);
 	if (i < 0) return { error: 'unknown' };
 	s.aps.splice(i, 1);
-	return { ok: true };
+	return { ok: true, collector: true };
 }
 
 /* validates the line, checks dropbear, adds the key: a router already

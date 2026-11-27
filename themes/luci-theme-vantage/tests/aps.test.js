@@ -434,7 +434,7 @@ test('vantage.aps: a router\'s key line is written one way and known again only 
 
 /* a sandbox of the plugin's files: dropbear (with or without the options
    parser), its host key, dbclient, dropbearkey (copies a prepared key),
-   the collector's init script (logs its argument), hostname, urandom */
+   the collector's init script (logs its argument, and can refuse one), hostname, urandom */
 function sandbox(o) {
 	const dir = mkTmp('vantage-pair-');
 	const p = rel => path.join(dir, rel);
@@ -444,7 +444,10 @@ function sandbox(o) {
 	if (o.dbclient !== false) fs.writeFileSync(p('usr/bin/dbclient'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
 	fs.writeFileSync(p('keysrc'), keyFile(o.routerKey ?? 9));
 	fs.writeFileSync(p('usr/bin/dropbearkey'), '#!/bin/sh\n[ "$1 $2 $3" = "-t ed25519 -f" ] && cp "' + p('keysrc') + '" "$4" && echo "$*" >> "' + p('dropbearkey.log') + '"\n', { mode: 0o755 });
-	fs.writeFileSync(p('etc/init.d/vantage-collector'), '#!/bin/sh\necho "$*" >> "' + p('collector.log') + '"\n', { mode: 0o755 });
+	/* o.collectorFails: the words the init script refuses, once for each time a word is listed (it is logged all the same) */
+	fs.writeFileSync(p('collector.fail'), (o.collectorFails || []).map(w => w + '\n').join(''));
+	fs.writeFileSync(p('etc/init.d/vantage-collector'), '#!/bin/sh\necho "$*" >> "' + p('collector.log') + '"\nF="' + p('collector.fail') + '"\n' +
+		'grep -qx "$1" "$F" || exit 0\nawk -v w="$1" \'!done && $0 == w { done = 1; next } { print }\' "$F" > "$F.new"\nmv "$F.new" "$F"\nexit 1\n', { mode: 0o755 });
 	if (o.hostKey !== null) fs.writeFileSync(p('etc/dropbear/dropbear_ed25519_host_key'), o.hostKey ?? keyFile(7), { mode: 0o600 });
 	if (o.auth != null) fs.writeFileSync(p('etc/dropbear/authorized_keys'), o.auth, { mode: 0o600 });
 	if (o.aps != null) { fs.mkdirSync(p('etc/vantage'), { recursive: true }); fs.writeFileSync(p('etc/vantage/aps.json'), JSON.stringify(o.aps)); }
@@ -461,8 +464,19 @@ const PATHS = {
 	HOSTNAME: 'proc/hostname', RANDOM: 'dev/urandom', NET: 'sys/class/net'
 };
 
+/* procd's word on its services (service list, all of them: 'service list'; one by name: 'service list <name>'): dropbear
+   as OpenWrt's init script starts it (the command line of a 24.10 device; more arguments for a section's options), and
+   the collector's service running, registered without an instance, or not there */
+const dropbearCmd = (...more) => [ '/usr/sbin/dropbear', '-F', '-P', '/var/run/dropbear.1.pid', '-l', 'br-lan', '-p', '22', '-K', '300', '-T', '3', '-W', '262144' ].concat(more);
+const dropbearUp = (...more) => ({ running: true, pid: 1234, command: dropbearCmd(...more) });
+const COLLECTOR_UP = { 'vantage-collector': { instances: { instance1: { running: true, pid: 2345, command: [ '/usr/libexec/vantage/collector' ] } } } };
+const COLLECTOR_IDLE = { 'vantage-collector': {} };
+/* what procd answers about the collector, one call after the other (true: running), the last from then on */
+const collectorSeq = (...runs) => ({ __seq: runs.map(r => r === true ? COLLECTOR_UP : r === false ? COLLECTOR_IDLE : r) });
 const UBUS_OK = {
-	'service list dropbear': { dropbear: { instances: { instance1: { running: true } } } },
+	'service list': { dropbear: { instances: { instance1: dropbearUp() } } },
+	/* after add_ap's start; a test that removes the last one says what procd answers then */
+	'service list vantage-collector': COLLECTOR_UP,
 	'network.interface.lan status': { l3_device: 'br-lan', 'ipv4-address': [ { address: '192.0.2.10', mask: 24 } ] }
 };
 
@@ -476,6 +490,9 @@ function runPlugin(o, calls) {
 		assert.match(src, re, name);
 		src = src.replace(re, () => 'const ' + name + ' = ' + JSON.stringify((o.paths && o.paths[name]) || sb.p(rel)) + ';');
 	}
+	/* a millisecond between two looks at a collector that is stopping, in place of a tenth of a second */
+	assert.match(src, /^const STOP_WAIT_MS = 100;/m, 'STOP_WAIT_MS');
+	src = src.replace(/^const STOP_WAIT_MS = 100;/m, () => 'const STOP_WAIT_MS = 1;');
 	const plugin = sb.p('plugin.uc'), file = sb.p('case.json');
 	fs.writeFileSync(plugin, src);
 	fs.writeFileSync(file, JSON.stringify({ stub: { ubus: o.ubus ?? UBUS_OK, uci: o.uci ?? { dropbear: [ { '.type': 'dropbear', Port: '22' } ] } }, calls }));
@@ -514,8 +531,8 @@ test('pair: allow_router adds one restricted line and keeps every other byte', {
 	assert.deepEqual(results[1].reply, { reply }, 'again: the same answer, no second line');
 	assert.equal(read(sb, 'etc/dropbear/authorized_keys'), own + LINE(K1, 'gw') + '\n');
 	assert.equal(mode(sb, 'etc/dropbear/authorized_keys'), 0o600);
-	assert.deepEqual(results[2].reply.ap, { ssh: 'ok', routers: [ { name: 'gw', key: K1 } ], unread: false, reply });
-	assert.ok(ubus.every(c => [ 'service list dropbear', 'network.interface.lan status' ].includes(c)), JSON.stringify(ubus));
+	assert.deepEqual(results[2].reply.ap, { ssh: 'ok', routers: [ { name: 'gw', key: K1 } ], unread: false, reply, forced: false });
+	assert.ok(ubus.every(c => [ 'service list', 'network.interface.lan status' ].includes(c)), JSON.stringify(ubus));
 	/* a line as an earlier build of this add-on wrote it (no key id in its comment), or one with a tab after it: Dropbear
 	   takes the key, the report gives it nothing, and the page neither lists nor replaces it. It is the administrator's to remove */
 	for (const old of [ OPTIONS + ' ssh-ed25519 ' + K1 + ' vantage-router@gw\n', LINE(K1, 'gw') + '\t\n' ]) {
@@ -546,11 +563,11 @@ test('pair: no pairing while SSH cannot hold a key to its command', { skip: NO_U
 		[ { dropbear: 'ELF built without key options' }, 'no-key-options' ],
 		[ { hostKey: null }, 'no-host-key' ],
 		[ { hostKey: Buffer.alloc(83, 1) }, 'no-host-key' ],
-		[ { ubus: { 'network.interface.lan status': UBUS_OK['network.interface.lan status'], 'service list dropbear': { dropbear: { instances: { instance1: { running: false } } } } } }, 'not-running' ],
-		[ { ubus: { 'service list dropbear': UBUS_OK['service list dropbear'] } }, 'no-address' ],
+		[ { ubus: { 'network.interface.lan status': UBUS_OK['network.interface.lan status'], 'service list': { dropbear: { instances: { instance1: { running: false } } } } } }, 'not-running' ],
+		[ { ubus: { 'service list': UBUS_OK['service list'] } }, 'no-address' ],
 		[ { lanMac: null }, 'no-address' ],
 		[ { lanMac: 'ff:ff:ff:ff:ff:fz' }, 'no-address' ],
-		[ { ubus: { 'service list dropbear': UBUS_OK['service list dropbear'], 'network.interface.lan status': { l3_device: '../../etc', 'ipv4-address': [ { address: '192.0.2.10' } ] } } }, 'no-address' ]
+		[ { ubus: { 'service list': UBUS_OK['service list'], 'network.interface.lan status': { l3_device: '../../etc', 'ipv4-address': [ { address: '192.0.2.10' } ] } } }, 'no-address' ]
 	];
 	for (const [ o, state ] of cases) {
 		const { results, sb } = runPlugin(o, [ { method: 'allow_router', args: { code } }, { method: 'status' } ]);
@@ -573,6 +590,101 @@ test('pair: the reply names the first dropbear section that is on; settings that
 		assert.equal(results[1].reply.ap.ssh, 'unsupported');
 		assert.equal(read(sb, 'etc/dropbear/authorized_keys'), null);
 	}
+});
+
+/* Every dropbear section is a listener of its own, all of them read the same authorized_keys, and dropbear runs a
+   listener's own command (ForceCommand, -c) in place of the one a key line names. A router's key, held to the report by its
+   line, would run that command as root there: no such key is written, and one written before is said on the page */
+test('pair: a listener that runs its own command for root keeps pairing off, whichever section it is; procd\'s instances count too', { skip: NO_UCODE }, () => {
+	const code = routerCode(K1, 'gw'), sec = o => Object.assign({ '.type': 'dropbear' }, o);
+	const own = sec({ Port: '2222', ForceCommand: '/usr/bin/backup-shell' });
+	const run = (o, calls) => runPlugin(o, calls ?? [ { method: 'allow_router', args: { code } }, { method: 'status' } ]);
+	/* the second listener, the first, and one behind a section that is off */
+	for (const uci of [ [ sec({ Port: '22' }), own ], [ own, sec({ Port: '22' }) ], [ sec({ enable: '0' }), sec({ Port: '22' }), sec({ enable: '1', RootLogin: '1', ForceCommand: 'x' }) ] ]) {
+		const { results, sb } = run({ uci: { dropbear: uci } });
+		assert.deepEqual([ results[0].reply, results[1].reply.ap.ssh, results[1].reply.ap.forced ], [ { error: 'unsupported' }, 'unsupported', false ], JSON.stringify(uci));
+		assert.equal(read(sb, 'etc/dropbear/authorized_keys'), null, 'no key written');
+	}
+	/* a listener root cannot log in on, or one that is off, runs its command for no root key: pairing as before */
+	for (const other of [ { RootLogin: '0' }, { RootLogin: 'off' }, { enable: '0' } ]) {
+		const { results } = run({ uci: { dropbear: [ sec({ Port: '22' }), sec(Object.assign({ Port: '2222', ForceCommand: 'x' }, other)) ] } });
+		assert.ok(results[0].reply.reply, JSON.stringify(other));
+		assert.equal(results[1].reply.ap.ssh, 'ok');
+	}
+	/* what procd runs, whatever uci says: -c, and not -w (no root login) */
+	const inst = dropbearUp;
+	const ubus = instances => Object.assign({}, UBUS_OK, { 'service list': { dropbear: { instances } } });
+	assert.deepEqual(run({ ubus: ubus({ a: inst(), b: inst('-c', '/usr/bin/backup-shell') }) }).results[0].reply, { error: 'unsupported' });
+	assert.deepEqual(run({ ubus: ubus({ b: inst('-c', '/usr/bin/backup-shell'), a: inst() }) }).results[0].reply, { error: 'unsupported' });
+	assert.ok(run({ ubus: ubus({ a: inst(), b: inst('-c', 'x', '-w') }) }).results[0].reply.reply, 'no root login there');
+	assert.ok(run({ ubus: ubus({ a: inst(), b: Object.assign(inst('-c', 'x'), { running: false }) }) }).results[0].reply.reply, 'not running');
+	assert.ok(run({ ubus: ubus({ a: inst(), b: inst('-p', '2222') }) }).results[0].reply.reply, 'two plain listeners');
+	/* a running instance whose command procd does not say, or says as something else than a list: what it runs is not known,
+	   so it is not taken for a plain listener */
+	for (const unread of [ { running: true }, { running: true, pid: 1234 }, { running: true, command: null }, { running: true, command: '/usr/sbin/dropbear -F' }, { running: true, command: { 0: '/usr/sbin/dropbear' } } ]) {
+		const alone = run({ ubus: ubus({ a: unread }) }).results, beside = run({ ubus: ubus({ a: inst(), b: unread }) }).results;
+		assert.deepEqual([ alone[0].reply, alone[1].reply.ap.ssh, beside[0].reply ], [ { error: 'unsupported' }, 'unsupported', { error: 'unsupported' } ], JSON.stringify(unread));
+	}
+	assert.ok(run({ ubus: ubus({ a: inst(), b: { running: false } }) }).results[0].reply.reply, 'one that does not run has no command to read');
+	/* OpenWrt's own command lines are plain: the one above, and a key-only listener's (-s -g) */
+	assert.ok(run({ ubus: ubus({ a: inst('-s', '-g') }) }).results[0].reply.reply, 'no passwords');
+
+	/* a dropbear under another procd service than OpenWrt's own (a maintenance listener somebody made): seen by its
+	   program, the last part of the path, whatever the service is called. Another program's -c is nothing of the kind */
+	const other = (name, command) => Object.assign({}, UBUS_OK, { 'service list': { dropbear: { instances: { instance1: inst() } }, [name]: { instances: { main: { running: true, command } } } } });
+	for (const prog of [ '/usr/sbin/dropbear', '/usr/local/sbin/dropbear', 'dropbear', '/opt/maint/bin/dropbear' ]) {
+		const r = run({ ubus: other('maint-ssh', [ prog, '-F', '-p', '2222', '-c', '/usr/bin/backup-shell' ]) }).results;
+		assert.deepEqual([ r[0].reply, r[1].reply.ap.ssh ], [ { error: 'unsupported' }, 'unsupported' ], prog);
+	}
+	assert.ok(run({ ubus: other('maint-ssh', [ '/usr/local/sbin/dropbear', '-F', '-p', '2222' ]) }).results[0].reply.reply, 'a plain one elsewhere');
+	assert.ok(run({ ubus: other('maint-ssh', [ '/usr/local/sbin/dropbear', '-F', '-p', '2222', '-w', '-c', 'x' ]) }).results[0].reply.reply, 'no root there');
+	for (const command of [ [ '/usr/sbin/uhttpd', '-f', '-c', '/etc/httpd.conf' ], [ '/usr/bin/dbclient', '-c', 'aes256-ctr' ], [ '/usr/sbin/dropbearkey', '-c' ], [ '/bin/sh', '-c', 'true' ] ])
+		assert.ok(run({ ubus: other('web', command) }).results[0].reply.reply, command[0]);
+	/* a running instance of any service whose command procd does not say: it may be one */
+	assert.deepEqual(run({ ubus: Object.assign({}, UBUS_OK, { 'service list': { dropbear: { instances: { instance1: inst() } }, odd: { instances: { main: { running: true } } } } }) }).results[0].reply, { error: 'unsupported' });
+	/* and a router let in before such a listener came is told of on the page, as with OpenWrt's own */
+	const told = run({ auth: 'ssh-ed25519 ' + K3 + ' admin@laptop\n' + LINE(K1, 'gw') + '\n', ubus: other('maint-ssh', [ '/usr/local/sbin/dropbear', '-F', '-p', '2222', '-c', 'x' ]) }, [ { method: 'status' } ]).results[0].reply.ap;
+	assert.deepEqual([ told.ssh, told.forced ], [ 'unsupported', true ]);
+	/* procd is asked once a check, for all its services */
+	assert.deepEqual(run({ ubus: other('maint-ssh', [ '/usr/local/sbin/dropbear', '-F', '-p', '2222' ]) }, [ { method: 'allow_router', args: { code } } ]).ubus.filter(c => c.startsWith('service ')), [ 'service list' ]);
+
+	/* The options as dropbear reads them: a word is a "-" and option letters, several in one word too, and an option that
+	   takes a value ends its word: the value is the rest of that word or the whole next word, never options itself */
+	const line = (...words) => ({ dropbear: { instances: { a: { running: true, command: [ '/usr/sbin/dropbear' ].concat(words) } } } });
+	const FORCED = [ [ '-c', 'x' ], [ '-Fc', 'x' ], [ '-sgc', 'x' ], [ '-F', '-c/usr/bin/x' ], [ '-Fsgc/usr/bin/x' ], [ '-p', '22', '-c', 'x' ], [ '-c', '-w' ], [ '-c', 'x', '-P', '-w' ],
+		[ '-b', '-w', '-c', 'x' ], [ '-lwan', '-c', 'x' ], [ '-l', 'wan', '-c', 'x' ], [ '-Pw', '-c', 'x' ], [ '-G', 'wheel', '-c', 'x' ], [ '-D', '/etc/keys', '-c', 'x' ], [ '-r', '/etc/k', '-ac', 'x' ] ];
+	const PLAIN = [ [], [ '-F' ], [ '-F', '-P', '/var/run/dropbear.1.pid', '-l', 'br-lan', '-p', '22', '-K', '300', '-T', '3', '-W', '262144' ], [ '-F', '-s', '-g' ], [ '-Fsg' ],
+		[ '-w', '-c', 'x' ], [ '-c', 'x', '-w' ], [ '-wc', 'x' ], [ '-Fwc', 'x' ], [ '-c', 'x', '-Fw' ], [ '-cx', '-w' ], [ '-P', '-c' ], [ '-b', '-c', '-F' ], [ '-p', '-c' ], [ '-l', '-c', '-F' ],
+		[ '-Pc' ], [ '-lcan0' ], [ '-p2222' ], [ '-K300', '-T3' ], [ '-r', '-c' ], [ '-D', '/etc/keys' ], [ '-jka' ], [ '-RFEemz' ] ];
+	/* what dropbear itself would refuse, or a letter it does not have: not readable, so it counts */
+	const UNREAD = [ [ 'extra' ], [ '-F', 'extra' ], [ '-' ], [ '-o', 'x' ], [ '-Fx' ], [ '-c' ], [ '-F', '-p' ], [ '-Fc' ], [ '--help' ], [ '-F', 7 ], [ '-F', null ], [ '-\u00e9' ] ];
+	assert.deepEqual(runModule(FORCED.concat(PLAIN, UNREAD).map(w => [ 'forced_listener', line(...w) ])),
+		FORCED.map(() => true).concat(PLAIN.map(() => false), UNREAD.map(() => true)), 'each line, in order: forced, plain, not readable');
+	/* a few of them through the plugin */
+	for (const [ words, state ] of [ [ [ '-Fsgc', 'x' ], 'unsupported' ], [ [ '-lwan', '-c', 'x' ], 'unsupported' ], [ [ '-P', '-c' ], 'ok' ], [ [ '-Fwc', 'x' ], 'ok' ], [ [ '-o' ], 'unsupported' ] ])
+		assert.equal(run({ ubus: Object.assign({}, UBUS_OK, { 'service list': line(...words) }) }).results[1].reply.ap.ssh, state, words.join(' '));
+	/* the check itself, which the report uses too (vantage.aps): procd's services -> whether one runs such a listener */
+	const svc = instances => ({ dropbear: { instances } });
+	assert.deepEqual(runModule([ [ 'forced_listener', svc({ a: inst() }) ], [ 'forced_listener', svc({ a: inst(), b: inst('-c', 'x') }) ], [ 'forced_listener', svc({ a: inst('-c', 'x', '-w') }) ],
+		[ 'forced_listener', svc({ a: { running: true } }) ], [ 'forced_listener', svc({ a: { running: false, command: dropbearCmd('-c', 'x') } }) ], [ 'forced_listener', {} ], [ 'forced_listener', null ],
+		[ 'forced_listener', { dropbear: {}, x: 'y', z: { instances: 'no table' }, w: { instances: { a: 'no instance' } } } ] ]),
+		[ false, true, false, true, false, false, false, false ]);
+
+	/* a router let in before the listener got its command: its line stays (nothing is revoked on its own), the page is
+	   told what that key runs now, no other router is let in, and this one can still be revoked */
+	const auth = 'ssh-ed25519 ' + K3 + ' admin@laptop\n' + LINE(K1, 'gw') + '\n';
+	for (const o of [ { uci: { dropbear: [ sec({ Port: '22' }), own ] } }, { ubus: ubus({ a: inst(), b: inst('-c', 'x') }) }, { ubus: ubus({ a: inst(), b: { running: true } }) } ]) {
+		const { results, sb } = run(Object.assign({ auth }, o), [ { method: 'status' }, { method: 'allow_router', args: { code: routerCode(K2, 'gw2') } }, { method: 'status' },
+			{ method: 'revoke_router', args: { key: K1 } }, { method: 'status' } ]);
+		assert.deepEqual(results[0].reply.ap, { ssh: 'unsupported', routers: [ { name: 'gw', key: K1 } ], unread: false, reply: null, forced: true });
+		assert.deepEqual([ results[1].reply, results[2].reply.ap.routers.length ], [ { error: 'unsupported' }, 1 ]);
+		assert.deepEqual(results[3].reply, { ok: true });
+		assert.deepEqual(results[4].reply.ap, { ssh: 'unsupported', routers: [], unread: false, reply: null, forced: false });
+		assert.equal(read(sb, 'etc/dropbear/authorized_keys'), 'ssh-ed25519 ' + K3 + ' admin@laptop\n', 'only the revoked line went');
+	}
+	/* unsupported for another reason (root login off on the listener a router is given), a router let in: not this case */
+	const off = run({ auth, uci: { dropbear: [ sec({ RootLogin: '0' }) ] } }, [ { method: 'status' } ]).results[0].reply.ap;
+	assert.deepEqual([ off.ssh, off.forced, off.routers.length ], [ 'unsupported', false, 1 ]);
 });
 
 test('pair: a write that does not hold leaves the keys as they were', { skip: NO_UCODE }, () => {
@@ -622,7 +734,7 @@ test('pair: a key file or a paired list that is there and cannot be read whole i
 	for (const [ what, make, intact ] of cases) {
 		const { results, sb } = runPlugin({ before: make }, [ { method: 'allow_router', args: { code } }, { method: 'revoke_router', args: { key: K1 } }, { method: 'status' } ]);
 		assert.deepEqual([ results[0].reply, results[1].reply ], [ { error: 'keys-unreadable' }, { error: 'failed' } ], what);
-		assert.deepEqual(results[2].reply.ap, { ssh: 'keys-unreadable', routers: [], unread: true, reply: null }, what + ': the page is told it does not know, not that there is none');
+		assert.deepEqual(results[2].reply.ap, { ssh: 'keys-unreadable', routers: [], unread: true, reply: null, forced: false }, what + ': the page is told it does not know, not that there is none');
 		assert.ok(intact(sb), what + ': left as it was');
 		assert.equal(fs.existsSync(sb.p('etc/dropbear/authorized_keys.vantage')), false);
 	}
@@ -655,7 +767,7 @@ test('pair: a key file or a paired list that is there and cannot be read whole i
 	/* no file at all is no list yet, as before, and so is an empty one; a list as the add-on wrote it is read */
 	for (const before of [ undefined, text('')[0], text(' \n')[0], text('[]')[0] ]) {
 		const fresh = runPlugin({ haveKey: true, before }, [ { method: 'add_ap', args: { code: ap } }, { method: 'status' } ]).results;
-		assert.deepEqual([ fresh[0].reply, fresh[1].reply.router.unread, fresh[1].reply.router.aps.length ], [ { id: '0123456789abcdef' }, false, 1 ]);
+		assert.deepEqual([ fresh[0].reply, fresh[1].reply.router.unread, fresh[1].reply.router.aps.length ], [ { id: '0123456789abcdef', collector: true }, false, 1 ]);
 	}
 	assert.deepEqual(runPlugin({ haveKey: true, before: text(JSON.stringify(three))[0] }, [ { method: 'status' } ]).results[0].reply.router.aps.map(a => a.id), three.map(a => a.id));
 	/* the collector reads what it can of such a list (it writes nothing back): the entries that are whole */
@@ -663,10 +775,10 @@ test('pair: a key file or a paired list that is there and cannot be read whole i
 		.map(l => l && l.map(a => a.id)), [ [ three[0].id, three[2].id ], null, [], null, [], [], null, [] ]);
 
 	/* unread while SSH has another fault too, which the plugin names first: the page is still told */
-	const down = { 'network.interface.lan status': UBUS_OK['network.interface.lan status'], 'service list dropbear': { dropbear: { instances: { instance1: { running: false } } } } };
+	const down = { 'network.interface.lan status': UBUS_OK['network.interface.lan status'], 'service list': { dropbear: { instances: { instance1: { running: false } } } } };
 	const st = (before) => runPlugin({ ubus: down, before }, [ { method: 'status' } ]).results[0].reply.ap;
-	assert.deepEqual(st(sb => asLink(sb, 'etc/dropbear/authorized_keys')), { ssh: 'not-running', routers: [], unread: true, reply: null });
-	assert.deepEqual(st(), { ssh: 'not-running', routers: [], unread: false, reply: null });
+	assert.deepEqual(st(sb => asLink(sb, 'etc/dropbear/authorized_keys')), { ssh: 'not-running', routers: [], unread: true, reply: null, forced: false });
+	assert.deepEqual(st(), { ssh: 'not-running', routers: [], unread: false, reply: null, forced: false });
 });
 
 test('pair: allow_router has its answer before it writes the line', { skip: NO_UCODE }, () => {
@@ -679,7 +791,8 @@ test('pair: allow_router has its answer before it writes the line', { skip: NO_U
 
 test('pair: add_ap stores the access point and starts the collector; remove_ap stops it with the last', { skip: NO_UCODE }, () => {
 	const code = apCode(K2, '192.0.2.20', 22, 'ap-hall');
-	const { results, sb } = runPlugin({ haveKey: true }, [
+	/* procd is asked after each change whether the collector runs: after the two adds it does, after the removals not */
+	const { results, sb } = runPlugin({ haveKey: true, ubus: Object.assign({}, UBUS_OK, { 'service list vantage-collector': collectorSeq(true, true, false) }) }, [
 		{ method: 'add_ap', args: { code } },
 		{ method: 'add_ap', args: { code } },
 		{ method: 'add_ap', args: { code: apCode(K3, '192.0.2.21', 2222, 'ap-loft'), addr: '198.51.100.7' } },
@@ -690,11 +803,13 @@ test('pair: add_ap stores the access point and starts the collector; remove_ap s
 		{ method: 'remove_ap', args: { id: 'nope' } }
 	]);
 	const id = '0123456789abcdef';
-	/* the urandom double gives the same id again: a second entry under it is refused */
-	assert.deepEqual(results.slice(0, 5).map(x => x.reply), [ { id }, { error: 'duplicate' }, { error: 'failed' }, { error: 'invalid' }, { error: 'invalid' } ]);
+	/* the same pairing again: nothing stored anew, its id once more, the collector's service set again. The urandom double
+	   gives the same id again: a second entry under it is refused */
+	assert.deepEqual(results.slice(0, 5).map(x => x.reply), [ { id, collector: true }, { id, collector: true }, { error: 'failed' }, { error: 'invalid' }, { error: 'invalid' } ]);
 	assert.deepEqual(results[5].reply.router.aps, [ { id, name: 'ap-hall', addr: '192.0.2.20', port: 22 } ]);
-	assert.deepEqual(results.slice(6).map(x => x.reply), [ { ok: true }, { error: 'unknown' } ]);
-	assert.equal(read(sb, 'collector.log'), 'enable\nstart\nstop\ndisable\n');
+	/* the last one removed: stopped; asked for one that is gone with none left: stopped again, whatever the first try did */
+	assert.deepEqual(results.slice(6).map(x => x.reply), [ { ok: true, collector: true }, { error: 'unknown' } ]);
+	assert.equal(read(sb, 'collector.log'), 'enable\nstart\nenable\nstart\nstop\ndisable\nstop\ndisable\n');
 	const other = runPlugin({ haveKey: true }, [ { method: 'add_ap', args: { code: apCode(K3, '192.0.2.21', 2222, 'ap-loft'), addr: '198.51.100.7' } }, { method: 'status' } ]);
 	assert.deepEqual(other.results[1].reply.router.aps, [ { id, name: 'ap-loft', addr: '198.51.100.7', port: 2222 } ], 'the address given wins');
 	assert.deepEqual(JSON.parse(read(other.sb, 'etc/vantage/aps.json')), [ { id, name: 'ap-loft', key: K3, addr: '198.51.100.7', port: 2222, mac: AP_MAC } ], 'kept with its MAC');
@@ -703,6 +818,58 @@ test('pair: add_ap stores the access point and starts the collector; remove_ap s
 	const nokey = runPlugin({}, [ { method: 'add_ap', args: { code } } ]);
 	assert.deepEqual(nokey.results[0].reply, { error: 'no-key' });
 	assert.equal(read(nokey.sb, 'collector.log'), null);
+	/* the same access point under another name, address, port or MAC is no retry: paired already, and nothing run */
+	for (const other of [ apCode(K2, '192.0.2.20', 22, 'ap-attic'), apCode(K2, '192.0.2.21', 22, 'ap-hall'), apCode(K2, '192.0.2.20', 2222, 'ap-hall'), apCode(K2, '192.0.2.20', 22, 'ap-hall', MAC(0xa9)) ]) {
+		const twice = runPlugin({ haveKey: true }, [ { method: 'add_ap', args: { code } }, { method: 'add_ap', args: { code: other } }, { method: 'add_ap', args: { code, addr: '192.0.2.99' } } ]);
+		assert.deepEqual(twice.results.slice(1).map(x => x.reply), [ { error: 'duplicate' }, { error: 'duplicate' } ], other);
+		assert.equal(read(twice.sb, 'collector.log'), 'enable\nstart\n');
+	}
+	/* with two paired, removing one leaves the collector alone, and one that is gone as well */
+	const two = runPlugin({ haveKey: true, aps: [ AP1, AP2 ] }, [ { method: 'remove_ap', args: { id: AP1.id } }, { method: 'remove_ap', args: { id: AP1.id } } ]);
+	assert.deepEqual([ two.results.map(x => x.reply), read(two.sb, 'collector.log') ], [ [ { ok: true, collector: true }, { error: 'unknown' } ], null ]);
+});
+
+/* The collector's init script can fail (a full flash at enable, procd not answering), and it can end well without starting
+   anything (no dbclient: it returns before it opens an instance). The list is saved by then. The reply says so beside
+   the pairing, and the same call again runs the script again without a second pairing */
+test('pair: a collector service that did not take a command, or does not run as asked, is said; the same call again sets it right', { skip: NO_UCODE }, () => {
+	const code = apCode(K2, '192.0.2.20', 22, 'ap-hall'), id = '0123456789abcdef';
+	const stored = [ { id, name: 'ap-hall', key: K2, addr: '192.0.2.20', port: 22, mac: AP_MAC } ];
+	const procd = (...runs) => Object.assign({}, UBUS_OK, { 'service list vantage-collector': collectorSeq(...runs) });
+	const looks = r => r.ubus.filter(c => c === 'service list vantage-collector').length;
+	const add = { method: 'add_ap', args: { code } }, remove = { method: 'remove_ap', args: { id } };
+	for (const word of [ 'enable', 'start' ]) {
+		const { results, sb } = runPlugin({ haveKey: true, collectorFails: [ word ] }, [ add, { method: 'status' }, add, { method: 'status' } ]);
+		assert.deepEqual([ results[0].reply, results[2].reply ], [ { id, collector: false }, { id, collector: true } ], word);
+		assert.deepEqual([ results[1].reply.router.aps.length, results[3].reply.router.aps.length ], [ 1, 1 ], word + ': saved the first time, no second pairing');
+		assert.deepEqual(JSON.parse(read(sb, 'etc/vantage/aps.json')), stored);
+		assert.equal(read(sb, 'collector.log'), 'enable\nstart\nenable\nstart\n', word + ': both words each time, whichever failed');
+	}
+	/* both words taken and nothing running, however procd says it: the service without an instance, an instance that is not
+	   running, no such service, no answer. Not a success; running the next time, it is */
+	for (const idle of [ COLLECTOR_IDLE, { 'vantage-collector': { instances: {} } }, { 'vantage-collector': { instances: { instance1: { running: false, exit_code: 1 } } } }, {}, null, { 'vantage-collector': { instances: 'x' } } ]) {
+		const r = runPlugin({ haveKey: true, ubus: procd(idle, true) }, [ add, { method: 'status' }, add ]);
+		assert.deepEqual([ r.results[0].reply, r.results[1].reply.router.aps.length, r.results[2].reply ], [ { id, collector: false }, 1, { id, collector: true } ], JSON.stringify(idle));
+		assert.equal(read(r.sb, 'collector.log'), 'enable\nstart\nenable\nstart\n');
+		assert.equal(looks(r), 2, 'asked once a call: a start is not waited for');
+	}
+	for (const word of [ 'stop', 'disable' ]) {
+		const { results, sb } = runPlugin({ haveKey: true, aps: stored, collectorFails: [ word ], ubus: procd(false) }, [ remove, { method: 'status' }, remove, remove ]);
+		assert.deepEqual(results[0].reply, { ok: true, collector: false }, word);
+		assert.deepEqual(results[1].reply.router.aps, [], word + ': removed all the same');
+		assert.deepEqual([ results[2].reply, results[3].reply ], [ { error: 'unknown' }, { error: 'unknown' } ], word + ': gone already, and stopped now');
+		assert.equal(read(sb, 'collector.log'), 'stop\ndisable\nstop\ndisable\nstop\ndisable\n');
+	}
+	/* still failing when asked again: said again */
+	const still = runPlugin({ haveKey: true, aps: stored, collectorFails: [ 'stop', 'disable', 'disable' ], ubus: procd(false) }, [ remove, remove, remove ]);
+	assert.deepEqual(still.results.map(x => x.reply), [ { ok: true, collector: false }, { error: 'unknown', collector: false }, { error: 'unknown' } ]);
+	/* stop only asks the collector to end, and procd lists it until it has: looked at again, a few times. Ended by the third
+	   look: stopped. Still running after the last: not stopped, and said; the next call finds it ended */
+	const ending = runPlugin({ haveKey: true, aps: stored, ubus: procd(true, true, false) }, [ remove ]);
+	assert.deepEqual([ ending.results[0].reply, looks(ending) ], [ { ok: true, collector: true }, 3 ]);
+	const hung = runPlugin({ haveKey: true, aps: stored, ubus: procd(...Array(11).fill(true), false) }, [ remove, remove ]);
+	assert.deepEqual([ hung.results.map(x => x.reply), looks(hung) ], [ [ { ok: true, collector: false }, { error: 'unknown' } ], 11 + 1 ]);
+	assert.equal(read(hung.sb, 'collector.log'), 'stop\ndisable\nstop\ndisable\n');
 });
 
 test('pair: add_ap keeps the network the access point is on, by name; a list of an earlier version is read and stays as it was', { skip: NO_UCODE }, () => {
@@ -711,12 +878,12 @@ test('pair: add_ap keeps the network the access point is on, by name; a list of 
 	const entry = (r) => JSON.parse(read(r.sb, 'etc/vantage/aps.json'))[0];
 	/* on the LAN: its name, in the list and on the page */
 	const lan = add({ code: apCode(K2, '192.0.2.20', 22, 'ap-hall') });
-	assert.deepEqual(lan.results[0].reply, { id });
+	assert.deepEqual(lan.results[0].reply, { id, collector: true });
 	assert.deepEqual(entry(lan), { id, name: 'ap-hall', key: K2, addr: '192.0.2.20', port: 22, mac: AP_MAC, net: 'lan' });
 	assert.deepEqual(lan.results[1].reply.router.aps, [ { id, name: 'ap-hall', addr: '192.0.2.20', port: 22, net: 'lan' } ]);
 	assert.equal(read(lan.sb, 'collector.log'), 'enable\nstart\n');
-	/* netifd is asked once, for its interfaces, and nothing else is asked for a pairing */
-	assert.deepEqual(runPlugin({ haveKey: true, ubus }, [ { method: 'add_ap', args: { code: apCode(K2, '192.0.2.20', 22, 'ap-hall') } } ]).ubus, [ 'network.interface dump' ]);
+	/* netifd is asked once, for its interfaces, then procd whether the collector runs, and nothing else is asked for a pairing */
+	assert.deepEqual(runPlugin({ haveKey: true, ubus }, [ { method: 'add_ap', args: { code: apCode(K2, '192.0.2.20', 22, 'ap-hall') } } ]).ubus, [ 'network.interface dump', 'service list vantage-collector' ]);
 	/* the network of the address it is paired at: the one given, by IPv6 too */
 	assert.equal(entry(add({ code: apCode(K2, '192.0.2.20', 22, 'ap-hall'), addr: '198.51.100.7' })).net, 'guest');
 	assert.equal(entry(add({ code: apCode(K2, '198.51.100.7', 22, 'ap-hall'), addr: '2001:db8:1::10' })).net, 'lan');
@@ -729,7 +896,7 @@ test('pair: add_ap keeps the network the access point is on, by name; a list of 
 		[ 'down', { code: apCode(K2, '192.0.2.20', 22, 'ap-hall') }, { ubus: Object.assign({}, UBUS_OK, { 'network.interface dump': { interface: [ Object.assign({}, LAN_IF, { up: false }) ] } }) } ],
 		[ 'no name', { code: apCode(K2, '192.0.2.20', 22, 'ap-hall') }, { ubus: Object.assign({}, UBUS_OK, { 'network.interface dump': { interface: [ Object.assign({}, LAN_IF, { interface: 'my-lan' }) ] } }) } ] ]) {
 		const r = add(args, o);
-		assert.deepEqual([ r.results[0].reply, entry(r) ], [ { id }, plain(args.addr ?? args.code.split(' ')[4]) ], what);
+		assert.deepEqual([ r.results[0].reply, entry(r) ], [ { id, collector: true }, plain(args.addr ?? args.code.split(' ')[4]) ], what);
 		assert.deepEqual(r.results[1].reply.router.aps, [ { id, name: 'ap-hall', addr: plain(args.code.split(' ')[4]).addr, port: 22 } ], what + ': none on the page');
 	}
 
@@ -738,9 +905,9 @@ test('pair: add_ap keeps the network the access point is on, by name; a list of 
 	const up = runPlugin({ haveKey: true, ubus, aps: old }, [ { method: 'status' }, { method: 'add_ap', args: { code: apCode(K2, '192.0.2.20', 22, 'ap-hall') } }, { method: 'status' },
 		{ method: 'remove_ap', args: { id: old[0].id } } ]);
 	assert.deepEqual([ up.results[0].reply.router.unread, up.results[0].reply.router.aps ], [ false, old.map(a => ({ id: a.id, name: a.name, addr: a.addr, port: a.port })) ]);
-	assert.deepEqual(up.results[1].reply, { id });
+	assert.deepEqual(up.results[1].reply, { id, collector: true });
 	assert.deepEqual(up.results[2].reply.router.aps.map(a => a.net), [ undefined, undefined, 'lan' ]);
-	assert.deepEqual(up.results[3].reply, { ok: true });
+	assert.deepEqual(up.results[3].reply, { ok: true, collector: true });
 	assert.deepEqual(JSON.parse(read(up.sb, 'etc/vantage/aps.json')), [ old[1], Object.assign(plain('192.0.2.20'), { net: 'lan' }) ], 'no network made up for the old one');
 	/* a network that is no name (a hand edit): the list is not this add-on's to write, as with any other field gone wrong */
 	for (const bad of [ 'br-lan', '', null, 7 ]) {
@@ -767,8 +934,8 @@ test('pair: a device is not paired with itself', { skip: NO_UCODE }, () => {
 	assert.deepEqual(runPlugin({}, [ { method: 'add_ap', args: { code: self } } ]).results[0].reply, { error: 'self' });
 	assert.deepEqual(runPlugin({ haveKey: true }, [ { method: 'add_ap', args: { code: self, addr: '127.0.0.1' } } ]).results[0].reply, { error: 'invalid' });
 	/* another device's key at this device's own address, and a device with no host key to compare: paired as before */
-	assert.deepEqual(runPlugin({ haveKey: true }, [ { method: 'add_ap', args: { code: apCode(K2, '192.0.2.10', 22, 'gw', '00:00:5e:00:53:b1') } } ]).results[0].reply, { id: '0123456789abcdef' });
-	assert.deepEqual(runPlugin({ haveKey: true, hostKey: null }, [ { method: 'add_ap', args: { code: self } } ]).results[0].reply, { id: '0123456789abcdef' });
+	assert.deepEqual(runPlugin({ haveKey: true }, [ { method: 'add_ap', args: { code: apCode(K2, '192.0.2.10', 22, 'gw', '00:00:5e:00:53:b1') } } ]).results[0].reply, { id: '0123456789abcdef', collector: true });
+	assert.deepEqual(runPlugin({ haveKey: true, hostKey: null }, [ { method: 'add_ap', args: { code: self } } ]).results[0].reply, { id: '0123456789abcdef', collector: true });
 });
 
 test('pair: at most 16 access points', { skip: NO_UCODE }, () => {
@@ -782,7 +949,8 @@ test('pair: at most 16 access points', { skip: NO_UCODE }, () => {
 
 /* a fake /sys/class/net and /proc/net/arp, and the report's ubus replies. Run as Dropbear runs it for a router's key
    line: the line's comment in SSH_PUBKEYINFO, what the router asked for in SSH_ORIGINAL_COMMAND (auth, keyinfo: another
-   key file, another comment or none; shell: no key line's command, as from the administrator's shell) */
+   key file, another comment or none; shell: no key line's command, as from the administrator's shell). Its lock is in
+   a directory of the sandbox */
 function reportRun(o) {
 	if (!('auth' in o) && !('keyinfo' in o) && !o.shell) o = Object.assign({ auth: LINE(K1, 'gw') + '\n', keyinfo: COMMENT(K1, 'gw') }, o);
 	const dir = mkTmp('vantage-report-');
@@ -807,11 +975,14 @@ function reportRun(o) {
 	let src = fs.readFileSync(REPORT, 'utf8');
 	const auth = path.join(dir, 'authorized_keys');
 	if (o.auth != null) fs.writeFileSync(auth, o.auth);
-	for (const [ name, v ] of Object.entries({ NET: net, ARP: arp, HOSTNAME: host, AUTH: auth })) {
+	for (const [ name, v ] of Object.entries({ NET: net, ARP: arp, HOSTNAME: host, AUTH: auth, DIR: path.join(dir, 'run') })) {
 		const re = new RegExp('^const ' + name + ' = .*$', 'm');
 		assert.match(src, re);
 		src = src.replace(re, () => 'const ' + name + ' = ' + JSON.stringify(v) + ';');
 	}
+	/* the lock's directory is root's on an access point: here this process's account */
+	assert.ok(src.includes('st.uid === 0'), 'the owner check');
+	src = src.replace('st.uid === 0', () => 'st.uid === ' + process.getuid());
 	const script = path.join(dir, 'report.uc'), stub = path.join(dir, 'stub.json'), calls = path.join(dir, 'calls');
 	fs.writeFileSync(script, src);
 	fs.writeFileSync(stub, JSON.stringify({ ubus: o.ubus }));
@@ -827,6 +998,8 @@ function reportRun(o) {
 }
 
 const REPORT_UBUS = {
+	/* asked first: the listeners, as procd runs them (a plain one) */
+	'service list': { dropbear: { instances: { instance1: dropbearUp() } } },
 	'system board': { model: 'Example AP', release: {} },
 	'system info': { uptime: 1234 },
 	'iwinfo devices': { devices: [ 'phy0-ap0', 'phy0-sta0', 'bad name', 'ra0' ] },
@@ -851,7 +1024,7 @@ const REPORT_UBUS = {
 		{ mac: MAC(1), port: 'lan2' }, { mac: 'bad', port: 'lan2' }, { mac: MAC(71), port: 'bad port' }, { mac: MAC(66), port: 'lan3' } ] }
 };
 /* and the switch chip's counters (#156): the dashboard's plugin runs ethtool for them, the report only asks */
-const REPORT_CALLS = [ 'system board', 'system info', 'iwinfo devices', 'iwinfo info', 'iwinfo assoclist', 'network.interface dump', 'luci.vantage wired', 'luci.vantage.ports counters' ];
+const REPORT_CALLS = [ 'service list', 'system board', 'system info', 'iwinfo devices', 'iwinfo info', 'iwinfo assoclist', 'network.interface dump', 'luci.vantage wired', 'luci.vantage.ports counters' ];
 
 test('report: SSIDs, stations, and the wired hosts past the uplink', { skip: NO_UCODE }, () => {
 	const { out, calls } = reportRun({ ubus: REPORT_UBUS, arp: [ [ '192.0.2.1', '0x1', '0x2', MAC(64), '*', 'br-lan' ], [ '192.0.2.99', '0x1', '0x0', MAC(65), '*', 'br-lan' ] ] });
@@ -924,6 +1097,74 @@ test('report: at most 32 VLAN interfaces are asked, none whose BSSID two network
 	assert.deepEqual([ own.length, own.slice(0, 7), own.slice().sort().join() === own.join() ], [ 64, [ MAC(1), MAC(2), MAC(3), MAC(4), MAC(16), MAC(17), '02:00:5e:00:54:00' ], true ]);
 });
 
+/* A router's key runs the report only where the listener it logs in on leaves a key line its command. Where a listener
+   that takes root runs a command of its own, the key runs that there: the report, asked on a plain listener of the same
+   device, gives nothing, so the router shows the access point as not reporting and its pairing page says why */
+test('report: no report while a dropbear listener that takes root runs a command of its own, or procd\'s word on them cannot be read', { skip: NO_UCODE }, () => {
+	const arp = [ [ '192.0.2.1', '0x1', '0x2', MAC(64), '*', 'br-lan' ] ];
+	const run = (svc, o) => reportRun(Object.assign({ ubus: Object.assign({}, REPORT_UBUS, { 'service list': svc }), arp }, o));
+	const list = (instances, others) => Object.assign({ dropbear: { instances } }, others);
+	const elsewhere = (...words) => ({ 'maint-ssh': { instances: { main: { running: true, command: [ '/usr/local/sbin/dropbear' ].concat(words) } } } });
+	/* nothing printed, and nothing of the device asked for: procd's word on its services is the only call */
+	for (const [ what, svc ] of [ [ 'a second listener with its command', list({ a: dropbearUp(), b: dropbearUp('-p', '2222', '-c', '/usr/bin/backup-shell') }) ],
+		[ 'the only listener', list({ a: dropbearUp('-c', 'x') }) ], [ 'its command not said', list({ a: dropbearUp(), b: { running: true } }) ],
+		[ 'its command no list', list({ a: { running: true, command: '/usr/sbin/dropbear -F' } }) ],
+		[ 'no instances', { dropbear: {} } ], [ 'no such service', {} ], [ 'no answer', null ], [ 'instances no table', list('x') ],
+		/* a dropbear under another service, and options in one word */
+		[ 'a dropbear of another service', list({ a: dropbearUp() }, elsewhere('-F', '-p', '2222', '-c', 'x')) ], [ 'its options in one word', list({ a: dropbearUp() }, elsewhere('-Fsgc', 'x')) ],
+		[ 'a letter dropbear does not have', list({ a: dropbearUp('-o', 'x') }) ], [ 'another service\'s command not said', list({ a: dropbearUp() }, { odd: { instances: { main: { running: true } } } }) ] ]) {
+		const r = run(svc, { refused: true });
+		assert.deepEqual([ r.status, r.stdout, r.calls ], [ 1, '', [ 'service list' ] ], what);
+	}
+	/* a listener root cannot log in on, and one that does not run, take nobody's root key: a report as before */
+	for (const [ what, svc ] of [ [ 'no root there', list({ a: dropbearUp(), b: dropbearUp('-c', 'x', '-w') }) ], [ 'not running', list({ a: dropbearUp(), b: { running: false, command: dropbearCmd('-c', 'x') } }) ],
+		[ 'two plain listeners', list({ a: dropbearUp(), b: dropbearUp('-p', '2222') }) ], [ 'a plain dropbear of another service', list({ a: dropbearUp() }, elsewhere('-F', '-p', '2222')) ],
+		[ 'no root on the other one', list({ a: dropbearUp() }, elsewhere('-Fwc', 'x')) ], [ 'a value that looks like an option', list({ a: dropbearUp('-b', '-c') }) ],
+		[ 'another program with -c', list({ a: dropbearUp() }, { web: { instances: { main: { running: true, command: [ '/usr/sbin/uhttpd', '-f', '-c', '/etc/httpd.conf' ] } } } }) ] ]) {
+		const r = run(svc);
+		assert.equal(r.out.name, 'ap-hall', what);
+		assert.equal(r.calls[0], 'service list', what + ': asked before anything else');
+	}
+	/* the administrator's own shell is told the same: there is no report to show while a key would not run it */
+	assert.equal(run(list({ a: dropbearUp('-c', 'x') }), { shell: true, refused: true }).status, 1);
+});
+
+/* The 16 networks a report lists used to end the asking: an interface named after the sixteenth was not looked at, a
+   listed network's VLAN interface among them, so which stations showed depended on the order iwinfo names interfaces in */
+test('report: with its 16 networks listed, the stations on their VLAN interfaces are still read, in whatever order the interfaces come', { skip: NO_UCODE }, () => {
+	const names = Array.from({ length: 17 }, (_, i) => 'ap' + String(i).padStart(2, '0'));
+	const arp = [ [ '192.0.2.1', '0x1', '0x2', MAC(64), '*', 'br-lan' ] ], vlan = n => ({ mode: 'Master (VLAN)', bssid: MAC(100 + n) });
+	const base = Object.assign({}, REPORT_UBUS,
+		Object.fromEntries(names.map((n, i) => [ 'iwinfo info ' + n, { mode: 'Master', ssid: 'net' + i, bssid: MAC(100 + i), frequency: 5180, channel: 36 } ])),
+		Object.fromEntries(names.map(n => [ 'iwinfo assoclist ' + n, { results: [] } ])),
+		{ 'iwinfo info ap00.5': vlan(0), 'iwinfo assoclist ap00.5': { results: [ { mac: MAC(40), signal: -50 } ] },
+			/* a VLAN interface of the seventeenth network, which is not listed: nobody's */
+			'iwinfo info ap16.5': vlan(16), 'iwinfo assoclist ap16.5': { results: [ { mac: MAC(41), signal: -50 } ] } });
+	for (const devices of [ names.concat([ 'ap00.5', 'ap16.5' ]), [ 'ap16.5', 'ap00.5' ].concat(names), names.slice(0, 16).concat([ 'ap16.5', 'ap16', 'ap00.5' ]) ]) {
+		const { out } = reportRun({ ubus: Object.assign({}, base, { 'iwinfo devices': { devices } }), arp });
+		assert.deepEqual(out.ssids.map(x => x.ifname), names.slice(0, 16), devices.slice(0, 2).join());
+		assert.deepEqual(out.stations.map(x => [ x.mac, x.ifname ]), [ [ MAC(40), 'ap00' ] ], devices.slice(0, 2).join());
+	}
+	/* bounded all the same: with both the networks and the VLAN interfaces full, no further interface is asked about */
+	const vlans = Array.from({ length: 40 }, (_, i) => 'v' + String(i).padStart(2, '0'));
+	const full = Object.assign({}, base, { 'iwinfo devices': { devices: names.slice(0, 16).concat(vlans, [ 'ap16', 'ap00.5' ]) } },
+		Object.fromEntries(vlans.map(n => [ 'iwinfo info ' + n, vlan(1) ])), Object.fromEntries(vlans.map(n => [ 'iwinfo assoclist ' + n, { results: [] } ])));
+	assert.equal(reportRun({ ubus: full, arp }).calls.filter(c => c.startsWith('iwinfo info ')).length, 16 + 32);
+	/* and with neither full: one iwinfo call an interface, 16 + 32 of them a report at most, whatever the interfaces are.
+	   200 networks: the first 16 are listed, 48 looked at, and the VLAN interface after them is not */
+	const crowd = Array.from({ length: 200 }, (_, i) => 'w' + String(i).padStart(3, '0'));
+	const many = Object.assign({}, REPORT_UBUS, { 'iwinfo devices': { devices: crowd.concat([ 'w000.5' ]) } },
+		Object.fromEntries(crowd.map((n, i) => [ 'iwinfo info ' + n, { mode: 'Master', ssid: 'net' + i, bssid: MAC(i % 200), frequency: 5180, channel: 36 } ])),
+		Object.fromEntries(crowd.map(n => [ 'iwinfo assoclist ' + n, { results: [] } ])), { 'iwinfo info w000.5': vlan(-100), 'iwinfo assoclist w000.5': { results: [ { mac: MAC(40), signal: -50 } ] } });
+	const big = reportRun({ ubus: many, arp });
+	assert.deepEqual([ big.calls.filter(c => c.startsWith('iwinfo info ')).length, big.out.ssids.map(x => x.ifname), big.out.stations ], [ 48, crowd.slice(0, 16), [] ]);
+	/* interfaces that are no network's (a client, a mesh point, one iwinfo says nothing of) count as looked at too */
+	const odd = Array.from({ length: 60 }, (_, i) => 'sta' + i);
+	const mixed = Object.assign({}, base, { 'iwinfo devices': { devices: odd.concat(names) } }, Object.fromEntries(odd.map((n, i) => [ 'iwinfo info ' + n, i % 2 ? { mode: 'Client' } : null ])));
+	const m = reportRun({ ubus: mixed, arp });
+	assert.deepEqual([ m.calls.filter(c => c.startsWith('iwinfo info ')).length, m.out.ssids ], [ 48, [] ]);
+});
+
 /* #167: an access point on a wire that carries several VLANs, each a device of its own here. It knows the gateway in
    its own network (eth0.1); what it hears on the wire's other VLANs is as far upstream: the other access points'
    bridges, every host of those networks. The kernel says which device a VLAN is on, whatever the names */
@@ -992,31 +1233,72 @@ test('report: a router whose key line is gone gets nothing, on a connection it s
 
 test('report: without ubus it prints nothing and fails', { skip: NO_UCODE }, () => {
 	const dir = mkTmp('vantage-report-');
-	const stub = path.join(dir, 'stub.json');
-	fs.writeFileSync(stub, JSON.stringify({ no_ubus: true }));
-	const r = spawnSync(UCODE, ucodeArgs().concat([ '-D', 'STUBFILE=' + stub, REPORT ]), { encoding: 'utf8' });
+	const stub = path.join(dir, 'stub.json'), self = path.join(dir, 'report'), at = path.join(dir, 'run');
+	/* its lock in the sandbox, so that it gets as far as ubus: the same copy reports with ubus there */
+	fs.writeFileSync(self, fs.readFileSync(REPORT, 'utf8').replace(/^const DIR = .*$/m, () => 'const DIR = ' + JSON.stringify(at) + ';').replace('st.uid === 0', () => 'st.uid === ' + process.getuid()));
+	const run = stubbed => { fs.writeFileSync(stub, JSON.stringify(stubbed)); return spawnSync(UCODE, ucodeArgs().concat([ '-D', 'STUBFILE=' + stub, self ]), { encoding: 'utf8' }); };
+	assert.equal(run({ ubus: REPORT_UBUS }).status, 0, 'with ubus: a report');
+	const r = run({ no_ubus: true });
 	assert.equal(r.status, 1);
 	assert.equal(r.stdout, '');
 });
 
-test('report: one at a time; a second run gives up without a report', { skip: NO_UCODE }, async () => {
-	const dir = mkTmp('vantage-report-');
-	const self = path.join(dir, 'report'), stub = path.join(dir, 'stub.json');
+/* The lock used to be on the report's own file, which any account may open for reading (one that held a lock on it
+   kept every router without a report) and which an upgrade replaces; and a report that could not open it ran unlocked */
+test('report: one at a time, by a lock file only root can reach; a second run gives up without a report, and so does one that cannot have the lock', { skip: NO_UCODE }, async () => {
+	const dir = mkTmp('vantage-report-'), stub = path.join(dir, 'stub.json');
 	fs.writeFileSync(stub, JSON.stringify({ ubus: REPORT_UBUS }));
-	const src = fs.readFileSync(REPORT, 'utf8').replace(/^const SELF = .*$/m, () => 'const SELF = ' + JSON.stringify(self) + ';');
-	fs.writeFileSync(self, src);
-	const run = () => spawnSync(UCODE, ucodeArgs().concat([ '-D', 'STUBFILE=' + stub, self ]), { encoding: 'utf8' });
-	assert.equal(run().status, 0, 'alone, it reports');
-	/* another holds the lock for two seconds (it says so in a file: its output is buffered until it ends) */
-	const held = path.join(dir, 'held');
-	const holder = require('child_process').spawn(UCODE, [ '-e', 'import { open, writefile } from "fs"; let f = open(' + JSON.stringify(self) + ', "r"); f.lock("x"); writefile(' + JSON.stringify(held) + ', "1"); sleep(2000);' ], { stdio: 'ignore' });
-	for (let i = 0; i < 100 && !fs.existsSync(held); i++) await new Promise(resolve => setTimeout(resolve, 20));
-	assert.ok(fs.existsSync(held), 'the lock is held');
-	const second = run();
+	/* a copy with its lock in `at`, root's there being this process's account (or uid) */
+	const copy = (at, uid) => {
+		const self = path.join(dir, 'report-' + path.basename(at));
+		const src = fs.readFileSync(REPORT, 'utf8').replace(/^const DIR = .*$/m, () => 'const DIR = ' + JSON.stringify(at) + ';').replace('st.uid === 0', () => 'st.uid === ' + (uid ?? process.getuid()));
+		assert.ok(src.includes(JSON.stringify(at)) && !src.includes('st.uid === 0'));
+		fs.writeFileSync(self, src);
+		return self;
+	};
+	const run = self => spawnSync(UCODE, ucodeArgs().concat([ '-D', 'STUBFILE=' + stub, self ]), { encoding: 'utf8' });
+	const hold = async (file, mode, ms) => {
+		const held = path.join(dir, 'held-' + path.basename(file));
+		const holder = require('child_process').spawn(UCODE, [ '-e', 'import { open, writefile } from "fs"; let f = open(' + JSON.stringify(file) + ', ' + JSON.stringify(mode) + '); f.lock("x"); writefile(' + JSON.stringify(held) + ', "1"); sleep(' + ms + ');' ], { stdio: 'ignore' });
+		for (let i = 0; i < 100 && !fs.existsSync(held); i++) await new Promise(resolve => setTimeout(resolve, 20));
+		assert.ok(fs.existsSync(held), 'the lock is held');
+		return holder;
+	};
+	const at = path.join(dir, 'run'), self = copy(at);
+	assert.equal(run(self).status, 0, 'alone, it reports');
+	/* all it wrote: its directory, root's alone, and the empty lock file in it */
+	assert.deepEqual([ fs.statSync(at).mode & 0o777, fs.readdirSync(at), fs.statSync(path.join(at, 'lock')).mode & 0o777, fs.statSync(path.join(at, 'lock')).size ], [ 0o700, [ 'lock' ], 0o600, 0 ]);
+	/* another holds the lock for two seconds */
+	const holder = await hold(path.join(at, 'lock'), 'a', 2000);
+	const second = run(self);
 	assert.equal(second.status, 1);
-	assert.equal(second.stdout, '', 'nothing printed');
+	assert.equal(second.stdout === '', true, 'nothing printed');
 	await new Promise(resolve => holder.once('exit', resolve));
-	assert.equal(run().status, 0, 'and again once the first is done');
+	assert.equal(run(self).status, 0, 'and again once the first is done');
+	/* a lock on the report's own file, which any account may read, keeps no router out */
+	const other = await hold(self, 'r', 30000);
+	const free = run(self);
+	const gone = new Promise(resolve => other.once('exit', resolve));
+	other.kill('SIGKILL');
+	await gone;
+	assert.equal(free.status, 0, 'its own file locked by another: it reports');
+	/* without the lock, no report: the directory not as it makes it (open to others, a link, a file, another account's:
+	   on an access point, not root's), or the lock file not to be opened (a directory under its name) */
+	for (const [ what, make, uid ] of [
+		[ 'open', d => { fs.mkdirSync(d); fs.chmodSync(d, 0o755); } ],
+		[ 'link', d => { fs.mkdirSync(d + '-real', { mode: 0o700 }); fs.symlinkSync(d + '-real', d); } ],
+		[ 'file', d => fs.writeFileSync(d, 'a file') ],
+		[ 'other', d => fs.mkdirSync(d, { mode: 0o700 }), process.getuid() + 1 ],
+		[ 'blocked', d => { fs.mkdirSync(path.join(d, 'lock'), { recursive: true }); fs.chmodSync(d, 0o700); } ]
+	]) {
+		const d = path.join(dir, 'run-' + what);
+		make(d);
+		const r = run(copy(d, uid));
+		/* (this copy reads the machine's own interfaces: what it printed is not put into a failure's text) */
+		assert.deepEqual([ r.status, r.stdout === '' ], [ 1, true ], what);
+		if (what != 'blocked' && fs.lstatSync(d).isDirectory()) assert.deepEqual(fs.readdirSync(d), [], what + ': no file made in it');
+		if (fs.existsSync(d + '-real')) assert.deepEqual(fs.readdirSync(d + '-real'), []);
+	}
 });
 
 /* --------------------------------------------------------- collector */
@@ -1266,6 +1548,57 @@ test('collector: a pairing that names its network is found again after that netw
 	assert.deepEqual(last(late), [ 'ok', '198.51.100.40' ]);
 });
 
+/* Where an access point answered after a move is kept in memory, and used to be asked from then on whatever became of
+   that address: the named network was looked at only while the kept address was still the pairing's own */
+test('collector: the address it last answered at is asked only while it is on the network its pairing names: a second renumbering, a subnet with a new owner', { skip: NO_UCODE }, () => {
+	const tried = r => r.calls.map(c => /root@(\S+)/.exec(c)[1]);
+	const report = { out: apReport(1, 1000) }, NAMED = Object.assign({}, AP1, { net: 'lan' });
+	const lan = (address, mask) => Object.assign({}, LAN_IF, { 'ipv4-address': [ { address, mask } ] });
+	/* the first move: the LAN is 198.51.100.0/24 now, and it has a lease there */
+	const first = { interface: [ WAN_IF, lan('198.51.100.1', 24) ] };
+	/* the second: the LAN keeps the upper half of that subnet and the guests get the lower, where it last answered */
+	const second = { interface: [ WAN_IF, lan('198.51.100.129', 25), { interface: 'guest', up: true, l3_device: 'br-guest', 'ipv4-address': [ { address: '198.51.100.1', mask: 25 } ] } ] };
+	const lease = a => '1700000000 ' + AP_MAC + ' ' + a + ' ap-hall *\n';
+	/* a device answers at each of them, whoever it is */
+	const hosts = { '192.0.2.10': report, '198.51.100.40': report, '198.51.100.140': report };
+	const start = [ ASK, wait(1), ASK, wait(21), ASK ];
+	const before = runCollector({ aps: [ NAMED ], dump: first, leases: lease('198.51.100.40'), hosts }, start);
+	assert.deepEqual([ ...new Set(tried(before)) ], [ '198.51.100.40' ], 'found after the first move, and asked there');
+	/* netifd is asked once before each connection: after as many answers as there were connections, the second move */
+	const n = before.calls.length, moves = { __seq: Array(n).fill(first).concat([ second ]) };
+	assert.ok(n >= 2, 'asked again at the address it moved to');
+	const again = runCollector({ aps: [ NAMED ], dump: moves, leases: lease('198.51.100.40'), hosts }, start.concat([ { write: [ 'leases', lease('198.51.100.140') ] }, wait(30), ASK ]));
+	assert.deepEqual(tried(again).slice(0, n), tried(before));
+	assert.ok(tried(again).length > n, 'fetched after the second move');
+	assert.deepEqual([ ...new Set(tried(again).slice(n)) ], [ '198.51.100.140' ], 'the guests\' address is not asked: it is looked for on the LAN as it is now');
+	const a = again.results[again.results.length - 1].aps[0];
+	assert.deepEqual([ a.state, a.addr, a.error ], [ 'ok', '198.51.100.140', null ]);
+	/* nowhere on the LAN now: nobody is asked, and it is not found */
+	const lost = runCollector({ aps: [ NAMED ], dump: moves, leases: lease('198.51.100.40'), hosts }, start.concat([ wait(30), ASK ]));
+	assert.deepEqual([ tried(lost).slice(n), lost.results[lost.results.length - 1].aps[0].error ], [ [], 'unreachable' ]);
+	/* still on the named network after a move: asked there, as before */
+	const kept = runCollector({ aps: [ NAMED ], dump: first, leases: lease('198.51.100.40'), hosts }, start.concat([ wait(30), ASK ]));
+	assert.deepEqual([ ...new Set(tried(kept)) ], [ '198.51.100.40' ]);
+	assert.ok(kept.calls.length > n);
+
+	/* An address its MAC was found at waits for the next fetch, and the network can change in between. Gone from where it
+	   was paired (192.0.2.10 refuses), its lease in that subnet is queued; before the fetch the LAN is renumbered and that
+	   subnet is the guests': the queued address is not asked, it is looked for on the LAN as it is now, and found there.
+	   netifd is asked before the first connection, for the search after it failed, and before the next connection */
+	const home = { interface: [ WAN_IF, LAN_IF ] };
+	const away = { interface: [ WAN_IF, lan('198.51.100.1', 24), { interface: 'guest', up: true, l3_device: 'br-guest', 'ipv4-address': [ { address: '192.0.2.1', mask: 24 } ] } ] };
+	const both = lease('192.0.2.77') + lease('198.51.100.40');
+	const queued = runCollector({ aps: [ NAMED ], dump: { __seq: [ home, home, away ] }, leases: both, hosts: { '192.0.2.77': report, '198.51.100.40': report } }, [ ASK, wait(1), ASK, wait(12), ASK ]);
+	assert.deepEqual([ ...new Set(tried(queued)) ], [ '192.0.2.10', '198.51.100.40' ], 'the queued address, a guest\'s by now, is not asked');
+	const q = queued.results[queued.results.length - 1].aps[0];
+	assert.deepEqual([ q.state, q.addr ], [ 'ok', '198.51.100.40' ]);
+	/* (the network as it was: the queued address is asked, as before) */
+	assert.deepEqual([ ...new Set(tried(runCollector({ aps: [ NAMED ], dump: home, leases: both, hosts: { '192.0.2.77': report } }, [ ASK, wait(1), ASK, wait(12), ASK ]))) ], [ '192.0.2.10', '192.0.2.77' ]);
+	/* and with nowhere else to look, nobody is asked */
+	const nowhere = runCollector({ aps: [ NAMED ], dump: { __seq: [ home, home, away ] }, leases: lease('192.0.2.77'), hosts: { '192.0.2.77': report } }, [ ASK, wait(1), ASK, wait(12), ASK ]);
+	assert.deepEqual([ [ ...new Set(tried(nowhere)) ], nowhere.results[nowhere.results.length - 1].aps[0].error ], [ [ '192.0.2.10' ], 'unreachable' ]);
+});
+
 test('collector: after a pause, an access point that had already failed is not shown as fine', { skip: NO_UCODE }, () => {
 	const down = [ { write: [ 'hosts/192.0.2.10/out', '' ] }, { write: [ 'hosts/192.0.2.10/code', '1' ] }, { write: [ 'hosts/192.0.2.10/err', '\n' + DBC + 'Connect failed: No route to host\n' ] } ];
 	/* fine, then gone while someone still looks; nobody looks for two minutes; the first reply after that */
@@ -1475,4 +1808,20 @@ test('collector: the fullest report an access point can make now passes the coun
 		assert.deepEqual([ a.state, a.error ], [ 'ok', null ], 'full of ' + fill + ': ' + out.length + ' bytes, ' + out.replace(/[^[{]/g, '').length + ' opened, ' + out.replace(/[^,]/g, '').length + ' commas');
 		assert.deepEqual([ r.ssids.length, r.stations.length, r.wired.length, r.stations[255].rxPhy.mhz ], [ 16, 256, 128, 640 ]);
 	}
+});
+
+/* own_command() reads a command line only when it knows every option on
+   it, so an option OpenWrt's own start script begins to pass would turn
+   pairing off everywhere: hold the two tables to that script (the device
+   rootfs dump; skipped without one, as in CI) */
+test('listeners: every option OpenWrt\'s dropbear start script can pass is one own_command() knows', { skip: !process.env.VANTAGE_ROOTFS && 'no VANTAGE_ROOTFS' }, () => {
+	const init = fs.readFileSync(path.join(process.env.VANTAGE_ROOTFS, 'etc/init.d/dropbear'), 'utf8');
+	const src = fs.readFileSync(path.join(__dirname, '..', 'luci-app-vantage-aps/root/usr/share/ucode/vantage/aps.uc'), 'utf8');
+	const known = /const DROPBEAR_VALUE = '([A-Za-z0-9]+)';\nconst DROPBEAR_FLAG = '([A-Za-z0-9]+)';/.exec(src);
+	assert.ok(known, 'the two tables');
+	const passed = new Set();
+	for (const m of init.matchAll(/procd_(?:append|set)_param command ([^;&|\n]*)/g))
+		for (const w of m[1].split(/\s+/)) if (/^-[A-Za-z0-9]$/.test(w)) passed.add(w[1]);
+	assert.ok(passed.has('p') && passed.has('c') && passed.has('w'), 'the script was read: ' + [ ...passed ].join(''));
+	assert.deepEqual([ ...passed ].filter(l => !(known[1] + known[2]).includes(l)), [], 'options the tables do not know');
 });
