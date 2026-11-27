@@ -108,7 +108,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: prebuilt
-          key: prebuilt-bin-${{ matrix.arch }}-${{ hashFiles('core/scripts/prebuild_host.sh', 'core/assets/prebuilt-packages.conf', 'apps/imm_pkg/frp/Makefile', 'apps/luci-app-mosdns/mosdns/Makefile', 'apps/OpenWrt-mihomo/**/Makefile', 'apps/imm_pkg/sing-box/Makefile', 'apps/openwrt-einat-ebpf/Makefile', 'apps/FlowCone/Cargo.lock', 'apps/FlowCone/crates/**', 'apps/FlowCone/openwrt/**/Makefile', 'apps/luci-app-honk/honk/**', 'apps/luci-app-dae/dae/**') }}
+          key: prebuilt-bin-${{ matrix.arch }}-${{ hashFiles('core/scripts/prebuild_host.sh', 'core/assets/prebuilt-packages.conf', 'apps/imm_pkg/frp/Makefile', 'apps/luci-app-mosdns/mosdns/Makefile', 'apps/OpenWrt-mihomo/**/Makefile', 'apps/imm_pkg/sing-box/Makefile', 'apps/openwrt-einat-ebpf/Makefile', 'apps/FlowCone/Cargo.lock', 'apps/FlowCone/crates/**', 'apps/FlowCone/openwrt/**/Makefile', 'apps/luci-app-daeuniverse/dae/**', 'apps/luci-app-daeuniverse/honk/**') }}
           restore-keys: |
             prebuilt-bin-${{ matrix.arch }}-
 
@@ -125,9 +125,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mk=apps/luci-app-honk/honk/Makefile
+          mk=apps/luci-app-daeuniverse/honk/Makefile
           if [ -f "$mk" ] && grep -q '^HONK_SRC_VERSION:=' "$mk"; then
-            script_hash="$(sha256sum apps/luci-app-honk/honk/build_honk_core.sh apps/luci-app-honk/honk/honk_toolchain.sh | sha256sum | awk '{print $1}')"
+            script_hash="$(sha256sum apps/luci-app-daeuniverse/honk/build_honk_core.sh apps/luci-app-daeuniverse/honk/honk_toolchain.sh | sha256sum | awk '{print $1}')"
             prebuild_hash="$(sha256sum core/scripts/prebuild_host.sh | awk '{print $1}')"
             src_ver="$(sed -n 's/^HONK_SRC_VERSION:=[[:space:]]*//p' "$mk" | tr -d ' \r\n')"
             expected="${{ matrix.arch }} ${prebuild_hash} ${src_ver}_${script_hash}"
@@ -139,7 +139,7 @@ jobs:
               echo "needed=false" >> "$GITHUB_OUTPUT"
             else
               echo "honk build needed (${src_ver}); resolving toolchain pins"
-              ./apps/luci-app-honk/honk/honk_toolchain.sh | tee "$RUNNER_TEMP/honk-toolchain.env"
+              ./apps/luci-app-daeuniverse/honk/honk_toolchain.sh | tee "$RUNNER_TEMP/honk-toolchain.env"
               . "$RUNNER_TEMP/honk-toolchain.env"
               echo "zig_version=${ZIG_VERSION}" >> "$GITHUB_OUTPUT"
               echo "available=true" >> "$GITHUB_OUTPUT"
@@ -199,7 +199,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/go/pkg/mod
-          key: prebuild-gomod-${{ matrix.arch }}-${{ hashFiles('apps/imm_pkg/frp/Makefile', 'apps/luci-app-mosdns/mosdns/Makefile', 'apps/OpenWrt-mihomo/**/Makefile', 'apps/imm_pkg/sing-box/Makefile', 'apps/luci-app-dae/dae/**') }}
+          key: prebuild-gomod-${{ matrix.arch }}-${{ hashFiles('apps/imm_pkg/frp/Makefile', 'apps/luci-app-mosdns/mosdns/Makefile', 'apps/OpenWrt-mihomo/**/Makefile', 'apps/imm_pkg/sing-box/Makefile', 'apps/luci-app-daeuniverse/dae/**') }}
           restore-keys: |
             prebuild-gomod-${{ matrix.arch }}-
 
@@ -210,7 +210,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: prebuild-cargo-${{ matrix.arch }}-${{ hashFiles('apps/openwrt-einat-ebpf/Makefile', 'apps/luci-app-honk/honk/Makefile', 'apps/FlowCone/Cargo.lock') }}
+          key: prebuild-cargo-${{ matrix.arch }}-${{ hashFiles('apps/openwrt-einat-ebpf/Makefile', 'apps/luci-app-daeuniverse/honk/Makefile', 'apps/FlowCone/Cargo.lock') }}
           restore-keys: |
             prebuild-cargo-${{ matrix.arch }}-
 

@@ -1,0 +1,328 @@
+name: Build packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      openwrt_majors:
+        description: 'OpenWrt major versions (space-separated, e.g. 24 25)'
+        required: false
+        default: '24 25'
+        type: string
+  push:
+    branches:
+      - master
+    paths:
+      - 'honk/**'
+      - 'dae/**'
+      - 'luci-app-daeuniverse/**'
+      - 'scripts/**'
+      - '.github/workflows/build-packages.yml'
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  OPENWRT_MAJORS: '24 25'
+
+jobs:
+  prepare:
+    name: Prepare version and matrix
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      release_name: ${{ steps.meta.outputs.release_name }}
+      sdks: ${{ steps.matrix.outputs.sdks }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Generate version metadata
+        id: meta
+        shell: bash
+        run: |
+          honk_version=$(grep '^PKG_VERSION:=' honk/Makefile | head -n 1 | cut -d= -f2)
+          dae_version=$(grep '^PKG_VERSION:=' dae/Makefile | head -n 1 | cut -d= -f2)
+          luci_version=$(grep '^PKG_VERSION:=' luci-app-daeuniverse/Makefile | head -n 1 | cut -d= -f2)
+          luci_release=$(grep '^PKG_RELEASE:=' luci-app-daeuniverse/Makefile | head -n 1 | cut -d= -f2)
+
+          tag_ver="${luci_version}-r${luci_release}_honk_${honk_version}_dae_${dae_version}"
+          # git tag 不允许 '~'
+          release_tag="daeuniverse_$(printf '%s' "$tag_ver" | tr '~' '_')"
+          release_name="daeuniverse ${luci_version}-r${luci_release} (honk ${honk_version} | dae ${dae_version})"
+
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+          echo "release_name=${release_name}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${release_tag}"
+
+      - name: Resolve latest SDK releases
+        id: matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          raw_majors="${{ inputs.openwrt_majors }}"
+          majors=$(echo "${raw_majors:-$OPENWRT_MAJORS}" | tr ',' ' ')
+          echo "Target major versions: ${majors}"
+
+          tags=""
+          for i in {1..3}; do
+            tags=$(git ls-remote --tags --refs https://github.com/openwrt/openwrt.git 2>/dev/null | awk -F'/' '{print $NF}' | sed 's/^v//' || true)
+            [ -n "$tags" ] && break
+            sleep 2
+          done
+
+          if [ -z "$tags" ]; then
+            echo "::error::Failed to fetch tags from https://github.com/openwrt/openwrt.git"
+            exit 1
+          fi
+
+          sdks=()
+          for major in $majors; do
+            latest=$(echo "$tags" | grep -E "^${major}\.[0-9.]+$" | sort -V | tail -n 1 || true)
+            [ -z "$latest" ] && latest=$(echo "$tags" | grep -E "^${major}\." | sort -V | tail -n 1 || true)
+
+            if [ -n "$latest" ]; then
+              echo "OpenWrt ${major} -> ${latest}"
+              sdks+=("$latest")
+            else
+              echo "::error::No OpenWrt release tag found for major: ${major}"
+              exit 1
+            fi
+          done
+
+          echo "sdks=$(jq -nc --args '$ARGS.positional' -- "${sdks[@]}")" >> "$GITHUB_OUTPUT"
+
+  prebuild-honk:
+    name: Prebuild honk-core ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - aarch64_generic
+          - x86_64
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Resolve honk toolchain pins
+        id: honk-toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./honk/honk_toolchain.sh | tee "$RUNNER_TEMP/honk-toolchain.env"
+          . "$RUNNER_TEMP/honk-toolchain.env"
+          echo "zig_version=${ZIG_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Install host build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm libbpf-dev cmake libclang-dev zstd
+          . "$RUNNER_TEMP/honk-toolchain.env"
+          curl -fsSL --retry 3 -o /tmp/bpf-linker.tar.zst \
+            "https://github.com/aya-rs/bpf-linker/releases/download/v${BPF_LINKER_VERSION}/bpf-linker-x86_64-unknown-linux-musl.tar.zst"
+          echo "${BPF_LINKER_SHA256}  /tmp/bpf-linker.tar.zst" | sha256sum -c -
+          sudo tar --zstd -xf /tmp/bpf-linker.tar.zst -C /usr/local/bin
+          bpf-linker --version
+
+      - name: Setup Zig for BoringSSL musl cross-compilation
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ steps.honk-toolchain.outputs.zig_version }}
+
+      - name: Build honk-core binary
+        shell: bash
+        run: |
+          ./honk/build_honk_core.sh "${{ matrix.arch }}" honk/files/honk-core.bin
+
+      - name: Upload honk-core binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: honk-core-${{ matrix.arch }}
+          path: honk/files/honk-core.bin
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  prebuild-dae:
+    name: Prebuild dae ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - aarch64_generic
+          - x86_64
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+          cache: false
+
+      - name: Install host eBPF tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm file
+
+      - name: Build dae binary
+        shell: bash
+        run: |
+          ./dae/build_dae_core.sh "${{ matrix.arch }}" dae/files/dae.bin
+
+      - name: Upload dae binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: dae-core-${{ matrix.arch }}
+          path: dae/files/dae.bin
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  build:
+    name: Build ${{ matrix.arch }}-openwrt-${{ matrix.sdk }}
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - prebuild-honk
+      - prebuild-dae
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - aarch64_generic
+          - x86_64
+        sdk: ${{ fromJson(needs.prepare.outputs.sdks) }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Download honk-core binary
+        uses: actions/download-artifact@v8
+        with:
+          name: honk-core-${{ matrix.arch }}
+          path: honk/files
+
+      - name: Download dae binary
+        uses: actions/download-artifact@v8
+        with:
+          name: dae-core-${{ matrix.arch }}
+          path: dae/files
+
+      - name: Remove KERNEL_DEBUG_INFO_BTF dependency for CI
+        shell: bash
+        run: |
+          sed -i '/depends on KERNEL_DEBUG_INFO_BTF/d' honk/Makefile dae/Makefile
+
+      - name: Configure Fastly CDN and anti-stall timeouts for OpenWrt SDK
+        shell: bash
+        run: |
+          f=$(find "${RUNNER_WORKSPACE}/../_actions/openwrt/gh-action-sdk" -name "entrypoint.sh" -print -quit 2>/dev/null)
+          if [ -n "$f" ] && [ -f "$f" ]; then
+            sed -i \
+              -e '2i export UPSTREAM_URL="https://downloads.openwrt.org"' \
+              -e '2i printf "connect_timeout = 15\\nread_timeout = 30\\ntries = 3\\nwaitretry = 2\\nretry_connrefused = on\\n" > ~/.wgetrc' \
+              "$f"
+            echo "Configured Fastly CDN and anti-stall wgetrc in $f"
+          fi
+
+      - name: Build packages
+        uses: openwrt/gh-action-sdk@main
+        env:
+          CONTAINER: docker.io/openwrt/sdk
+          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
+          FEEDNAME: packages_ci
+          PACKAGES: honk dae ${{ matrix.arch == 'x86_64' && 'luci-app-daeuniverse' || '' }}
+          NO_REFRESH_CHECK: true
+          NO_SHFMT_CHECK: true
+
+      - name: Prepare renamed artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          while IFS= read -r -d '' f; do
+            base="$(basename "$f")"
+            case "$base" in
+              honk[_-]*|dae[_-]*|luci-app-daeuniverse*|luci-i18n-daeuniverse*) ;;
+              *) continue ;;
+            esac
+            ext="${base##*.}"
+            name="${base%.*}"
+            case "$name" in
+              luci-*)
+                new_name="${name}-openwrt-${{ matrix.sdk }}.${ext}"
+                ;;
+              *)
+                if [[ "$name" == *"${{ matrix.arch }}"* ]]; then
+                  new_name="${name}-openwrt-${{ matrix.sdk }}.${ext}"
+                else
+                  new_name="${name}-${{ matrix.arch }}-openwrt-${{ matrix.sdk }}.${ext}"
+                fi
+                ;;
+            esac
+            cp "$f" "dist/${new_name}"
+          done < <(find bin/packages -type f \( -name '*.ipk' -o -name '*.apk' \) -print0)
+
+          compgen -G 'dist/*' >/dev/null || {
+            echo "::error::No package files were copied to dist"
+            exit 1
+          }
+
+          ls -lah dist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.arch }}-openwrt-${{ matrix.sdk }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - build
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release-dist
+          merge-multiple: true
+          pattern: '*-openwrt-*'
+
+      - name: Create or update GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          name: ${{ needs.prepare.outputs.release_name }}
+          files: release-dist/*
+          generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete Old Releases
+        uses: ophub/delete-releases-workflows@main
+        with:
+          delete_releases: true
+          releases_keep_latest: 3
+          delete_tags: true
+          delete_workflows: true
+          workflows_keep_day: 3
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true

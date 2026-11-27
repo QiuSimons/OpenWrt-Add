@@ -371,11 +371,11 @@ prebuild_flowcone() {
 }
 
 prebuild_honk() {
-  local mk=apps/luci-app-honk/honk/Makefile
+  local mk=apps/luci-app-daeuniverse/honk/Makefile
   [ -f "$mk" ] || { log "SKIP honk (包已移除)"; return 0; }
 
-  local script="$REPO_ROOT/apps/luci-app-honk/honk/build_honk_core.sh"
-  local toolchain="$REPO_ROOT/apps/luci-app-honk/honk/honk_toolchain.sh"
+  local script="$REPO_ROOT/apps/luci-app-daeuniverse/honk/build_honk_core.sh"
+  local toolchain="$REPO_ROOT/apps/luci-app-daeuniverse/honk/honk_toolchain.sh"
   [ -x "$script" ] || die "honk prebuild script not found: $script"
 
   local src_ver
@@ -402,74 +402,48 @@ prebuild_honk() {
   write_stamp honk "$sig"
 
   # 源码与 target 只在本次构建需要，清掉给后面的 Rust 包腾磁盘
-  rm -rf apps/luci-app-honk/honk/honk-src
+  rm -rf apps/luci-app-daeuniverse/honk/honk-src
 }
 
 prebuild_dae() {
-  local mk=apps/luci-app-dae/dae/Makefile
+  local dir="$REPO_ROOT/apps/luci-app-daeuniverse/dae"
+  local mk="$dir/Makefile"
   [ -f "$mk" ] || { log "SKIP dae (包已移除)"; return 0; }
 
-  resolve_source "$mk"
-  local pgo_file="$REPO_ROOT/apps/luci-app-dae/dae/pprof/default.pgo"
-  local pgo_hash=""
-  [ -f "$pgo_file" ] && pgo_hash="$(sha256sum "$pgo_file" | awk '{print $1}')"
-  local sig="${SRC_VERSION}_${SRC_URL}_${pgo_hash}"
+  local script="$dir/build_dae_core.sh"
+  [ -x "$script" ] || die "dae prebuild script not found: $script"
+
+  local src_ver
+  src_ver="$(sed -n 's/^DAE_SRC_VERSION:=[[:space:]]*//p' "$mk" | tr -d ' \r\n')"
+  [ -n "$src_ver" ] || die "DAE_SRC_VERSION not found in $mk"
+
+  local pgo_hash="" script_hash
+  if [ -f "$dir/pprof/default.pgo" ]; then
+    pgo_hash="$(sha256sum "$dir/pprof/default.pgo" | awk '{print $1}')"
+  fi
+  script_hash="$(sha256sum "$script" | awk '{print $1}')"
+  local sig="${src_ver}_${pgo_hash}_${script_hash}"
   local out="$OUT/dae/bin"
 
   if is_cached dae "$sig" "$out/dae"; then
-    log "SKIP dae (产物已是最新: $SRC_VERSION)"
+    log "SKIP dae (产物已是最新: $src_ver)"
     return 0
   fi
 
-  local src="$WORK/dae"
-  fetch_source dae "$mk"
   rm -f "$OUT/dae/.stamp"
   rm -rf "$out"; mkdir -p "$out"
 
-  local bpf_headers="$WORK/dae_bpf_headers"
-  git clone --depth 1 https://github.com/daeuniverse/dae_bpf_headers "$bpf_headers" \
-    || die "download dae_bpf_headers failed"
-  mkdir -p "$src/control/kern/headers" "$src/trace/kern/headers"
-  cp -rf "$bpf_headers"/* "$src/control/kern/headers/"
-  cp -rf "$bpf_headers"/* "$src/trace/kern/headers/"
+  "$script" "$ARCH" "$out/dae" || die "dae prebuild failed via build_dae_core.sh"
 
-  command -v clang >/dev/null || die "clang is required for dae bpf build"
-  command -v llvm-strip >/dev/null || die "llvm-strip is required for dae bpf build"
-
-  (
-    cd "$src"
-    local target_goarch="$GOARCH"
-    unset GOARCH
-    BPF_CLANG=clang \
-    BPF_STRIP_FLAG="-strip=llvm-strip" \
-    BPF_CFLAGS="-O2 -Wall -DMAX_MATCH_SET_LEN=1024" \
-    BPF_TARGET="bpfel,bpfeb" \
-    BPF_TRACE_TARGET="$target_goarch" \
-    go generate ./control/control.go
-    BPF_CLANG=clang \
-    BPF_STRIP_FLAG="-strip=llvm-strip" \
-    BPF_CFLAGS="-O2 -Wall -DMAX_MATCH_SET_LEN=1024" \
-    BPF_TARGET="bpfel,bpfeb" \
-    BPF_TRACE_TARGET="$target_goarch" \
-    go generate ./trace/trace.go
-  ) || die "dae: bpf generate failed"
-
-  local pgo_args=()
-  [ -f "$pgo_file" ] && pgo_args+=("-pgo=$pgo_file")
-
-  local ldflags="-s -w"
-  ldflags+=" -X github.com/daeuniverse/dae/cmd.Version=$SRC_VERSION"
-  ldflags+=" -X github.com/daeuniverse/dae/common/consts.MaxMatchSetLen_=1024"
-
-  (
-    cd "$src"
-    GOFLAGS="-mod=mod" GOEXPERIMENT=newinliner,simd \
-      go build -trimpath "${pgo_args[@]}" -ldflags "$ldflags" -tags trace -o "$out/dae" .
-  ) || die "go build failed: dae"
-
+  # 构建脚本会在产物旁留一份目标架构戳；Go 预编译注入整目录拷贝 bin/*，
+  # 这里只保留 ELF 本体，避免把 stamp 装进 /usr/bin。
+  rm -f "$out/dae.stamp"
   assert_elf "$out/dae"
 
   write_stamp dae "$sig"
+
+  # 源码与 eBPF 产物只在本次构建需要，清掉腾磁盘
+  rm -rf "$dir/dae-src"
 }
 
 # ==============================================================================

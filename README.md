@@ -107,7 +107,7 @@ apps/luci-app-demo | https://github.com/example/luci-app-demo
 
 构建管线要点：
 
-- Go / Rust 组件（sing-box、mihomo-meta、mihomo-alpha、frp、mosdns、einat-ebpf、flowcone）在 runner 上交叉编译，
+- Go / Rust 组件（sing-box、mihomo-meta、mihomo-alpha、frp、mosdns、einat-ebpf、flowcone、dae、honk）在 runner 上交叉编译，
   apply_prebuilt.sh 只改写对应 Makefile 的 Build/Compile，DEPENDS、conffiles、install 等元数据仍以仓库内 Makefile 为准。
 - 其余包（含依赖目标内核 BTF 的 vmlinux-btf）在 OpenWrt SDK 容器内正常编译。
 - 每个计划编译的包都必须产出 apk；缺失且不在 core/assets/build-allow-missing.conf 中，工作流直接失败。

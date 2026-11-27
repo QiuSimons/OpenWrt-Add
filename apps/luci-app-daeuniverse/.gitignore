@@ -1,0 +1,14 @@
+*.ipk
+*.apk
+*.o
+*.so
+*.a
+.DS_Store
+*~
+
+*.bin
+*.bin.stamp
+dist/
+target/
+honk-src/
+dae-src/
