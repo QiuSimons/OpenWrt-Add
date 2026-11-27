@@ -9,7 +9,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=coremark
 PKG_VERSION:=2025.05.01~1f483d5b
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 ifeq ($(CONFIG_USE_MUSL),y)
   PKG_LIBC:=musl
