@@ -463,6 +463,75 @@ sync_imm_pkg() {
 }
 
 # ------------------------------------------------------------------------------
+# 上游 release 选择：默认含 rc；同版本正式版优先于 rc，只有 rc 时取 rc 号最大。
+# OPENWRT_MAJORS 可指定多条大版本线，未指定时只取主版本最大的一条。
+# 不用 sort -V：它把 -rcN 排在正式版之后。
+# ------------------------------------------------------------------------------
+resolve_reference_versions() {
+    local majors="${OPENWRT_MAJORS:-}"
+    local listing
+    listing="$(curl -fsSL --retry 2 -m 20 "${OPENWRT_RELEASES_URL:-https://downloads.openwrt.org/releases/}" 2>/dev/null \
+        | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[Rr][Cc][0-9]+)?/' | sed 's#/##' | sort -u || true)"
+    [ -n "$listing" ] || return 0
+
+    if [ "${OPENWRT_ALLOW_RC:-1}" != "1" ]; then
+        listing="$(printf '%s\n' "$listing" | grep -viE -- '-rc[0-9]+$' || true)"
+        [ -n "$listing" ] || return 0
+    fi
+
+    printf '%s\n' "$listing" | awk -v majors="$majors" '
+        function key(v,   a, b, n, rc, fin) {
+            rc = 0; fin = 1
+            n = split(v, a, "-[Rr][Cc]")
+            if (n > 1) { rc = a[2] + 0; fin = 0 }
+            split(a[1], b, ".")
+            return sprintf("%06d%06d%06d%d%06d", b[1] + 0, b[2] + 0, b[3] + 0, fin, rc)
+        }
+        BEGIN {
+            n = split(majors, want, " ")
+            for (i = 1; i <= n; i++) allow[want[i]] = 1
+            have_allow = (majors != "")
+        }
+        {
+            major = $0; sub(/\..*/, "", major)
+            if (have_allow && !(major in allow)) next
+            k = key($0)
+            if (!(major in bestkey) || k > bestkey[major]) { best[major] = $0; bestkey[major] = k }
+        }
+        END {
+            if (!have_allow && length(best) > 1) {
+                top = ""
+                for (m in best) { if (top == "" || m + 0 > top + 0) top = m }
+                print best[top]
+                exit
+            }
+            for (m in best) print best[m]
+        }'
+}
+
+# ------------------------------------------------------------------------------
+# 同名包 release 对齐：同步完成后跑一次，保证树内版本不落后于上游
+# ------------------------------------------------------------------------------
+align_colliding_releases() {
+    local script="$REPO_ROOT/core/scripts/fix_colliding_release.sh"
+    [ -f "$script" ] || return 0
+
+    local versions="${OPENWRT_VERSIONS:-}"
+    if [ -z "$versions" ]; then
+        versions="$(resolve_reference_versions | sort -V | tr '\n' ' ')"
+        versions="$(echo $versions)"
+    fi
+    if [ -z "$versions" ]; then
+        log_warn "release 对齐跳过：无法解析上游 release"
+        return 0
+    fi
+
+    log_info "release 对齐: $versions"
+    REPO_ROOT="$REPO_ROOT" OPENWRT_VERSIONS="$versions" ARCH="$ARCH" \
+        bash "$script" || log_warn "release 对齐失败，已跳过"
+}
+
+# ------------------------------------------------------------------------------
 # 批量执行定制同步
 # ------------------------------------------------------------------------------
 run_all_custom_sync() {
@@ -488,6 +557,8 @@ run_all_custom_sync() {
     for handler in "${handlers[@]}"; do
         $handler || log_warn "$handler 执行遇到警告/错误，已保留安全旧版"
     done
+
+    align_colliding_releases
 }
 
 # 真实包目录名称别名 (支持 --only <包名> 快速定位)

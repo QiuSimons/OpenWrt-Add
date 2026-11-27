@@ -265,6 +265,16 @@ jobs:
           REPO_ROOT=staging_feed bash core/scripts/fix_translations.sh
           echo "Package Makefiles in feed: $(find staging_feed -name Makefile -not -path '*/src/*' | wc -l)"
 
+      # 与上游正式 feed 同名的包：版本号相同则把 PKG_RELEASE 提升到「上游 + 1」，
+      # 否则 apk 会按版本号选到上游那份（例如 zerotier 的 fw4 集成会静默失效）。
+      - name: Align colliding package releases with upstream
+        shell: bash
+        env:
+          REPO_ROOT: staging_feed
+          OPENWRT_VERSIONS: ${{ join(fromJson(needs.resolve-sdks.outputs.sdks), ' ') }}
+          ARCH: ${{ matrix.arch }}
+        run: bash core/scripts/fix_colliding_release.sh
+
       - name: Apply prebuilt binaries to feed
         shell: bash
         run: ./core/scripts/apply_prebuilt.sh staging_feed /prebuilt prebuilt
