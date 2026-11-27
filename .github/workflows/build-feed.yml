@@ -324,6 +324,20 @@ jobs:
           find artifacts/bin/ -type f 2>/dev/null | grep -E '.(ipk|apk)$' || true
           echo "==========================="
 
+      # 单个插件编译不过只告警、不失败：其它插件照常更新。
+      # 失败的插件优先用增量缓存里的上一版 apk 顶替，避免从 feed 里掉包；
+      # 只有"预期包一个都产不出来"时本步骤才失败，从而不发布、不部署。
+      - name: Verify package manifest
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 core/scripts/verify_manifest.py \
+            --expected artifacts/manifest/expected.txt \
+            --apk-dir artifacts/bin \
+            --fallback-dir cached_apks \
+            --allow-missing core/assets/build-allow-missing.conf
+
       - name: Prepare Staging Artifacts
         if: always()
         shell: bash
@@ -336,22 +350,13 @@ jobs:
 
       - name: Upload build logs
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: build-logs-${{ matrix.arch }}-${{ matrix.sdk }}
           path: artifacts/logs
           if-no-files-found: warn
           retention-days: 3
-
-      - name: Verify package manifest
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 core/scripts/verify_manifest.py \
-            --expected artifacts/manifest/expected.txt \
-            --apk-dir artifacts/bin \
-            --allow-missing core/assets/build-allow-missing.conf
 
       - name: Upload Build Artifacts
         if: always()
@@ -363,6 +368,7 @@ jobs:
 
       - name: Save Incremental Package Cache
         if: always() && hashFiles('cached_apks/fingerprints.json') != ''
+        continue-on-error: true
         uses: actions/cache/save@v6
         with:
           path: cached_apks
@@ -374,7 +380,6 @@ jobs:
       - resolve-sdks
       - build-packages
     runs-on: ubuntu-latest
-    if: always() && needs.build-packages.result != 'cancelled'
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v7
@@ -456,6 +461,8 @@ jobs:
           done
           exit 1
 
+  # 不写 if：默认 success() 依赖链正是想要的语义——构建失败(闸门拦下)就不发布、不部署。
+  # run 212 之所以一个插件就卡死全量更新，是因为闸门把"可发布"和"不可发布"混为一谈。
   deploy-feed:
     name: Deploy to GitHub Pages
     needs: publish-feed

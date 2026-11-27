@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """OpenWrt-Add 包清单闸门
 
-对比"计划编译的包"与"实际产出的 apk"，凡未产出且不在 allowlist 内的包一律失败。
-用于堵住 IGNORE_ERRORS=1 造成的静默残缺 feed。
+对比"计划编译的包"与"实际产出的 apk"，只回答一个问题：这份 feed 能不能发布。
+
+- 个别插件没产出：只告警、照常发布——一个插件编译不过不该阻塞其它插件的更新；
+- 缓存里还有该包上一次成功产物时顺手回填，避免失败的插件从 feed 里消失；
+- allowlist(core/assets/build-allow-missing.conf) 内的缺失不告警；
+- 只有"预期包一个都产不出来"时才拒绝发布，避免用空源覆盖线上 feed。
 """
 import argparse
 import pathlib
+import shutil
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from incremental_build import find_apks_for_pkg  # noqa: E402  (复用 APK 前缀/完整性校验)
 
 
 def load_list(path):
@@ -35,6 +43,8 @@ def main():
     ap.add_argument('--apk-dir', required=True, help='实际产出的 apk 目录')
     ap.add_argument('--allow-missing', default='core/assets/build-allow-missing.conf',
                     help='允许缺失的包清单（每行一个包名）')
+    ap.add_argument('--fallback-dir', default='',
+                    help='上一次成功产物的缓存目录；本次没编译出来的包用它顶替，feed 不掉包')
     args = ap.parse_args()
 
     expected = load_list(args.expected)
@@ -45,28 +55,50 @@ def main():
 
     allowed = load_list(args.allow_missing)
     apk_dir = pathlib.Path(args.apk_dir)
-    apks = sorted(p.name for p in apk_dir.glob('*.apk')) if apk_dir.is_dir() else []
+    apk_dir.mkdir(parents=True, exist_ok=True)
+    names = sorted(p.name for p in apk_dir.glob('*.apk'))
 
-    missing = sorted(p for p in expected if not produced(apks, p))
-    tolerated = [p for p in missing if p in allowed]
-    blocking = [p for p in missing if p not in allowed]
+    fallback_dir = pathlib.Path(args.fallback_dir) if args.fallback_dir else None
+    if fallback_dir is not None and not fallback_dir.is_dir():
+        fallback_dir = None
 
-    print(f'预期包数: {len(expected)}    产出 apk 数: {len(apks)}')
+    tolerated, carried, blocking = [], [], []
+    for pkg in sorted(p for p in expected if not produced(names, p)):
+        found = find_apks_for_pkg(fallback_dir, pkg) if fallback_dir is not None else []
+        fallback = max(found, key=lambda f: (f.stat().st_mtime, f.name)) if found else None
+        if pkg in allowed:
+            tolerated.append(pkg)
+        elif fallback is not None:
+            dst = apk_dir / fallback.name
+            if not dst.exists():
+                shutil.copy2(fallback, dst)
+                names.append(fallback.name)
+            carried.append(f'{pkg} {fallback.name}')
+        else:
+            blocking.append(pkg)
+
+    covered = [p for p in expected if produced(names, p)]
+    print(f'预期包数: {len(expected)}    产出: {len(covered)}    '
+          f'顶替: {len(carried)}    未产出: {len(blocking)}')
     if tolerated:
-        print('allowlist 内缺失(不阻塞): ' + ', '.join(tolerated))
-
+        print('allowlist 内缺失（忽略）: ' + ', '.join(tolerated))
+    if carried:
+        print('本次没编译出来、已用上一版产物顶替:')
+        for item in carried:
+            print('  ~ ' + item)
+        print(f'::warning::以下 {len(carried)} 个插件本次编译失败，已用上一版 apk 顶替: '
+              + ', '.join(item.split(' ', 1)[0] for item in carried))
     if blocking:
         print('')
-        print(f'::error::以下 {len(blocking)} 个包未产出 apk:')
+        print(f'::warning::以下 {len(blocking)} 个插件本次未产出 apk（不阻塞其它插件更新）:')
         for p in blocking:
             print('  - ' + p)
-        print('')
-        print('若确认该包本就无法在本 SDK 内构建，请加入 core/assets/build-allow-missing.conf:')
-        for p in blocking:
-            print(f'  {p}  # 原因')
+
+    if not covered:
+        print('::error::预期包一个都没有产出，拒绝发布空软件源')
         return 1
 
-    print('manifest 闸门通过')
+    print('manifest 闸门放行')
     return 0
 
 

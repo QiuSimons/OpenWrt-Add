@@ -51,7 +51,7 @@ OpenWrt-Add/
 │   │   ├── prebuild_host.sh  # runner 上交叉编译 Go/Rust 组件，免容器工具链引导
 │   │   ├── apply_prebuilt.sh # 把预编译二进制注入 feed 的包 Makefile
 │   │   ├── smart_fanout.py   # 产物按架构分发
-│   │   └── verify_manifest.py# 包清单闸门，防止静默产出残缺 feed
+│   │   └── verify_manifest.py# 包清单闸门：单包失败只告警，不阻塞其它插件更新
 │   ├── patches/              # 离线补丁文件
 │   ├── assets/               # 静态文件 (直连域名、闸门 allowlist、变体摘除清单)
 │   └── tools/                # 路由器端独立运维工具 (clean-overlay.sh 等)
@@ -110,7 +110,9 @@ apps/luci-app-demo | https://github.com/example/luci-app-demo
 - Go / Rust 组件（sing-box、mihomo-meta、mihomo-alpha、frp、mosdns、einat-ebpf、flowcone、dae、honk）在 runner 上交叉编译，
   apply_prebuilt.sh 只改写对应 Makefile 的 Build/Compile，DEPENDS、conffiles、install 等元数据仍以仓库内 Makefile 为准。
 - 其余包（含依赖目标内核 BTF 的 vmlinux-btf）在 OpenWrt SDK 容器内正常编译。
-- 每个计划编译的包都必须产出 apk；缺失且不在 core/assets/build-allow-missing.conf 中，工作流直接失败。
+- 单个插件编译不过只告警、不阻塞：该插件在增量缓存里有上一版 apk 时直接顶替（feed 不掉包），
+  其它插件照常编译并更新；确认无法在某 SDK 内构建的包可登记到 core/assets/build-allow-missing.conf。
+- 只有「预期包一个都产不出来」（defconfig 后清单为空，或全部无产物）才会中止发布，避免用空的残缺源覆盖线上 feed。
 - prebuild_host.sh 的版本号与源码地址从各包 Makefile 解析，跟随每日同步自动更新。
 
 ### 1. 路由器在线安装
