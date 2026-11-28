@@ -85,7 +85,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  	u32	min_rtt_us;	        /* min RTT in min_rtt_win_sec window */
  	u32	min_rtt_stamp;	        /* timestamp of min_rtt_us */
  	u32	probe_rtt_done_stamp;   /* end time for BBR_PROBE_RTT mode */
-@@ -178,8 +211,40 @@
+@@ -178,8 +211,44 @@
  	u8	unused_4;		/* to preserve alignment */
  	struct tcp_plb_state plb;
  
@@ -94,13 +94,17 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	u32	lfn_round_acked;	/* packets delivered in current round */
 +	u32	lfn_round_max_tx;	/* peak tx_in_flight in current round */
 +	u32	lfn_round_min_qd;	/* min queue delay (us) in current round */
++	u32	lfn_prev_lost;		/* previous round lost packets */
++	u32	lfn_prev_acked;		/* previous round delivered packets */
++	u32	lfn_prev_min_qd;	/* previous round min queue delay (us) */
 +	u16	lfn_floor;		/* learned physical loss floor in 0.1% */
 +	u16	lfn_p_cruise;		/* steady-state cruise loss rate in 0.1% */
 +	u16	lfn_p_probe;		/* bandwidth probe loss rate in 0.1% */
 +	u8	lfn_cruise_rounds;	/* consecutive clean cruise rounds */
 +	u8	lfn_slope_bad:1,	/* probe loss significantly > cruise loss */
 +		lfn_cut_by_queue:1,	/* last cut was caused by queue delay > 5ms */
-+		lfn_round_probing:1;	/* sampled probing conditions during round */
++		lfn_round_probing:1,	/* sampled probing conditions during round */
++		lfn_round_non_cruise:1;	/* sampled non-cruise phase during round */
  };
  
 +static void bbr_init(struct sock *sk);
@@ -126,7 +130,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  struct bbr_context {
  	u32 sample_bw;
  };
-@@ -1191,11 +1256,358 @@
+@@ -1191,11 +1260,447 @@
  		bbr_raise_inflight_hi_slope(sk);
  }
  
@@ -174,8 +178,18 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +
 +static u32 bbr_lfn_class_roof(const struct bbr *bbr)
 +{
++	/* PROBE_UP uses 1.25x pacing_gain; allow 1.30x during probe so
++	 * cross-carrier probing is not prematurely clamped at 1.15x.
++	 */
++	if (bbr->mode == BBR_PROBE_BW && bbr->cycle_idx == BBR_BW_PROBE_UP)
++		return BBR_LFN_ROOF_LFN;
 +	return bbr->min_rtt_us >= BBR_LFN_LFN_RTT_US ?
 +		BBR_LFN_ROOF_LFN : BBR_LFN_ROOF_MID;
++}
++
++static u32 bbr_lfn_roof_pkts(u32 bdp, u32 roof)
++{
++	return max_t(u32, div_u64((u64)bdp * roof, 100), bdp + 2);
 +}
 +
 +static bool bbr_lfn_min_rtt_fresh(const struct sock *sk)
@@ -185,7 +199,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +
 +	if (!limit_ms)
 +		return true;
-+	if (!bbr->min_rtt_stamp)
++	if (bbr->min_rtt_us == ~0U)
 +		return false;
 +	return jiffies_to_msecs(tcp_jiffies32 - bbr->min_rtt_stamp) <= limit_ms;
 +}
@@ -198,19 +212,40 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +		 bbr->cycle_idx == BBR_BW_PROBE_REFILL));
 +}
 +
-+static bool bbr_lfn_round_measured(const struct bbr *bbr, u32 *rate)
++static bool bbr_lfn_calc_rate(u32 lost, u32 acked, u32 *rate)
 +{
-+	u32 denom = bbr->lfn_round_acked + bbr->lfn_round_lost;
++	u32 denom = acked + lost;
 +
 +	if (denom < BBR_LFN_MIN_ROUND_PKTS)
 +		return false;
-+	if (!bbr->lfn_round_lost) {
++	if (!lost) {
 +		*rate = 0;
 +		return true;
 +	}
-+	*rate = (u32)min_t(u64, div_u64((u64)bbr->lfn_round_lost * 1000, denom),
-+			  1000U);
++	*rate = (u32)min_t(u64, div_u64((u64)lost * 1000, denom), 1000U);
 +	return true;
++}
++
++static bool bbr_lfn_round_measured(const struct bbr *bbr, u32 *rate)
++{
++	return bbr_lfn_calc_rate(bbr->lfn_round_lost, bbr->lfn_round_acked, rate);
++}
++
++/* Blend with the just-finished round when the current round has < 8 packets,
++ * so early-round ACKs in PROBE_UP are not blindly rejected after round reset.
++ */
++static bool bbr_lfn_running_rate(const struct bbr *bbr, u32 *rate)
++{
++	u32 lost = bbr->lfn_round_lost;
++	u32 acked = bbr->lfn_round_acked;
++
++	if (acked + lost < BBR_LFN_MIN_ROUND_PKTS) {
++		if (bbr->lfn_prev_acked + bbr->lfn_prev_lost < BBR_LFN_MIN_ROUND_PKTS)
++			return false;
++		lost += bbr->lfn_prev_lost;
++		acked += bbr->lfn_prev_acked;
++	}
++	return bbr_lfn_calc_rate(lost, acked, rate);
 +}
 +
 +static u32 bbr_lfn_ewma_step(u32 cur, u32 sample, u32 max)
@@ -268,13 +303,38 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	return thresh;
 +}
 +
++static u32 bbr_lfn_effective_min_rtt(const struct sock *sk,
++				     const struct rate_sample *rs)
++{
++	const struct bbr *bbr = bbr_ca(sk);
++	u32 probe_exp, min_exp, eff_probe;
++
++	if (rs->rtt_us <= 0)
++		return bbr->min_rtt_us;
++
++	probe_exp = bbr->probe_rtt_min_stamp +
++		    msecs_to_jiffies(bbr_param(sk, probe_rtt_win_ms));
++	if (after(tcp_jiffies32, probe_exp) && !rs->is_ack_delayed)
++		eff_probe = (u32)rs->rtt_us;
++	else
++		eff_probe = min_t(u32, bbr->probe_rtt_min_us, (u32)rs->rtt_us);
++
++	min_exp = bbr->min_rtt_stamp + bbr_param(sk, min_rtt_win_sec) * HZ;
++	if (eff_probe <= bbr->min_rtt_us || after(tcp_jiffies32, min_exp))
++		return eff_probe;
++
++	return bbr->min_rtt_us;
++}
++
 +static bool bbr_lfn_loss_tolerated(struct sock *sk, const struct rate_sample *rs)
 +{
 +	struct bbr *bbr = bbr_ca(sk);
-+	u32 thresh, running, bdp, roof;
++	u32 thresh, running, bdp, roof, qd;
 +	u32 tx_in_flight = bbr_rs_tx_in_flight(rs);
 +
-+	if (bbr->lfn_round_min_qd == ~0U)
++	qd = bbr->lfn_round_min_qd != ~0U ?
++	     bbr->lfn_round_min_qd : bbr->lfn_prev_min_qd;
++	if (qd == ~0U)
 +		return false;
 +
 +	if (!bbr_lfn_min_rtt_fresh(sk))
@@ -287,29 +347,29 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	if (bbr->mode == BBR_STARTUP) {
 +		if (bbr->min_rtt_us < BBR_LFN_LFN_RTT_US)
 +			return false;
-+		if (bbr->lfn_round_min_qd > BBR_LFN_LEARN_QDELAY_US)
++		if (qd > BBR_LFN_LEARN_QDELAY_US)
 +			return false;
-+		if (!bbr_lfn_round_measured(bbr, &running) ||
++		if (!bbr_lfn_running_rate(bbr, &running) ||
 +		    running > BBR_LFN_CAP_TENTHS)
 +			return false;
 +		return true;
 +	}
 +
 +	/* 2. Steady-state and probing phases */
-+	if (bbr->lfn_round_min_qd > BBR_LFN_ALLOW_QDELAY_US)
++	if (qd > BBR_LFN_ALLOW_QDELAY_US)
 +		return false;
 +
 +	thresh = bbr_lfn_active_thresh(sk);
 +	if (!thresh)
 +		return false;
 +
-+	if (!bbr_lfn_round_measured(bbr, &running) || running > thresh)
++	if (!bbr_lfn_running_rate(bbr, &running) || running > thresh)
 +		return false;
 +
 +	/* In steady state, tx_in_flight must not exceed roof */
 +	bdp = bbr_bdp(sk, bbr_max_bw(sk), BBR_UNIT);
 +	roof = bbr_lfn_class_roof(bbr);
-+	if (!bdp || tx_in_flight > div_u64((u64)bdp * roof, 100))
++	if (!bdp || tx_in_flight > bbr_lfn_roof_pkts(bdp, roof))
 +		return false;
 +
 +	return true;
@@ -320,6 +380,11 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	struct bbr *bbr = bbr_ca(sk);
 +	u32 thresh, running, bdp, roof;
 +
++	if (bbr->min_rtt_us == ~0U ||
++	    bbr->min_rtt_us < BBR_LFN_MIN_PATH_RTT_US ||
++	    bbr_lfn_pct(sk) <= 0)
++		return false;
++
 +	if (bbr->lfn_round_min_qd == ~0U ||
 +	    bbr->lfn_round_min_qd > BBR_LFN_ALLOW_QDELAY_US)
 +		return false;
@@ -327,12 +392,24 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	if (!bbr_lfn_min_rtt_fresh(sk))
 +		return false;
 +
-+	thresh = bbr_lfn_thresh_tenths(sk);
-+	if (!thresh)
-+		return false;
-+
 +	if (bbr->mode != BBR_PROBE_BW)
 +		return false;
++
++	thresh = bbr_lfn_thresh_tenths(sk);
++	if (!thresh) {
++		/* During initial 4-round auto bootstrap, exempt strictly
++		 * unqueued (<= 2ms) clean PROBE_CRUISE rounds up to class cap
++		 * so background loss > 2% does not collapse bw_lo/inflight_lo
++		 * before lfn_floor can be learned.
++		 */
++		if (bbr_lfn_pct(sk) != 1 || bbr->lfn_slope_bad ||
++		    bbr->lfn_cruise_rounds >= 4 ||
++		    bbr->cycle_idx != BBR_BW_PROBE_CRUISE ||
++		    bbr->lfn_round_non_cruise || bbr->lfn_round_probing ||
++		    bbr->lfn_round_min_qd > BBR_LFN_LEARN_QDELAY_US)
++			return false;
++		thresh = bbr_lfn_class_cap(bbr);
++	}
 +
 +	if (!bbr_lfn_round_measured(bbr, &running) || running > thresh)
 +		return false;
@@ -340,7 +417,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	/* Ensure inflight during this round didn't exceed roof */
 +	bdp = bbr_bdp(sk, bbr_max_bw(sk), BBR_UNIT);
 +	roof = bbr_lfn_class_roof(bbr);
-+	if (!bdp || bbr->lfn_round_max_tx > div_u64((u64)bdp * roof, 100))
++	if (!bdp || bbr->lfn_round_max_tx > bbr_lfn_roof_pkts(bdp, roof))
 +		return false;
 +
 +	return true;
@@ -379,10 +456,14 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	    (bbr->bw_probe_samples || bbr->cycle_idx == BBR_BW_PROBE_UP))
 +		bbr->lfn_round_probing = 1;
 +
++	if (bbr->mode != BBR_PROBE_BW || bbr->cycle_idx != BBR_BW_PROBE_CRUISE)
++		bbr->lfn_round_non_cruise = 1;
++
 +	/* Track minimum queue delay among non-delayed ACKs */
 +	if (rs->rtt_us > 0 && !rs->is_ack_delayed) {
-+		u32 qd = (u32)rs->rtt_us > bbr->min_rtt_us ?
-+			 (u32)rs->rtt_us - bbr->min_rtt_us : 0;
++		u32 eff_min = bbr_lfn_effective_min_rtt(sk, rs);
++		u32 qd = (u32)rs->rtt_us > eff_min ?
++			 (u32)rs->rtt_us - eff_min : 0;
 +		if (qd < bbr->lfn_round_min_qd)
 +			bbr->lfn_round_min_qd = qd;
 +	}
@@ -395,12 +476,14 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	bbr->lfn_round_max_tx = 0;
 +	bbr->lfn_round_min_qd = ~0U;
 +	bbr->lfn_round_probing = 0;
++	bbr->lfn_round_non_cruise = 0;
 +}
 +
-+static void bbr_lfn_round_finish(struct sock *sk)
++static void bbr_lfn_round_finish(struct sock *sk, u8 prev_mode,
++				 u8 prev_cycle_idx)
 +{
 +	struct bbr *bbr = bbr_ca(sk);
-+	u32 rate, bdp, cap, qd, cruise_hi;
++	u32 rate, bdp, eff_bdp, cap, qd, cruise_hi;
 +	bool measured;
 +
 +	if (!bbr->loss_round_start)
@@ -408,11 +491,16 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +
 +	if (bbr->min_rtt_us == ~0U ||
 +	    bbr->min_rtt_us < BBR_LFN_MIN_PATH_RTT_US ||
-+	    bbr_lfn_pct(sk) <= 0)
++	    bbr_lfn_pct(sk) <= 0) {
++		bbr->lfn_prev_lost = 0;
++		bbr->lfn_prev_acked = 0;
++		bbr->lfn_prev_min_qd = ~0U;
 +		goto reset;
++	}
 +
 +	measured = bbr_lfn_round_measured(bbr, &rate);
 +	bdp = bbr_bdp(sk, bbr_max_bw(sk), BBR_UNIT);
++	eff_bdp = bbr_bdp(sk, bbr_bw(sk), BBR_UNIT);
 +	cap = bbr_lfn_class_cap(bbr);
 +	qd = bbr->lfn_round_min_qd;
 +	/* 1.05*BDP truncates to bdp for bdp < 20; keep two packets of
@@ -422,14 +510,15 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +				 bdp + 2) : 0;
 +
 +	/* 1. Cruise Phase learning */
-+	if (bbr->mode == BBR_PROBE_BW &&
-+	    bbr->cycle_idx == BBR_BW_PROBE_CRUISE &&
++	if (prev_mode == BBR_PROBE_BW &&
++	    prev_cycle_idx == BBR_BW_PROBE_CRUISE &&
++	    !bbr->lfn_round_non_cruise &&
 +	    !bbr->lfn_round_probing &&
 +	    measured &&
 +	    qd != ~0U && qd <= BBR_LFN_LEARN_QDELAY_US &&
 +	    bbr_lfn_min_rtt_fresh(sk) &&
-+	    bdp &&
-+	    bbr->lfn_round_max_tx * 2 >= bdp &&
++	    eff_bdp &&
++	    bbr->lfn_round_max_tx * 2 >= eff_bdp &&
 +	    bbr->lfn_round_max_tx <= cruise_hi &&
 +	    rate <= cap) {
 +		bbr->lfn_p_cruise = bbr_lfn_ewma_step(bbr->lfn_p_cruise, rate, cap);
@@ -473,6 +562,10 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +		bbr->lfn_cut_by_queue = 0;
 +	}
 +
++	bbr->lfn_prev_lost = bbr->lfn_round_lost;
++	bbr->lfn_prev_acked = bbr->lfn_round_acked;
++	bbr->lfn_prev_min_qd = bbr->lfn_round_min_qd;
++
 +reset:
 +	bbr_lfn_round_reset(bbr);
 +}
@@ -486,7 +579,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  				      const struct rate_sample *rs)
  {
  	const struct bbr *bbr = bbr_ca(sk);
-@@ -1206,7 +1618,8 @@
+@@ -1206,7 +1711,8 @@
  	if (rs_lost > 0 && rs_tx_in_flight) {
  		loss_thresh = (u64)rs_tx_in_flight * bbr_param(sk, loss_thresh) >>
  				BBR_SCALE;
@@ -496,7 +589,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  			return true;
  		}
  	}
-@@ -1420,8 +1833,8 @@
+@@ -1420,8 +1926,8 @@
  		bbr_ecn_lower_bounds(sk, &ecn_inflight_lo);
  	}
  
@@ -507,48 +600,66 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  		bbr_init_lower_bounds(sk, true);
  		bbr_loss_lower_bounds(sk, &bbr->bw_lo, &bbr->inflight_lo);
  	}
-@@ -1672,9 +2085,23 @@
+@@ -1672,9 +2178,31 @@
  	 * samples are not known to be robustly probing bw).
  	 */
  	if (!rs->is_app_limited) {
 +		bool queue_high = false;
-+		u32 sample_qd = 0;
 +
  		bbr->inflight_hi = max_t(u32, bbr_rs_tx_in_flight(rs),
  					 (u64)bbr_target_inflight(sk) *
  					 (BBR_UNIT - beta) >> BBR_SCALE);
 +
-+		if (rs->rtt_us > 0 && !rs->is_ack_delayed &&
-+		    (u32)rs->rtt_us > bbr->min_rtt_us)
-+			sample_qd = (u32)rs->rtt_us - bbr->min_rtt_us;
++		if (bbr->min_rtt_us != ~0U &&
++		    bbr->min_rtt_us >= BBR_LFN_MIN_PATH_RTT_US &&
++		    bbr_lfn_pct(sk) > 0) {
++			u32 sample_qd = 0;
 +
-+		if ((bbr->lfn_round_min_qd != ~0U &&
-+		     bbr->lfn_round_min_qd > BBR_LFN_ALLOW_QDELAY_US) ||
-+		    sample_qd > BBR_LFN_ALLOW_QDELAY_US)
-+			queue_high = true;
++			if (rs->rtt_us > 0 && !rs->is_ack_delayed) {
++				u32 eff_min = bbr_lfn_effective_min_rtt(sk, rs);
++
++				if ((u32)rs->rtt_us > eff_min)
++					sample_qd = (u32)rs->rtt_us - eff_min;
++			}
++
++			if ((bbr->lfn_round_min_qd != ~0U &&
++			     bbr->lfn_round_min_qd > BBR_LFN_ALLOW_QDELAY_US) ||
++			    sample_qd > BBR_LFN_ALLOW_QDELAY_US)
++				queue_high = true;
++		}
 +
 +		bbr->lfn_cut_by_queue = queue_high;
  	}
  	if (bbr->mode == BBR_PROBE_BW && bbr->cycle_idx == BBR_BW_PROBE_UP)
  		bbr_start_bw_probe_down(sk);
-@@ -2097,6 +2524,7 @@
+@@ -2082,6 +2610,7 @@
+ 	bool update_model = true;
+ 	u32 bw, round_delivered;
+ 	int ce_ratio = -1;
++	u8 lfn_prev_mode, lfn_prev_cycle;
+ 
+ 	if (unlikely(!bbr))
+ 		return;
+@@ -2097,6 +2626,9 @@
  	bbr->ecn_in_round  |= (bbr->ecn_eligible && bbr_rs_is_ece(rs));
  	bbr_calculate_bw_sample(sk, rs, &ctx);
  	bbr_update_latest_delivery_signals(sk, rs, &ctx);
++	lfn_prev_mode = bbr->mode;
++	lfn_prev_cycle = bbr->cycle_idx;
 +	bbr_lfn_note_sample(sk, rs);
  
  	if (bbr_run_fast_path(sk, &update_model, rs, &ctx))
  		goto out;
-@@ -2112,6 +2540,8 @@
+@@ -2112,6 +2644,8 @@
  	bbr_bound_cwnd_for_inflight_model(sk);
  
  out:
 +	if (unlikely(bbr->loss_round_start))
-+		bbr_lfn_round_finish(sk);
++		bbr_lfn_round_finish(sk, lfn_prev_mode, lfn_prev_cycle);
  	bbr_advance_latest_delivery_signals(sk, rs, &ctx);
  	bbr->prev_ca_state = inet_csk(sk)->icsk_ca_state;
  	bbr->loss_in_cycle |= bbr_rs_lost(rs) > 0;
-@@ -2121,20 +2551,44 @@
+@@ -2121,20 +2655,47 @@
  __bpf_kfunc static void bbr_init(struct sock *sk)
  {
  	struct tcp_sock *tp = tcp_sk(sk);
@@ -592,11 +703,14 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	bbr->lfn_cruise_rounds = 0;
 +	bbr->lfn_slope_bad = 0;
 +	bbr->lfn_cut_by_queue = 0;
++	bbr->lfn_prev_lost = 0;
++	bbr->lfn_prev_acked = 0;
++	bbr->lfn_prev_min_qd = ~0U;
 +	bbr_lfn_round_reset(bbr);
  
  	bbr->init_cwnd = min(0x7FU, tcp_snd_cwnd(tp));
  	bbr->prior_cwnd = bbr_init_prior_cwnd(tp);
-@@ -2223,8 +2677,13 @@
+@@ -2223,8 +2784,13 @@
  {
  	struct bbr **slot = bbr_ca_slot(sk);
  
@@ -612,7 +726,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  }
  
  /* BBR marks the current round trip as a loss round. */
-@@ -2369,11 +2828,12 @@
+@@ -2369,11 +2935,12 @@
  {
  	if (ext & (1 << (INET_DIAG_BBRINFO - 1)) ||
  	    ext & (1 << (INET_DIAG_VEGASINFO - 1))) {
@@ -627,7 +741,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  			return 0;
  		bw = bbr_bw_bytes_per_sec(sk, bbr_bw(sk));
  
-@@ -2467,9 +2927,102 @@
+@@ -2467,9 +3034,102 @@
  	.set_state	= bbr_set_state,
  };
  
@@ -730,7 +844,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  
  	tcp_bbr_cong_ops.flags = TCP_CONG_NON_RESTRICTED;
  #ifdef HAVE_TCP_CONG_WANTS_CE_EVENTS
-@@ -2483,12 +3036,18 @@
+@@ -2483,12 +3143,18 @@
  	if (bbr_ecn_low)
  		tcp_bbr_cong_ops.flags |= TCP_CONG_NEEDS_ECN;
  #endif
