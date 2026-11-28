@@ -130,7 +130,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  struct bbr_context {
  	u32 sample_bw;
  };
-@@ -1191,11 +1260,453 @@
+@@ -1191,11 +1260,470 @@
  		bbr_raise_inflight_hi_slope(sk);
  }
  
@@ -521,7 +521,19 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	    bbr->lfn_round_max_tx * 2 >= eff_bdp &&
 +	    bbr->lfn_round_max_tx <= cruise_hi &&
 +	    rate <= cap) {
-+		bbr->lfn_p_cruise = bbr_lfn_ewma_step(bbr->lfn_p_cruise, rate, cap);
++		u32 old_cruise = bbr->lfn_p_cruise;
++
++		bbr->lfn_p_cruise = bbr_lfn_ewma_step(old_cruise, rate, cap);
++		if (bbr->lfn_p_cruise < old_cruise) {
++			u32 drop = old_cruise - bbr->lfn_p_cruise;
++
++			/* Shift p_probe down with falling physical floor so
++			 * cleaner paths do not falsely trip slope_bad, while
++			 * preserving relative probe-minus-cruise excess.
++			 */
++			bbr->lfn_p_probe = bbr->lfn_p_probe > drop ?
++					   bbr->lfn_p_probe - drop : 0;
++		}
 +		bbr->lfn_floor = bbr->lfn_p_cruise;
 +		if (bbr->lfn_cruise_rounds < 255)
 +			bbr->lfn_cruise_rounds++;
@@ -534,8 +546,13 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +			bbr->lfn_slope_bad = 0;
 +			bbr->lfn_p_probe = bbr->lfn_p_cruise;
 +		}
-+	} else if (qd != ~0U && qd > BBR_LFN_ALLOW_QDELAY_US) {
-+		/* Persistent queueing detected: reset cruise confidence */
++	} else if ((qd != ~0U && qd > BBR_LFN_ALLOW_QDELAY_US) ||
++		   (prev_mode == BBR_PROBE_BW &&
++		    prev_cycle_idx == BBR_BW_PROBE_CRUISE &&
++		    !bbr->lfn_round_non_cruise &&
++		    !bbr->lfn_round_probing &&
++		    measured && rate > cap)) {
++		/* Persistent queueing or excessive cruise loss: reset confidence */
 +		bbr->lfn_cruise_rounds = 0;
 +	}
 +
