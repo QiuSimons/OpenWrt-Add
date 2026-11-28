@@ -16,9 +16,49 @@ pub const BINDING_EPOCH_MASK: u16 = !BINDING_FLAG_SHORT_LIVED;
 pub const RESERVED_PORT_BIT: u16 = 1;
 pub const DEFAULT_SHORT_LIVED_TIMEOUT_SEC: u32 = 5;
 
+pub const PER_CPU_PORT_CACHE_CAP: usize = 4;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PerCpuPortCache {
+    pub count: u16,
+    pub min_port: u16,
+    pub max_port: u16,
+    pub _pad: u16,
+    pub ports: [u16; PER_CPU_PORT_CACHE_CAP],
+}
+
+#[cfg(not(target_arch = "bpf"))]
+unsafe impl aya::Pod for PerCpuPortCache {}
+
 #[inline(always)]
 pub const fn monotonic_ns_to_sec(ns: u64) -> u32 {
     (ns / 1_000_000_000) as u32
+}
+
+/// Selects a prime probing stride coprime to `span` (`1..=PORT_BITMAP_SLOTS`)
+/// with `stride <= span`, ensuring modulo-free wraparound in eBPF.
+#[inline(always)]
+pub const fn port_probe_stride(span: u32, _probes_per_parity: u32) -> u32 {
+    if span <= 37 {
+        1
+    } else if !span.is_multiple_of(37) {
+        37
+    } else {
+        29
+    }
+}
+
+/// Scales the lazy `last_seen` update step with session timeout so active
+/// flows avoid dirtying shared HashMap cachelines on every second/packet.
+#[inline(always)]
+pub const fn last_seen_refresh_interval_sec(timeout_sec: u32, is_short_lived: bool) -> u32 {
+    if is_short_lived || timeout_sec < 20 {
+        1
+    } else {
+        let step = timeout_sec / 20;
+        if step > 5 { 5 } else { step }
+    }
 }
 
 #[inline(always)]
@@ -949,5 +989,27 @@ mod tests {
             let bit = mask.trailing_zeros();
             assert_eq!(bitmap_coords_to_port(is_even, slot, bit), port);
         }
+    }
+
+    #[test]
+    fn test_port_probe_stride_and_refresh_helpers() {
+        fn gcd(mut a: u32, mut b: u32) -> u32 {
+            while b != 0 {
+                let r = a % b;
+                a = b;
+                b = r;
+            }
+            a
+        }
+        for span in 1..=PORT_BITMAP_SLOTS {
+            let stride = port_probe_stride(span, 8);
+            assert!(stride <= span);
+            assert_eq!(gcd(stride, span), 1, "span={span}, stride={stride}");
+        }
+        assert_eq!(monotonic_ns_to_sec(5_999_999_999), 5);
+        assert_eq!(last_seen_refresh_interval_sec(120, true), 1);
+        assert_eq!(last_seen_refresh_interval_sec(10, false), 1);
+        assert_eq!(last_seen_refresh_interval_sec(40, false), 2);
+        assert_eq!(last_seen_refresh_interval_sec(120, false), 5);
     }
 }

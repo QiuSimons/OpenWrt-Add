@@ -204,6 +204,7 @@ impl DataPlane {
             "flowcone_egress_alloc_v6",
             "flowcone_frag_v4_ingress",
             "flowcone_frag_v4_egress",
+            "flowcone_frag_v4_egress_alloc",
             "flowcone_frag_v6_ingress",
             "flowcone_frag_v6_egress",
             "flowcone_frag_v6_egress_alloc",
@@ -243,6 +244,7 @@ impl DataPlane {
             &[
                 (0, "flowcone_frag_v4_ingress"),
                 (1, "flowcone_frag_v4_egress"),
+                (2, "flowcone_frag_v4_egress_alloc"),
             ],
         )?;
         let frag6_target = load_target_slots(

@@ -39,6 +39,8 @@ const REATTACH_INTERVAL: Duration = Duration::from_secs(30);
 
 const RESERVE_SCAN_INTERVAL: Duration = Duration::from_secs(5);
 
+const IDLE_RESERVE_SCAN_INTERVAL: Duration = Duration::from_secs(60);
+
 const LIVENESS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Coalesces periodic 5s maintenance timers within a single wakeup window.
@@ -394,16 +396,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     while RUNNING.load(Ordering::SeqCst) {
         let now_instant = Instant::now();
         let time_to_gc = gc_interval.saturating_sub(last_gc_run.elapsed());
-        let time_to_reserve = RESERVE_SCAN_INTERVAL.saturating_sub(last_reserve_scan.elapsed());
+        let liveness_active_cur = config.manage_nft
+            && applied.liveness
+            && (applied.v4_enabled || applied.effective_v6 != 0);
+        let active_reserve_interval = if session_mgr.is_idle() && !liveness_active_cur {
+            IDLE_RESERVE_SCAN_INTERVAL
+        } else {
+            RESERVE_SCAN_INTERVAL
+        };
+        let time_to_reserve = active_reserve_interval.saturating_sub(last_reserve_scan.elapsed());
         let time_to_attach = if applied.present {
             REATTACH_INTERVAL.saturating_sub(last_attach_check.elapsed())
         } else {
             Duration::from_secs(3600)
         };
-        let time_to_liveness = if config.manage_nft
-            && applied.liveness
-            && (applied.v4_enabled || applied.effective_v6 != 0)
-        {
+        let time_to_liveness = if liveness_active_cur {
             LIVENESS_REFRESH_INTERVAL.saturating_sub(last_liveness_refresh.elapsed())
         } else {
             Duration::from_secs(3600)
@@ -566,12 +573,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let liveness_active = config.manage_nft
             && applied.liveness
             && (applied.v4_enabled || applied.effective_v6 != 0);
+        let reserve_interval = if session_mgr.is_idle() && !liveness_active {
+            IDLE_RESERVE_SCAN_INTERVAL
+        } else {
+            RESERVE_SCAN_INTERVAL
+        };
         let reserve_elapsed = last_reserve_scan.elapsed();
         let liveness_elapsed = last_liveness_refresh.elapsed();
-        let reserve_due = reserve_elapsed >= RESERVE_SCAN_INTERVAL
+        let reserve_due = reserve_elapsed >= reserve_interval
             || (liveness_active
                 && liveness_elapsed >= LIVENESS_REFRESH_INTERVAL
-                && reserve_elapsed + PERIODIC_COALESCE_SLACK >= RESERVE_SCAN_INTERVAL);
+                && reserve_elapsed + PERIODIC_COALESCE_SLACK >= reserve_interval);
         if reserve_due {
             session_mgr.reserve_local_ports(&mut udp_scanner);
             last_reserve_scan = Instant::now();
