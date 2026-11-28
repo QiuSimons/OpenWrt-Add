@@ -130,7 +130,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  struct bbr_context {
  	u32 sample_bw;
  };
-@@ -1191,11 +1260,458 @@
+@@ -1191,11 +1260,453 @@
  		bbr_raise_inflight_hi_slope(sk);
  }
  
@@ -283,10 +283,10 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +	if (bbr->lfn_slope_bad || bbr->lfn_cruise_rounds < 4)
 +		return 0;
 +
-+	thresh = bbr->lfn_floor + bbr_lfn_class_margin(bbr);
-+	if (thresh <= BBR_LFN_STOCK_TENTHS)
++	if (bbr->lfn_floor <= BBR_LFN_STOCK_TENTHS)
 +		return 0;
 +
++	thresh = bbr->lfn_floor + bbr_lfn_class_margin(bbr);
 +	return min_t(u32, thresh, cap);
 +}
 +
@@ -526,18 +526,13 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +		if (bbr->lfn_cruise_rounds < 255)
 +			bbr->lfn_cruise_rounds++;
 +
-+		/* Self-healing: if we had a temporary bad slope, but now achieved
-+		 * 4 consecutive clean, unqueued cruise rounds, clear slope_bad.
-+		 * Otherwise gently decay stale probe loss toward cruise floor.
++		/* Arm / self-heal at 4 clean cruise rounds: reset probe loss
++		 * baseline to learned cruise floor (without decaying p_probe
++		 * on subsequent cruise rounds, so multi-probe slope builds up).
 +		 */
-+		if (bbr->lfn_slope_bad && bbr->lfn_cruise_rounds >= 4) {
++		if (bbr->lfn_cruise_rounds == 4) {
 +			bbr->lfn_slope_bad = 0;
 +			bbr->lfn_p_probe = bbr->lfn_p_cruise;
-+		} else if (!bbr->lfn_slope_bad &&
-+			   bbr->lfn_p_probe > bbr->lfn_p_cruise) {
-+			bbr->lfn_p_probe = bbr_lfn_ewma_step(bbr->lfn_p_probe,
-+							     bbr->lfn_p_cruise,
-+							     1000);
 +		}
 +	} else if (qd != ~0U && qd > BBR_LFN_ALLOW_QDELAY_US) {
 +		/* Persistent queueing detected: reset cruise confidence */
