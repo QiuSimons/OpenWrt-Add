@@ -130,7 +130,7 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
  struct bbr_context {
  	u32 sample_bw;
  };
-@@ -1191,11 +1260,447 @@
+@@ -1191,11 +1260,458 @@
  		bbr_raise_inflight_hi_slope(sk);
  }
  
@@ -527,11 +527,17 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +			bbr->lfn_cruise_rounds++;
 +
 +		/* Self-healing: if we had a temporary bad slope, but now achieved
-+		 * 4 consecutive clean, unqueued cruise rounds, clear slope_bad!
++		 * 4 consecutive clean, unqueued cruise rounds, clear slope_bad.
++		 * Otherwise gently decay stale probe loss toward cruise floor.
 +		 */
 +		if (bbr->lfn_slope_bad && bbr->lfn_cruise_rounds >= 4) {
 +			bbr->lfn_slope_bad = 0;
 +			bbr->lfn_p_probe = bbr->lfn_p_cruise;
++		} else if (!bbr->lfn_slope_bad &&
++			   bbr->lfn_p_probe > bbr->lfn_p_cruise) {
++			bbr->lfn_p_probe = bbr_lfn_ewma_step(bbr->lfn_p_probe,
++							     bbr->lfn_p_cruise,
++							     1000);
 +		}
 +	} else if (qd != ~0U && qd > BBR_LFN_ALLOW_QDELAY_US) {
 +		/* Persistent queueing detected: reset cruise confidence */
@@ -549,8 +555,13 @@ Signed-off-by: QiuSimons <45143996+QiuSimons@users.noreply.github.com>
 +		}
 +	}
 +
-+	/* 3. Inflight_hi rapid recovery after queue-induced cut (e.g. Starlink handoff) */
++	/* 3. Inflight_hi rapid recovery after queue-induced cut (e.g. Starlink handoff).
++	 * Restrict to true LFN (>= 80ms) or paths with > 2% learned background floor
++	 * so normal 20-80ms congested links do not sawtooth against stale max_bw.
++	 */
 +	if (bbr->lfn_cut_by_queue &&
++	    (bbr->min_rtt_us >= BBR_LFN_LFN_RTT_US ||
++	     bbr->lfn_floor > BBR_LFN_STOCK_TENTHS) &&
 +	    bbr->inflight_hi != ~0U && bdp &&
 +	    bbr->inflight_hi < bdp &&
 +	    !bbr->lfn_slope_bad &&
